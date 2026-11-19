@@ -124,8 +124,9 @@ rustc-hash = { workspace = true }
 flui-testing = { path = ".", features = ["http"] }
 # `CountingWaker` and `panicking_waker` for tests that count or fail a waker.
 flui-foundation = { workspace = true, features = ["testing"] }
-# The headless backend whose windows the conformance checks run against.
-flui-native = { workspace = true }
+# The headless host whose windows the conformance checks run against, named
+# through its doubles (`scripted`).
+flui-native = { workspace = true, features = ["scripted"] }
 # The painting values the integration tests' widgets paint with.
 flui-painting = { workspace = true }
 

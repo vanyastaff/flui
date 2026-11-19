@@ -487,83 +487,6 @@ fn run_ui_runtime_sibling_child() {
     assert_eq!(disposed.get(), 2, "both presentations disposed");
 }
 
-struct OwnershipWindow {
-    delegate: crate::testing::TestWindow,
-    external: std::rc::Weak<RefCell<Option<Rc<dyn flui_platform::PlatformWindow>>>>,
-    armed: AtomicBool,
-    fail_callback: bool,
-    _captures: DropCompetition,
-}
-
-impl flui_platform::PlatformWindow for OwnershipWindow {
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn id(&self) -> flui_platform::WindowId {
-        self.delegate.id()
-    }
-    fn request_redraw(&self) {
-        self.delegate.request_redraw();
-    }
-    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        self.delegate.redraw_requester()
-    }
-    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        self.delegate.surface_target()
-    }
-    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        self.delegate.text_input()
-    }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        self.delegate.haptics()
-    }
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        self.delegate.system_chrome()
-    }
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        self.delegate.drag_source()
-    }
-    fn set_frame_rate_hint(
-        &self,
-        hint: flui_platform::FrameRateHint,
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.delegate.set_frame_rate_hint(hint)
-    }
-    fn set_input_regions(
-        &self,
-        regions: &[flui_platform::input_regions::InputRegion],
-    ) -> Result<(), flui_platform::Unsupported> {
-        self.delegate.set_input_regions(regions)
-    }
-    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        if self.armed.load(Ordering::Relaxed) {
-            if let Some(external) = self.external.upgrade() {
-                external.borrow_mut().take();
-            }
-            assert!(!self.fail_callback, "window cursor failure");
-        }
-        self.delegate.set_cursor(cursor)
-    }
-    fn state(&self) -> flui_platform::WindowState {
-        self.delegate.state()
-    }
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        self.delegate.apply(command)
-    }
-}
-
 struct OwnershipBridge {
     delegate: flui_native::FakeAccessibility,
     external: std::sync::Weak<
@@ -623,13 +546,27 @@ fn run_platform_ownership_child(kind: &str) {
             drops: Arc::clone(counts),
         },
     };
-    let window = Rc::new(OwnershipWindow {
-        delegate: crate::testing::TestWindow::new().focused(true),
-        external: Rc::downgrade(&external_window),
-        armed: AtomicBool::new(false),
-        fail_callback: fail_window || cursor_first,
-        _captures: bundle(&window_drops),
-    });
+    // Once armed, the window's cursor call takes the window out of the shared slot, so the
+    // slot's owner is the last to release it, and fails when the case asks.
+    let window_armed = Rc::new(Cell::new(false));
+    let window = Rc::new(
+        flui_testing::MockWindow::new()
+            .focused(true)
+            .with_observer({
+                let armed = Rc::clone(&window_armed);
+                let external = Rc::downgrade(&external_window);
+                let fail_callback = fail_window || cursor_first;
+                move |call| {
+                    if matches!(call, flui_testing::WindowCall::SetCursor(_)) && armed.get() {
+                        if let Some(external) = external.upgrade() {
+                            external.borrow_mut().take();
+                        }
+                        assert!(!fail_callback, "window cursor failure");
+                    }
+                }
+            })
+            .keeping(bundle(&window_drops)),
+    );
     let bridge = Arc::new(OwnershipBridge {
         delegate: flui_native::FakeAccessibility::new(),
         external: Arc::downgrade(&external_bridge),
@@ -663,7 +600,7 @@ fn run_platform_ownership_child(kind: &str) {
         .set_cursor_change_callback(Rc::new(move |_, _| {
             let _ = &capture;
         }));
-    window.armed.store(true, Ordering::Relaxed);
+    window_armed.set(true);
     bridge.armed.store(true, Ordering::Relaxed);
     drop(window);
     drop(bridge);

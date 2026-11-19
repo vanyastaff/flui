@@ -8,4 +8,4 @@
 
 ### Removed
 
-- `flui_platform::testing` (`NoNativeSurface`, `window_takes_no_frame_verbs!` and the contract doubles) exists only with the `testing` feature.
+- `flui_platform::testing` (`NoNativeSurface` and the contract doubles) exists only with the `testing` feature.

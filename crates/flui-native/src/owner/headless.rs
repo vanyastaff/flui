@@ -20,17 +20,19 @@ use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, Trans
 use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
 use parking_lot::Mutex;
 
-use crate::host::{self, Host};
+use crate::host;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::call_point::Called;
 use crate::owner::slot::OwnerSlot;
-use crate::platform::{ExitAnswer, HostPlatform};
+use crate::platform::ExitAnswer;
 use crate::{
     error::PlatformError, host_window::HostWindow, owner::DirectOwnerHooks, owner::OpenWindowError,
     owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform, owner::PendingWindow,
     owner::ProxyTransport, owner::WindowOpen, owner::window_delivery::WindowDelivery,
     platform::AppHandler, platform::Platform,
 };
+#[cfg(feature = "scripted")]
+use crate::{host::Host, platform::HostPlatform};
 use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowOptions};
 
 /// The value a deferred (or synchronous) window-open request resolves to,
@@ -141,6 +143,10 @@ pub(crate) trait SimulatedDevices: Send {
 /// of the system's drag state ([`OsDrags`]).
 pub(crate) trait SimulatedOffers: Send {
     /// Mint a live offer announcing `representations`.
+    #[cfg_attr(
+        not(feature = "scripted"),
+        expect(dead_code, reason = "read by the test controls `scripted` builds")
+    )]
     fn mint(&mut self, representations: Arc<[RepresentationDescriptor]>) -> DataTransferId;
 
     /// Retire live offer `id`, so it is stale for good; a stale `id` is a
@@ -187,6 +193,10 @@ pub(crate) trait TrackedWindows: OpenWindows {
 
     /// Keep `window`, which a deferred open built, until it closes: its
     /// opener gets its identity, never the window (ADR-0254 §4).
+    #[cfg_attr(
+        not(feature = "scripted"),
+        expect(dead_code, reason = "read by the test controls `scripted` builds")
+    )]
     fn keep_deferred(&self, window: &Rc<dyn HostWindow>);
 
     /// What every open window delivers to its handler, in the order they
@@ -194,6 +204,10 @@ pub(crate) trait TrackedWindows: OpenWindows {
     fn deliveries_of_all(&self) -> Vec<Arc<WindowDelivery>>;
 
     /// What the open window `id` names delivers to its handler.
+    #[cfg_attr(
+        not(feature = "scripted"),
+        expect(dead_code, reason = "read by the test controls `scripted` builds")
+    )]
     fn delivery_of(&self, id: WindowId) -> Option<Arc<WindowDelivery>>;
 }
 
@@ -205,6 +219,10 @@ pub(crate) trait TrackedWindows: OpenWindows {
 pub struct HeadlessLoop {
     pub(crate) signal: Arc<crate::owner::signal::OwnerSignal>,
     pub(crate) turn: std::rc::Rc<crate::owner::signal::OwnerTurnSlot>,
+    #[cfg_attr(
+        not(feature = "scripted"),
+        expect(dead_code, reason = "read by the test controls `scripted` builds")
+    )]
     wake_failure: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) state: std::rc::Rc<std::cell::RefCell<HeadlessState>>,
 }
@@ -222,6 +240,10 @@ pub(crate) struct OsDrags {
 }
 
 /// One drag session in flight at the simulated system.
+#[cfg_attr(
+    not(feature = "scripted"),
+    expect(dead_code, reason = "read by the test controls `scripted` builds")
+)]
 pub(crate) struct OsDragSession {
     pub(crate) representations: Arc<[RepresentationDescriptor]>,
     pub(crate) allowed: TransferActions,
@@ -233,6 +255,10 @@ pub(crate) struct OsDragSession {
 }
 
 /// The window the simulated pointer is over.
+#[cfg_attr(
+    not(feature = "scripted"),
+    expect(dead_code, reason = "read by the test controls `scripted` builds")
+)]
 pub(crate) struct DragOver {
     pub(crate) window: WindowId,
     pub(crate) offer: DataTransferId,
@@ -282,6 +308,10 @@ pub(crate) struct HeadlessState {
     pub(crate) keyboard_layout: String,
     /// The application's turn deadline as [`HeadlessOwnerTurns::drive_at`]
     /// armed it.
+    #[cfg_attr(
+        not(feature = "scripted"),
+        expect(dead_code, reason = "read by the test controls `scripted` builds")
+    )]
     turn_deadline: crate::owner::wake_deadline::TurnDeadline,
     /// Deferred-window-open test mode (see
     /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)): when `true`,
@@ -525,6 +555,7 @@ pub(crate) fn consult_exit_policy(state: &std::cell::RefCell<HeadlessState>) -> 
 
 /// The headless platform's owner-turn handles: taken before [`Platform::run`]
 /// consumes it.
+#[cfg(feature = "scripted")]
 impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     /// Obtain the manual owner-turn driver before `run` consumes this platform.
     #[must_use]
@@ -709,6 +740,10 @@ const fn default_input_availability() -> flui_platform::input_capabilities::Inpu
 /// A deferred open waiting for [`HeadlessDeferredWindowOpens::resolve_next`]:
 /// where its window goes, its options, and its handler, which stays on the
 /// owner thread that made it.
+#[cfg_attr(
+    not(feature = "scripted"),
+    expect(dead_code, reason = "read by the test controls `scripted` builds")
+)]
 pub(crate) struct PendingOpen {
     slot: ClaimSlot<OpenWindowResult>,
     options: WindowOptions,
@@ -767,6 +802,7 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
 
 /// Deterministic headless owner-turn driver. `run` returning does not close it.
 #[derive(Clone)]
+#[cfg(feature = "scripted")]
 pub struct HeadlessOwnerTurns {
     wake_failure: Weak<std::sync::atomic::AtomicBool>,
     owner_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
@@ -774,12 +810,15 @@ pub struct HeadlessOwnerTurns {
     turn: std::rc::Weak<crate::owner::signal::OwnerTurnSlot>,
     state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
+#[cfg(feature = "scripted")]
 static_assertions::assert_not_impl_any!(HeadlessOwnerTurns: Send, Sync);
+#[cfg(feature = "scripted")]
 impl std::fmt::Debug for HeadlessOwnerTurns {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HeadlessOwnerTurns").finish_non_exhaustive()
     }
 }
+#[cfg(feature = "scripted")]
 impl HeadlessOwnerTurns {
     /// Inject one physical notification failure for deterministic recovery tests.
     /// The following post succeeds normally; this does not close the owner.
@@ -866,10 +905,12 @@ impl HeadlessOwnerTurns {
 /// loop of its own, so the owner-thread half of a re-evaluation request (the
 /// owner loop's control arm) is driven explicitly by the
 /// embedding test through [`drive`](Self::drive).
+#[cfg(feature = "scripted")]
 pub struct HeadlessExitReevaluation {
     state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 
+#[cfg(feature = "scripted")]
 impl std::fmt::Debug for HeadlessExitReevaluation {
     // Manual impl: `HeadlessState` carries no blanket `Debug`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -879,6 +920,7 @@ impl std::fmt::Debug for HeadlessExitReevaluation {
     }
 }
 
+#[cfg(feature = "scripted")]
 impl HeadlessExitReevaluation {
     /// Whether a re-evaluation request is parked, awaiting
     /// [`drive`](Self::drive) — the bounded-wait probe for tests
@@ -944,10 +986,12 @@ impl HeadlessExitReevaluation {
 /// returned. `Weak`: this handle must never keep the platform state alive
 /// past the platform's own lifetime (same rationale as
 /// `HeadlessHostWindow::platform_state`).
+#[cfg(feature = "scripted")]
 pub struct HeadlessDeferredWindowOpens {
     state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,
 }
 
+#[cfg(feature = "scripted")]
 impl std::fmt::Debug for HeadlessDeferredWindowOpens {
     // Manual impl: `HeadlessState` carries no blanket `Debug` (its own
     // `windows`/`handlers` fields don't derive it either).
@@ -958,6 +1002,7 @@ impl std::fmt::Debug for HeadlessDeferredWindowOpens {
     }
 }
 
+#[cfg(feature = "scripted")]
 impl HeadlessDeferredWindowOpens {
     /// Resolves the oldest still-pending deferred open by constructing a
     /// real headless window and delivering it through that request's

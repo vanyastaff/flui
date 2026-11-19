@@ -16,7 +16,7 @@ use flui_interaction::{gesture::GestureArenaMember, ids::PointerId};
 use flui_platform::{PlatformInput, PlatformWindow, WindowExecutionState};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_runtime::sink::SubmitVerdict;
-use flui_runtime::testing::{ScriptedSink, TestWindow};
+use flui_runtime::testing::ScriptedSink;
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_scheduler::AppLifecycleState;
 use flui_view::prelude::*;
@@ -49,7 +49,7 @@ fn dispatch(realm: &UiRuntime, id: PresentationId, event: PointerEvent) {
 }
 
 fn install_secondary(realm: &mut UiRuntime) -> PresentationId {
-    let window: Rc<dyn PlatformWindow> = Rc::new(TestWindow::new().focused(false));
+    let window: Rc<dyn PlatformWindow> = Rc::new(flui_testing::MockWindow::new().focused(false));
     let presentation = realm.assemble_presentation(window);
     realm.install_presentation(presentation)
 }

@@ -6,11 +6,16 @@ use flui_rendering::constraints::BoxConstraints;
 
 use super::*;
 
-fn counting_window(id: u64) -> (Rc<dyn PlatformWindow>, Arc<AtomicU32>) {
-    let window = crate::testing::TestWindow::new()
-        .with_id(flui_platform::WindowId::try_from_raw(id).expect("a test window id is nonzero"));
-    let redraw_calls = window.redraw_calls_handle();
-    (Rc::new(window), redraw_calls)
+fn counting_window(id: u64) -> Rc<flui_testing::MockWindow> {
+    Rc::new(
+        flui_testing::MockWindow::new().with_id(
+            flui_platform::WindowId::try_from_raw(id).expect("a test window id is nonzero"),
+        ),
+    )
+}
+
+fn counting_platform_window(id: u64) -> Rc<dyn PlatformWindow> {
+    counting_window(id)
 }
 
 /// The same edge, fired from a foreign thread — the shape an async
@@ -25,7 +30,7 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_ui_runtimes_platform_wake
         wake_counter.fetch_add(1, AtomicOrdering::Relaxed);
     });
 
-    let (window, _calls) = counting_window(1);
+    let window = counting_platform_window(1);
     let mut ui_runtime = UiRuntime::try_new(
         window,
         1.0,
@@ -59,7 +64,7 @@ fn counting_ui_runtime(id: u64) -> (UiRuntime, Arc<AtomicU32>) {
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         wake_counter.fetch_add(1, AtomicOrdering::Relaxed);
     });
-    let (window, _calls) = counting_window(id);
+    let window = counting_platform_window(id);
     let mut ui_runtime = UiRuntime::try_new(
         window,
         1.0,
@@ -207,10 +212,10 @@ pub(crate) fn many_frame_requests_before_a_frame_poke_the_window_once() {
     use flui_animation::AnimationController;
     use std::time::Duration;
 
-    let (window, redraws) = counting_window(1);
+    let window = counting_window(1);
     // A presentation holds its window weakly; the host keeps it alive.
-    let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window));
-    let before = redraws.load(AtomicOrdering::Relaxed);
+    let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window) as Rc<dyn PlatformWindow>);
+    let before = window.redraw_requests();
     let owners: Vec<_> = (0..100)
         .map(|_| {
             AnimationController::builder(Duration::from_secs(1)).build_on(Some(&ui_runtime.vsync()))
@@ -220,7 +225,7 @@ pub(crate) fn many_frame_requests_before_a_frame_poke_the_window_once() {
         owner.controller().forward().expect("run admission");
     }
     assert_eq!(
-        redraws.load(AtomicOrdering::Relaxed) - before,
+        window.redraw_requests() - before,
         1,
         "a hundred frame requests before a frame poke the window once"
     );
@@ -231,7 +236,7 @@ pub(crate) fn many_frame_requests_before_a_frame_poke_the_window_once() {
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&ui_runtime.vsync()));
     late.controller().forward().expect("run admission");
     assert_eq!(
-        redraws.load(AtomicOrdering::Relaxed) - before,
+        window.redraw_requests() - before,
         2,
         "the frame that sampled the presentation reopens the poke"
     );
@@ -247,16 +252,13 @@ pub(crate) fn a_secondary_presentation_is_laid_out_at_its_own_size() {
         .attach_root_widget(&SizedBox::square(10.0))
         .expect("primary root");
     let window: Rc<dyn PlatformWindow> = Rc::new(
-        crate::testing::TestWindow::new()
+        flui_testing::MockWindow::new()
             .focused(false)
             .with_scale_factor(
                 flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
                     .expect("a ratio in range"),
             )
-            .with_sizes(
-                Size::new(600, 400),
-                flui_platform::WindowExtent::try_new(Size::new(300.0, 200.0)).expect("an extent"),
-            ),
+            .with_size(300.0, 200.0),
     );
     // A presentation holds its window weakly; the host keeps it alive.
     let assembled = ui_runtime.assemble_presentation(Rc::clone(&window));
@@ -297,7 +299,7 @@ pub(crate) fn a_tail_panic_whose_wake_panics_keeps_its_report_and_backoff() {
             "platform wake — intentional test panic"
         );
     });
-    let (window, _calls) = counting_window(2);
+    let window = counting_platform_window(2);
     let mut ui_runtime = UiRuntime::try_new(
         window,
         1.0,

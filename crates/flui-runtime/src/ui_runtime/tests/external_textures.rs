@@ -5,7 +5,7 @@
 
 use std::sync::atomic::AtomicU32;
 
-use flui_foundation::geometry::{Rect, Size};
+use flui_foundation::geometry::Rect;
 use flui_layer::{DamageRect, DamageRegion, Region, TextureRegistration};
 use flui_painting::Alignment;
 use flui_painting::paint::{Image, TextureId};
@@ -127,17 +127,9 @@ struct Fixture {
 
 fn mounted(placement: Placement) -> Fixture {
     let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(
-        crate::testing::TestWindow::new().focused(true).with_sizes(
-            Size::new(
-                i32::try_from(SURFACE.0).expect("the width fits"),
-                i32::try_from(SURFACE.1).expect("the height fits"),
-            ),
-            flui_platform::WindowExtent::try_new(Size::new(
-                f64::from(SURFACE.0),
-                f64::from(SURFACE.1),
-            ))
-            .expect("an extent"),
-        ),
+        flui_testing::MockWindow::new()
+            .focused(true)
+            .with_size(f64::from(SURFACE.0), f64::from(SURFACE.1)),
     );
     let ui_runtime = UiRuntime::for_test_with_window(Rc::clone(&window));
     let graph = ui_runtime

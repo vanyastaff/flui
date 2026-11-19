@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::DataTransferId;
-use flui_foundation::geometry::{Offset, Point, Size};
+use flui_foundation::geometry::{Offset, Point};
 use flui_foundation::{DragSessionId, IdMint, PresentationId, RenderId, UiRuntimeId};
 use flui_interaction::drag::{
     AllowedActions, Autoscroll, DragError, DragFetch, DragHandle, DragItem, DragObserver,
@@ -138,80 +138,13 @@ impl PlatformDragSource for FakeDragSource {
     }
 }
 
-struct DragWindow {
-    size: Size<f64>,
-    source: Option<Arc<dyn PlatformDragSource>>,
-    /// What the window honours, published once when it was made: what its commands are admitted
-    /// against and opened under.
-    capabilities: flui_platform::WindowCapabilities,
-}
-
-impl PlatformWindow for DragWindow {
-    fn id(&self) -> WindowId {
-        WindowId::try_from_raw(1).expect("a nonzero window id")
-    }
-    fn request_redraw(&self) {}
-    fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
-        Arc::new(|| {})
-    }
-    fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
-        Arc::new(flui_platform::testing::NoNativeSurface)
-    }
-    flui_platform::window_takes_no_frame_verbs!();
-
-    fn gesture_geometry(
-        &self,
-    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
-        Ok(None)
-    }
-
-    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
-        flui_platform::WindowAt::Unknown
-    }
-
-    fn reveal_after_first_frame(&self) {}
-
-    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
-        Ok(())
-    }
-    fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
-        self.source.clone()
-    }
-    fn state(&self) -> flui_platform::WindowState {
-        flui_platform::WindowState::new(
-            flui_platform::WindowGeometry::try_new(None, self.size).expect("a finite size"),
-            flui_platform::WindowExtent::try_new(self.size).expect("a finite size"),
-        )
-        .with_capabilities(self.capabilities)
-    }
-    fn apply(
-        &self,
-        command: flui_platform::AdmittedCommand,
-    ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&self.capabilities)?;
-        Ok(())
-    }
-    fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
-        None
-    }
-
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
-        None
-    }
-
-    fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
-        None
-    }
-}
-
+/// A 100 × 100 window whose system starts OS drag sessions at `source`'s
+/// timing, or none.
 fn window(source: Option<OsDragStart>) -> Rc<dyn PlatformWindow> {
-    Rc::new(DragWindow {
-        size: Size::new(100.0, 100.0),
-        source: source
-            .map(|timing| Arc::new(FakeDragSource(timing)) as Arc<dyn PlatformDragSource>),
-        capabilities: flui_platform::WindowCapabilities::NONE
-            .publish()
-            .expect("the process has publications left"),
+    let window = flui_testing::MockWindow::new().with_size(100.0, 100.0);
+    Rc::new(match source {
+        Some(timing) => window.with_drag_source(Arc::new(FakeDragSource(timing))),
+        None => window,
     })
 }
 

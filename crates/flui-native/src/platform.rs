@@ -75,7 +75,7 @@ pub trait AppHandler: 'static {
     /// window's handler, and a session end reaches
     /// [`session_end`](Self::session_end)); iOS, Android and the web cannot
     /// be asked to quit; the headless host asks when a test reports one
-    /// ([`HeadlessHostEvents::quit`](crate::HeadlessHostEvents::quit)).
+    /// (`HeadlessHostEvents::quit`, with `scripted`).
     fn quit_asked(&self, owner: &OwnerPlatform) -> QuitAnswer;
 
     /// The user reopened the application: a click on its Dock icon (AppKit),
@@ -140,7 +140,7 @@ pub trait AppHandler: 'static {
     /// follows every turn; AppKit, UIKit and the web after each turn and once
     /// the handler bootstrapped, through a timer of the main queue or the
     /// page; the headless host when a test drives
-    /// [`HeadlessOwnerTurns::drive_at`](crate::HeadlessOwnerTurns::drive_at).
+    /// `HeadlessOwnerTurns::drive_at` (with `scripted`).
     /// A handler that moves its turn deadline outside an owner turn asks for
     /// one ([`PlatformProxy::wake`](crate::PlatformProxy::wake)).
     fn turn_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant>;
@@ -498,7 +498,7 @@ pub trait Platform: sealed::Sealed + 'static {
     /// never answers `None`. Android answers with its process's own folders,
     /// and `None` only when the Activity reports no internal data path;
     /// headless keeps the values in memory unless a test gives it a root
-    /// ([`HeadlessPlatform::with_data_root`](crate::HeadlessPlatform::with_data_root)).
+    /// (`HeadlessPlatform::with_data_root`, with `scripted`).
     fn data_store(&self, app: &flui_platform::AppDataDir) -> Option<crate::storage::DataStore>;
 }
 
@@ -575,12 +575,21 @@ impl<H: Host> HostPlatform<H> {
 
     /// The host's loop, for what a host offers beyond [`Platform`] (test
     /// controls, a scene registration).
+    #[cfg_attr(
+        not(any(feature = "scripted", target_os = "ios", target_os = "android")),
+        expect(
+            dead_code,
+            reason = "outside the headless host's test controls only the UIKit scene registration \
+                      and the Android start reach a loop through its platform"
+        )
+    )]
     pub(crate) fn owner(&self) -> &H::Loop {
         &self.owner
     }
 
     /// What the host's windows share, for what its window position offers
     /// beyond [`Platform`] (headless test controls).
+    #[cfg(feature = "scripted")]
     pub(crate) fn window_shared(&self) -> &Arc<WindowShared<H>> {
         &self.window_shared
     }

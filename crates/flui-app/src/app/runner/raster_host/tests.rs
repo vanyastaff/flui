@@ -2530,8 +2530,7 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         RasterFactory::Scripted(slots.clone()),
         RasterPlacement::Inline,
     );
-    let window = flui_runtime::testing::TestWindow::new();
-    let redraws = window.redraw_calls_handle();
+    let window = flui_testing::MockWindow::new();
     host.attach(
         &window,
         address(),
@@ -2553,10 +2552,10 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         "the request's deadline is seconds away"
     );
 
-    let asked = redraws.load(std::sync::atomic::Ordering::SeqCst);
+    let asked = window.redraw_requests();
     assert!(slots.answer_device_request());
     assert_eq!(
-        redraws.load(std::sync::atomic::Ordering::SeqCst),
+        window.redraw_requests(),
         asked + 1,
         "the answer asks the window for a frame"
     );

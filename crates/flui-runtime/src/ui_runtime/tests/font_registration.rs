@@ -253,7 +253,7 @@ fn a_font_change_notice_requests_a_redraw_for_every_presentation() {
     let (wake, wakes) = counting_wake();
     let mut ui_runtime = new_runtime(wake).expect("ui_runtime constructs");
     let window_b: Rc<dyn PlatformWindow> = Rc::new(
-        crate::testing::TestWindow::new()
+        flui_testing::MockWindow::new()
             .with_id(flui_platform::WindowId::try_from_raw(42).expect("42 is a nonzero window id")),
     );
     let presentation_b = ui_runtime.assemble_presentation(window_b);
