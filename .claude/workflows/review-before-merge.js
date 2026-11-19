@@ -480,7 +480,10 @@ Return full 40-character shas. When step 2, 3 or 5 fails, put the command and it
   { phase: 'Scope', label: 'scope', schema: SCOPE_SCHEMA, model: 'haiku', effort: 'low' },
 )
 if (scoped.error) return unavailable(`the scope step failed: ${scoped.error}`)
-const scope = blankQuotes(scoped.value)
+// A changed path is data, not an empty field: the file list keeps every name git printed, and only an
+// empty string is dropped. A list of quote-only names therefore goes to the readers, who read the
+// range from git, rather than to a "no change" the diff check would have to confirm.
+const scope = { ...blankQuotes(scoped.value), files: scoped.value.files.filter((f) => f !== '') }
 notes.push(...scope.warnings.map((w) => `Scope: ${w}.`))
 if (scope.error) return unavailable(`the scope step failed: ${scope.error}`)
 if (!SHA.test(scope.head) || !SHA.test(scope.base)) {

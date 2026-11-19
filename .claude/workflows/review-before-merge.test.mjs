@@ -56,7 +56,7 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
     [[], ok, /No change to review: the merge base and the head have the same tree/],
     [[], { ...ok, error: ' "" ' }, /No change to review/],
     [[], { ...ok, error: '" "' }, /No change to review/],
-    [['""', ' '], ok, /No change to review/],
+    [[''], ok, /No change to review/],
   ]) {
     let checkPrompt = ''
     const { result, calls } = await run({ since: SHA('c') }, (p, o) => {
@@ -74,6 +74,19 @@ for (const base of ['origin/ma’in', '--upload-pack=x', 42]) {
     // No reader ran, so no note says the readers read the whole change.
     assert.doesNotMatch(result.markdown, /the readers read the whole change/)
   }
+}
+
+/// 2c. A changed path is data: a name made of quotes is kept, so the readers run and a design read
+//     still names the change read it owes for that non-document file.
+{
+  const { result, calls } = await run({ mode: 'design' }, (p, o) => {
+    if (o.label === 'scope') return scope({ files: ['docs/adr/ADR-0400-x.md', "''"] })
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.ok(!calls.includes('scope:diff'))
+  assert.ok(calls.some((l) => l.startsWith('read:')))
+  assert.match(result.markdown, /The diff also changes 1 files that are not documents/)
 }
 
 // 3. A mistyped unread is reported; readers get numbers they cannot override; a confirmed entry
@@ -146,7 +159,8 @@ for (const since of ['', null]) {
     return { confirmed: [], rejected: [], not_kept: [] }
   })
   assert.equal(result.unavailable, undefined)
-  // Readers are read as they wrote: only the scope steps' answers are blanked.
+  // Readers write prose and are read as they wrote: blankQuotes reads only the agents that report
+  // command output (the scope step, the diff check, the mutation read).
   assert.match(result.markdown, /it tried: ""/)
   assert.equal(result.judge, 'fable')
 }
@@ -213,6 +227,7 @@ for (const [report, label, why] of [
   [null, 'unreadable', /could not be read: no result/],
   [() => { throw new Error('budget spent') }, 'unreadable', /could not be read: budget spent/],
   [gamma({ run_head: SHA('c') }), 'over another head', /checked out at c{40}, not b{40}/],
+  [gamma({ run_head: ' "" ' }), 'over another head', /checked out at no commit, not b{40}/],
   [gamma({ extra_files: [' M crates/a/src/lib.rs'] }), 'over an edited tree', /holds more than change\.diff \( M crates\/a\/src\/lib\.rs\)/],
   [gamma({ report_is_newer: false }), 'older than its diff', /written before its change\.diff/],
   [gamma({ diff_matches: false }), 'over another diff', /took another diff .*left out/],
