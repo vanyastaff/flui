@@ -96,16 +96,16 @@ Three versions must agree or the runner refuses to start: the locked `wasm-bindg
 and would bump the workspace lock as a side effect of adding a dev-dependency), and
 `wasm-bindgen-cli`, whose version is the one `wasm-bindgen` the lock resolves: the step reads it
 from `cargo metadata`, `cargo xtask doctor full` compares the installed one with it, and both fail
-on a lock with two. Locally, the step's loop is one line per crate:
-`cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32`.
+on a lock with two. Locally, the step's loop is one line per test target:
+`cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32`.
 
 Discovery rather than a crate list is deliberate: a list is how the next crate to add wasm tests
 gets silently never run — the same defect one level up. Its guards exist for that reason and each
 covers a distinct way this goes inert while looking like success: a query matching nothing never runs
-the loop body; a runner finding no tests still exits 0 printing `0 passed`; and an aggregate-only
-count lets *exactly the crate someone just added* be the silent one, so the non-zero check is **per
-crate**. (Per crate, not per target — a crate legitimately has only one kind, and a zero there is
-expected.)
+the loop body; a runner finding no tests still exits 0 printing `0 passed`; and an aggregate count
+lets *exactly the target someone just added* be the silent one, so the non-zero check is **per
+target**. The one exception is a crate's lib target beside its `wasm32` target: when the wasm
+tests live in `tests/wasm32.rs`, the lib target legitimately holds none.
 
 **A `#[test]` function does not run on wasm32.** It compiles, and `wasm-bindgen-test-runner` reports
 `no tests to run!`, because only `#[wasm_bindgen_test]` registers with the harness. That attribute is

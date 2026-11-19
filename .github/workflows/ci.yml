@@ -1398,12 +1398,14 @@ jobs:
   #                flui-native's wasm32-only web backend.
   #   build      — really links the two web demos: `cargo check` does not
   #                link, and an undefined symbol fails the link.
-  #   test       — EXECUTES the wasm32 tests, on node or, for a crate whose
-  #                tests ask for a browser, in the job's headless Chrome.
+  #   imports    — wasm-bindgen over each demo, and node lists the modules it
+  #                imports from: only wasm-bindgen's own two may appear.
+  #   test       — EXECUTES the wasm32 tests, each target on its own, on node
+  #                or, for a crate whose tests ask for a browser (flui-native's
+  #                DOM tests among them), in the job's headless Chrome.
   #                Everything before it only compiles; swapping
   #                `web_time::Instant` for std's stays green there and panics
   #                at run time (issue #985).
-  #   then the DOM tests in headless Chrome, which node is not (below).
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check
@@ -1473,6 +1475,7 @@ jobs:
           echo "locked wasm-bindgen: $version"
 
       - name: Install wasm-bindgen-cli (matching the lockfile)
+        id: test_runner
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
@@ -1498,9 +1501,17 @@ jobs:
             node -e '
               const [file, name] = process.argv.slice(1);
               const allowed = new Set(["__wbindgen_placeholder__", "__wbindgen_externref_xform__"]);
-              const bytes = require("fs").readFileSync(file);
-              const modules = [...new Set(
+              const modulesOf = (bytes) => [...new Set(
                 WebAssembly.Module.imports(new WebAssembly.Module(bytes)).map((i) => i.module))];
+              // A module importing one function from "env": the check must
+              // refuse it, or it refuses nothing.
+              const canary = Uint8Array.of(0, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+                1, 4, 1, 0x60, 0, 0, 2, 9, 1, 3, 0x65, 0x6e, 0x76, 1, 0x66, 0, 0);
+              if (modulesOf(canary).filter((m) => !allowed.has(m)).join() !== "env") {
+                console.log("::error::the import check no longer refuses a module importing from env");
+                process.exit(1);
+              }
+              const modules = modulesOf(require("fs").readFileSync(file));
               const unexpected = modules.filter((m) => !allowed.has(m));
               if (unexpected.length > 0) {
                 console.log(`::error::${name} imports from ${unexpected.map((m) => JSON.stringify(m)).join(", ")}, which no web build provides`);
@@ -1524,6 +1535,7 @@ jobs:
           install-chromedriver: true
 
       - name: Write the headless Chrome capabilities
+        id: capabilities
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
@@ -1540,8 +1552,13 @@ jobs:
       # compiles; swapping `web_time::Instant` for std's stays green there and
       # panics here (issue #985). A target whose run executes no assertion
       # fails: it opted in to nothing, and a healthy sibling would hide it in
-      # a total. flui-native's `web_browser` target runs in the same loop.
+      # a total. flui-native's `web_browser` target runs in the same loop. It
+      # needs only the runner, Chrome and its capabilities, so a failed import
+      # step does not hide a failure here.
       - name: cargo test for wasm32
+        if: >-
+          ${{ !cancelled() && steps.test_runner.outcome == 'success'
+          && steps.chrome.outcome == 'success' && steps.capabilities.outcome == 'success' }}
         env:
           # the wasm lib-test build has dead code (its callers are the
           # native-only test modules); the shipping build is linted above
