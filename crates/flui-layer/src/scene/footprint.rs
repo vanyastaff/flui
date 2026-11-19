@@ -16,8 +16,8 @@ use super::owner::SlotMarks;
 use super::table::TableCost;
 use super::version::{Address, VersionInner};
 use crate::damage::closure::{Closure, Closures, close_over};
+use crate::damage::{DamageRect, DamageRegion, FullReason, Region};
 use crate::layer::Layer;
-use crate::scene_snapshot::{DamageRect, DamageRegion, FullReason, Region};
 
 /// What the damage pass reads of the patch.
 pub(crate) struct PatchFacts<'p> {

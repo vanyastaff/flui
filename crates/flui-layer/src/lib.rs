@@ -63,6 +63,8 @@
 // and a consuming builder that returns `Self` is `#[must_use]`.
 #![deny(missing_docs)]
 #![warn(clippy::return_self_not_must_use)]
+// A table keyed by ids the process mints hashes with FxHash, not SipHash.
+#![warn(clippy::disallowed_types)]
 
 mod compositor;
 mod damage;
@@ -80,7 +82,8 @@ pub use compositor::SceneBuilder;
 #[cfg(feature = "testing")]
 pub use damage::LayerDiffer;
 pub use damage::{
-    Closure, Closures, DamageMode, MAX_CLOSURE_ROUNDS, RasterBase, close_over, read_closure,
+    Closure, Closures, DamageMode, DamageRect, DamageRegion, FullReason, MAX_CLOSURE_ROUNDS,
+    NonFinite, RasterBase, Region, ResyncReason, close_over, read_closure,
 };
 pub use flui_foundation::LayerId;
 pub use layer::{
@@ -98,9 +101,7 @@ pub use scene::{
     SceneNode, SceneNodeId, SceneNodeMarker, SceneOp, SceneOwner, ScenePublication, SceneVersion,
     SceneVersionId, SceneWriter, SubtreeCull, SurfaceKey, TextureDamageScratch,
 };
-pub use scene_snapshot::{
-    DamageRect, DamageRegion, FullReason, NonFinite, Region, ResyncReason, SceneSnapshot,
-};
+pub use scene_snapshot::SceneSnapshot;
 pub use texture_registry::{
     TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
 };

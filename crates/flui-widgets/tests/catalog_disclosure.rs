@@ -144,7 +144,7 @@ fn body_paint(app: &LaidOut) -> Vec<BodyPaint> {
             let mut clips: Vec<Rect> = Vec::new();
             let mut parent = tree.parent(id);
             while let Some(id) = parent {
-                let layer = tree.get_layer(id).expect("live layer ancestor");
+                let layer = tree.layer(id).expect("live layer ancestor");
                 let transform = match layer {
                     Layer::Offset(offset) => Some(Matrix4::translation(
                         offset.offset().dx,

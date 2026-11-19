@@ -15,13 +15,15 @@ frame by annotated regions rather than by direct calls.
 
 ## Decision
 
-**Lookup.** `LayerTree::find_annotations::<T>(point)` returns every `T` at a scene
+**Lookup.** `SceneVersion::find_annotation::<T>(point)` returns the topmost `T` at a point of
+the retained scene (ADR-0304), read off the version in place, and a hand-built tree answers
+`LayerTree::find_annotations::<T>(point)` with every `T` at a scene
 point, topmost first: later siblings and a region's own children before the region.
 The point maps through offset-carrying layers, transforms and resolved follower
 offsets. A transform unprojects the point onto its subtree's plane as hit testing
 does; a singular transform, or one placing that intersection behind the camera,
 hides its subtree; a clip whose shape excludes the point hides
-its subtree, and `Clip::None` clips nothing. `find_annotation` takes the first.
+its subtree, and `Clip::None` clips nothing. `LayerTree::find_annotation` takes the first.
 
 **Producer.** `RenderAnnotatedRegion` annotates its own box around its child through
 a paint scope; `AnnotatedRegion<T>` is the widget, comparing values so an equal

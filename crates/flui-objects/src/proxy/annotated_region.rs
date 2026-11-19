@@ -11,7 +11,7 @@ use flui_rendering::{
 /// A pass-through proxy whose box carries a type-erased annotation.
 ///
 /// It paints an annotated region around its child, sized to its own box;
-/// [`LayerTree::find_annotations`](flui_rendering::layer::LayerTree::find_annotations)
+/// [`SceneVersion::find_annotation`](flui_rendering::layer::SceneVersion::find_annotation)
 /// finds the value at points inside it. Layout and hit testing are the
 /// child's. Without a child it annotates nothing.
 #[derive(Clone)]

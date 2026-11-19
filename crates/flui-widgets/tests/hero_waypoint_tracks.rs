@@ -130,7 +130,7 @@ fn painted_hero_bounds(laid: &LaidOut, color: Color) -> Vec<Rect> {
             let mut visible = Some(command.transform.transform_rect(rect));
             let mut parent = tree.parent(id);
             while let Some(id) = parent {
-                let layer = tree.get_layer(id).expect("live scene ancestor");
+                let layer = tree.layer(id).expect("live scene ancestor");
                 let transform = match layer {
                     Layer::Offset(offset) => Some(Matrix4::translation(
                         offset.offset().dx,

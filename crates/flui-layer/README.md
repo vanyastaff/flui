@@ -1,21 +1,29 @@
 # flui-layer
 
-Compositor layer tree for FLUI — the fourth tree in FLUI's 5-tree architecture.
+FLUI's compositor scene: the retained scene a frame's paint changes by typed patches, the layer
+types it is made of, its damage, and the package the raster side draws.
 
 ```
-View → Element → Render → Layer → Semantics
+RenderObject::paint ──► SceneWriter ──► SceneVersion ──► SceneSnapshot ──► flui-engine
+  (flui-rendering)      (this crate: patches, damage)     (raster boundary)   (wgpu)
 ```
 
 ## Overview
 
-The paint walk in `flui-rendering` emits one `LayerTree` per frame; it is frozen into a `Scene`,
-stamped into a `SceneSnapshot`, moved by value to the raster side, and lowered to GPU work by
-`flui-engine`.
+A `SceneOwner` keeps one persistent scene per presentation (ADR-0304). Each frame's paint
+publishes the boundaries that repainted through its `SceneWriter`; the owner applies the patch
+all-or-nothing, computes its damage from the footprint of what changed, and publishes an
+immutable `SceneVersion` that shares every unchanged boundary with the version before it. A
+`SceneSnapshot` carries that version, its frame stamp and its damage across to the raster
+thread by value.
 
-```
-RenderObject::paint  ──►  LayerTree  ──►  Scene  ──►  SceneSnapshot  ──►  flui-engine
-  (flui-rendering)       (this crate)                 (raster boundary)     (wgpu)
-```
+A boundary's content is a run of entries: drawing chunks (sealed `DisplayList`s), the effect
+layers that group them (clip, transform, opacity, filters, shader masks, backdrops, leaders and
+followers, annotated regions) and slots that place child boundaries.
+
+`LayerTree` and `SceneBuilder` build a whole layer tree by hand. That form serves
+`flui_app::run_direct`, a hot-reload plugin's image and the engine's GPU readback tests; no frame
+of an application builds one.
 
 ## Layer types
 
@@ -31,109 +39,50 @@ RenderObject::paint  ──►  LayerTree  ──►  Scene  ──►  SceneSna
 `Layer::local_translation()` is the one place the set of translating variants is written down;
 the engine's pushes and the follower resolver's chain sums both read it.
 
-## Usage
-
-### Building a tree
+## A hand-built tree
 
 ```rust
-use flui_layer::{ClipRectLayer, Layer, LayerTree, OffsetLayer, PictureLayer, Scene};
-use flui_foundation::geometry::Rect;
-use flui_painting::paint::Clip;
+use flui_foundation::geometry::Offset;
+use flui_layer::{PictureLayer, Scene, SceneBuilder};
 
-let mut tree = LayerTree::new();
-let root = tree.insert_root(Layer::from(OffsetLayer::zero()));
-let clip = tree.push_child(
-    root,
-    Layer::from(ClipRectLayer::new(
-        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        Clip::AntiAlias,
-    )),
-);
-tree.push_child(clip, Layer::from(PictureLayer::default()));
+let mut builder = SceneBuilder::new();
+let offset = builder.push_offset(Offset::ZERO);
+builder.push_opacity(0.5);
+builder.add(PictureLayer::default());
+builder.pop();
+let tree = builder.build();
+assert_eq!(tree.parent(offset), Some(tree.root()));
 
 let scene = Scene::new(tree); // frozen: no `&mut` path back to the tree
-assert_eq!(scene.root(), Some(root));
 ```
 
-The tree is append-only: `push_child` mints the child's id in the call that links it, so a cycle
-or a doubly-parented node cannot be expressed and no walker needs a guard.
+A tree has one root for its whole life and is append-only: `push_child` mints the child's id in
+the call that links it, so a cycle or a doubly-parented node cannot be expressed and no walker
+needs a guard.
 
-### Scene building
+## Linked layers
 
-```rust
-use flui_layer::{LayerTree, OpacityLayer, PictureLayer, SceneBuilder};
-use flui_painting::DisplayList;
-use flui_foundation::geometry::Offset;
-
-let mut tree = LayerTree::new();
-let mut builder = SceneBuilder::new(&mut tree);
-builder.push_offset(Offset::ZERO);
-builder.push(OpacityLayer::new(0.9));
-builder.add_picture(DisplayList::new());
-builder.pop(); // opacity
-builder.pop(); // offset
-let root = builder.build();
-assert!(root.is_some());
-```
-
-### Linked layers
-
-For tooltips, dropdowns, and overlays that follow other content:
-
-```rust
-use flui_layer::{FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, resolve_follower_transform};
-use flui_foundation::geometry::{Offset, Size};
-use flui_painting::Alignment;
-
-let link = LayerLink::new();
-let mut tree = LayerTree::new();
-let root = tree.insert_root(Layer::from(flui_layer::OffsetLayer::zero()));
-tree.push_child(
-    root,
-    Layer::from(LeaderLayer::with_offset(
-        link,
-        Size::new(100.0, 30.0),
-        Offset::new(40.0, 10.0),
-    )),
-);
-// Hang 5 px below the leader's bottom-center.
-let follower = FollowerLayer::new(link)
-    .with_leader_anchor(Alignment::BOTTOM_CENTER)
-    .with_follower_anchor(Alignment::TOP_CENTER)
-    .with_target_offset(Offset::new(0.0, 5.0))
-    .with_size(Size::new(60.0, 20.0));
-let follower_id = tree.push_child(root, Layer::from(follower));
-
-let resolved = resolve_follower_transform(&tree, follower_id).expect("linked");
-assert_eq!(resolved.transform_point(0.0, 0.0), (60.0, 45.0));
-```
-
-The tree indexes every leader by link as it is pushed; at render time
-`resolve_follower_transform` walks both ancestor chains to their common ancestor and returns the
-transform the renderer applies at the follower's tree position, the leader's scale and
-rotation included. `FollowerLayer::with_leader_clip(LeaderClip::Hide)` hides a follower while its
-leader's anchor is clipped out (a selection handle whose end scrolled away).
+A `LeaderLayer` and the `FollowerLayer`s that share its `LayerLink` place tooltips, menus and
+selection handles against content painted elsewhere. At render time the follower's transform is
+the leader's anchor carried across both ancestor chains, the leader's scale and rotation
+included; `FollowerLayer::with_leader_clip(LeaderClip::Hide)` hides a follower while its
+leader's anchor is clipped out (a selection handle whose end scrolled away). A version resolves
+links as its flattened tree does (`a_version_resolves_links_and_annotations_as_its_flattened_tree_does`).
 
 ## Features
 
-- `testing` — the `testing::inspect` walkers (`structure`, `clip_rects`, `first_picture_bounds`,
-  …). `flui-rendering`'s render harness re-exports them.
-
-```toml
-[dev-dependencies]
-flui-layer = { git = "https://github.com/vanyastaff/flui", features = ["testing"] }
-```
-
-This crate isn't published to crates.io; depend on it via git or path — see
-the [flui facade's README](../../README.md).
+- `testing`: the `testing::inspect` walkers (`structure`, `clip_rects`, `first_picture_bounds`,
+  …), the layer-tree differ that checks a patch's footprint (ADR-0304 §11), and
+  `SceneVersion::flatten`. `flui-rendering`'s render harness re-exports them.
 
 ## Design
 
-1. **Canonical IDs** — `LayerId` from `flui-foundation`, 1-based over a 0-based `Vec`
-2. **Inherent walks** — `LayerTree` answers `ancestors`, `lowest_common_ancestor` and (for the
-   `testing` walkers) `descendants` itself; no generic tree trait sits in between
-3. **Separation** — layer types here, GPU lowering in `flui-engine`
-4. **Single owner, value-moved** — built on the paint side, frozen into a `Scene`, rendered on the
-   raster side; no lock, no `Arc`
-5. **Behavior is pinned by tests**; [`ARCHITECTURE.md`](ARCHITECTURE.md) explains the notable
-   choices
+1. **Retained, shared, immutable versions:** an unchanged boundary is the same `Arc` in the next
+   version, so a frame costs what changed, and the raster side reads a version without a lock.
+2. **Damage from patches:** a frame's damage is the footprint of the nodes its patch changed,
+   closed over what filters read, never which render objects repainted (ADR-0061, ADR-0304 §4).
+3. **Canonical IDs:** `LayerId` from `flui-foundation`, 1-based; scene node ids are generational.
+4. **Separation:** layer types and damage here, GPU lowering in `flui-engine`.
+
+[`ARCHITECTURE.md`](ARCHITECTURE.md) explains the invariants and the notable choices.
+
