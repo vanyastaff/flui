@@ -1,15 +1,15 @@
-//! The decoded images a registry keeps, and the loads that fill them.
+//! The decoded images a cache keeps, and the loads that fill them.
 //!
-//! [`AssetRegistry::load_image`](super::AssetRegistry::load_image) and its
+//! [`ImageCache::load_image`](super::ImageCache::load_image) and its
 //! network sibling go through [`DecodedImages`]: a completed image is served
 //! from a byte-budgeted LRU, a request for an image already loading joins
 //! that load, and a cold request starts one on the caller's background lanes.
 //!
-//! # The registry owns a load, a subscriber only waits for it
+//! # The cache owns a load, a subscriber only waits for it
 //!
 //! The first request for a source reads it on its lanes' IO lane and decodes
-//! it on their compute lane; the registry starts no runtime or thread of its
-//! own. The load is the registry's, not that subscriber's: every
+//! it on their compute lane; the cache starts no runtime or thread of its
+//! own. The load is the cache's, not that subscriber's: every
 //! [`ImageLoad`] waiting on it is a subscriber, and only when the last one is
 //! dropped is the pending entry removed, its [`LoadTicket`] cancelled and its
 //! cancel signal sent. The IO future sees the signal at its next poll: an
@@ -40,7 +40,7 @@
 //! # Decoding never runs on the IO lane
 //!
 //! Bytes are read first; the decode runs on the compute lane behind the
-//! registry's decode slots, so at most `decode_threads` decodes run at once.
+//! cache's decode slots, so at most `decode_threads` decodes run at once.
 //! Load slots are granted in admission order; a decode slot goes to the
 //! earliest-admitted load whose bytes are ready ([`OrderedSlots`]), and a load
 //! still fetching holds none, so the decoder never idles behind a slow read.
@@ -71,21 +71,21 @@ use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
 use super::ordered_slots::{AdmissionOrder, OrderedSlots, Reservation, Slot, Start};
-use crate::Image;
 use crate::error::{AssetError, Result};
+use flui_painting::paint::{Image, ImageDecodeError};
 
-/// Decoded bytes a registry keeps by default.
+/// Decoded bytes a cache keeps by default.
 ///
 /// Phones and the browser get a quarter of the desktop budget: there the
 /// system kills a process for its footprint long before it runs out of
 /// address space.
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
 pub(crate) const DEFAULT_DECODED_IMAGE_BYTES: usize = 64 * 1024 * 1024;
-/// Decoded bytes a registry keeps by default.
+/// Decoded bytes a cache keeps by default.
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 pub(crate) const DEFAULT_DECODED_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 
-/// The most decodes a registry runs at once by default: half the cores, at
+/// The most decodes a cache runs at once by default: half the cores, at
 /// most four, so decoding never takes the cores the owner and raster threads
 /// need.
 pub(crate) fn default_decode_threads() -> NonZeroUsize {
@@ -103,10 +103,10 @@ const FILE_READ_CHUNK: usize = 256 * 1024;
 /// not keep a subscriber re-admitting forever.
 const MAX_HANDOVERS: u8 = 4;
 
-/// Where a decoded image comes from: the identity a registry caches it and
+/// Where a decoded image comes from: the identity a cache caches it and
 /// coalesces its loads under.
 ///
-/// Two sources are the same image only within one registry; each registry
+/// Two sources are the same image only within one cache; each cache
 /// keeps its own decoded images.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -167,7 +167,7 @@ type Lanes = Option<Arc<dyn Executor>>;
 ///
 /// ```rust,ignore
 /// let services = LoadServices::new().with_lanes(lanes).with_http(http);
-/// let load = registry.load_network_image(url, services);
+/// let load = cache.load_network_image(url, services);
 /// ```
 #[derive(Clone, Default)]
 pub struct LoadServices {
@@ -309,7 +309,7 @@ impl State {
     }
 }
 
-/// A registry's decoded images: the completed ones it keeps and the loads in
+/// A cache's decoded images: the completed ones it keeps and the loads in
 /// flight.
 pub(crate) struct DecodedImages {
     state: Mutex<State>,
@@ -325,7 +325,7 @@ pub(crate) struct DecodedImages {
     decodes: Arc<OrderedSlots>,
 }
 
-/// Loads a registry lets read or wait to decode per decode thread: enough to
+/// Loads a cache lets read or wait to decode per decode thread: enough to
 /// keep the decoders fed past a slow read, few enough that the encoded bytes
 /// waiting for them stay bounded.
 pub(crate) const LOADS_PER_DECODE_THREAD: usize = 4;
@@ -438,7 +438,7 @@ impl DecodedImages {
         let order = state.next_order;
         state.next_order = order
             .checked_add(1)
-            .expect("BUG: a registry admitted 2^64 image loads");
+            .expect("BUG: a cache admitted 2^64 image loads");
         let ticket = Arc::new(LoadTicket {
             cancelled: AtomicBool::new(false),
             order,
@@ -792,15 +792,13 @@ impl DecodedImages {
                 reason = "ADR-0287: a panicking image decoder fails its load, not the lane"
             )]
             Some(
-                std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    crate::assets::image::decode_rgba8(&label, &bytes)
-                }))
-                .unwrap_or_else(|_| {
-                    Err(AssetError::DecodeFailed {
-                        path: label.to_string(),
-                        reason: "the image decoder panicked".to_owned(),
-                    })
-                }),
+                std::panic::catch_unwind(AssertUnwindSafe(|| decode_rgba8(&label, &bytes)))
+                    .unwrap_or_else(|_| {
+                        Err(AssetError::DecodeFailed {
+                            path: label.to_string(),
+                            reason: "the image decoder panicked".to_owned(),
+                        })
+                    }),
             )
         };
         let Some(lanes) = lanes else {
@@ -1253,4 +1251,15 @@ impl Future for ImageLoad {
             }
         }
     }
+}
+
+/// Decodes `bytes` read from `path` into RGBA8 pixels.
+fn decode_rgba8(path: &str, bytes: &[u8]) -> Result<Image> {
+    Image::decode(bytes).map_err(|error| AssetError::LoadFailed {
+        path: path.to_owned(),
+        reason: match error {
+            ImageDecodeError::Malformed(reason) => format!("Failed to decode image: {reason}"),
+            error => error.to_string(),
+        },
+    })
 }

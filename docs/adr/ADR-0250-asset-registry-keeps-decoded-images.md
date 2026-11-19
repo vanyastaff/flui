@@ -34,8 +34,8 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
 
 ## Decision
 
-1. **The registry keeps the decoded images of the loads it bridges.** `AssetRegistry` owns an LRU
-   bounded by pixel bytes (`AssetRegistryBuilder::decoded_image_budget`; 256 MiB, 64 MiB on
+1. **The image cache keeps the decoded images of the loads it bridges.** `ImageCache` owns an LRU
+   bounded by pixel bytes (`ImageCacheConfig::budget`; 256 MiB, 64 MiB on
    Android, iOS and the web), a pending map, and `cached_image(&ImageSource)` as the synchronous
    probe. An image larger than the budget is handed to its waiters and not kept. There is no
    process-wide image cache; the `image::decode_cache::CACHE` global and its allowlist entry are
@@ -66,29 +66,28 @@ an async worker, and sent the result down a oneshot. Five defects followed from 
    scrolled out of a lazy list unmounts and cancels, so the loads left waiting are the
    mounted ones.
 4. **Keys are typed.** `flui_widgets::ImageCacheKey` is opaque: built-in providers key by the
-   registry's weak allocation identity and the `ImageSource`; custom providers key by a value of
+   cache's weak allocation identity and the `ImageSource`; custom providers key by a value of
    their own type through `ImageCacheKey::custom`. `ImageProvider::cached` is the non-blocking
    probe `Image` makes before subscribing.
 5. **Memory pressure.** The renderer reclaims image textures itself: moderate pressure evicts
    those the last frame did not draw, critical pressure evicts all and releases the image atlas texture. The
-   registry's `ReclaimMemory` trims decoded images to half the budget (moderate) or drops them
-   (critical). The application owns its registry and registers it with
-   `AppConfig::memory_reclaim`, as it already registers the registry's typed caches; the host
-   does not own a registry it could reclaim unasked.
+   cache's `ReclaimMemory` trims decoded images to half the budget (moderate) or drops them
+   (critical). The application owns its cache and registers it with
+   `AppConfig::memory_reclaim`; the host does not own a cache it could reclaim unasked.
 
 ## Consequences
 
 - `load_image_bridged` and `load_network_image_bridged` return `ImageLoad` and consult the
-  registry's decoded-image cache; a second load of a decoded source is a hit, not a request.
+  image cache; a second load of a decoded source is a hit, not a request.
 - `ImageCacheKey::Asset`, `ImageCacheKey::Network` and `NetworkImageKey` are gone; a custom
   provider that used `ImageCacheKey::Asset(label)` moves to `ImageCacheKey::custom(value)`.
 - `NetworkLoader::try_new` has connect, read and whole-request timeouts, and `load_url` refuses bodies
   over 256 MiB. Every image decode refuses an image whose RGBA8 pixels would pass 256 MiB
   (128 MiB on Android, iOS and the web) before it allocates them.
-- An application that does not register its registry keeps its decoded images under pressure.
+- An application that does not register its image cache keeps its decoded images under pressure.
   Removing that opt-in needs host-owned asset services, which is a separate decision.
 - `Image::file` and `Image::memory` still decode on the owner thread; their providers take no
-  registry and so have no decode pool to reach.
+  image cache and so have no decode pool to reach.
 
 ## Verification
 

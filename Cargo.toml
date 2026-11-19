@@ -22,7 +22,7 @@ members = [
     "crates/flui-interaction", # Event routing and gestures
     "crates/flui-semantics",   # Accessibility tree
     "crates/flui-animation",   # Animation system
-    "crates/flui-assets",      # Asset loading and caching
+    "crates/flui-assets",      # Decoded-image cache
 
     # R: render machine
     "crates/flui-layer",     # Retained compositing layers
@@ -415,13 +415,11 @@ futures-core = { version = "0.3", default-features = false, features = ["std"] }
 # also needs StreamExt to await portal notifications on its existing executor.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
-# Recency order for each asset registry's byte-budgeted decoded-image cache
-# (`flui_assets::registry::images`), the one a frame probes synchronously
-# before starting a bridged image load. No time-based eviction. flui-assets'
-# Moka cache stores typed loaded results with configurable expiration; bridged
-# image loads use this cache instead.
+# Recency order of an image cache's byte-budgeted decoded images
+# (`flui_assets::ImageCache`), the one a frame probes synchronously before
+# starting an image load. No time-based eviction.
 lru = "0.19.0"
-
+# IMAGE PROCESSING - Used by flui-painting (the one decoder) and flui-engine
 
 # IMAGE PROCESSING - Used by flui-assets and flui-engine
 # TODO: Re-enable "webp" feature when image-rs/image-webp#102 is fixed upstream
@@ -484,8 +482,6 @@ zip = { version = "9.0.4", default-features = false }
 # - lyon (tessellation)
 # - guillotiere (texture atlas)
 
-# CACHING - Used by flui-assets
-moka = { version = "0.12.16", features = ["future"] }
 
 # NETWORKING - the built-in HTTP client (ADR-0280)
 # The blocking HTTP stack of the native hosts without a system one (Linux and

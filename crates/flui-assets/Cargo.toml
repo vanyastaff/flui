@@ -6,13 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "High-performance asset management with smart caching, type safety, and async I/O"
+description = "The decoded-image cache of FLUI: byte-budgeted, shared loads on the caller's background lanes"
 repository.workspace = true
-keywords = ["assets", "cache", "async", "game", "ui"]
-categories = ["asynchronous", "caching", "game-development", "gui"]
-
-# Dev-only files a `cargo package --list` sweep found leaking into the
-# published archive (internal architecture docs, criterion benches, etc.):
+keywords = ["ui", "image", "cache", "flui"]
+categories = ["caching", "gui"]
+# The crate's design notes are for its contributors, not its users.
 exclude = ["/docs/"]
 documentation = "https://docs.rs/flui-assets"
 # All root tests/*.rs files are compiled as modules of ONE integration-test
@@ -21,74 +19,33 @@ documentation = "https://docs.rs/flui-assets"
 autotests = false
 
 [dependencies]
-# Internal dependencies
 flui-foundation = { workspace = true }
-flui-painting = { workspace = true }
-# The `Executor` a decoded-image load runs on: the caller's background lanes
-# (ADR-0047), so the registry starts no runtime or thread of its own, and the
-# HTTP client a network image is fetched with (ADR-0280).
+# `Image::decode`, the one image decoder, whose limit bounds every decoded image.
+flui-painting = { workspace = true, features = ["decode"] }
+# The `Executor` a load runs on: the caller's background lanes (ADR-0279), so
+# the cache starts no runtime or thread of its own, and the HTTP client a
+# network image is fetched with (ADR-0280).
 flui-platform = { workspace = true }
-
-# Async runtime. "sync" backs the decoded-image load channels and slots
-# (`registry::images`); "rt" backs the typed cache's `tokio::fs` loaders.
-tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt"] }
-
-# High-performance cache
-moka = { workspace = true }
-
-# Sync primitives
+# The one-shot channels between a load and its subscribers.
+tokio = { workspace = true, features = ["sync"] }
 parking_lot = { workspace = true }
-
-# Error handling
 thiserror = { workspace = true }
-
-# The registry's byte-budgeted decoded-image LRU (`registry::images`).
-lru = { workspace = true, optional = true }
+# The byte-budgeted recency order of the decoded images kept.
+lru = { workspace = true }
 
 [dev-dependencies]
-# "macros" backs `#[tokio::test]`; "time" backs `tokio::time::timeout`, the
-# decode-scheduling tests' hang guard; "rt-multi-thread" builds the runtime the
-# tests' lanes (`tests/lanes.rs`) run IO on, as a native host's default IO
-# lane does.
+# "rt-multi-thread" builds the runtime the tests' lanes (`tests/lanes.rs`) run
+# IO on, as a native host's default IO lane does; "time" backs
+# `tokio::time::timeout`, the decode-scheduling tests' hang guard.
 tokio = { workspace = true, features = ["macros", "time", "rt-multi-thread"] }
 # `ScriptedHttp`, the scripted HTTP client network-image tests fetch with.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-platform = { path = "../flui-platform", features = ["testing"] }
 # `CountingWaker`, the waker whose wakes a network-image test counts.
 flui-foundation = { path = "../flui-foundation", features = ["testing"] }
-# The decoder hooks `image_hook_reentry` registers: the same `image` crate
-# `flui-painting/decode` decodes with.
+# The decoder hooks `image_decode_scheduling` observes decodes through: the
+# same `image` crate `flui-painting/decode` decodes with.
 image = { workspace = true }
-
-[features]
-default = []
-
-## Core Features
-##
-## Enable specific asset types and loading capabilities:
-
-# Enable image loading (PNG, JPEG, GIF, WebP, etc.)
-# Images decode through `flui_painting::paint::Image::decode`, whose limit
-# bounds every decoded image.
-images = ["flui-painting/decode", "dep:lru"]
-
-## Future Features (Coming Soon)
-##
-## Performance optimizations and development tools:
-
-# File watching for hot-reload during development
-# hot-reload = ["notify"]
-
-# Memory-mapped font loading for reduced memory usage
-# mmap-fonts = ["memmap2"]
-
-# Parallel image/video decoding for faster loading
-# parallel-decode = ["rayon"]
-
-## Convenience Feature Sets
-
-# Enable all stable features (recommended for applications)
-full = ["images"]
 
 [lints]
 workspace = true
@@ -97,28 +54,20 @@ workspace = true
 name = "assets_it"
 path = "tests/main.rs"
 
-# image's decoder registrations are process-global and cannot be removed.
-[[test]]
-name = "image_hook_reentry"
-path = "tests/image_hook_reentry.rs"
-required-features = ["images"]
 
 # Decoder hooks are process-global, so the decode-scheduling contracts that
 # observe decodes through them run in their own process too.
 [[test]]
 name = "image_decode_scheduling"
 path = "tests/image_decode_scheduling.rs"
-required-features = ["images"]
 
 [package.metadata.flui]
 tier = "S"
 tier-kind = "internal"
 order = 7
-# tokio's networking stack (mio) has no wasm32-unknown-unknown support.
-wasm = false
 
 # What the asset loader needs from the application's manifests (ADR-0307):
-# it `fstat`s each file it reads (`registry::images`), an Apple
+# it `fstat`s each file it reads (`image_cache::loads`), an Apple
 # required-reason API (C617.1, files inside the app's container).
 [package.metadata.flui.declares]
 schema = 1

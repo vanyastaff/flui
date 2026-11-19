@@ -48,7 +48,7 @@ These crates compose the rendering and platform substrate largely without knowin
 | `flui-interaction` | Hit-testing, gestures, focus, pointer events, owner-local text input |
 | `flui-semantics` | Accessibility tree (semantics nodes, focus, labels) |
 | `flui-animation` | curves, tweens, controllers, implicit animations (re-enabled for the Core.1 transition widgets) |
-| `flui-assets` | Asset loading, caching, image decoding |
+| `flui-assets` | The decoded-image cache: byte-budgeted, shared image loads on the caller's lanes |
 
 ## Tier R — render machine
 

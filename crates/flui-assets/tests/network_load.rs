@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use flui_assets::{AssetError, AssetRegistryBuilder, LoadServices};
+use flui_assets::{AssetError, ImageCache, ImageCacheConfig, LoadServices};
 use flui_platform::executor::{Lane, SpawnError};
 use flui_platform::http::{HttpError, StatusCode};
 use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
@@ -32,7 +32,7 @@ fn decode_error_then_recovery() {
     http.respond(URL, ScriptedResponse::ok(b"invalid image".to_vec()));
     let lanes = ThreadLanes::new();
     let services = lanes.services().with_http(http.handle());
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     let malformed = block_on(registry.load_network_image(URL, services.clone()));
     assert!(
         matches!(
@@ -63,7 +63,7 @@ fn decode_error_then_recovery() {
 fn no_lanes() {
     let http = ScriptedHttp::new();
     http.respond(URL, ScriptedResponse::ok(PNG.to_vec()));
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     let image =
         block_on(registry.load_network_image(URL, LoadServices::new().with_http(http.handle())))
             .expect("the image loads with no lanes and no runtime");
@@ -79,7 +79,7 @@ fn error_status() {
             body: b"not here".to_vec(),
         },
     );
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     let answered =
         block_on(registry.load_network_image(URL, LoadServices::new().with_http(http.handle())));
     assert!(
@@ -91,7 +91,7 @@ fn error_status() {
 fn failed_request() {
     let http = ScriptedHttp::new();
     http.respond(URL, ScriptedResponse::Fail(HttpError::Timeout));
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     let answered =
         block_on(registry.load_network_image(URL, LoadServices::new().with_http(http.handle())));
     assert!(
@@ -109,7 +109,7 @@ fn failed_request() {
 /// A host with no HTTP client answers a typed error and sends nothing.
 fn no_client() {
     let lanes = QueuedLanes::new();
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     let pending = registry.load_network_image(URL, lanes.services());
     lanes.run_until_idle();
     let answered = block_on(pending);
@@ -128,7 +128,7 @@ fn handed_over() {
     let http = ScriptedHttp::new();
     http.hold(URL);
     let retiring = QueuedLanes::new();
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     let first = registry.load_network_image(URL, retiring.services().with_http(http.handle()));
     retiring.run_until_idle();
     assert_eq!(http.requests_to(URL), 1, "the lead's request is in flight");
@@ -169,7 +169,7 @@ fn an_image_request_lives_exactly_as_long_as_someone_waits_for_it() {
     http.hold(URL);
     let lanes = ThreadLanes::new();
     let services = lanes.services().with_http(http.handle());
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     let first = registry.load_network_image(URL, services.clone());
     let second = registry.load_network_image(URL, services);
     eventually(|| http.requests_to(URL) == 1, "the shared request goes out");
@@ -383,14 +383,14 @@ const OTHER_PNG: &[u8] = include_bytes!("fixtures/tiny_5x3.png");
 /// Red-check: key network sources by URL alone (each load gets the image
 /// of the client that fetched first).
 #[test]
-fn one_registry_keeps_two_clients_images_of_one_url_apart() {
+fn one_cache_keeps_two_clients_images_of_one_url_apart() {
     for in_flight in [false, true] {
         let first = ScriptedHttp::new();
         first.respond(URL, ScriptedResponse::ok(PNG.to_vec()));
         let second = ScriptedHttp::new();
         second.respond(URL, ScriptedResponse::ok(OTHER_PNG.to_vec()));
         let lanes = QueuedLanes::new();
-        let registry = AssetRegistryBuilder::new().default_capacity().build();
+        let registry = ImageCache::default();
         let first_load =
             registry.load_network_image(URL, lanes.services().with_http(first.handle()));
         if !in_flight {
@@ -503,11 +503,9 @@ fn held_loads(
     http: &ScriptedHttp,
     lanes: &std::sync::Arc<QueuedLanes>,
     count: usize,
-) -> (flui_assets::AssetRegistry, Vec<flui_assets::ImageLoad>) {
-    let registry = AssetRegistryBuilder::new()
-        .default_capacity()
-        .decode_threads(std::num::NonZeroUsize::MIN)
-        .build();
+) -> (flui_assets::ImageCache, Vec<flui_assets::ImageLoad>) {
+    let registry =
+        ImageCache::new(ImageCacheConfig::default().decode_threads(std::num::NonZeroUsize::MIN));
     let loads = (0..count)
         .map(|n| {
             http.hold(nth_url(n));
@@ -690,7 +688,7 @@ fn a_panicking_waker_leaves_the_rest_told() {
 fn a_panicking_waker_keeps_its_outcome() {
     let http = ScriptedHttp::new();
     let lanes = QueuedLanes::new();
-    let registry = AssetRegistryBuilder::new().default_capacity().build();
+    let registry = ImageCache::default();
     http.respond(URL, ScriptedResponse::Fail(HttpError::Timeout));
     let lead = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
     let mut panicking = registry.load_network_image(URL, lanes.services().with_http(http.handle()));
