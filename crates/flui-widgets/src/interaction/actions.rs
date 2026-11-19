@@ -519,15 +519,21 @@ impl FocusRecord {
 }
 
 /// The record a focused widget left on `node`. `None` for a node no `Focus`
-/// or text field hosts, or one with no `Actions` above it.
-fn record_at(node: &FocusNode) -> Option<Rc<FocusRecord>> {
-    node.context()?.downcast::<FocusRecord>().ok()
+/// or text field hosts, or one with no `Actions` above it. A text field
+/// leaves the record itself; a focus host leaves its shared state, which
+/// holds it.
+fn record_at(node: &FocusNode) -> Option<FocusRecord> {
+    let context = node.context()?;
+    match context.downcast_ref::<FocusRecord>() {
+        Some(record) => Some(record.clone()),
+        None => super::focus_host::hosted_record(&context),
+    }
 }
 
 /// The chain recorded on `node`: the bindings visible at the focused widget's
 /// position, which is where a shortcut's intent is resolved.
 pub(crate) fn chain_at(node: &FocusNode) -> Option<ActionChain> {
-    record_at(node).map(|record| record.chain.clone())
+    record_at(node).map(|record| record.chain)
 }
 
 /// The platform convention the widget that recorded on `node` was built

@@ -439,9 +439,10 @@ impl FocusNodeRegistration {
             && self.node.upgrade().is_some_and(|node| {
                 !node.is_closed()
                     && match self.kind {
-                        FocusNodeRegistrationKind::KeyHandler => {
-                            node.on_key_event.is_current(self.generation)
-                        }
+                        FocusNodeRegistrationKind::KeyHandler => node
+                            .rare
+                            .get()
+                            .is_some_and(|rare| rare.on_key_event.is_current(self.generation)),
                         FocusNodeRegistrationKind::KeyCancelHandler => node
                             .rare
                             .get()
@@ -488,7 +489,9 @@ impl FocusNodeRegistration {
         };
         match self.kind {
             FocusNodeRegistrationKind::KeyHandler => {
-                node.on_key_event.clear(self.generation, &node);
+                if let Some(rare) = node.rare.get() {
+                    rare.on_key_event.clear(self.generation, &node);
+                }
             }
             FocusNodeRegistrationKind::KeyCancelHandler => {
                 if let Some(rare) = node.rare.get() {
@@ -540,8 +543,11 @@ impl std::fmt::Debug for FocusNodeRegistration {
 }
 /// What few focus nodes register. A node makes room for these with the
 /// first registration of one and keeps it: a registration's generation
-/// lives here, and outlives the value it names.
+/// lives here, and outlives the value it names. A control's node (a button,
+/// a checkbox) registers none of them; a node with a key handler (a
+/// scrollable, a text field, `Shortcuts`) pays this box.
 struct RareRegistrations {
+    on_key_event: Registered<KeyEventHandler>,
     on_key_cancel: Registered<KeyCancelHandler>,
     traversal_entry: Registered<TraversalEntry>,
     traversal_group: Registered<GroupConfig>,
@@ -555,6 +561,7 @@ struct RareRegistrations {
 impl RareRegistrations {
     fn new() -> Self {
         Self {
+            on_key_event: Registered::new(),
             on_key_cancel: Registered::new(),
             traversal_entry: Registered::new(),
             traversal_group: Registered::new(),
@@ -575,7 +582,6 @@ pub struct FocusNode {
     skip_traversal: Cell<bool>,
     descendants_are_focusable: Cell<bool>,
     scope_owner: RefCell<Option<Weak<FocusScopeNode>>>,
-    on_key_event: Registered<KeyEventHandler>,
     listeners: ChangeNotifier,
     rect_provider: Registered<RectProvider>,
     context: Registered<NodeContext>,
@@ -735,7 +741,6 @@ impl FocusNode {
             skip_traversal: Cell::new(false),
             descendants_are_focusable: Cell::new(true),
             scope_owner: RefCell::new(scope_owner),
-            on_key_event: Registered::new(),
             listeners: ChangeNotifier::new(),
             rect_provider: Registered::new(),
             context: Registered::new(),
@@ -923,12 +928,16 @@ impl FocusNode {
 
     /// Install this node's key handler.
     pub fn set_on_key_event(&self, handler: KeyEventHandler) {
-        self.on_key_event.write(Some(handler), self);
+        self.rare().on_key_event.write(Some(handler), self);
     }
 
     /// Clear this node's key handler.
     pub fn clear_on_key_event(&self) {
-        self.on_key_event.write(None, self);
+        // A node that never had a key handler has nothing to clear, and no
+        // registration of one whose generation a write would retire.
+        if let Some(rare) = self.rare.get() {
+            rare.on_key_event.write(None, self);
+        }
     }
 
     /// Install this node's key handler with generation-checked cleanup
@@ -940,7 +949,7 @@ impl FocusNode {
         self: &Rc<Self>,
         handler: KeyEventHandler,
     ) -> FocusNodeRegistration {
-        let generation = self.on_key_event.write(Some(handler), self);
+        let generation = self.rare().on_key_event.write(Some(handler), self);
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::KeyHandler)
     }
 
@@ -1346,7 +1355,7 @@ impl FocusNode {
 
     /// Invoke this node's key handler.
     pub fn handle_key_event(&self, event: &KeyEvent) -> KeyEventResult {
-        let handler = self.on_key_event.get();
+        let handler = self.rare.get().and_then(|rare| rare.on_key_event.get());
         let Some(handler) = handler else {
             return KeyEventResult::Ignored;
         };
@@ -1770,8 +1779,8 @@ impl FocusNode {
             // All child nodes are retained by the snapshot until their own
             // terminal state and outgoing ownership have been committed.
             node.children.borrow_mut().clear();
-            let key_handler = node.on_key_event.take();
             let rare = node.rare.get();
+            let key_handler = rare.and_then(|rare| rare.on_key_event.take());
             let key_cancel = rare.and_then(|rare| rare.on_key_cancel.take());
             let rect_provider = node.rect_provider.take();
             let context = node.context.take();
