@@ -1525,7 +1525,20 @@ fn damaged_and_full(
     frame(&mut partial, before, region, |plan| {
         plan == FramePlan::Direct
     });
-    warm(&mut partial, before);
+    // The warm-up seeds the retained target, unless `before` holds a filter
+    // that paints transparent black: its version closes every damage to the
+    // whole surface (`SceneVersion::close_damage`), so the frame renders in
+    // full and direct, as a pipeline's version with that filter does.
+    partial.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+    partial.render_scene(before).expect("the warm-up renders");
+    assert!(
+        matches!(
+            partial.last_plan(),
+            Some(FramePlan::RetainedFull | FramePlan::Direct)
+        ),
+        "{:?}",
+        partial.last_plan()
+    );
     let region = differ.diff(&after.tree, (SIDE, SIDE));
     frame(&mut partial, after, region, plan);
     (
