@@ -453,25 +453,28 @@ impl PressCallbacks {
         }
     }
 
-    /// Whether a slot set now acts on a press of `button`: a primary press
-    /// for the tap family, a long press, a double tap or a pressed state, a
-    /// secondary press for the secondary tap. The members are built with
-    /// every tap callback and read these slots live, so this is the press
-    /// group's own gate on a Down ([`PressRecognizers::takes_down`]).
-    fn acts_on(&self, button: PointerButton) -> bool {
-        if button == PointerButton::PRIMARY {
-            self.tap.is_some()
-                || self.tap_down.is_some()
-                || self.tap_up.is_some()
-                || self.tap_cancel.is_some()
-                || self.pressed.is_some()
-                || self.long_press.is_some()
-                || self.double_tap.is_some()
-                || self.double_tap_down.is_some()
-        } else if button == PointerButton::SECONDARY {
-            self.secondary_tap.is_some()
-        } else {
-            false
+    /// Whether a slot set now gives `member` something to do with a press of
+    /// `button`: the tap a primary press for the tap family or a pressed
+    /// state, and a secondary press for the secondary tap; the long press and
+    /// the double tap a primary press for their own slots. The members are
+    /// built with every callback of their kind and read these slots live, so
+    /// this is each member's gate on a Down: its admission in the press
+    /// group's set, and the group's answer to [`PressRecognizers::takes_down`].
+    fn acts_on(&self, member: PressMember, button: PointerButton) -> bool {
+        let primary = button == PointerButton::PRIMARY;
+        match member {
+            PressMember::Tap if primary => {
+                self.tap.is_some()
+                    || self.tap_down.is_some()
+                    || self.tap_up.is_some()
+                    || self.tap_cancel.is_some()
+                    || self.pressed.is_some()
+            }
+            PressMember::Tap => button == PointerButton::SECONDARY && self.secondary_tap.is_some(),
+            PressMember::LongPress => primary && self.long_press.is_some(),
+            PressMember::DoubleTap => {
+                primary && (self.double_tap.is_some() || self.double_tap_down.is_some())
+            }
         }
     }
 
@@ -495,6 +498,37 @@ pub(super) struct PressShape {
     tap: bool,
     long_press: bool,
     double_tap: bool,
+}
+
+/// One recognizer of the press group ([`PressMembers`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PressMember {
+    Tap,
+    LongPress,
+    DoubleTap,
+}
+
+impl PressShape {
+    /// The members this shape builds.
+    fn members(self) -> impl Iterator<Item = PressMember> {
+        [
+            (self.tap, PressMember::Tap),
+            (self.long_press, PressMember::LongPress),
+            (self.double_tap, PressMember::DoubleTap),
+        ]
+        .into_iter()
+        .filter_map(|(built, member)| built.then_some(member))
+    }
+}
+
+/// `member`'s admission in the press group's set: a Down of a button a slot
+/// gives it something to do with now ([`PressCallbacks::acts_on`]).
+fn member_admission(
+    member: PressMember,
+    live: &Rc<dyn PressLive>,
+) -> impl Fn(PointerDispatch<'_>) -> bool + 'static {
+    let live = Rc::clone(live);
+    move |down: PointerDispatch<'_>| matches!(down.local, PointerEvent::Down(press) if live.press().acts_on(member, press.button()))
 }
 
 impl PressShape {
@@ -1164,15 +1198,18 @@ impl PressMembers {
                 })
                 .build()
         });
+        // Each member joins only a Down its own slots act on: a tap wired
+        // for every button but given only `on_tap` does not join a secondary
+        // click.
         let mut set = RecognizerSet::default();
         if let Some(tap) = &tap {
-            set.attach(tap);
+            set.attach_when(tap, member_admission(PressMember::Tap, live));
         }
         if let Some(long_press) = &long_press {
-            set.attach(long_press);
+            set.attach_when(long_press, member_admission(PressMember::LongPress, live));
         }
         if let Some(double_tap) = &double_tap {
-            set.attach(double_tap);
+            set.attach_when(double_tap, member_admission(PressMember::DoubleTap, live));
         }
         Self {
             set,
@@ -1211,25 +1248,21 @@ impl GestureArenaMember for PressRecognizers {
 }
 
 impl GestureRecognizer for PressRecognizers {
-    /// A Down of a button some slot acts on now ([`PressCallbacks::acts_on`]:
-    /// a detector with only a secondary tap refuses a primary touch), taken
-    /// as the strongest of the members' answers.
+    /// A press when a member this shape builds has a slot that acts on the
+    /// Down's button now ([`PressCallbacks::acts_on`], the admission each
+    /// member joins the set with: a detector with only a secondary tap refuses
+    /// a primary touch); every member contends for the press itself. Answered
+    /// from the shape and the slots, without building the members a contact
+    /// has not needed yet.
     fn takes_down(&self, down: PointerDispatch<'_>) -> Option<DownTake> {
         let PointerEvent::Down(press) = down.local else {
             return None;
         };
-        if !self.live.press().acts_on(press.button()) {
-            return None;
-        }
-        let mut take = None;
-        for member in self.members().recognizers() {
-            match member.takes_down(down) {
-                Some(DownTake::Press) => return Some(DownTake::Press),
-                Some(DownTake::Motion) => take = Some(DownTake::Motion),
-                None => {}
-            }
-        }
-        take
+        let live = self.live.press();
+        self.shape
+            .members()
+            .any(|member| live.acts_on(member, press.button()))
+            .then_some(DownTake::Press)
     }
 
     fn add_pointer(&self, down: PointerDispatch<'_>) {

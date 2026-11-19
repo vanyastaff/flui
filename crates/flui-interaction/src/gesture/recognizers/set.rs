@@ -16,12 +16,40 @@ use std::rc::{Rc, Weak};
 /// is attached with ([`RecognizerSet::attach_when`]), and the one a widget's
 /// contact admission holds. Asked of the Down only; the contact's later
 /// events reach the recognizer whatever it answered for a Down it admitted.
+///
+/// It must be pure: a platform asks it too, between owner turns and outside
+/// the UI runtime's scope ([`RecognizerSet::claims_press`] through a press
+/// probe), where no signal can be read or written.
 pub type DownAdmission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
 
 #[derive(Clone)]
 struct Attached {
     recognizer: Weak<dyn GestureRecognizer>,
     admit: Option<DownAdmission>,
+}
+
+/// How `recognizer`, attached as `entry`, takes the Down `dispatch` carries
+/// from a contact of `kind`: its device admitted, its own answer
+/// ([`GestureRecognizer::takes_down`]), then its attachment's admission. The
+/// one composition both [`RecognizerSet::dispatch`] and
+/// [`RecognizerSet::claims_press`] ask, so delivery and a platform's press
+/// question cannot disagree. The recognizer's answer is asked first: it is
+/// pure, and the admission is user code.
+fn admitted_take(
+    entry: &Attached,
+    recognizer: &dyn GestureRecognizer,
+    dispatch: PointerDispatch<'_>,
+    kind: crate::events::PointerKind,
+) -> Option<super::recognizer::DownTake> {
+    if !admits_device(recognizer.allowed_devices(), kind) {
+        return None;
+    }
+    let take = recognizer.takes_down(dispatch)?;
+    entry
+        .admit
+        .as_ref()
+        .is_none_or(|admit| admit(dispatch))
+        .then_some(take)
 }
 
 /// Ordered weak recognizer attachments; widget state retains strong ownership.
@@ -78,9 +106,10 @@ impl RecognizerSet {
             };
             let candidate = caught(|| match dispatch.local {
                 PointerEvent::Down(down) => {
-                    if admits_device(recognizer.allowed_devices(), down.pointer.kind)
-                        && entry.admit.as_ref().is_none_or(|admit| admit(dispatch))
-                    {
+                    // The seam holds the gate: a recognizer is offered only a
+                    // Down it takes, whether or not its own `add_pointer`
+                    // asks again.
+                    if admitted_take(entry, &*recognizer, dispatch, down.pointer.kind).is_some() {
                         recognizer.add_pointer(dispatch);
                     }
                 }
@@ -125,9 +154,8 @@ impl RecognizerSet {
         };
         self.entries.iter().any(|entry| {
             entry.recognizer.upgrade().is_some_and(|recognizer| {
-                admits_device(recognizer.allowed_devices(), down.pointer.kind)
-                    && recognizer.takes_down(dispatch) == Some(super::recognizer::DownTake::Press)
-                    && entry.admit.as_ref().is_none_or(|admit| admit(dispatch))
+                admitted_take(entry, &*recognizer, dispatch, down.pointer.kind)
+                    == Some(super::recognizer::DownTake::Press)
             })
         })
     }

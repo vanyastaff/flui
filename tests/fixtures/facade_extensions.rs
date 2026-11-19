@@ -418,6 +418,14 @@ impl flui::interaction::GestureArenaMember for DistanceRecognizer {
 }
 
 impl flui::interaction::GestureRecognizer for DistanceRecognizer {
+    /// Any Down, claimed once it moves past the threshold.
+    fn takes_down(
+        &self,
+        _dispatch: flui::interaction::PointerDispatch<'_>,
+    ) -> Option<flui::interaction::DownTake> {
+        Some(flui::interaction::DownTake::Motion)
+    }
+
     fn add_pointer(&self, dispatch: flui::interaction::PointerDispatch<'_>) {
         self.contact
             .begin(dispatch, &flui::interaction::GestureSettings::default())

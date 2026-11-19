@@ -30,13 +30,6 @@
   (`RecognizerSet::claims_press`); a raw pointer-down callback only observes.
 - `DownTake` and `DownAdmission` in `flui-interaction` (`DownTake` also in `flui_sdk::interaction`
   and `flui::interaction`).
-
-### Changed
-
-- `GestureRecognizer` has a required `takes_down`: how the recognizer takes a Down, judged from
-  the Down and its configuration alone (`None`, `DownTake::Press`, `DownTake::Motion`), which its
-  `add_pointer` asks first and a platform's press question reuses. A recognizer written outside
-  the framework implements it.
 - `PipelineOwner::presented_placement` and `PresentedPlacement` in `flui-rendering`: where one
   render node's local space is drawn in the window after the last frame and the part of the
   window its ancestors' clips leave it, by the paint walk's gates and composition, which the
@@ -46,6 +39,16 @@
 - `flui-testing`: `RecordingTextStoreHost::with_selection_ui`,
   `HeadlessWindow::with_text_store_host_drawing`, `harness::mount_with_selection_ui_on` and
   `lay_out_with_selection_ui_on`.
+
+### Changed
+
+- `GestureRecognizer` has a required `takes_down`: how the recognizer takes a Down, judged from
+  the Down and its configuration alone (`None`, `DownTake::Press`, `DownTake::Motion`). A
+  `RecognizerSet` offers `add_pointer` only a Down it takes, and a platform's press question
+  reuses it. A recognizer written outside the framework implements it.
+- A `GestureDetector` joins the gesture arena only for a button one of its slots acts on: one
+  with only `on_tap` no longer joins a secondary click (a surrounding secondary tap or context
+  menu wins it), and one with only `on_secondary_tap` no longer joins a primary press.
 
 ### Fixed
 

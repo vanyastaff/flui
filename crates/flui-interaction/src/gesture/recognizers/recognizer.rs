@@ -26,11 +26,21 @@ pub trait GestureRecognizer: GestureArenaMember {
     /// long press, a hold), [`DownTake::Motion`] when it joins the contact but
     /// claims it only once it moves past its slop (a drag, a scale, a swipe).
     ///
-    /// The one answer both questions ask: [`Self::add_pointer`] returns at
-    /// once on `None`, and a platform asking whether a widget would take a
-    /// press counts only `Press` ([`RecognizerSet::claims_press`](super::RecognizerSet::claims_press)).
+    /// The one answer both questions ask: [`RecognizerSet::dispatch`](super::RecognizerSet::dispatch)
+    /// offers [`Self::add_pointer`] only a Down this takes (and the built-in
+    /// recognizers ask it again there, so a direct call is gated too), and a
+    /// platform asking whether a widget would take a press counts only
+    /// `Press` ([`RecognizerSet::claims_press`](super::RecognizerSet::claims_press)).
     /// No default: a recognizer that left it out would either take every
     /// press from the platform or none.
+    ///
+    /// It must be pure: a platform asks it between owner turns, outside the
+    /// UI runtime's scope, where no signal can be read or written. Because it
+    /// reads configuration, never in-flight state, a Down the recognizer
+    /// would still refuse for a moment's reason (a tap already in progress, a
+    /// contact its arena membership cannot begin) answers `Press` all the
+    /// same: a platform's gesture then stands back from a touch that nobody
+    /// takes, the cautious side of the question.
     fn takes_down(&self, down: PointerDispatch<'_>) -> Option<DownTake>;
     /// Admit a Down, committing membership before invoking user callbacks.
     /// Returns at once when [`Self::takes_down`] refuses it.

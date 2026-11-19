@@ -668,8 +668,6 @@ impl LinkRouting {
         let activation = ctx.register_local_payload(self.activation(routed));
         match (pointer, activation) {
             (Ok(pointer), Ok(target)) => {
-                // A link is hit only over its own span and its tap takes the
-                // press there: the default of a target that declares nothing.
                 let handler: SemanticsActionHandler =
                     Rc::new(move |call| run_link_action(target, &call));
                 Some(TextLinkRoute::new(
