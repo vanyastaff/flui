@@ -103,6 +103,8 @@ mod measured {
     use flui_sdk::foundation::InputSequenceId as _;
     // A behavioural widget's gesture alternatives (ADR-0216).
     use flui_sdk::painting::Alignment as _;
+    // The start and end alignment a table cell resolves against the reading direction.
+    use flui_sdk::painting::AlignmentDirectional as _;
     use flui_sdk::painting::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
         BoxDecoration as _, BoxShadow as _, Color as _,
@@ -600,6 +602,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_layer::Scene;",
         "pub use flui_objects::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction};",
         "pub use flui_painting::Alignment;",
+        "pub use flui_painting::AlignmentDirectional;",
         "pub use flui_painting::BlurSigma;",
         "pub use flui_painting::Canvas;",
         "pub use flui_painting::DrawOp;",

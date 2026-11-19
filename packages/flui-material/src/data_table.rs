@@ -83,6 +83,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::{Alignment, AlignmentDirectional};
 use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::painting::{TextDirection, TextStyle};
 use flui_sdk::rendering::BoxConstraints;
@@ -92,7 +94,6 @@ use flui_sdk::widgets::{
     SizedBox, Table, TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow,
     WidgetState, WidgetStateProperty, WidgetStates,
 };
-use flui_sdk::{geometry::EdgeInsets, painting::Alignment};
 
 use crate::checkbox::{CHECKBOX_EDGE_SIZE, Checkbox};
 use crate::color_scheme::ColorScheme;
@@ -674,10 +675,12 @@ fn horizontal_insets(start: f64, end: f64, direction: TextDirection) -> EdgeInse
 /// A cell's content alignment: vertically centered against the end edge of
 /// `direction` when `numeric`, else against its start edge.
 fn cell_alignment(numeric: bool, direction: TextDirection) -> Alignment {
-    match (numeric, direction) {
-        (true, TextDirection::Ltr) | (false, TextDirection::Rtl) => Alignment::CENTER_RIGHT,
-        (false, TextDirection::Ltr) | (true, TextDirection::Rtl) => Alignment::CENTER_LEFT,
-    }
+    let alignment = if numeric {
+        AlignmentDirectional::CENTER_END
+    } else {
+        AlignmentDirectional::CENTER_START
+    };
+    alignment.resolve(direction)
 }
 
 /// A data column's cell padding at `data_column_index` (0-based, excluding
