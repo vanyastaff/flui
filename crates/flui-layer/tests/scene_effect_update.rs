@@ -10,9 +10,9 @@ use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
     BoundaryContent, Chunk, ClipRectLayer, ContentVersion, DamageRect, DamageRegion, Entry,
     EntryIndex, ImageFilterLayer, Layer, OpacityLayer, Placement, SceneNodeId, SceneOp, SceneOwner,
-    SceneWriter, SurfaceKey, TextureLayer, TransformLayer,
+    SceneWriter, SurfaceKey, TransformLayer,
 };
-use flui_painting::paint::{Clip, ImageFilter, TextureId};
+use flui_painting::paint::{Clip, ImageFilter};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
 
@@ -315,13 +315,10 @@ pub(crate) fn an_effect_update_equals_a_content_built_afresh(run: &mut Run) {
             ],
         },
         Shape {
-            name: "a texture and nested transforms",
+            name: "a clip between nested transforms",
             layers: vec![
                 translate(0.0, 0.0),
-                Layer::from(TextureLayer::new(
-                    TextureId::new(3),
-                    Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
-                )),
+                clip(Rect::from_xywh(0.0, 0.0, 200.0, 200.0)),
                 translate(10.0, 0.0),
                 translate(0.0, 10.0),
             ],

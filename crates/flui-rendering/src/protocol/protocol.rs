@@ -91,6 +91,15 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// invalidation escalation.
     type LayoutCache: crate::storage::ProtocolLayoutCache;
 
+    /// Where `RenderState<Self>` keeps the constraints of a node's last
+    /// layout and the geometry it produced: inline for the box protocol,
+    /// behind one allocation made on first write for the sliver protocol,
+    /// whose record would otherwise size every slot of the render slab.
+    type LayoutRecord: crate::storage::LayoutRecord<
+            <Self::Layout as LayoutCapability>::Geometry,
+            <Self::Layout as LayoutCapability>::Constraints,
+        >;
+
     /// Protocol name for debugging and diagnostics.
     fn name() -> &'static str;
 

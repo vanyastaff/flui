@@ -1,4 +1,4 @@
-//! External textures a presentation draws through [`TextureLayer`]s, fed with
+//! External textures a presentation draws (`Canvas::draw_texture`, ADR-0233), fed with
 //! frames from any thread.
 //!
 //! A [`TextureRegistry`] belongs to one presentation. [`TextureRegistry::register`]
@@ -14,8 +14,6 @@
 //! producer that outruns the display only costs its skipped frames. Dropping a
 //! registration retires its id; the backend releases the allocation on its next
 //! update.
-//!
-//! [`TextureLayer`]: crate::TextureLayer
 
 use std::{fmt, num::NonZeroU64, sync::Arc};
 
@@ -259,7 +257,7 @@ pub struct TextureRegistration {
 }
 
 impl TextureRegistration {
-    /// The id a `Texture` widget or [`TextureLayer`](crate::TextureLayer) names.
+    /// The id a `Texture` widget or a `Canvas::draw_texture` call names.
     #[must_use]
     pub fn id(&self) -> TextureId {
         self.id

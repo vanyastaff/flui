@@ -6567,16 +6567,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33ff1c1b360982e93b6d8ea9c04836f71dba0817a16f91e229cf3a51bdd9d987"
 
 [[package]]
-name = "wasmparser"
-version = "0.262.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "974d643b125b272607e2fff8012ea14a8328acd7621e4bafa7afb32500052b1b"
-dependencies = [
- "bitflags",
- "indexmap",
-]
-
-[[package]]
 name = "wayland-backend"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7626,7 +7616,6 @@ dependencies = [
  "tempfile",
  "toml",
  "walkdir",
- "wasmparser",
  "windows 0.62.2",
 ]
 

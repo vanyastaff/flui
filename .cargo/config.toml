@@ -26,11 +26,14 @@
 [target.wasm32-unknown-unknown]
 # Lets `cargo test --target wasm32-unknown-unknown` actually RUN the tests
 # instead of building a .wasm nobody executes (issue #985). The runner hosts
-# them on node -- no browser and no wasm-pack involved.
+# them on node, or, for a crate whose tests are `run_in_browser`, in the
+# browser its `CHROMEDRIVER` (or another driver variable) names; no wasm-pack
+# is involved.
 #
 # `wasm-bindgen-test-runner` must be on PATH and its version must match the
 # LOCKED `wasm-bindgen` exactly, or it refuses with "must exactly match".
-# `cargo xtask locked-version wasm-bindgen` prints that version, and
+# CI's `wasm-check` job reads that version from
+# `cargo metadata --all-features`, and
 # `cargo xtask doctor full` checks the installed one; this line only says which
 # runner to use, so a plain `cargo build --target wasm32-...` is unaffected.
 runner = "wasm-bindgen-test-runner"

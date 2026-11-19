@@ -16,7 +16,7 @@ use flui_foundation::{
     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
     geometry::DeviceSize,
 };
-use flui_layer::{CanvasLayer, DamageRegion, FullReason, Layer, LayerTree, Scene, SceneSnapshot};
+use flui_layer::{DamageRegion, FullReason, Scene, SceneSnapshot};
 use flui_platform::{ColorGamut, DisplayColor, DisplayConnection};
 
 struct Rig {
@@ -63,7 +63,7 @@ impl Rig {
             snapshot: SceneSnapshot::new(
                 FrameStamp::new(address(), frame_epoch, generation),
                 DamageRegion::Unchanged,
-                Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
+                Scene::default(),
             ),
         })
     }
@@ -556,7 +556,7 @@ fn a_restore_queued_before_a_surface_loss_does_not_rewind_the_generation() {
             snapshot: SceneSnapshot::new(
                 FrameStamp::new(address(), frame_epoch, generation),
                 DamageRegion::Unchanged,
-                Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
+                Scene::default(),
             ),
         }
     };
@@ -1404,7 +1404,7 @@ fn a_resize_answer_is_matched_to_its_send_by_generation() {
             snapshot: SceneSnapshot::new(
                 FrameStamp::new(address(), epoch, record.required_generation),
                 DamageRegion::Unchanged,
-                Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
+                Scene::default(),
             ),
         })
         .expect("accepted");
@@ -1439,7 +1439,7 @@ fn a_lent_scene_draws_once_and_the_next_frame_draws_in_full() {
         let _ = rig.executor.turn();
         assert_eq!(rig.verdicts(slot), [(epoch, RasterVerdict::Presented)]);
     }
-    let lent = Scene::new(LayerTree::new(Layer::from(CanvasLayer::new())));
+    let lent = Scene::default();
     assert_eq!(
         rig.executor.render_lent(slot, &lent, true).ok(),
         Some(flui_engine::PresentDisposition::Presented)
@@ -1473,7 +1473,7 @@ fn a_lent_scene_draws_once_and_the_next_frame_draws_in_full() {
 /// keeps `Held` with the old generation.
 #[test]
 fn a_lent_render_commits_what_it_did_to_the_surface() {
-    let lent = Scene::new(LayerTree::new(Layer::from(CanvasLayer::new())));
+    let lent = Scene::default();
 
     let mut rig = self::rig();
     let (slot, before) = rig.sized_window();

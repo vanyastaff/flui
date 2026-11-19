@@ -49,6 +49,9 @@ impl Protocol for SliverProtocol {
     // queries, so invalidation never needs the cache-driven escalation.
     type LayoutCache = ();
 
+    // Out of line: a sliver record would size every slab slot.
+    type LayoutRecord = crate::storage::SliverLayoutRecord;
+
     fn name() -> &'static str {
         "sliver"
     }

@@ -719,19 +719,16 @@ impl<'v> Geometry<'v> {
             {
                 out.push(Link::Everywhere);
             }
-            Layer::ShaderMask(_)
-            | Layer::BackdropFilter(_)
-            | Layer::Texture(_)
-            | Layer::PlatformView(_)
-            | Layer::PerformanceOverlay(_) => match layer.bounds() {
-                Some(bounds) => out.push(Link::Extent(bounds)),
-                None => out.push(Link::Everywhere),
-            },
+            Layer::ShaderMask(_) | Layer::BackdropFilter(_) | Layer::PerformanceOverlay(_) => {
+                match layer.bounds() {
+                    Some(bounds) => out.push(Link::Extent(bounds)),
+                    None => out.push(Link::Everywhere),
+                }
+            }
             // A recording changes what its damage extent covers, which takes
             // full-canvas fills, strokes, shadows and glyph overflow that its
             // bounds leave out, as a chunk's bounds do.
             Layer::Picture(picture) => out.push(extent_link(picture.picture().damage_extent())),
-            Layer::Canvas(canvas) => out.push(extent_link(canvas.display_list().damage_extent())),
             _ => {}
         }
     }

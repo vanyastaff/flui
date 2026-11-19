@@ -25,8 +25,8 @@ use flui_foundation::{
     panic::FirstPanic,
 };
 use flui_layer::{
-    AnnotatedRegionLayer, CanvasLayer, DamageRect, DamageRegion, FullReason, Layer, LayerTree,
-    Region, ResyncReason, Scene, SceneSnapshot,
+    AnnotatedRegionLayer, DamageRect, DamageRegion, FullReason, Layer, LayerTree, Region,
+    ResyncReason, Scene, SceneSnapshot,
 };
 
 /// An executor over the testing backend, its sender, a clone of the backend
@@ -119,7 +119,7 @@ fn attached(rig: &mut Rig, presentation: usize) -> Attached {
 }
 
 fn scene() -> Scene {
-    Scene::new(LayerTree::new(Layer::from(CanvasLayer::new())))
+    Scene::default()
 }
 
 fn snapshot(at: Attached, epoch: u64, damage: DamageRegion, scene: Scene) -> SceneSnapshot {
