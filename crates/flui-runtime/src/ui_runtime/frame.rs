@@ -668,27 +668,19 @@ impl UiRuntime {
         let dpr = presentation
             .pipeline()
             .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio);
-        let target = crate::presentation_scene::SceneTarget {
-            size: (
-                device_extent(constraints.max_width, dpr),
-                device_extent(constraints.max_height, dpr),
-            ),
-            scale: dpr,
-        };
+        let target = crate::presentation_scene::SceneTarget::of(constraints, dpr);
         // A version the surface withheld is published again as it is when this frame paints
         // nothing (ADR-0304 §7). One applied for another target, or superseded by a newer
         // version, is not what the screen should show: the tree repaints in full.
         let held_retry = scene.held_retry(target);
-        // A texture update the held version owes a publication for rides it again when this
-        // frame paints nothing (ADR-0304 §8). A version applied for another target cannot carry
-        // it: the tree repaints, and the update rides the new version.
-        let textures = scene.owes_texture_frame(presentation.texture_registry());
-        let textures_republish = textures && scene.holds_version_for(target);
-        if held_retry == crate::presentation_scene::HeldRetry::Repaint
-            || (textures && !textures_republish)
-        {
+        if held_retry == crate::presentation_scene::HeldRetry::Repaint {
             Self::mark_root_needs_paint(presentation);
         }
+        // A texture update the held version owes a publication for rides it again when this
+        // frame paints nothing (ADR-0304 §8); a version applied for another target owes none,
+        // since the repaint the target change asked for carries the update.
+        let textures_republish =
+            scene.owes_texture_frame(presentation.texture_registry(), Some(target));
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(
@@ -1675,15 +1667,4 @@ impl<'a> PhaseStopwatch<'a> {
         *slot = slot.saturating_add(spent);
         self.presentation.record_segment_phases(self.phases);
     }
-}
-
-/// A logical extent in whole device pixels, for the surface a patch is
-/// applied against, snapped by the conversion the hosts share
-/// (`flui_foundation::geometry::device_extent`), so the patch's surface rounds
-/// as the window's does: an unbounded or non-finite extent is no surface. The
-/// largest surface is a host's policy, applied where it sizes the window, and
-/// the renderer refuses a surface past its device's limit; the runtime holds
-/// neither, so it does not clamp.
-fn device_extent(logical: f64, ratio: flui_foundation::geometry::DevicePixelRatio) -> u32 {
-    flui_foundation::geometry::device_extent(logical, ratio).unwrap_or(0)
 }

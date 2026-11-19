@@ -1705,6 +1705,11 @@ impl HeadlessHost {
                 FrameOutcome::default()
             }
         }));
+        // A frame whose lineage the pump renewed (a hot reload) takes its
+        // presentation's texture updates now, from the registry its new
+        // lineage names.
+        self.track_textures();
+        self.sink.claim_textures();
         let first_failure = {
             let mut failures = self.failures.lock();
             let first = failures.first().cloned();
@@ -3433,6 +3438,55 @@ mod tests {
             "the raising pump did not move the clock"
         );
         let _outcome = ui_runtime.pump(Duration::ZERO);
+    }
+
+    /// A hot reload renews the window's scene lineage within the pump whose
+    /// frame then publishes it: the frame still takes the window's texture
+    /// frames, from the registry its new lineage names.
+    ///
+    /// Fails against a sink that looks its registry up only by the lineages
+    /// read before the pump: the frame publishes without its texture frame.
+    #[test]
+    fn a_frame_in_a_lineage_a_reload_renewed_takes_its_texture_frames() {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+        let registry = host
+            .ui_runtime()
+            .texture_registry(host.ui_runtime().presentation_id())
+            .expect("the window's registry");
+        let texture = registry.register().expect("a texture id");
+        host.attach(&flui_widgets::Texture::new(texture.id()))
+            .expect("root");
+        let _ = host.pump(Duration::ZERO);
+        let _ = host.pump(Duration::ZERO);
+        let lineage = host.sink().version().expect("a version").id().lineage();
+
+        texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+            1,
+            1,
+            vec![7, 7, 7, 255],
+        ));
+        host.ui_runtime()
+            .command_sender()
+            .request_hot_reload(flui_runtime::reload::ReloadTier::Reassemble)
+            .expect("the inbox takes the reload");
+        let _ = host.pump(Duration::ZERO);
+        assert_ne!(
+            host.sink().version().expect("a version").id().lineage(),
+            lineage,
+            "the reload renewed the lineage in this pump"
+        );
+        let taken: Vec<_> = host
+            .sink()
+            .textures()
+            .frames
+            .iter()
+            .map(|(id, image)| (*id, image.data()[0]))
+            .collect();
+        assert_eq!(
+            taken,
+            [(texture.id(), 7)],
+            "the frame rides the renewed lineage"
+        );
     }
 
     /// The kept tree holds what an adapter holds: a node an incremental

@@ -30,8 +30,13 @@ pub struct HeadlessSink {
     presented: std::collections::VecDeque<flui_foundation::FrameEpoch>,
     /// Each open presentation's external textures, by the lineage of its
     /// scene: a publication takes the updates of the registry its lineage
-    /// names. Refreshed before each pump into the same buffer.
+    /// names. Refreshed before and after each pump into the same buffer.
     registries: Vec<(Lineage, TextureRegistry)>,
+    /// The lineage of a presented frame no tracked registry named: a
+    /// lineage the pump renewed before the frame (a hot reload). Its
+    /// registry's updates are taken once the host refreshes the registries
+    /// after the pump ([`Self::claim_textures`]).
+    unclaimed: Option<Lineage>,
     /// What the frame presented last took from its presentation's registry,
     /// kept so a frame takes them without allocating.
     textures: TextureUpdates,
@@ -97,6 +102,7 @@ impl HeadlessSink {
             // Its room is taken here, so a frame that presents allocates nothing.
             presented: std::collections::VecDeque::with_capacity(PRESENTED_KEPT),
             registries: Vec::new(),
+            unclaimed: None,
             textures: TextureUpdates::default(),
         }
     }
@@ -110,6 +116,17 @@ impl HeadlessSink {
     ) {
         self.registries.clear();
         self.registries.extend(registries);
+    }
+
+    /// Takes the updates of the presented frame whose lineage no registry
+    /// named when it was submitted, from the registry that names it now.
+    pub(super) fn claim_textures(&mut self) {
+        let Some(lineage) = self.unclaimed.take() else {
+            return;
+        };
+        if let Some((_, registry)) = self.registries.iter().find(|(of, _)| *of == lineage) {
+            registry.take_updates_into(&mut self.textures);
+        }
     }
 
     /// The epoch of the frame presented last, which a presentation report
@@ -175,12 +192,16 @@ impl FrameSink for HeadlessSink {
             return how.verdict();
         }
         // Taken with the frame it rides, from the registry of the
-        // presentation that produced it, as the raster host takes them.
+        // presentation that produced it, as the raster host takes them; a
+        // lineage renewed during this pump is claimed after it.
         self.textures.frames.clear();
         self.textures.retired.clear();
         let lineage = publication.scene.id().lineage();
+        self.unclaimed = None;
         if let Some((_, registry)) = self.registries.iter().find(|(of, _)| *of == lineage) {
             registry.take_updates_into(&mut self.textures);
+        } else {
+            self.unclaimed = Some(lineage);
         }
         self.last = Some((publication.scene, OnceCell::new()));
         self.submits = self.submits.saturating_add(1);

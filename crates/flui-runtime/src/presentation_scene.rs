@@ -56,9 +56,12 @@ pub(crate) struct PresentationScene {
     /// its lineage ([`Self::held_retry`]). A republish leaves it: the
     /// republished frame may be discarded before any verdict.
     owed: Option<SceneVersionId>,
-    /// The version the window refused, until a frame applies a version: a
-    /// texture frame does not publish it again, since a refused window costs
-    /// none (ADR-0334 §4); the frame waits in the registry.
+    /// The version the window refused: a texture frame does not publish it
+    /// again, since a refused window costs none (ADR-0334 §4); the frame
+    /// waits in the registry. It holds only while it is the current version,
+    /// so a frame that applies a version or renews the lineage ends it by
+    /// making another current, and the raster side showing it, or a later
+    /// version of its lineage, clears it ([`Self::completed`]).
     refused: Option<SceneVersionId>,
 }
 
@@ -68,6 +71,31 @@ pub(crate) struct PresentationScene {
 pub(crate) struct SceneTarget {
     pub(crate) size: (u32, u32),
     pub(crate) scale: DevicePixelRatio,
+}
+
+impl SceneTarget {
+    /// The target a frame laid out under `constraints` at `scale` draws for:
+    /// each logical extent in whole device pixels, snapped by the conversion
+    /// the hosts share (`flui_foundation::geometry::device_extent`), so the
+    /// patch's surface rounds as the window's does; an unbounded or
+    /// non-finite extent is no surface. The largest surface is a host's
+    /// policy, applied where it sizes the window, and the renderer refuses a
+    /// surface past its device's limit; the runtime holds neither, so it does
+    /// not clamp.
+    pub(crate) fn of(
+        constraints: flui_rendering::constraints::BoxConstraints,
+        scale: DevicePixelRatio,
+    ) -> Self {
+        let extent =
+            |logical: f64| flui_foundation::geometry::device_extent(logical, scale).unwrap_or(0);
+        Self {
+            size: (
+                extent(constraints.max_width),
+                extent(constraints.max_height),
+            ),
+            scale,
+        }
+    }
 }
 
 /// What a frame owes a version its surface withheld (ADR-0304 §7).
@@ -193,10 +221,8 @@ impl PresentationScene {
             size: target.size,
             generation: SurfaceGeneration::ZERO,
         };
-        // A new version, or a renewed lineage, replaces whatever was owed or
-        // refused.
+        // A new version, or a renewed lineage, replaces whatever was owed.
         self.owed = None;
-        self.refused = None;
         match self.owner.apply(surface) {
             Ok(applied) => {
                 self.refusals = 0;
@@ -234,6 +260,14 @@ impl PresentationScene {
         }) {
             self.owed = None;
         }
+        // A window that shows the refused version, or a later one, takes
+        // frames again: a refusal that settled before a republish of the
+        // same version was shown no longer holds its texture frames.
+        if self.refused.is_some_and(|refused| {
+            refused.lineage() == rastered.lineage() && refused.seq() <= rastered.seq()
+        }) {
+            self.refused = None;
+        }
         self.owner.completed(Some(rastered))
     }
 
@@ -266,25 +300,21 @@ impl PresentationScene {
             Some(_) => HeldRetry::Repaint,
         }
     }
-
-    /// Whether the current version was applied for `target`, so a frame that
-    /// painted nothing may publish it again for a texture frame
-    /// ([`Self::republish`], ADR-0304 §8): `false` before the first version,
-    /// after a renewal, and when the surface or its scale changed since.
-    pub(crate) fn holds_version_for(&self, target: SceneTarget) -> bool {
-        self.target == Some(target)
-    }
-
     /// Whether `textures` holds updates the held version owes a publication
     /// for (ADR-0304 §8): a retirement, or a pending frame of a texture an
-    /// attached entry of the version draws. `false` before the first version,
-    /// after a renewal and while the window refuses the version
-    /// ([`Self::refuse`]), so a texture nothing shows, or a window that takes
-    /// nothing, costs no frame; its updates wait for the next publication.
-    /// The one answer the runner's gate, sampling admission and the frame's
-    /// republish read.
-    pub(crate) fn owes_texture_frame(&self, textures: &TextureRegistry) -> bool {
-        if self.target.is_none() {
+    /// attached entry of the version draws. `false` unless the version was
+    /// applied for `target`, the target the window's pipeline now lays out
+    /// for, and while the window refuses the version ([`Self::refuse`]): a
+    /// target change is carried by the repaint it causes, and a texture
+    /// nothing shows, or a window that takes nothing, costs no frame; their
+    /// updates wait for the next publication. The one answer the runner's
+    /// gate, sampling admission and the frame's republish read.
+    pub(crate) fn owes_texture_frame(
+        &self,
+        textures: &TextureRegistry,
+        target: Option<SceneTarget>,
+    ) -> bool {
+        if target.is_none() || self.target != target {
             return false;
         }
         let current = self.owner.current();
@@ -295,7 +325,8 @@ impl PresentationScene {
     }
 
     /// The window refused `version`: a texture frame does not publish it
-    /// again until a frame applies a version ([`Self::apply`]).
+    /// again until a frame applies a version ([`Self::apply`]) or the raster
+    /// side shows it ([`Self::completed`]).
     fn refuse(&mut self, version: SceneVersionId) {
         self.refused = Some(version);
     }
@@ -315,7 +346,6 @@ impl PresentationScene {
         self.overlay = None;
         self.target = None;
         self.owed = None;
-        self.refused = None;
         self.owner.renew(reason)
     }
 
@@ -422,11 +452,15 @@ impl SceneSlot {
 
     /// See [`PresentationScene::owes_texture_frame`]. `false` while a frame
     /// holds the scene: that frame answers for itself.
-    pub(crate) fn owes_texture_frame(&self, textures: &TextureRegistry) -> bool {
+    pub(crate) fn owes_texture_frame(
+        &self,
+        textures: &TextureRegistry,
+        target: Option<SceneTarget>,
+    ) -> bool {
         self.scene
             .borrow()
             .as_ref()
-            .is_some_and(|scene| scene.owes_texture_frame(textures))
+            .is_some_and(|scene| scene.owes_texture_frame(textures, target))
     }
 
     /// The window refused `version`; see [`PresentationScene::refuse`].

@@ -170,7 +170,8 @@ impl TextureRegistry {
     /// one buffer across frames takes them without allocating once the
     /// buffer has grown to its working size.
     pub fn take_updates_into(&self, into: &mut TextureUpdates) {
-        // Frames the newer ones replace drop after the lock.
+        // The frames newer ones replace, and the frames of retired ids, drop
+        // after the lock.
         let mut replaced = Vec::new();
         {
             let mut state = self.shared.state.lock();
@@ -192,7 +193,11 @@ impl TextureRegistry {
                 *pending = 0;
             }
             if !retired.is_empty() {
-                into.frames.retain(|(id, _)| !retired.contains(id));
+                replaced.extend(
+                    into.frames
+                        .extract_if(.., |(id, _)| retired.contains(id))
+                        .map(|(_, frame)| frame),
+                );
                 into.retired.append(retired);
             }
         }

@@ -74,9 +74,11 @@ and spends none on a window the host knows is refused.
   panicked on this scene. The runtime records the dropped frame, drains its telemetry, commits
   nothing and arms nothing; the window's next change (a size the device takes, a new surface, a
   rebuilt device, a rebuild of the tree) asks for the frame. The scene keeps the refused version,
-  and a texture frame does not publish it again (ADR-0304 §8) until a frame applies another
-  version: the texture's frames wait in its registry, the newest per id. `flui-app`'s raster host
-  answers it, and `Failed` stays for what a later attempt may get through.
+  and a texture frame does not publish it again (ADR-0304 §8) while it is the current version,
+  until the raster side shows it or a later version of its lineage (a republish of it in flight
+  that the window then takes): the texture's frames wait in its registry, the newest per id.
+  `flui-app`'s raster host answers it, and `Failed` stays for what a later attempt may get
+  through.
 
 ### Consequences
 
@@ -134,7 +136,8 @@ refused and draw on its next change, and `a_resize_that_keeps_panicking_is_not_r
 stops after the one retry of a panicked resize. `flui-runtime`'s
 `external_textures::a_refused_window_costs_no_texture_frame` and `flui-app`'s
 `a_refused_window_costs_no_texture_frame` pin that texture frames fed to a refused window publish
-nothing and leave no frame work owed.
+nothing and leave no frame work owed, and `external_textures::a_shown_refused_version_takes_texture_frames_again`
+that a window shown the version it refused takes them again.
 
 ## Pros and cons of the options
 

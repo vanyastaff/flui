@@ -2065,8 +2065,16 @@ impl RasterHost {
         };
         // A dead executor takes no frame (ADR-0305 §9): the frame is finished
         // as far as the window can tell, and commits, so input and the agent
-        // keep reading the tree while the window draws nothing.
+        // keep reading the tree while the window draws nothing. Its texture
+        // updates are taken into the slot's carry, newest per id, which a
+        // replacing executor receives: left in the registry they would keep
+        // the window's texture frame owed, a frame every period.
         if placed.sender.health() == flui_engine::ExecutorHealth::Died {
+            if let Some(slot) = placed.slots.get_mut(&address)
+                && let Some(textures) = &slot.textures
+            {
+                textures.take_updates_into(&mut slot.carried);
+            }
             return SubmitVerdict::NoPresent;
         }
         let Some(generation) = Self::configure(placed, address, surface) else {

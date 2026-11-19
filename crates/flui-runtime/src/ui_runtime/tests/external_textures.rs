@@ -76,6 +76,9 @@ enum Placement {
     /// A 20-px surface at (100, 100) over a background; hiding it keeps it
     /// mounted, offstage.
     Small,
+    /// A 20-px surface beside a leaf whose layout waits for input at any
+    /// surface width but the test window's.
+    Gated,
 }
 
 /// Shows the surface while `shown` is non-zero.
@@ -109,7 +112,80 @@ impl StatelessView for Toggle {
                     ),
                 )
                 .boxed(),
+            Placement::Gated => flui_widgets::Column::new((
+                WidthGate,
+                SizedBox::new(20.0, 20.0).child(self.surface.clone()),
+            ))
+            .boxed(),
         }
+    }
+}
+
+/// A 10-px leaf whose layout fails as text whose context is busy, so the
+/// pipeline waits for input, at any width but the test window's.
+#[derive(Debug)]
+struct WidthGateBox;
+
+impl flui_foundation::inspect::Inspect for WidthGateBox {
+    fn kind(&self) -> &'static str {
+        "WidthGateBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::prelude::RenderBox for WidthGateBox {
+    type Arity = flui_rendering::prelude::Leaf;
+    type ParentData = flui_rendering::prelude::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::prelude::BoxLayoutContext<
+            '_,
+            flui_rendering::prelude::Leaf,
+            flui_rendering::prelude::BoxParentData,
+        >,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        #[expect(
+            clippy::float_cmp,
+            reason = "the window's width is an exact logical extent at scale 1"
+        )]
+        if ctx.constraints().max_width != f64::from(SURFACE.0) {
+            return Err(flui_rendering::RenderError::TextContextBusy);
+        }
+        Ok(flui_foundation::geometry::Size::new(10.0, 10.0))
+    }
+
+    fn paint(
+        &self,
+        _ctx: &mut flui_rendering::prelude::PaintContext<'_, flui_rendering::prelude::Leaf>,
+    ) {
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WidthGate;
+
+impl flui_view::RenderView for WidthGate {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = WidthGateBox;
+
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> WidthGateBox {
+        WidthGateBox
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut WidthGateBox,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl flui_view::View for WidthGate {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -374,28 +450,86 @@ pub(crate) fn a_refused_window_costs_no_texture_frame() {
     assert_eq!(frames[0].1.data()[0], 3);
 }
 
-/// A texture frame that finds the held version applied for another target
-/// (the scale changed and nothing else) repaints the tree, and the frame
-/// rides the new version rather than waiting, owed, for ever.
-pub(crate) fn a_texture_frame_under_a_new_target_repaints() {
-    let fixture = mounted(Placement::Small);
+/// A window that shows the version it refused takes texture frames again:
+/// of two republishes of one version in flight, the first is refused and the
+/// second shown, and the next texture frame is published with that version.
+pub(crate) fn a_shown_refused_version_takes_texture_frames_again() {
+    use crate::sink::{FrameSettlement, SubmitVerdict};
+
+    let mut fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |index| match index {
+        1 | 2 => SubmitVerdict::Queued,
+        _ => SubmitVerdict::Presented,
+    })
+    .holding(std::num::NonZeroUsize::new(2).expect("two"));
+    fixture.ui_runtime.render_frame(&mut sink);
+    for shade in [1, 2] {
+        feed(&fixture.shared, shade);
+        fixture.ui_runtime.render_frame(&mut sink);
+    }
+    let [_, refused, shown] = sink.epochs[..] else {
+        panic!("the first frame and two republishes, got {:?}", sink.epochs);
+    };
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: fixture.ui_runtime.id(),
+        presentation_id: fixture.ui_runtime.presentation_id(),
+    };
+    for (epoch, verdict) in [
+        (refused, SubmitVerdict::Refused),
+        (shown, SubmitVerdict::Presented),
+    ] {
+        let _ = fixture
+            .ui_runtime
+            .settle_frame(FrameSettlement::new(address, epoch, verdict));
+    }
+    feed(&fixture.shared, 3);
+    fixture.ui_runtime.render_frame(&mut sink);
+
+    let seen = seen.lock().clone();
+    assert_eq!(
+        seen.len(),
+        4,
+        "the shown version takes the next texture frame: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|frame| frame.version == seen[0].version),
+        "{seen:?}"
+    );
+    assert_eq!(seen[3].frames, [(texture_id(&fixture), 3)]);
+}
+
+/// A texture frame fed while the window's new size cannot be laid out (the
+/// layout waits for input that has not come) owes no frame: the held version
+/// was applied for the old size, and the repaint the new size asks for is
+/// what carries the frame. The runner's gate sees nothing to do, rather
+/// than a no-present frame every period.
+pub(crate) fn a_texture_frame_while_a_new_size_waits_owes_nothing() {
+    let fixture = mounted(Placement::Gated);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut sink = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Presented);
     fixture.ui_runtime.render_frame(&mut sink);
-    assert!(fixture.ui_runtime.set_pipeline_device_pixel_ratio_for(
-        fixture.ui_runtime.presentation_id(),
-        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
-    ));
+    assert_eq!(seen.lock().len(), 1, "the first frame is shown");
+
+    let mut resized = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Presented)
+        .with_size(SURFACE.0 - 100, SURFACE.1);
     feed(&fixture.shared, 9);
-    fixture.ui_runtime.render_frame(&mut sink);
-    let seen = seen.lock();
-    assert_eq!(seen.len(), 2, "the texture frame is published: {seen:?}");
-    assert_ne!(
-        seen[1].version, seen[0].version,
-        "a version for the new target"
+    fixture.ui_runtime.render_frame(&mut resized);
+    assert!(
+        fixture
+            .ui_runtime
+            .presentations
+            .primary()
+            .pipeline()
+            .with(flui_rendering::pipeline::PipelineOwner::layout_waits_for_input),
+        "the new size's layout waits for input"
     );
-    assert_eq!(seen[1].frames, [(texture_id(&fixture), 9)]);
-    assert!(!fixture.ui_runtime.has_pending_work(), "nothing stays owed");
+    assert!(
+        !fixture.ui_runtime.has_pending_work(),
+        "the texture frame owes no frame under the new size"
+    );
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 1, "nothing more is published: {seen:?}");
 }
 
 /// Unmounting the widget that owns the registration retires its texture.

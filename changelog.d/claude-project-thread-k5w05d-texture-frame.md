@@ -18,10 +18,12 @@
 - A texture frame is tree work the runner's gate counts (`UiRuntime::has_pending_tree_work`), so
   a frame fed while the previous one renders is not lost to the redraw mark that frame clears.
 - A texture frame costs nothing while no attached entry draws the texture (an offstage subtree),
-  or while the window refuses the version it holds (ADR-0334 §4); its newest frame waits in the
-  registry. A version held for another target repaints for it instead of waiting.
+  while the window refuses the version it holds until the window shows it (ADR-0334 §4), or while
+  the window's size or scale changed since that version, whose repaint carries the frame; its
+  newest frame waits in the registry. A window whose raster executor died takes its texture frames
+  into its slot's carry, so none keeps the window drawing.
 - The headless host's sink takes each window's texture frames with the frames that window's scene
-  publishes.
+  publishes, a scene whose lineage a hot reload renewed in that pump included.
 
 ### Removed
 

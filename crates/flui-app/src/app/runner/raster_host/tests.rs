@@ -2152,12 +2152,14 @@ fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
 /// deadline is kept, not refused: the executor is dead, but the thread may
 /// still hold the window's surface, so the native window outlives it as a
 /// dead executor's windows do. Its frames draw nothing and commit
-/// (`NoPresent`), so its UI runtime keeps taking input.
+/// (`NoPresent`), so its UI runtime keeps taking input, and take its
+/// texture frames into the slot's carry, so none stays owed to a frame.
 ///
 /// Red-check: decide from the slot's record after the deadline and the
 /// window is refused (`did not attach the slot`) while its surface is in
 /// the thread's hands; leave an unanswered attach out of `try_with`'s
-/// `wedged` and the window is not kept past its close.
+/// `wedged` and the window is not kept past its close; leave the texture
+/// frames in the registry at the death and one stays owed.
 #[test]
 fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     let (shared, slots, wakes) = threaded_host();
@@ -2171,6 +2173,8 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         presentation_id: PresentationId::new(2),
     };
     let late = Arc::new(FakeWindow::new(2));
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
     let woken = wakes.load(std::sync::atomic::Ordering::SeqCst);
     let attached = shared
         .try_with(|host| {
@@ -2179,7 +2183,7 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
                 None,
                 other,
                 &crate::app::AppConfig::default(),
-                None,
+                Some(registry.clone()),
                 None,
             )
         })
@@ -2195,6 +2199,7 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         "the window the thread did not attach is kept past its close"
     );
     let mut other_scene = TestScene::new(AT);
+    texture.submit_frame(pixel());
     let publication = other_scene.publication();
     let epoch = other_scene.next_epoch();
     let verdict = shared
@@ -2203,6 +2208,10 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     assert!(
         verdict == SubmitVerdict::NoPresent,
         "a dead executor draws nothing and the frame commits: {verdict:?}"
+    );
+    assert!(
+        !registry.has_updates_for(|_| true),
+        "the dead executor's window takes its texture frame into its carry, so none stays owed"
     );
     render.release();
 }

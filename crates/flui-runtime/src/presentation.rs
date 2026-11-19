@@ -1680,14 +1680,22 @@ impl PresentationState {
 
     /// Whether a texture update waits that the held version owes a
     /// publication for: a retirement, or a frame of a texture it draws, while
-    /// the window does not refuse it (ADR-0304 §8, ADR-0334 §4). A frame
+    /// the version was applied for the target the pipeline now lays out for
+    /// and the window does not refuse it (ADR-0304 §8, ADR-0334 §4). A frame
     /// finding no tree work publishes the held version for it, and the
     /// registry holds the update until the host takes it with a publication,
-    /// so a frame that never reached the host leaves it for the next. The one
-    /// predicate the runner's gate, sampling admission and the frame's
-    /// republish read; `false` while a frame holds the scene.
+    /// so a frame that never reached the host leaves it for the next. A
+    /// target change owes nothing here: the repaint it causes carries the
+    /// update, and a repaint that fails leaves no texture work to spin on.
+    /// The one predicate the runner's gate, sampling admission and the
+    /// frame's republish read; `false` while a frame holds the scene.
     pub(crate) fn owes_texture_frame(&self) -> bool {
-        self.scene.owes_texture_frame(&self.textures)
+        let target = self.pipeline.with(|owner| {
+            owner.root_constraints().map(|constraints| {
+                crate::presentation_scene::SceneTarget::of(constraints, owner.device_pixel_ratio())
+            })
+        });
+        self.scene.owes_texture_frame(&self.textures, target)
     }
 
     /// This presentation's semantics enablement gate and platform

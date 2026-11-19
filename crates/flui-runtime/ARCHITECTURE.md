@@ -762,35 +762,40 @@ with nothing painted: a version the surface withheld (above), and a frame of an 
 texture. A texture frame or retirement waits in the presentation's `TextureRegistry` and
 wakes the runtime, as Flutter's `markTextureFrameAvailable` schedules a frame. One predicate
 says whether the held version owes a publication for it
-(`PresentationState::owes_texture_frame`, over `PresentationScene::owes_texture_frame`): a
-retirement waits, or an attached entry of the version draws a texture with a pending frame, and
-the window has not refused the version. The runner's gate counts it as tree work
-(`UiRuntime::has_pending_tree_work`, under the holds tree work has), so a frame fed while the
-previous one renders outlives the redraw mark that frame's end clears; sampling admits the
+(`PresentationState::owes_texture_frame`, over `PresentationScene::owes_texture_frame`): the
+version was applied for the target the pipeline now lays out for (`SceneTarget::of` its root
+constraints and ratio), the window has not refused it, and a retirement waits or an attached
+entry of the version draws a texture with a pending frame. The runner's gate counts it as tree
+work (`UiRuntime::has_pending_tree_work`, under the holds tree work has), so a frame fed while
+the previous one renders outlives the redraw mark that frame's end clears; sampling admits the
 segment on it; and it is frame work a settlement or a shown window wakes for. A segment that
 paints nothing then publishes the held version, with the damage since the acknowledged base,
-which is none once the raster side showed it, provided the version was applied for this frame's
-target (`PresentationScene::holds_version_for`); one applied for another target repaints from
-the root, and the frames ride the new version. The raster host takes the frames from the
-registry with the publication and damages the texture's users alone (ADR-0304 §9). A texture
-nothing attached draws (an offstage subtree) owes no frame, and a version the window refused
-(`SubmitVerdict::Refused`, `SceneSlot::refuse`) owes none until a frame applies another, as a
-refused window costs none (ADR-0334 §4); their frames wait in the registry, the newest per id.
-The registry is the one record of what is owed: it keeps a frame until a host takes it, so a
-frame withheld before the host took it leaves it for the next, a texture frame that arrives
-with a tree change rides that change's frame, and a frame after the host took it publishes
-nothing. The `Texture` widget neither rebuilds nor repaints for a frame. Pinned by the
-`external_textures` rows of `frame_pacing_and_pump_matrix`
-(`a_fed_frame_republishes_the_held_version`, `a_texture_frame_not_taken_is_published_again`,
-`a_hidden_texture_repaints_nothing`, `a_frame_fed_during_a_submit_is_still_owed`,
-`a_refused_window_costs_no_texture_frame`, `a_texture_frame_under_a_new_target_repaints`),
-`flui-widgets`' perf scenarios `perf_a_texture_frame_republishes_the_held_version`,
+which is none once the raster side showed it. A target change owes nothing: the repaint it asks
+for carries the frames, and one that cannot run (a layout waiting for input) leaves the gate
+nothing to spin on. The raster host takes the frames from the registry with the publication and
+damages the texture's users alone (ADR-0304 §9); a host whose executor died takes them into the
+slot's carry. A texture nothing attached draws (an offstage subtree) owes no frame, and a version
+the window refused (`SubmitVerdict::Refused`, `SceneSlot::refuse`) owes none while it is current,
+until the raster side shows it or a later version of its lineage, as a refused window costs none
+(ADR-0334 §4); their frames wait in the registry, the newest per id. The registry is the one
+record of what is owed: it keeps a frame until a host takes it, so a frame withheld before the
+host took it leaves it for the next, a texture frame that arrives with a tree change rides that
+change's frame, and a frame after the host took it publishes nothing. The `Texture` widget
+neither rebuilds nor repaints for a frame. Pinned by the `external_textures` rows of
+`frame_pacing_and_pump_matrix` (`a_fed_frame_republishes_the_held_version`,
+`a_texture_frame_not_taken_is_published_again`, `a_hidden_texture_repaints_nothing`,
+`a_frame_fed_during_a_submit_is_still_owed`, `a_refused_window_costs_no_texture_frame`,
+`a_shown_refused_version_takes_texture_frames_again`,
+`a_texture_frame_while_a_new_size_waits_owes_nothing`), `flui-widgets`' perf scenarios
+`perf_a_texture_frame_republishes_the_held_version`,
 `an_idle_frame_after_a_texture_frame_publishes_nothing`,
 `texture_frames_between_two_frames_go_out_in_one_publication` and
 `a_texture_frame_rides_the_frame_of_a_tree_change`, `flui-testing`'s
-`each_window_takes_its_own_texture_frames`, and `flui-app`'s
-`a_texture_frame_reaches_the_slot_as_its_users_damage` and
-`a_refused_window_costs_no_texture_frame`.
+`each_window_takes_its_own_texture_frames` and
+`a_frame_in_a_lineage_a_reload_renewed_takes_its_texture_frames`, and `flui-app`'s
+`a_texture_frame_reaches_the_slot_as_its_users_damage`,
+`a_refused_window_costs_no_texture_frame` and
+`a_window_whose_attach_the_raster_thread_does_not_answer_is_kept`.
 
 ### An unseen window waits, and a covered one owes its surface a frame
 
