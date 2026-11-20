@@ -6,7 +6,7 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Offset, Point, Vec2};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::gesture::RemainderHandoff;
 use flui_interaction::gesture::{GestureArena, Velocity};
 use flui_platform::EventTime;
@@ -436,11 +436,11 @@ impl ScrollSequence {
     /// Tell every participant the sequence started. A programmatic sequence
     /// first leaves out every participant that does not accept one: such a
     /// link is closed before anyone is told, so it hears nothing of it.
-    pub(crate) fn start(&self, recovery: &mut PanicRecovery) {
-        self.pass(recovery, |recovery| {
+    pub(crate) fn start(&self, failure: &mut FirstPanic) {
+        self.pass(failure, |failure| {
             for index in 0..self.links.len() {
                 if self.device == ScrollDevice::Programmatic
-                    && !self.accepts_programmatic(index, recovery)
+                    && !self.accepts_programmatic(index, failure)
                 {
                     self.links[index].closed.set(true);
                     continue;
@@ -448,7 +448,7 @@ impl ScrollSequence {
                 if !self.links[index].node.acquire(self.id) {
                     continue;
                 }
-                self.call(index, recovery, |connection| {
+                self.call(index, failure, |connection| {
                     connection.sequence_started(self.id);
                 });
             }
@@ -459,16 +459,15 @@ impl ScrollSequence {
     /// sequence. A scrollable never does: it moves for a reveal or a jump
     /// in a sequence of its own (ADR-0209 §3). A connection says so itself;
     /// one that panics while it answers declines, and the first failure
-    /// stays in `recovery`.
-    fn accepts_programmatic(&self, index: usize, recovery: &mut PanicRecovery) -> bool {
+    /// stays in `failure`.
+    fn accepts_programmatic(&self, index: usize, failure: &mut FirstPanic) -> bool {
         let Participant::Connection(connection) = &self.links[index].participant else {
             return false;
         };
         let Some(connection) = connection.upgrade() else {
             return false;
         };
-        let mut answer = None;
-        recovery.run(|| answer = Some(connection.accepts_programmatic()));
+        let answer = failure.contain(|| connection.accepts_programmatic());
         if answer.is_none() {
             tracing::error!(
                 sequence = self.id.get(),
@@ -476,7 +475,7 @@ impl ScrollSequence {
                  programmatic scrolls; it takes no part in the sequence"
             );
         }
-        recovery.retire(connection);
+        failure.retire(connection);
         answer.unwrap_or(false)
     }
 
@@ -520,7 +519,7 @@ impl ScrollSequence {
     /// was dispatched: no further input belongs to it, and it ends
     /// [`Released`](ScrollEndReason::Released) once its last run comes to
     /// rest (at once without one).
-    pub(crate) fn lapse(&self, recovery: &mut PanicRecovery) {
+    pub(crate) fn lapse(&self, failure: &mut FirstPanic) {
         let timer = self.idle_end.borrow_mut().take();
         drop(timer);
         if self.phase.get() != Phase::Live {
@@ -528,7 +527,7 @@ impl ScrollSequence {
         }
         self.finish_input();
         if !self.has_runs() {
-            self.end(self.end_reason(), recovery);
+            self.end(self.end_reason(), failure);
         }
     }
 
@@ -668,7 +667,7 @@ impl ScrollSequence {
     /// sequence id, with the release velocity on the axes whose latch it
     /// holds and from rest on the others. The leaf runs motion only on the
     /// axes no ancestor holds ([`held_above`](Self::held_above)).
-    pub(crate) fn release(&self, velocity: Vec2, recovery: &mut PanicRecovery) {
+    pub(crate) fn release(&self, velocity: Vec2, failure: &mut FirstPanic) {
         if self.phase.get() != Phase::Live {
             return;
         }
@@ -678,36 +677,36 @@ impl ScrollSequence {
         let device_pixel_ratio = self.device_pixel_ratio(ScrollCause::UserInput, &leaf);
         // A plane that cannot be crossed releases nothing up the chain.
         let velocity = leaf.to_root_velocity(velocity, focal).unwrap_or(Vec2::ZERO);
-        self.pass(recovery, |recovery| {
+        self.pass(failure, |failure| {
             for index in 0..self.links.len() {
                 let plane = self.plane_at(index + 1);
                 let local = plane
                     .to_local_velocity(velocity, focal)
                     .unwrap_or(Vec2::ZERO);
                 let step = self.fling_step(local, &plane, focal, device_pixel_ratio);
-                self.call(index, recovery, |connection| connection.released(&step));
+                self.call(index, failure, |connection| connection.released(&step));
             }
-            self.settle_owed(velocity, recovery);
+            self.settle_owed(velocity, failure);
         });
     }
 
     /// Tell every participant the sequence is over. Once only. A scrollable
     /// the sequence moved and its release did not settle (none came, or the
     /// sequence was cut short) settles from rest first.
-    pub(crate) fn end(&self, reason: ScrollEndReason, recovery: &mut PanicRecovery) {
+    pub(crate) fn end(&self, reason: ScrollEndReason, failure: &mut FirstPanic) {
         if self.phase.replace(Phase::Ended) == Phase::Ended {
             return;
         }
         // Nothing lapses for an ended sequence.
         let timer = self.idle_end.borrow_mut().take();
         drop(timer);
-        self.pass(recovery, |recovery| {
-            self.settle_owed(Vec2::ZERO, recovery);
+        self.pass(failure, |failure| {
+            self.settle_owed(Vec2::ZERO, failure);
             for index in 0..self.links.len() {
                 if !self.links[index].node.release(self.id) {
                     continue;
                 }
-                self.call(index, recovery, |connection| {
+                self.call(index, failure, |connection| {
                     connection.sequence_ended(self.id, reason);
                 });
             }
@@ -719,7 +718,7 @@ impl ScrollSequence {
     /// plane) on the axes whose latch it holds, rest on the others, each in
     /// its own plane. Its own live contact settles it instead. A connection
     /// settles itself from `released`.
-    fn settle_owed(&self, velocity: Vec2, recovery: &mut PanicRecovery) {
+    fn settle_owed(&self, velocity: Vec2, failure: &mut FirstPanic) {
         for (index, link) in self.links.iter().enumerate() {
             if !link.owed.replace(false) {
                 continue;
@@ -746,7 +745,7 @@ impl ScrollSequence {
                 .plane_at(index + 1)
                 .to_local_velocity(velocity, focal)
                 .unwrap_or(Vec2::ZERO);
-            let _ = owner.settle_owed(self.id, self.device, velocity, recovery);
+            let _ = owner.settle_owed(self.id, self.device, velocity, failure);
         }
     }
 
@@ -766,7 +765,7 @@ impl ScrollSequence {
         cause: ScrollCause,
         available: Vec2,
         consume: impl FnOnce(Vec2) -> Vec2,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Vec2 {
         if !(available.x.is_finite() && available.y.is_finite()) {
             tracing::warn!(
@@ -776,8 +775,8 @@ impl ScrollSequence {
             );
             return Vec2::ZERO;
         }
-        self.pass(recovery, |recovery| {
-            self.dispatch_within(runner, cause, available, consume, recovery)
+        self.pass(failure, |failure| {
+            self.dispatch_within(runner, cause, available, consume, failure)
         })
     }
 
@@ -787,7 +786,7 @@ impl ScrollSequence {
         cause: ScrollCause,
         available: Vec2,
         consume: impl FnOnce(Vec2) -> Vec2,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Vec2 {
         if self.is_ended() {
             return consume(available);
@@ -827,8 +826,7 @@ impl ScrollSequence {
                 continue;
             };
             let step = self.step(cause, offer, &plane, focal, device_pixel_ratio);
-            let taken = match self.call(index, recovery, |connection| connection.pre_scroll(&step))
-            {
+            let taken = match self.call(index, failure, |connection| connection.pre_scroll(&step)) {
                 Called::Answered(taken) => {
                     let taken = clamp_consumed(taken, offer, "pre_scroll");
                     root_taken(&plane, taken, offer, remaining, focal)
@@ -882,7 +880,7 @@ impl ScrollSequence {
             let local_taken = match &self.links[index].participant {
                 Participant::Connection(_) => {
                     let below = plane.to_local_delta(below, focal).unwrap_or(Vec2::ZERO);
-                    match self.call(index, recovery, |connection| {
+                    match self.call(index, failure, |connection| {
                         connection.post_scroll(&step, below)
                     }) {
                         Called::Answered(taken) => clamp_consumed(taken, local, "post_scroll"),
@@ -898,7 +896,7 @@ impl ScrollSequence {
                             // that fails while it does keeps the debt.
                             let owed = link.owed.replace(true);
                             let taken = clamp_consumed(
-                                owner.take_remainder(&step, recovery),
+                                owner.take_remainder(&step, failure),
                                 local,
                                 "scrollable",
                             );
@@ -943,7 +941,7 @@ impl ScrollSequence {
         from: usize,
         velocity: Vec2,
         dpr: f64,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Handoff {
         let focal = self.focal();
         let Some(velocity) = self
@@ -952,7 +950,7 @@ impl ScrollSequence {
         else {
             return Handoff::Over;
         };
-        self.pass(recovery, |recovery| {
+        self.pass(failure, |failure| {
             for index in from.min(self.post_end)..self.post_end {
                 if self.links[index].closed.get() {
                     continue;
@@ -966,7 +964,7 @@ impl ScrollSequence {
                     Participant::Connection(_) => {
                         let step = self.fling_step(local, &plane, focal, dpr);
                         if let Called::Answered(FlingHandoff::Accepted) =
-                            self.call(index, recovery, |connection| connection.post_fling(&step))
+                            self.call(index, failure, |connection| connection.post_fling(&step))
                         {
                             break;
                         }
@@ -975,7 +973,7 @@ impl ScrollSequence {
                         match self.links[index]
                             .node
                             .owner()
-                            .map(|owner| owner.accept_fling(self, index + 1, local, dpr, recovery))
+                            .map(|owner| owner.accept_fling(self, index + 1, local, dpr, failure))
                         {
                             Some(Acceptance::Running) => return Handoff::Running,
                             // Reentrant user code moved the owner while it
@@ -1099,26 +1097,22 @@ impl ScrollSequence {
     /// scrollable of the chain defers programmatic requests and refuses user
     /// input from inside it. When the outermost pass on a scrollable returns,
     /// the scrollable services what was requested meanwhile, within
-    /// `recovery`, before this returns.
-    fn pass<R>(
-        &self,
-        recovery: &mut PanicRecovery,
-        body: impl FnOnce(&mut PanicRecovery) -> R,
-    ) -> R {
+    /// `failure`, before this returns.
+    fn pass<R>(&self, failure: &mut FirstPanic, body: impl FnOnce(&mut FirstPanic) -> R) -> R {
         let scope = PassScope::enter(self.owners());
-        let result = body(recovery);
-        scope.exit(recovery);
+        let result = body(failure);
+        scope.exit(failure);
         result
     }
 
     /// Call the user connection at link `index`, contained. A panic closes
     /// the link and delivers its `sequence_ended(Cancelled)`; the first
-    /// failure stays in `recovery`. The connection runs inside a pass, so a
+    /// failure stays in `failure`. The connection runs inside a pass, so a
     /// scroll it requests waits for the pass to return.
     fn call<R>(
         &self,
         index: usize,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
         callout: impl FnOnce(&dyn NestedScrollConnection) -> R,
     ) -> Called<R> {
         let link = &self.links[index];
@@ -1131,8 +1125,7 @@ impl ScrollSequence {
         let Some(connection) = connection.upgrade() else {
             return Called::Absent;
         };
-        let mut answer = None;
-        recovery.run(|| answer = Some(callout(&*connection)));
+        let answer = failure.contain(|| callout(&*connection));
         let called = if let Some(answer) = answer {
             Called::Answered(answer)
         } else {
@@ -1143,13 +1136,13 @@ impl ScrollSequence {
                  leaves the sequence"
             );
             if self.phase.get() != Phase::Ended {
-                recovery.run(|| {
+                failure.contain(|| {
                     connection.sequence_ended(self.id, ScrollEndReason::Cancelled);
                 });
             }
             Called::Panicked
         };
-        recovery.retire(connection);
+        failure.retire(connection);
         called
     }
 
@@ -1157,9 +1150,9 @@ impl ScrollSequence {
     /// scrollable of the chain stops the run it drives for it, and the
     /// last one to stop ends the sequence
     /// [`Preempted`](ScrollEndReason::Preempted).
-    pub(crate) fn preempt_runs(&self, recovery: &mut PanicRecovery) {
+    pub(crate) fn preempt_runs(&self, failure: &mut FirstPanic) {
         for owner in self.owners() {
-            owner.stop_run_of(self, recovery);
+            owner.stop_run_of(self, failure);
         }
     }
 
@@ -1200,13 +1193,13 @@ impl PassScope {
         Self { owners }
     }
 
-    fn exit(mut self, recovery: &mut PanicRecovery) {
+    fn exit(mut self, failure: &mut FirstPanic) {
         let owners = std::mem::take(&mut self.owners);
         for owner in &owners {
             owner.leave_pass();
         }
         for owner in &owners {
-            owner.service_deferred(recovery);
+            owner.service_deferred(failure);
         }
     }
 }

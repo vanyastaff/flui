@@ -94,7 +94,7 @@ impl AnimationController {
                         profile = Some(crate::observability::ProfileSpan::listeners());
                     });
                 if let Some(profile) = profile {
-                    profile.close(retirement);
+                    profile.close();
                 }
             }
             if drain {
@@ -169,7 +169,7 @@ impl AnimationController {
                         });
                     }
                     if let Some(profile) = profile {
-                        profile.close(retirement);
+                        profile.close();
                     }
                 }
                 ControllerDelivery::Run(delivery) => {
@@ -177,7 +177,7 @@ impl AnimationController {
                     retirement.run_classified(FailureClass::Delivery, |_| {
                         delivery.into_inner().deliver();
                     });
-                    profile.close(retirement);
+                    profile.close();
                 }
                 ControllerDelivery::Retire(retired) => {
                     retirement.retire_classified(FailureClass::Delivery, retired);

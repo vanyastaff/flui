@@ -2986,7 +2986,7 @@ critically damped spring, at any velocity, rather than refusing a run there
 `a_rebuild_taken_over_by_its_physics_stops_the_obsolete_run`,
 `clamping_release_past_an_edge_returns_to_it`).
 
-Every owner entry point holds one `PanicRecovery`: a participant that panics is
+Every owner entry point holds one `FirstPanic`: a participant that panics is
 closed, told `sequence_ended(Cancelled)`, and the first failure resumes only after
 the owner's bookkeeping (runs attached, sequences ended) is done. Owner identity: a change of
 controller, axis, orientation, overscroll behavior or parent chain retires the owner. On
@@ -3044,7 +3044,7 @@ controller's one command slot (`PendingScrollCommand::JumpTo` beside `AnimateTo`
 the latest replacing the rest) instead of running inside the pass; the controller asks through
 the pass hook the `Scrollable` installs with its stop and jump hooks. When the outermost pass on
 the owner returns, `ScrollOwner::service_deferred` lands what the slot holds within that pass's
-`PanicRecovery`, before the dispatch returns: a participant that asks and then panics still gets
+`FirstPanic`, before the dispatch returns: a participant that asks and then panics still gets
 its jump, and a position listener's jump runs after the step that published, never inside it.
 Requests the landing itself makes are serviced by the same loop, eight at most; past that the
 latest waits, with a warning, for the command listener's next notification. A landing jump stops

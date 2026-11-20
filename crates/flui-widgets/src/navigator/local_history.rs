@@ -66,22 +66,22 @@ pub(crate) type OnRemoveCallback = Rc<dyn Fn()>;
 ///   element is building (ADR-0025).
 ///
 /// A panic in one callback, or in one capture's drop, does not keep the next
-/// from being delivered; the first is resumed by the caller's `recovery`.
+/// from being delivered; the first is resumed by the caller's `failure`.
 pub(crate) fn deliver_on_remove(
     post_frame: Option<&flui_scheduler::PostFrameHandle>,
     callbacks: Vec<OnRemoveCallback>,
-    recovery: &mut flui_foundation::panic::PanicRecovery,
+    failure: &mut flui_foundation::panic::FirstPanic,
 ) {
     for callback in callbacks {
         let Some(post_frame) = post_frame else {
-            recovery.retire(callback);
+            failure.retire(callback);
             continue;
         };
         match post_frame.schedule_or_return(callback, |callback, _timing| callback()) {
             Ok(()) => {}
             Err(flui_scheduler::PostFrameRejection::Returned(callback)) => {
-                recovery.run(|| callback());
-                recovery.retire(callback);
+                failure.contain(|| callback());
+                failure.retire(callback);
             }
         }
     }
@@ -464,7 +464,7 @@ mod tests {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use flui_foundation::panic::PanicRecovery;
+    use flui_foundation::panic::FirstPanic;
     use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
     use super::*;
@@ -483,9 +483,9 @@ mod tests {
         callbacks: Vec<OnRemoveCallback>,
     ) -> Option<String> {
         catch_unwind(AssertUnwindSafe(|| {
-            let mut recovery = PanicRecovery::new();
-            deliver_on_remove(post_frame, callbacks, &mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            deliver_on_remove(post_frame, callbacks, &mut failure);
+            failure.resume();
         }))
         .err()
         .map(|payload| {
@@ -499,7 +499,7 @@ mod tests {
     /// runs at once, contained on its own: the first panic does not keep the
     /// second from running, and it is the one reported.
     ///
-    /// Red-check: run the returned callbacks inside one `recovery.run` — the
+    /// Red-check: run the returned callbacks inside one `failure.run` — the
     /// second never runs.
     #[test]
     fn a_closed_queue_runs_each_owed_removal_contained_alone() {

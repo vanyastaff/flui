@@ -1238,21 +1238,21 @@ impl HeroState {
             seat: None,
         });
         let previous = Terminal::new(std::mem::replace(&mut self.registry, next));
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some(previous) = previous.as_ref()
             && let Some(seat) = previous.seat.as_ref()
         {
-            recovery.run(|| previous.registry.deregister(seat));
+            failure.contain(|| previous.registry.deregister(seat));
         }
         if let Some(next) = self.registry.as_mut() {
-            recovery.run(|| {
+            failure.contain(|| {
                 next.seat = next
                     .registry
                     .register(next.tag.clone(), self.handle.clone());
             });
         }
-        recovery.retire(previous);
-        recovery.finish();
+        failure.retire(previous);
+        failure.resume();
     }
 }
 
@@ -1287,14 +1287,14 @@ impl ViewState<Hero> for HeroState {
                 .borrow_mut()
                 .replace(configuration),
         );
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         let registry = self
             .registry
             .as_ref()
             .map(|entry| (*entry.registry).clone());
-        recovery.run(|| self.sync_registration(registry, new_view.tag.clone()));
-        recovery.retire(previous);
-        recovery.finish();
+        failure.contain(|| self.sync_registration(registry, new_view.tag.clone()));
+        failure.retire(previous);
+        failure.resume();
     }
 
     /// Bind the render seat during mount, and establish the route dependency that subsequent lifecycle changes refresh.
@@ -1330,16 +1330,16 @@ impl ViewState<Hero> for HeroState {
         let rebuild = Terminal::new(self.handle.inner.rebuild.take());
         let configuration = Terminal::new(self.handle.inner.configuration.borrow_mut().take());
         let registry = Terminal::new(self.registry.take());
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some(registry) = registry.as_ref()
             && let Some(seat) = registry.seat.as_ref()
         {
-            recovery.run(|| registry.registry.deregister(seat));
+            failure.contain(|| registry.registry.deregister(seat));
         }
-        recovery.retire(rebuild);
-        recovery.retire(configuration);
-        recovery.retire(registry);
-        recovery.finish();
+        failure.retire(rebuild);
+        failure.retire(configuration);
+        failure.retire(registry);
+        failure.resume();
     }
 
     /// Builds the hero's seat: the anchored box, with the state-preserving custom

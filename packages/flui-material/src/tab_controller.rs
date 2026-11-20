@@ -42,7 +42,7 @@ use flui_sdk::animation::{
     AnimatedValue, AnimatedValueView, Animation as _, Curve as _, MotionSpec, SharedCurve, Vsync,
     curves,
 };
-use flui_sdk::foundation::panic::{PanicRecovery, RecoveryScope};
+use flui_sdk::foundation::panic::{FirstPanic, PanicRecovery, RecoveryScope};
 use flui_sdk::foundation::{
     ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, MutatedDuringBuild,
     Subscription,
@@ -313,7 +313,7 @@ impl Shared {
         let Some(owner) = self.owner.borrow_mut().take() else {
             return false;
         };
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         {
             let mut slot = OwnerSlot {
                 cell: &self.owner,
@@ -323,12 +323,12 @@ impl Shared {
                 .owner
                 .as_mut()
                 .expect("BUG: the owner stays in its slot while it is driven");
-            recovery.run(|| first(self, owner));
+            failure.contain(|| first(self, owner));
             while let Some((target, change)) = self.pending_drive.take() {
-                recovery.run(|| self.apply_drive(owner, target, change));
+                failure.contain(|| self.apply_drive(owner, target, change));
             }
         }
-        recovery.finish();
+        failure.resume();
         true
     }
 

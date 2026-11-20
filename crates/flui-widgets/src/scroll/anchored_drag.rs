@@ -31,7 +31,7 @@ use flui_animation::{
 use flui_foundation::InputSequenceId;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Offset, Vec2};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver, Subscription};
 use flui_interaction::haptics::HapticsHandle;
 use flui_platform::HapticFeedback;
@@ -779,14 +779,11 @@ impl Ancestor {
     /// calls this participant does not hold the drag's owner, and a scroll
     /// a callback it reaches requests must wait for the pass, not re-enter
     /// it.
-    fn on_owner<R>(
-        &self,
-        body: impl FnOnce(&Rc<ScrollOwner>, &mut PanicRecovery) -> R,
-    ) -> Option<R> {
+    fn on_owner<R>(&self, body: impl FnOnce(&Rc<ScrollOwner>, &mut FirstPanic) -> R) -> Option<R> {
         let owner = self.slot.owner()?;
-        let mut recovery = PanicRecovery::new();
-        let result = owner.within_pass(&mut recovery, |recovery| body(&owner, recovery));
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        let result = owner.within_pass(&mut failure, |failure| body(&owner, failure));
+        failure.resume();
         Some(result)
     }
 
@@ -819,11 +816,11 @@ impl NestedScrollConnection for Ancestor {
         if step.cause != ScrollCause::UserInput {
             return Vec2::ZERO;
         }
-        self.on_owner(|owner, recovery| {
+        self.on_owner(|owner, failure| {
             if owner.contact().is_some() {
                 return Vec2::ZERO;
             }
-            let taken = owner.take_remainder(step, recovery);
+            let taken = owner.take_remainder(step, failure);
             if taken != Vec2::ZERO {
                 self.moved.set(Some((step.sequence, step.device)));
                 owner.writer().set_is_scrolling(true);

@@ -15,7 +15,7 @@
 //!
 //! # Failure custody
 //!
-//! Every entry point owns one [`PanicRecovery`]: a participant that panics
+//! Every entry point owns one [`FirstPanic`]: a participant that panics
 //! while it is told about a sequence never skips the owner's own
 //! bookkeeping (a run attached, a sequence ended). The first failure resumes
 //! once the entry point's work is done (ADR-0127).
@@ -27,7 +27,7 @@ use flui_animation::{Animation, AnimationController, AnimationRunFuture, Simulat
 use flui_animation::{SpringDescription, SpringSimulation};
 use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Axis, Point, Vec2};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::gesture::GestureSettingsProvider;
 use flui_interaction::gesture::{HoldEnd, RemainderHandoff};
 use flui_platform::input::keyboard::Code;
@@ -422,8 +422,8 @@ impl ScrollOwner {
     /// pass of a chain this owner is not a link of.
     pub(crate) fn within_pass<R>(
         self: &Rc<Self>,
-        recovery: &mut PanicRecovery,
-        body: impl FnOnce(&mut PanicRecovery) -> R,
+        failure: &mut FirstPanic,
+        body: impl FnOnce(&mut FirstPanic) -> R,
     ) -> R {
         struct Leave<'a>(&'a ScrollOwner);
         impl Drop for Leave<'_> {
@@ -434,9 +434,9 @@ impl ScrollOwner {
         self.enter_pass();
         let result = {
             let _leave = Leave(self);
-            body(recovery)
+            body(failure)
         };
-        self.service_deferred(recovery);
+        self.service_deferred(failure);
         result
     }
 
@@ -459,7 +459,7 @@ impl ScrollOwner {
     /// jumps on every change) is serviced by the same loop, up to
     /// [`DEFERRED_ROUNDS`] commands; past that the latest waits in the slot
     /// for the next notification, with a diagnostic, and is never dropped.
-    pub(crate) fn service_deferred(self: &Rc<Self>, recovery: &mut PanicRecovery) {
+    pub(crate) fn service_deferred(self: &Rc<Self>, failure: &mut FirstPanic) {
         if !self.alive.get() || self.in_pass() || self.servicing.replace(true) {
             return;
         }
@@ -477,7 +477,7 @@ impl ScrollOwner {
             let Some(command) = self.controller.take_pending_command() else {
                 return;
             };
-            self.service_command(command, recovery);
+            self.service_command(command, failure);
         }
         if self.controller.has_pending_command() {
             tracing::warn!(
@@ -535,7 +535,7 @@ impl ScrollOwner {
         if !self.alive.replace(false) {
             return;
         }
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         // Every slot is emptied before a settle tells a participant: no
         // borrow is held while user code runs.
         let contact = self.contact.borrow_mut().take();
@@ -545,16 +545,16 @@ impl ScrollOwner {
         if let Some((_, sequence)) = autoscroll {
             sequence.finish_input();
             sequence.set_end_reason(ScrollEndReason::Cancelled);
-            Self::settle(&sequence, ScrollEndReason::Cancelled, &mut recovery);
+            Self::settle(&sequence, ScrollEndReason::Cancelled, &mut failure);
         }
         if let Some(held) = keyboard {
             held.sequence.finish_input();
             held.sequence.set_end_reason(ScrollEndReason::Cancelled);
-            Self::settle(&held.sequence, ScrollEndReason::Cancelled, &mut recovery);
+            Self::settle(&held.sequence, ScrollEndReason::Cancelled, &mut failure);
         }
         if let Some(contact) = contact {
             contact.cancel_contact();
-            Self::settle(&contact, ScrollEndReason::Cancelled, &mut recovery);
+            Self::settle(&contact, ScrollEndReason::Cancelled, &mut failure);
         }
         if let Some(driving) = driving {
             if driving.run.is_some() {
@@ -563,10 +563,10 @@ impl ScrollOwner {
             if !driving.sequence.has_runs() {
                 driving
                     .sequence
-                    .end(ScrollEndReason::Cancelled, &mut recovery);
+                    .end(ScrollEndReason::Cancelled, &mut failure);
             }
         }
-        recovery.finish();
+        failure.resume();
     }
 
     // -- Geometry -----------------------------------------------------------
@@ -634,7 +634,7 @@ impl ScrollOwner {
     /// Replace the driving sequence. The outgoing one ends unless it is the
     /// incoming one, still runs elsewhere, or is a contact still down;
     /// a run cut short ends it [`Preempted`](ScrollEndReason::Preempted).
-    fn drive(&self, incoming: Option<Driving>, recovery: &mut PanicRecovery) {
+    fn drive(&self, incoming: Option<Driving>, failure: &mut FirstPanic) {
         let incoming_sequence = incoming
             .as_ref()
             .map(|driving| Rc::as_ptr(&driving.sequence));
@@ -658,7 +658,7 @@ impl ScrollOwner {
         } else {
             sequence.end_reason()
         };
-        sequence.end(reason, recovery);
+        sequence.end(reason, failure);
     }
 
     /// New user input `incoming` reached this leaf: the fling it handed to a
@@ -666,7 +666,7 @@ impl ScrollOwner {
     /// stops, and that sequence ends [`Preempted`](ScrollEndReason::Preempted)
     /// before the new one starts (ADR-0209 §4). The leaf may take the input
     /// whole, so no remainder would reach the ancestor to catch it.
-    fn preempt_handoff(&self, incoming: Option<InputSequenceId>, recovery: &mut PanicRecovery) {
+    fn preempt_handoff(&self, incoming: Option<InputSequenceId>, failure: &mut FirstPanic) {
         let handed_off = self
             .driving
             .borrow()
@@ -679,25 +679,25 @@ impl ScrollOwner {
             })
             .map(|driving| Rc::clone(&driving.sequence));
         if let Some(sequence) = handed_off {
-            sequence.preempt_runs(recovery);
+            sequence.preempt_runs(failure);
         }
     }
 
     /// Stop the run this owner drives if it belongs to `sequence`.
-    pub(crate) fn stop_run_of(&self, sequence: &ScrollSequence, recovery: &mut PanicRecovery) {
+    pub(crate) fn stop_run_of(&self, sequence: &ScrollSequence, failure: &mut FirstPanic) {
         let drives = self.driving.borrow().as_ref().is_some_and(|driving| {
             driving.run.is_some() && std::ptr::eq(Rc::as_ptr(&driving.sequence), sequence)
         });
         if drives {
-            self.stop_motion(recovery);
+            self.stop_motion(failure);
         }
     }
 
     /// End `sequence` once nothing drives it any more: no run, and no live
     /// input — a contact still down, a wheel burst that may go on.
-    fn settle(sequence: &ScrollSequence, reason: ScrollEndReason, recovery: &mut PanicRecovery) {
+    fn settle(sequence: &ScrollSequence, reason: ScrollEndReason, failure: &mut FirstPanic) {
         if !sequence.has_runs() && !sequence.is_live() {
-            sequence.end(reason, recovery);
+            sequence.end(reason, failure);
         }
     }
 
@@ -707,7 +707,7 @@ impl ScrollOwner {
         self: &Rc<Self>,
         id: Option<InputSequenceId>,
         device: ScrollDevice,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Option<Rc<ScrollSequence>> {
         let current = self.contact.borrow().clone();
         if let Some(current) = &current
@@ -717,7 +717,7 @@ impl ScrollOwner {
             return Some(Rc::clone(current));
         }
         let id = id.or_else(|| self.mint())?;
-        self.preempt_handoff(Some(id), recovery);
+        self.preempt_handoff(Some(id), failure);
         let sequence = ScrollSequence::new(self, id, device, true, self.remainder_rule(device));
         self.contact_origin
             .set(Some((id, self.controller.pixels())));
@@ -727,15 +727,15 @@ impl ScrollOwner {
             .borrow()
             .as_ref()
             .is_some_and(|driving| driving.run.is_some());
-        self.drive(None, recovery);
+        self.drive(None, failure);
         if was_running {
             let _ = self.fling.stop();
         }
         if let Some(outgoing) = outgoing {
             outgoing.cancel_contact();
-            Self::settle(&outgoing, ScrollEndReason::Cancelled, recovery);
+            Self::settle(&outgoing, ScrollEndReason::Cancelled, failure);
         }
-        sequence.start(recovery);
+        sequence.start(failure);
         Some(sequence)
     }
 
@@ -748,9 +748,9 @@ impl ScrollOwner {
         kind: PointerKind,
         device: Option<DeviceId>,
     ) {
-        let mut recovery = PanicRecovery::new();
-        let _ = self.begin_contact_with(id, ScrollDevice::Pointer { kind, device }, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        let _ = self.begin_contact_with(id, ScrollDevice::Pointer { kind, device }, &mut failure);
+        failure.resume();
     }
 
     /// The live contact sequence.
@@ -767,7 +767,7 @@ impl ScrollOwner {
         self: &Rc<Self>,
         id: InputSequenceId,
         device: ScrollDevice,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Rc<ScrollSequence> {
         // An id is one sequence: input still naming one that already ended
         // (its latch lapsed) is no new sequence, and moves the leaf alone.
@@ -784,9 +784,9 @@ impl ScrollOwner {
                 position: 0,
                 run: None,
             }),
-            recovery,
+            failure,
         );
-        sequence.start(recovery);
+        sequence.start(failure);
         sequence
     }
 
@@ -812,16 +812,16 @@ impl ScrollOwner {
     fn begin_programmatic(
         self: &Rc<Self>,
         id: InputSequenceId,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Rc<ScrollSequence> {
         let device = ScrollDevice::Programmatic;
         if self.driven_by_input() {
             let sequence =
                 ScrollSequence::new(self, id, device, false, RemainderHandoff::NextSequence);
-            sequence.start(recovery);
+            sequence.start(failure);
             return sequence;
         }
-        self.begin_contactless(id, device, recovery)
+        self.begin_contactless(id, device, failure)
     }
 
     // -- Steps --------------------------------------------------------------
@@ -836,7 +836,7 @@ impl ScrollOwner {
         if !self.alive.get() || self.refused() {
             return;
         }
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let position = self.controller.position();
         sequence.aim(focal);
         sequence.dispatch(
@@ -867,9 +867,9 @@ impl ScrollOwner {
                 self.publish(target, ScrollCause::UserInput);
                 self.to_physical(target - pixels)
             },
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
     }
 
     /// Dispatch a contactless step that moves this leaf to `target` and
@@ -880,7 +880,7 @@ impl ScrollOwner {
         sequence: &ScrollSequence,
         cause: ScrollCause,
         target: f64,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) {
         if !self.alive.get() || (cause != ScrollCause::Programmatic && self.refused()) {
             return;
@@ -911,16 +911,16 @@ impl ScrollOwner {
                 self.publish(next, cause);
                 self.to_physical(next - now)
             },
-            recovery,
+            failure,
         );
     }
 
     /// A precise or unknown wheel packet moving this leaf to `target`, under
     /// the binding's latch for its source.
     pub(crate) fn wheel_step(&self, sequence: &ScrollSequence, cause: ScrollCause, target: f64) {
-        let mut recovery = PanicRecovery::new();
-        self.step_to(sequence, cause, target, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        self.step_to(sequence, cause, target, &mut failure);
+        failure.resume();
     }
 
     /// A wheel packet of `delta` (scroll coordinates) that cannot move this
@@ -951,25 +951,25 @@ impl ScrollOwner {
             return false;
         };
         sequence.aim(focal);
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let consumed = sequence.dispatch(
             0,
             cause,
             self.to_physical(delta),
             |_| Vec2::ZERO,
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
         consumed != Vec2::ZERO
     }
 
     /// A delta of the current run: the controller ticked.
     pub(crate) fn tick(self: &Rc<Self>) {
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         // A delta of a run built for extents the content no longer has
         // would carry the offset past them: the rebuilt run moves it instead.
-        let rebuilt = self.follow_extents(&mut recovery);
-        recovery.finish();
+        let rebuilt = self.follow_extents(&mut failure);
+        failure.resume();
         if rebuilt {
             return;
         }
@@ -995,7 +995,7 @@ impl ScrollOwner {
         if delta == 0.0 {
             return;
         }
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let available = self.to_physical(delta);
         let before = self.controller.pixels();
         let consumed = sequence.dispatch(
@@ -1016,14 +1016,14 @@ impl ScrollOwner {
                 self.publish(next, run.cause);
                 offer
             },
-            &mut recovery,
+            &mut failure,
         );
         // What the run moved that the leaf did not: participants took it.
         let lag = self.to_scroll(consumed) - (self.controller.pixels() - before);
         if lag.is_finite() {
             run.deflected.set(run.deflected.get() + lag);
         }
-        recovery.finish();
+        failure.resume();
     }
 
     /// A descendant's remainder reached this scrollable: take what fits
@@ -1033,7 +1033,7 @@ impl ScrollOwner {
     /// the run stops, its sequence ends `Preempted`, and the owner moves by
     /// what it takes alone. A remainder it cannot take leaves the run going,
     /// and framework motion from below (`SideEffect`) takes nothing from it.
-    pub(crate) fn take_remainder(&self, step: &ScrollStep, recovery: &mut PanicRecovery) -> Vec2 {
+    pub(crate) fn take_remainder(&self, step: &ScrollStep, failure: &mut FirstPanic) -> Vec2 {
         if !self.alive.get() || step.cause == ScrollCause::Programmatic {
             return Vec2::ZERO;
         }
@@ -1042,7 +1042,7 @@ impl ScrollOwner {
             if !catches || self.within_extents(step.available).is_none() {
                 return Vec2::ZERO;
             }
-            self.stop_motion(recovery);
+            self.stop_motion(failure);
         }
         self.take_within_extents(step.available, step.cause)
     }
@@ -1073,9 +1073,9 @@ impl ScrollOwner {
     /// committed: a release run built for others is rebuilt before the next
     /// frame ticks it ([`follow_extents`](Self::follow_extents)).
     pub(crate) fn follow_content_extents(self: &Rc<Self>) {
-        let mut recovery = PanicRecovery::new();
-        let _ = self.follow_extents(&mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        let _ = self.follow_extents(&mut failure);
+        failure.resume();
     }
 
     /// Rebuild the release run the owner drives when the content extents
@@ -1085,7 +1085,7 @@ impl ScrollOwner {
     /// on it (or bounces back to it), one in a list that grew coasts on, and
     /// a snap settles on its target, clamped to the new extents. Returns
     /// whether the run was replaced or ended.
-    fn follow_extents(self: &Rc<Self>, recovery: &mut PanicRecovery) -> bool {
+    fn follow_extents(self: &Rc<Self>, failure: &mut FirstPanic) -> bool {
         if !self.alive.get() || self.in_pass() || self.rebuilding.get() {
             return false;
         }
@@ -1124,11 +1124,11 @@ impl ScrollOwner {
                 self.0.set(false);
             }
         }
-        recovery.run(|| {
+        failure.contain(|| {
             self.rebuilding.set(true);
             let _rebuilt = Rebuilt(&self.rebuilding);
             let velocity = self.fling.velocity();
-            let mut rebuild = PanicRecovery::new();
+            let mut rebuild = FirstPanic::new();
             started = self.start_release(
                 &sequence,
                 position,
@@ -1137,7 +1137,7 @@ impl ScrollOwner {
                 Some(mode),
                 &mut rebuild,
             );
-            rebuild.finish();
+            rebuild.resume();
         });
         match started {
             RunStart::Running => {}
@@ -1149,7 +1149,7 @@ impl ScrollOwner {
                 if self.detach_run(&run).is_some() {
                     let _ = self.fling.stop();
                 }
-                Self::settle(&sequence, sequence.end_reason(), recovery);
+                Self::settle(&sequence, sequence.end_reason(), failure);
             }
         }
         true
@@ -1167,7 +1167,7 @@ impl ScrollOwner {
         cause: ScrollCause,
         start: f64,
         release: Option<Release>,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Rc<RunTag> {
         let run = Rc::new(RunTag::new(self.this.clone(), cause, start, release));
         sequence.run_started();
@@ -1177,7 +1177,7 @@ impl ScrollOwner {
                 position,
                 run: Some(Rc::clone(&run)),
             }),
-            recovery,
+            failure,
         );
         run
     }
@@ -1228,7 +1228,7 @@ impl ScrollOwner {
         position: usize,
         velocity: f64,
         device_pixel_ratio: f64,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> RunStart {
         self.start_release(
             sequence,
@@ -1236,7 +1236,7 @@ impl ScrollOwner {
             velocity,
             device_pixel_ratio,
             None,
-            recovery,
+            failure,
         )
     }
 
@@ -1250,7 +1250,7 @@ impl ScrollOwner {
         velocity: f64,
         device_pixel_ratio: f64,
         mode: Option<ReleaseMode>,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> RunStart {
         if !self.alive.get() {
             return RunStart::Rest;
@@ -1314,7 +1314,7 @@ impl ScrollOwner {
             ScrollCause::SideEffect,
             metrics.pixels,
             Some(release),
-            recovery,
+            failure,
         );
         let Ok(future) = self.fling.animate_with(simulation) else {
             let _ = self.detach_run(&run);
@@ -1349,7 +1349,7 @@ impl ScrollOwner {
                 // one.
                 return;
             };
-            let mut recovery = PanicRecovery::new();
+            let mut failure = FirstPanic::new();
             let rested = result.is_ok();
             if rested && owner.alive.get() && owner.fling.run_generation() == generation {
                 // A same-pixel jump still queues an authoritative Cancel
@@ -1357,9 +1357,9 @@ impl ScrollOwner {
                 // completion was published before those pixel listeners,
                 // so honor their accepted command before old handoff work.
                 if let Some(command) = owner.controller.take_pending_command() {
-                    owner.service_command(command, &mut recovery);
-                    Self::settle(&sequence, sequence.end_reason(), &mut recovery);
-                    recovery.finish();
+                    owner.service_command(command, &mut failure);
+                    Self::settle(&sequence, sequence.end_reason(), &mut failure);
+                    failure.resume();
                     return;
                 }
                 if let Some(residual) = residual
@@ -1372,10 +1372,10 @@ impl ScrollOwner {
                         position,
                         owner.to_physical(residual.velocity),
                         residual.device_pixel_ratio,
-                        &mut recovery,
+                        &mut failure,
                     ) == Handoff::Running
                 {
-                    recovery.finish();
+                    failure.resume();
                     return;
                 }
             }
@@ -1384,8 +1384,8 @@ impl ScrollOwner {
             } else {
                 ScrollEndReason::Preempted
             };
-            Self::settle(&sequence, reason, &mut recovery);
-            recovery.finish();
+            Self::settle(&sequence, reason, &mut failure);
+            failure.resume();
         });
     }
 
@@ -1396,7 +1396,7 @@ impl ScrollOwner {
         position: usize,
         physical: Vec2,
         device_pixel_ratio: f64,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Acceptance {
         if !self.alive.get() {
             return Acceptance::Declined;
@@ -1422,7 +1422,7 @@ impl ScrollOwner {
         if !allowed.is_finite() || allowed == metrics.pixels {
             return Acceptance::Declined;
         }
-        match self.start_run(sequence, position, velocity, device_pixel_ratio, recovery) {
+        match self.start_run(sequence, position, velocity, device_pixel_ratio, failure) {
             RunStart::Running => Acceptance::Running,
             RunStart::Rest => Acceptance::Declined,
             // The residual is stale for everyone above.
@@ -1442,9 +1442,9 @@ impl ScrollOwner {
         physical: Vec2,
         device_pixel_ratio: f64,
     ) -> bool {
-        let mut recovery = PanicRecovery::new();
-        let started = self.settle_within(id, device, physical, device_pixel_ratio, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        let started = self.settle_within(id, device, physical, device_pixel_ratio, &mut failure);
+        failure.resume();
         started
     }
 
@@ -1457,9 +1457,9 @@ impl ScrollOwner {
         id: InputSequenceId,
         device: ScrollDevice,
         physical: Vec2,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> bool {
-        self.settle_within(id, device, physical, self.device_pixel_ratio(), recovery)
+        self.settle_within(id, device, physical, self.device_pixel_ratio(), failure)
     }
 
     fn settle_within(
@@ -1468,12 +1468,12 @@ impl ScrollOwner {
         device: ScrollDevice,
         physical: Vec2,
         device_pixel_ratio: f64,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> bool {
         if !self.alive.get() || self.contact().is_some() {
             return false;
         }
-        let sequence = self.begin_contactless(id, device, recovery);
+        let sequence = self.begin_contactless(id, device, failure);
         sequence.finish_input();
         let _ = self.fling.stop();
         let started = self.start_run(
@@ -1481,10 +1481,10 @@ impl ScrollOwner {
             0,
             self.to_scroll(physical),
             device_pixel_ratio,
-            recovery,
+            failure,
         ) == RunStart::Running;
         if !started {
-            Self::settle(&sequence, ScrollEndReason::Released, recovery);
+            Self::settle(&sequence, ScrollEndReason::Released, failure);
         }
         started
     }
@@ -1498,10 +1498,10 @@ impl ScrollOwner {
         device: ScrollDevice,
     ) -> Option<Rc<ScrollSequence>> {
         let id = self.dispatched_or_mint()?;
-        let mut recovery = PanicRecovery::new();
-        self.preempt_handoff(Some(id), &mut recovery);
-        let sequence = self.begin_contactless(id, device, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        self.preempt_handoff(Some(id), &mut failure);
+        let sequence = self.begin_contactless(id, device, &mut failure);
+        failure.resume();
         Some(sequence)
     }
 
@@ -1524,16 +1524,16 @@ impl ScrollOwner {
     /// stops the controller: the same sequence goes on, another one was
     /// already preempted when `sequence` began.
     pub(crate) fn halt(&self, sequence: &Rc<ScrollSequence>) {
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         self.drive(
             Some(Driving {
                 sequence: Rc::clone(sequence),
                 position: 0,
                 run: None,
             }),
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
     }
 
     /// Run a notched wheel's eased motion to `target` under `sequence`, from
@@ -1545,14 +1545,14 @@ impl ScrollOwner {
         target: f64,
         duration: std::time::Duration,
     ) -> bool {
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let run = self.attach_run(
             sequence,
             0,
             ScrollCause::UserInput,
             self.fling.value(),
             None,
-            &mut recovery,
+            &mut failure,
         );
         let started = self.fling.animate_to_curved(
             target,
@@ -1569,7 +1569,7 @@ impl ScrollOwner {
                 false
             }
         };
-        recovery.finish();
+        failure.resume();
         moving
     }
 
@@ -1599,7 +1599,7 @@ impl ScrollOwner {
         } else {
             direction < 0.0 && pixels > self.controller.min_scroll_extent()
         };
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let step = velocity * elapsed.as_secs_f64();
         // A leaf at its extent dispatches nothing: the scrollable around it
         // autoscrolls on its own if the drag is near its edge too.
@@ -1607,34 +1607,34 @@ impl ScrollOwner {
         {
             open
         } else {
-            let sequence = self.autoscroll_sequence(drag, device, &mut recovery);
+            let sequence = self.autoscroll_sequence(drag, device, &mut failure);
             let consumed = sequence.map_or(Vec2::ZERO, |sequence| {
                 sequence.dispatch(
                     0,
                     ScrollCause::SideEffect,
                     step,
                     |offer| self.take_within_extents(offer, ScrollCause::SideEffect),
-                    &mut recovery,
+                    &mut failure,
                 )
             });
             consumed != Vec2::ZERO
         };
         if !scrolling {
-            self.end_autoscroll_with(drag, &mut recovery);
+            self.end_autoscroll_with(drag, &mut failure);
         }
-        recovery.finish();
+        failure.resume();
         scrolling
     }
 
     /// `drag` stopped autoscrolling this leaf: its sequence ends
     /// [`Released`](ScrollEndReason::Released).
     pub(crate) fn end_autoscroll(&self, drag: DragIdentity) {
-        let mut recovery = PanicRecovery::new();
-        self.end_autoscroll_with(drag, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        self.end_autoscroll_with(drag, &mut failure);
+        failure.resume();
     }
 
-    fn end_autoscroll_with(&self, drag: DragIdentity, recovery: &mut PanicRecovery) {
+    fn end_autoscroll_with(&self, drag: DragIdentity, failure: &mut FirstPanic) {
         let ending = {
             let mut autoscroll = self.autoscroll.borrow_mut();
             match autoscroll.as_ref() {
@@ -1644,7 +1644,7 @@ impl ScrollOwner {
         };
         if let Some((_, sequence)) = ending {
             sequence.finish_input();
-            Self::settle(&sequence, ScrollEndReason::Released, recovery);
+            Self::settle(&sequence, ScrollEndReason::Released, failure);
         }
     }
 
@@ -1655,7 +1655,7 @@ impl ScrollOwner {
         self: &Rc<Self>,
         drag: DragIdentity,
         device: ScrollDevice,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Option<Rc<ScrollSequence>> {
         let current = self
             .autoscroll
@@ -1667,11 +1667,11 @@ impl ScrollOwner {
             return Some(sequence);
         }
         let id = self.mint()?;
-        let sequence = self.begin_contactless(id, device, recovery);
+        let sequence = self.begin_contactless(id, device, failure);
         let outgoing = self.autoscroll.replace(Some((drag, Rc::clone(&sequence))));
         if let Some((_, outgoing)) = outgoing {
             outgoing.finish_input();
-            Self::settle(&outgoing, ScrollEndReason::Released, recovery);
+            Self::settle(&outgoing, ScrollEndReason::Released, failure);
         }
         Some(sequence)
     }
@@ -1712,23 +1712,23 @@ impl ScrollOwner {
     /// controller asks only while no pass runs through this owner; a jump
     /// asked during one waits in its command slot.
     pub(crate) fn jump(self: &Rc<Self>, target: f64) -> bool {
-        let mut recovery = PanicRecovery::new();
-        let jumped = self.jump_within(target, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        let jumped = self.jump_within(target, &mut failure);
+        failure.resume();
         jumped
     }
 
-    fn jump_within(self: &Rc<Self>, target: f64, recovery: &mut PanicRecovery) -> bool {
+    fn jump_within(self: &Rc<Self>, target: f64, failure: &mut FirstPanic) -> bool {
         if !self.alive.get() {
             return false;
         }
         let Some(id) = self.mint() else {
             return false;
         };
-        let sequence = self.begin_programmatic(id, recovery);
+        let sequence = self.begin_programmatic(id, failure);
         sequence.finish_input();
-        self.step_to(&sequence, ScrollCause::Programmatic, target, recovery);
-        Self::settle(&sequence, ScrollEndReason::Released, recovery);
+        self.step_to(&sequence, ScrollCause::Programmatic, target, failure);
+        Self::settle(&sequence, ScrollEndReason::Released, failure);
         true
     }
 
@@ -1736,16 +1736,12 @@ impl ScrollOwner {
     /// programmatic sequence, a jump asked during a pass lands. Nothing
     /// while a pass through this owner runs: its end services the slot.
     pub(crate) fn service_pending_command(self: &Rc<Self>) {
-        let mut recovery = PanicRecovery::new();
-        self.service_deferred(&mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        self.service_deferred(&mut failure);
+        failure.resume();
     }
 
-    fn service_command(
-        self: &Rc<Self>,
-        command: PendingScrollCommand,
-        recovery: &mut PanicRecovery,
-    ) {
+    fn service_command(self: &Rc<Self>, command: PendingScrollCommand, failure: &mut FirstPanic) {
         if let PendingScrollCommand::JumpTo { target_pixels } = command {
             // The jump ends the run the owner drives before its own
             // sequence starts; live input goes on from the new offset.
@@ -1754,7 +1750,7 @@ impl ScrollOwner {
                 self.controller.min_scroll_extent(),
                 self.controller.max_scroll_extent(),
             );
-            if !self.jump_within(target, recovery) {
+            if !self.jump_within(target, failure) {
                 self.writer()
                     .set_pixels(target, OffsetWriteCause::Programmatic);
             }
@@ -1768,7 +1764,7 @@ impl ScrollOwner {
             let _ = self.controller.service_command(command, &self.fling);
             return;
         };
-        let sequence = self.begin_programmatic(id, recovery);
+        let sequence = self.begin_programmatic(id, failure);
         sequence.finish_input();
         let run = self.attach_run(
             &sequence,
@@ -1776,13 +1772,13 @@ impl ScrollOwner {
             ScrollCause::Programmatic,
             self.controller.pixels(),
             None,
-            recovery,
+            failure,
         );
         match self.controller.service_command(command, &self.fling) {
             Some(future) => self.watch_run(&run, &future, None),
             None => {
                 if self.detach_run(&run).is_some() {
-                    Self::settle(&sequence, ScrollEndReason::Released, recovery);
+                    Self::settle(&sequence, ScrollEndReason::Released, failure);
                 }
             }
         }
@@ -1790,14 +1786,14 @@ impl ScrollOwner {
 
     /// Stop the run the owner drives; its sequence ends
     /// [`Preempted`](ScrollEndReason::Preempted).
-    fn stop_motion(&self, recovery: &mut PanicRecovery) {
+    fn stop_motion(&self, failure: &mut FirstPanic) {
         let running = self
             .driving
             .borrow()
             .as_ref()
             .is_some_and(|driving| driving.run.is_some());
         if running {
-            self.drive(None, recovery);
+            self.drive(None, failure);
         }
         let _ = self.fling.stop();
     }
@@ -1823,9 +1819,9 @@ impl ScrollOwner {
         if self.refused() {
             return MoveOutcome::Unmoved;
         }
-        let mut recovery = PanicRecovery::new();
-        let outcome = self.move_to_with(target, cause, device_pixel_ratio, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        let outcome = self.move_to_with(target, cause, device_pixel_ratio, &mut failure);
+        failure.resume();
         outcome
     }
 
@@ -1834,11 +1830,11 @@ impl ScrollOwner {
         target: f64,
         cause: ScrollCause,
         device_pixel_ratio: f64,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> MoveOutcome {
         if cause == ScrollCause::Programmatic {
             // A reveal stops the motion even where the target already shows.
-            self.stop_motion(recovery);
+            self.stop_motion(failure);
         }
         let position = self.controller.position();
         let target = target.clamp(position.min_scroll_extent(), position.max_scroll_extent());
@@ -1852,13 +1848,13 @@ impl ScrollOwner {
             let Some(id) = self.mint() else {
                 return MoveOutcome::Unmoved;
             };
-            self.begin_programmatic(id, recovery)
+            self.begin_programmatic(id, failure)
         } else {
             let Some(id) = self.dispatched_or_mint() else {
                 return MoveOutcome::Unmoved;
             };
-            self.preempt_handoff(Some(id), recovery);
-            self.begin_contactless(id, ScrollDevice::Assistive, recovery)
+            self.preempt_handoff(Some(id), failure);
+            self.begin_contactless(id, ScrollDevice::Assistive, failure)
         };
         sequence.finish_input();
         let _ = self.fling.stop();
@@ -1868,11 +1864,11 @@ impl ScrollOwner {
         } else {
             ScrollDirection::Forward
         });
-        self.step_to(&sequence, cause, target, recovery);
-        if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, recovery) == RunStart::Running {
+        self.step_to(&sequence, cause, target, failure);
+        if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, failure) == RunStart::Running {
             MoveOutcome::Settling
         } else {
-            Self::settle(&sequence, ScrollEndReason::Released, recovery);
+            Self::settle(&sequence, ScrollEndReason::Released, failure);
             MoveOutcome::Moved
         }
     }
@@ -1901,7 +1897,7 @@ impl ScrollOwner {
         if target == old {
             return MoveOutcome::Unmoved;
         }
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let held = self.keyboard.borrow().clone();
         let sequence = match held {
             Some(held) if auto_repeat && held.code == code && !held.sequence.is_ended() => {
@@ -1910,14 +1906,14 @@ impl ScrollOwner {
             previous => {
                 if let Some(previous) = previous {
                     previous.sequence.finish_input();
-                    Self::settle(&previous.sequence, ScrollEndReason::Released, &mut recovery);
+                    Self::settle(&previous.sequence, ScrollEndReason::Released, &mut failure);
                 }
                 let Some(id) = self.mint() else {
-                    recovery.finish();
+                    failure.resume();
                     return MoveOutcome::Unmoved;
                 };
-                self.preempt_handoff(Some(id), &mut recovery);
-                let sequence = self.begin_contactless(id, ScrollDevice::Keyboard, &mut recovery);
+                self.preempt_handoff(Some(id), &mut failure);
+                let sequence = self.begin_contactless(id, ScrollDevice::Keyboard, &mut failure);
                 *self.keyboard.borrow_mut() = Some(KeyHold {
                     code,
                     sequence: Rc::clone(&sequence),
@@ -1932,15 +1928,15 @@ impl ScrollOwner {
         } else {
             ScrollDirection::Forward
         });
-        self.step_to(&sequence, ScrollCause::UserInput, target, &mut recovery);
-        let outcome = if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, &mut recovery)
+        self.step_to(&sequence, ScrollCause::UserInput, target, &mut failure);
+        let outcome = if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, &mut failure)
             == RunStart::Running
         {
             MoveOutcome::Settling
         } else {
             MoveOutcome::Moved
         };
-        recovery.finish();
+        failure.resume();
         outcome
     }
 
@@ -1952,10 +1948,10 @@ impl ScrollOwner {
             return;
         };
         self.keyboard.borrow_mut().take();
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         held.sequence.finish_input();
-        Self::settle(&held.sequence, ScrollEndReason::Released, &mut recovery);
-        recovery.finish();
+        Self::settle(&held.sequence, ScrollEndReason::Released, &mut failure);
+        failure.resume();
     }
 
     // -- Contacts -----------------------------------------------------------
@@ -1963,13 +1959,13 @@ impl ScrollOwner {
     /// A press on this scrollable while it moves (ADR-0208 rule 4): the
     /// press's sequence takes over and stops the motion.
     pub(crate) fn hold(self: &Rc<Self>, id: Option<InputSequenceId>, kind: PointerKind) {
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let device = ScrollDevice::Pointer { kind, device: None };
-        if let Some(sequence) = self.begin_contact_with(id, device, &mut recovery) {
+        if let Some(sequence) = self.begin_contact_with(id, device, &mut failure) {
             sequence.set_held(true);
         }
         let _ = self.fling.stop();
-        recovery.finish();
+        failure.resume();
     }
 
     /// The hold ended. A lifted press settles the stopped position through
@@ -1983,9 +1979,9 @@ impl ScrollOwner {
             return false;
         };
         sequence.set_held(false);
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         match end {
-            HoldEnd::Lifted => sequence.release(Vec2::ZERO, &mut recovery),
+            HoldEnd::Lifted => sequence.release(Vec2::ZERO, &mut failure),
             // This scrollable's own drag may take the contact next and stop
             // the settle; until its drag lost too, the sequence stays live.
             HoldEnd::Yielded => {
@@ -1998,11 +1994,11 @@ impl ScrollOwner {
         }
         // Without a run of its own (none to start, or reentrant code took
         // over) the sequence ends now, unless its contact is still live.
-        if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, &mut recovery) != RunStart::Running
+        if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, &mut failure) != RunStart::Running
         {
-            Self::settle(&sequence, sequence.end_reason(), &mut recovery);
+            Self::settle(&sequence, sequence.end_reason(), &mut failure);
         }
-        recovery.finish();
+        failure.resume();
         self.runs_motion()
     }
 
@@ -2015,9 +2011,9 @@ impl ScrollOwner {
         if !sequence.is_held() {
             sequence.cancel_contact();
             sequence.set_end_reason(ScrollEndReason::ArenaLost);
-            let mut recovery = PanicRecovery::new();
-            Self::settle(&sequence, ScrollEndReason::ArenaLost, &mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            Self::settle(&sequence, ScrollEndReason::ArenaLost, &mut failure);
+            failure.resume();
         }
     }
 
@@ -2034,9 +2030,9 @@ impl ScrollOwner {
         let Some(sequence) = self.contact() else {
             return false;
         };
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let velocity = if completed {
-            sequence.release(physical, &mut recovery);
+            sequence.release(physical, &mut failure);
             // An ancestor that holds this axis settles with the velocity
             // instead; this leaf only comes to rest.
             if sequence.held_above(self.axis_index()) {
@@ -2050,12 +2046,12 @@ impl ScrollOwner {
         };
         // Without a run of its own (none to start, or reentrant code took
         // over) the sequence ends now.
-        if self.start_run(&sequence, 0, velocity, device_pixel_ratio, &mut recovery)
+        if self.start_run(&sequence, 0, velocity, device_pixel_ratio, &mut failure)
             != RunStart::Running
         {
-            Self::settle(&sequence, sequence.end_reason(), &mut recovery);
+            Self::settle(&sequence, sequence.end_reason(), &mut failure);
         }
-        recovery.finish();
+        failure.resume();
         self.runs_motion()
     }
 }

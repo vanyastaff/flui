@@ -185,8 +185,8 @@ impl TransitionInner {
         let Some(mut owner) = outgoing else {
             return;
         };
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        recovery.run(|| {
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| {
             if let Err(error) = owner.rebind(vsync) {
                 tracing::error!(%error, "route animation has no frame clock");
             }
@@ -194,9 +194,9 @@ impl TransitionInner {
         if !self.disposed.get() && self.controller.borrow().is_none() {
             *self.controller.borrow_mut() = Some(owner);
         } else {
-            recovery.run(|| drop(owner));
+            failure.retire(owner);
         }
-        recovery.finish();
+        failure.resume();
     }
 
     /// Whether the route is still active (not yet popped).

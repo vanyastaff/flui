@@ -90,7 +90,7 @@ use flui_animation::{
 use flui_foundation::InputSequenceId;
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Axis, EdgeInsets, Matrix4, Offset, Point, Rect, Vec2};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::gesture::{GestureEndReason, RemainderHandoff, Velocity};
 use flui_interaction::gesture::{
@@ -733,7 +733,7 @@ impl ViewerLeaf {
         id: InputSequenceId,
         device: ScrollDevice,
         contact: bool,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Rc<ScrollSequence> {
         let parent = self.parent.borrow().clone();
         let sequence = ScrollSequence::above(
@@ -744,37 +744,37 @@ impl ViewerLeaf {
             contact,
             self.remainder_rule(device),
         );
-        sequence.start(recovery);
+        sequence.start(failure);
         sequence
     }
 
-    fn end_contactless(&self, reason: ScrollEndReason, recovery: &mut PanicRecovery) {
+    fn end_contactless(&self, reason: ScrollEndReason, failure: &mut FirstPanic) {
         let outgoing = self.contactless.borrow_mut().take();
         if let Some(outgoing) = outgoing {
             outgoing.sequence.finish_input();
-            outgoing.sequence.end(reason, recovery);
+            outgoing.sequence.end(reason, failure);
         }
     }
 
     /// A contact's pan started on the viewer: its sequence begins, and the
     /// contactless one it interrupts ends.
     fn begin_contact(&self) {
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let outgoing = self.contact.borrow_mut().take();
         if let Some(outgoing) = outgoing {
             outgoing.cancel_contact();
-            outgoing.end(ScrollEndReason::Cancelled, &mut recovery);
+            outgoing.end(ScrollEndReason::Cancelled, &mut failure);
         }
-        self.end_contactless(ScrollEndReason::Released, &mut recovery);
+        self.end_contactless(ScrollEndReason::Released, &mut failure);
         if let Some(id) = self.dispatched_or_mint() {
             let device = self.device.get().unwrap_or(ScrollDevice::Pointer {
                 kind: PointerKind::Touch,
                 device: None,
             });
-            let sequence = self.begin(id, device, true, &mut recovery);
+            let sequence = self.begin(id, device, true, &mut failure);
             *self.contact.borrow_mut() = Some(sequence);
         }
-        recovery.finish();
+        failure.resume();
     }
 
     /// One delta of the live contact at `focal` (the viewer's box) through
@@ -791,10 +791,10 @@ impl ViewerLeaf {
             return consume(available);
         };
         sequence.aim(Point::new(focal.dx, focal.dy));
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let consumed =
-            sequence.dispatch(0, ScrollCause::UserInput, available, consume, &mut recovery);
-        recovery.finish();
+            sequence.dispatch(0, ScrollCause::UserInput, available, consume, &mut failure);
+        failure.resume();
         consumed
     }
 
@@ -809,15 +809,15 @@ impl ViewerLeaf {
     /// The contact lifted with `velocity` (physical channel axes): the
     /// release settles every scrollable the pan moved. Returns the sequence,
     /// for the viewer's own inertia, and the axes the viewer holds. A
-    /// participant's failure stays in `recovery`: the caller resumes it only
+    /// participant's failure stays in `failure`: the caller resumes it only
     /// once the sequence has a run or an end.
     fn release(
         &self,
         velocity: Vec2,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Option<(Rc<ScrollSequence>, [bool; 2])> {
         let sequence = self.contact.borrow_mut().take()?;
-        sequence.release(velocity, recovery);
+        sequence.release(velocity, failure);
         let held = sequence.leaf_holds();
         Some((sequence, held))
     }
@@ -828,10 +828,10 @@ impl ViewerLeaf {
         let Some(sequence) = self.contact.borrow_mut().take() else {
             return;
         };
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         sequence.cancel_contact();
-        sequence.end(ScrollEndReason::Cancelled, &mut recovery);
-        recovery.finish();
+        sequence.end(ScrollEndReason::Cancelled, &mut failure);
+        failure.resume();
     }
 
     /// Whether `id` is the contactless sequence the viewer leads now.
@@ -853,7 +853,7 @@ impl ViewerLeaf {
         available: Vec2,
         consume: impl FnOnce(Vec2) -> Vec2,
     ) -> Vec2 {
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let current = self
             .contactless
             .borrow()
@@ -865,8 +865,8 @@ impl ViewerLeaf {
         let sequence = if let Some(sequence) = current {
             sequence
         } else {
-            self.end_contactless(ScrollEndReason::Released, &mut recovery);
-            let sequence = self.begin(id, device, false, &mut recovery);
+            self.end_contactless(ScrollEndReason::Released, &mut failure);
+            let sequence = self.begin(id, device, false, &mut failure);
             *self.contactless.borrow_mut() = Some(Contactless {
                 sequence: Rc::clone(&sequence),
                 key: match input {
@@ -879,8 +879,8 @@ impl ViewerLeaf {
         if let ContactlessInput::Wheel(pointer) = input {
             sequence.aim(Point::new(pointer.dx, pointer.dy));
         }
-        let consumed = sequence.dispatch(0, cause, available, consume, &mut recovery);
-        recovery.finish();
+        let consumed = sequence.dispatch(0, cause, available, consume, &mut failure);
+        failure.resume();
         consumed
     }
 
@@ -909,9 +909,9 @@ impl ViewerLeaf {
     /// `code` was released: the sequence it held ends.
     fn key_released(&self, code: Code) {
         if self.key_sequence(code).is_some() {
-            let mut recovery = PanicRecovery::new();
-            self.end_contactless(ScrollEndReason::Released, &mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            self.end_contactless(ScrollEndReason::Released, &mut failure);
+            failure.resume();
         }
     }
 
@@ -925,29 +925,29 @@ impl ViewerLeaf {
         let Some(id) = self.dispatched_or_mint() else {
             return consume(available);
         };
-        let mut recovery = PanicRecovery::new();
-        self.end_contactless(ScrollEndReason::Released, &mut recovery);
-        let sequence = self.begin(id, device, false, &mut recovery);
+        let mut failure = FirstPanic::new();
+        self.end_contactless(ScrollEndReason::Released, &mut failure);
+        let sequence = self.begin(id, device, false, &mut failure);
         let consumed =
-            sequence.dispatch(0, ScrollCause::UserInput, available, consume, &mut recovery);
+            sequence.dispatch(0, ScrollCause::UserInput, available, consume, &mut failure);
         sequence.finish_input();
-        sequence.end(ScrollEndReason::Released, &mut recovery);
-        recovery.finish();
+        sequence.end(ScrollEndReason::Released, &mut failure);
+        failure.resume();
         consumed
     }
 
     /// The viewer went away: what it leads ends cancelled.
     fn retire(&self) {
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         // Taken before its end tells a participant: no borrow is held while
         // user code runs.
         let contact = self.contact.borrow_mut().take();
         if let Some(contact) = contact {
             contact.cancel_contact();
-            contact.end(ScrollEndReason::Cancelled, &mut recovery);
+            contact.end(ScrollEndReason::Cancelled, &mut failure);
         }
-        self.end_contactless(ScrollEndReason::Cancelled, &mut recovery);
-        recovery.finish();
+        self.end_contactless(ScrollEndReason::Cancelled, &mut failure);
+        failure.resume();
     }
 }
 
@@ -1615,9 +1615,9 @@ impl FocalFling {
             return true;
         }
         if let Some(sequence) = sequence {
-            let mut recovery = PanicRecovery::new();
-            sequence.end(ScrollEndReason::Released, &mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            sequence.end(ScrollEndReason::Released, &mut failure);
+            failure.resume();
         }
         false
     }
@@ -1644,9 +1644,9 @@ impl FocalFling {
             speed.is_finite() && speed > 0.0,
         ) else {
             if let Some(sequence) = sequence {
-                let mut recovery = PanicRecovery::new();
-                sequence.end(ScrollEndReason::Released, &mut recovery);
-                recovery.finish();
+                let mut failure = FirstPanic::new();
+                sequence.end(ScrollEndReason::Released, &mut failure);
+                failure.resume();
             }
             return;
         };
@@ -1682,15 +1682,15 @@ impl FocalFling {
             let consume = |offer| core.consume(offer, [false, false]);
             let consumed = match &step_sequence {
                 Some(sequence) => {
-                    let mut recovery = PanicRecovery::new();
+                    let mut failure = FirstPanic::new();
                     let consumed = sequence.dispatch(
                         0,
                         ScrollCause::SideEffect,
                         available,
                         consume,
-                        &mut recovery,
+                        &mut failure,
                     );
-                    recovery.finish();
+                    failure.resume();
                     consumed
                 }
                 None => consume(available),
@@ -1762,9 +1762,9 @@ impl FocalFling {
         else {
             rest();
             if let Some(sequence) = sequence {
-                let mut recovery = PanicRecovery::new();
-                sequence.end(ScrollEndReason::Released, &mut recovery);
-                recovery.finish();
+                let mut failure = FirstPanic::new();
+                sequence.end(ScrollEndReason::Released, &mut failure);
+                failure.resume();
             }
             return;
         };
@@ -1879,9 +1879,9 @@ impl FocalRun {
             core.publish(core.base());
         }
         if let Some(sequence) = &self.sequence {
-            let mut recovery = PanicRecovery::new();
-            sequence.end(reason, &mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            sequence.end(reason, &mut failure);
+            failure.resume();
         }
     }
 
@@ -2195,14 +2195,14 @@ impl InteractiveViewerState {
                 // A participant that fails at the release still leaves the
                 // sequence to the run below, which owns its end; the failure
                 // resumes after it.
-                let mut recovery = PanicRecovery::new();
+                let mut failure = FirstPanic::new();
                 let sequence = if native {
                     None
                 } else {
                     core.leaf
-                        .release(Vec2::new(-velocity.dx, -velocity.dy), &mut recovery)
+                        .release(Vec2::new(-velocity.dx, -velocity.dy), &mut failure)
                 };
-                recovery.run(|| {
+                failure.contain(|| {
                     if !overlay.is_rest() {
                         // Pulled past the bounds: the scene comes back, and no
                         // inertia runs from outside them.
@@ -2232,7 +2232,7 @@ impl InteractiveViewerState {
                     }
                 });
                 if let Some(callback) = core.callbacks().end {
-                    recovery.run(|| {
+                    failure.contain(|| {
                         callback(
                             ctx,
                             InteractionEndDetails {
@@ -2243,7 +2243,7 @@ impl InteractiveViewerState {
                         );
                     });
                 }
-                recovery.finish();
+                failure.resume();
             };
 
             let cancel_core = Rc::clone(&core);
