@@ -26,7 +26,6 @@ mod doctor;
 mod fonts;
 mod icon_import;
 mod key_vocabulary;
-mod perf;
 mod platform_floor;
 mod recording_vocabulary;
 mod toolchain;
@@ -76,8 +75,6 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     /// Collect benchmark results.
     BenchCollect(bench::BenchCollectArgs),
-    /// Run the counted perf scenarios and compare them with the baseline.
-    Perf(perf::PerfArgs),
     /// Create, list and prune task worktrees under `.worktrees/`.
     Worktree(worktree::WorktreeArgs),
 }
@@ -104,7 +101,6 @@ fn main() -> ExitCode {
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
-        Command::Perf(args) => perf::perf(&args),
         Command::Worktree(args) => worktree::worktree(&args),
     };
     match result {

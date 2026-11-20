@@ -223,10 +223,6 @@ impl RenderBox for RenderSubtreeAnchor {
     }
 
     flui_rendering::forward_single_child_box_queries!();
-
-    fn debug_name(&self) -> &'static str {
-        "RenderSubtreeAnchor"
-    }
 }
 
 /// [`RenderSubtreeAnchor`] for a sliver subtree: a layout/paint/hit-test
@@ -321,9 +317,5 @@ impl RenderSliver for RenderSliverSubtreeAnchor {
         if let Some(id) = self.mounted_id.take() {
             self.anchor.clear(id);
         }
-    }
-
-    fn debug_name(&self) -> &'static str {
-        "RenderSliverSubtreeAnchor"
     }
 }

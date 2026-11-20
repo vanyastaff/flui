@@ -32,6 +32,31 @@ fn with_lane(probe: &Probe, dir: &tempfile::TempDir) -> (Driver, LaneLog) {
     (driver, log)
 }
 
+/// The session says what its lane can do, the accessibility API it reads through included; a
+/// session with no lane has none.
+#[test]
+fn a_session_reports_what_its_lane_can_do() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let probe = Probe::default();
+    let bare = Driver::launch(counter(&probe)).expect("the headless app starts");
+    assert_eq!(bare.lane_capabilities(), None);
+    let (driver, _log) = with_lane(&probe, &dir);
+    let capabilities = driver.lane_capabilities().expect("a lane is attached");
+    assert_eq!(capabilities.isolation, Isolation::Shared);
+    assert_eq!(
+        capabilities.accessibility, None,
+        "the scripted lane reads no tree"
+    );
+    let read = lane::LaneCapabilities::new(
+        vec![PointerDevice::Mouse],
+        true,
+        Isolation::Xvfb,
+        lane::PositionFidelity::Exact,
+    )
+    .accessibility(lane::AccessibilityApi::AtSpi);
+    assert_eq!(read.accessibility, Some(lane::AccessibilityApi::AtSpi));
+}
+
 fn a_move() -> ActionSequence {
     ActionSequence::new(vec![InputSource::Pointer {
         id: "p".into(),

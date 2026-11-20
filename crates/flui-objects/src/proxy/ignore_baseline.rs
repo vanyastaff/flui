@@ -107,8 +107,4 @@ impl RenderBox for RenderIgnoreBaseline {
     ) -> flui_rendering::RenderResult<Size> {
         flui_rendering::context::proxy_queries::forward_dry_layout(constraints, ctx)
     }
-
-    fn debug_name(&self) -> &'static str {
-        "RenderIgnoreBaseline"
-    }
 }

@@ -73,7 +73,7 @@ fn the_error_view_factory_reaches_every_presentation_of_its_runtime_only() {
     configured_runtime.set_error_view_builder(Some(configured));
 
     configured_runtime
-        .attach_root_widget_with_size(&Panics(true), 800.0, 600.0)
+        .attach_root_widget(&Panics(true))
         .expect("first root");
     frame(&mut configured_runtime, &clock);
     assert_eq!(
@@ -88,7 +88,7 @@ fn the_error_view_factory_reaches_every_presentation_of_its_runtime_only() {
         .expect("assemble sibling");
     let sibling = configured_runtime.install_presentation(sibling);
     configured_runtime
-        .attach_root_widget_with_size_to(sibling, &Panics(true), 800.0, 600.0)
+        .attach_root_widget_to(sibling, &Panics(true))
         .expect("sibling root");
     frame(&mut configured_runtime, &clock);
     assert_eq!(
@@ -98,7 +98,7 @@ fn the_error_view_factory_reaches_every_presentation_of_its_runtime_only() {
     );
 
     other_runtime
-        .attach_root_widget_with_size(&Panics(true), 800.0, 600.0)
+        .attach_root_widget(&Panics(true))
         .expect("other root");
     frame(&mut other_runtime, &clock);
     assert_eq!(

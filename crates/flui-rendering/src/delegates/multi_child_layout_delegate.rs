@@ -56,7 +56,7 @@ use crate::constraints::BoxConstraints;
 ///         Ok(())
 ///     }
 ///
-///     fn get_size(&self, constraints: BoxConstraints) -> Size {
+///     fn size(&self, constraints: BoxConstraints) -> Size {
 ///         constraints.biggest()
 ///     }
 ///
@@ -94,7 +94,7 @@ pub trait MultiChildLayoutDelegate: Debug {
     /// # Returns
     ///
     /// The size of this render object.
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 

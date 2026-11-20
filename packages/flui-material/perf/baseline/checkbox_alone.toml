@@ -6,7 +6,7 @@
 
 [checkbox_alone]
 allocations = 87
-bytes = 11385
+bytes = 11217
 elements = 4
 reallocations = 2
 render_nodes = 2

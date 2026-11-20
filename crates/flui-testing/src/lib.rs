@@ -26,9 +26,8 @@
 //! pipeline's phase counters differenced across the frame and what its scene
 //! patch cost. `flui-widgets`' `perf` test target drives a fixed app through idle,
 //! scroll, text-change and full-reassemble frames, asserts budgets on those
-//! reports, and — when `FLUI_PERF_OUT` names a directory — writes each
-//! scenario's counts there for `cargo xtask perf` to compare with the
-//! checked-in baseline.
+//! reports, and — when `FLUI_PERF_BASELINE` is `check` — holds each
+//! scenario's counts to the checked-in baseline.
 //!
 //! ## Example
 //!
@@ -152,7 +151,7 @@ pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 /// returns for a frame of the UI runtime.
 ///
 /// Counts, not timings: every figure is a deterministic function of the tree
-/// and the change applied, which is what lets `cargo xtask perf` compare them
+/// and the change applied, which is what lets a perf scenario compare them
 /// exactly against a checked-in baseline.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]

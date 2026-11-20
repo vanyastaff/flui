@@ -1583,3 +1583,132 @@ pub(crate) fn image_transforms_refuse_what_they_cannot_invert() {
         }
     }
 }
+
+/// A lerp's retained state serializes its gradient fallback but never its image
+/// blend, decoration images being skipped: a decoration that retains only a
+/// blend writes no retained state and reads back as the plain decoration, and
+/// one that retains both writes the gradient alone.
+#[cfg(feature = "serde")]
+pub(crate) fn a_lerp_serializes_its_gradient_fallback_but_not_its_image_blend() {
+    use flui_painting::paint::Image;
+    use flui_painting::styling::DecorationImage;
+
+    let with = |color: Color| {
+        BoxDecoration::<f64>::with_image(DecorationImage::new(Image::solid_color(4, 4, color)))
+    };
+    let blend_only = BoxDecoration::lerp(&with(Color::RED), &with(Color::BLUE), 0.25);
+    let written = serde_json::to_value(&blend_only).expect("a decoration serializes");
+    assert!(
+        written.get("lerp_retained").is_none(),
+        "a blend without a gradient fallback writes no retained state: {written}"
+    );
+    let restored: BoxDecoration =
+        serde_json::from_value(written).expect("a decoration deserializes");
+    let image = restored
+        .image
+        .clone()
+        .expect("the published image round-trips");
+    assert_eq!(
+        restored,
+        BoxDecoration::with_image(image),
+        "a restored blend is the plain decoration it paints like"
+    );
+
+    // An extrapolated gradient keeps a bounded fallback; images on both
+    // endpoints add a blend beside it.
+    let mut begin = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
+    begin.begin = Alignment::CENTER;
+    begin.end = Alignment::new(0.0, 1.0);
+    let mut end = begin.clone();
+    end.end.y = 2.0;
+    let extrapolated = |color: Color| {
+        let mut decoration = BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(Gradient::Linear(begin.clone())),
+            &BoxDecoration::with_gradient(Gradient::Linear(end.clone())),
+            1e10,
+        );
+        decoration.image = with(color).image;
+        decoration
+    };
+    let both = BoxDecoration::lerp(&extrapolated(Color::RED), &extrapolated(Color::BLUE), 0.5);
+    let written = serde_json::to_value(&both).expect("a decoration serializes");
+    let retained = written
+        .get("lerp_retained")
+        .expect("a gradient fallback is written");
+    assert!(
+        retained
+            .get("gradient")
+            .is_some_and(|gradient| !gradient.is_null())
+            && retained.get("image").is_none(),
+        "the gradient fallback is written and the blend is not: {retained}"
+    );
+}
+
+/// A lerp endpoint keeps what its decoration retains: the exact endpoints keep
+/// a bounded gradient fallback, and an extrapolated endpoint that rebuilds the
+/// gradient fallback keeps the image blend beside it.
+pub(crate) fn lerp_endpoints_keep_a_gradient_fallback_and_an_image_blend() {
+    use flui_painting::paint::Image;
+    use flui_painting::styling::DecorationImage;
+
+    let mut begin = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
+    begin.begin = Alignment::CENTER;
+    begin.end = Alignment::new(0.0, 1.0);
+    let mut end = begin.clone();
+    end.end.y = 2.0;
+    let extrapolated = |image: Option<Color>| {
+        let mut decoration = BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(Gradient::Linear(begin.clone())),
+            &BoxDecoration::with_gradient(Gradient::Linear(end.clone())),
+            1e10,
+        );
+        decoration.image = image.map(|color| DecorationImage::new(Image::solid_color(4, 4, color)));
+        decoration
+    };
+
+    let fallback = extrapolated(None);
+    let plain = BoxDecoration::<f64>::new();
+    assert_eq!(
+        BoxDecoration::lerp(&fallback, &plain, 0.0),
+        fallback,
+        "t = 0 keeps a's gradient fallback"
+    );
+    assert_eq!(
+        BoxDecoration::lerp(&plain, &fallback, 1.0),
+        fallback,
+        "t = 1 keeps b's gradient fallback"
+    );
+
+    let blended = BoxDecoration::lerp(
+        &extrapolated(Some(Color::RED)),
+        &extrapolated(Some(Color::BLUE)),
+        0.5,
+    );
+    // A different gradient on the other side, so the overshoot rebuilds the
+    // fallback.
+    let other = BoxDecoration::<f64>::with_gradient(Gradient::Linear(begin.clone()));
+    let overshoot = BoxDecoration::lerp(&other, &blended, 2.0);
+    assert!(
+        overshoot != blended,
+        "premise: the overshoot rebuilds the gradient fallback"
+    );
+    let mut canvas = flui_painting::Canvas::new();
+    overshoot.paint(
+        &mut canvas,
+        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        flui_painting::styling::DecorationPaintOptions::default(),
+    );
+    let images = canvas
+        .finish()
+        .iter()
+        .filter(|command| {
+            matches!(
+                command.op,
+                flui_painting::DrawOp::Image { .. }
+                    | flui_painting::DrawOp::ImageRegion { .. }
+                    | flui_painting::DrawOp::ImageRepeat { .. }
+            )
+        })
+        .count();
+    assert_eq!(images, 2, "an overshooting endpoint keeps its image blend");
+}

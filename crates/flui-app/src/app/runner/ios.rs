@@ -348,7 +348,6 @@ where
     config.install_input_tap(&ui_runtime);
     config.install_error_view_builder(&ui_runtime);
 
-    let logical = geometry.logical;
     let owner = APP_RUNTIME
         .with(|slot| slot.borrow().owner_platform.clone())
         .expect("BUG: UIKit owner installed before scene bootstrap");
@@ -362,13 +361,8 @@ where
     );
     ui_runtime
         .install_captured_text_sizing_for(ui_runtime.presentation_id(), native_sizing.source());
-    let attach = ui_runtime.enter(|ui_runtime| {
-        ui_runtime.attach_root_widget_with_size(
-            &app_root(root.clone()),
-            logical.width,
-            logical.height,
-        )
-    });
+    let attach =
+        ui_runtime.enter(|ui_runtime| ui_runtime.attach_root_widget(&app_root(root.clone())));
     if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));

@@ -67,7 +67,7 @@ fn paragraph_width(ui_runtime: &UiRuntime) -> f64 {
         let paragraph = owner
             .render_tree()
             .iter()
-            .find(|(_, node)| node.debug_name().contains("RenderParagraph"))
+            .find(|(_, node)| node.kind() == "RenderParagraph")
             .map(|(id, _)| id)
             .expect("the Text mounted a RenderParagraph");
         owner

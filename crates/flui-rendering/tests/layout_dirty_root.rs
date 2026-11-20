@@ -47,7 +47,7 @@ use crate::common::fresh_layout_pipeline;
 // ============================================================================
 
 // ============================================================================
-// Manual RenderObject<BoxProtocol> impls (RenderViewAdapter): the layout walk
+// Manual RenderObject<BoxProtocol> impls (RenderView): the layout walk
 // still drives perform_layout_raw on them via the trait dispatch.
 // ============================================================================
 

@@ -665,7 +665,7 @@ impl PipelineOwner<PaintPhase> {
                 drop(fresh);
                 flui_foundation::panic::discard_payload(payload);
                 return Err(crate::error::RenderError::poisoned(
-                    node.debug_name(),
+                    node.kind(),
                     PoisonPhase::LayerUpdate,
                 ));
             }
@@ -859,7 +859,7 @@ impl PipelineOwner<PaintPhase> {
         } else {
             anchor
         };
-        let debug_name = render_node.debug_name();
+        let kind = render_node.kind();
         // The node records after its ancestors' unreplayed operations in the
         // pass's one recorder, and its children record after its own, so a
         // node that paints only its child allocates nothing. Its runs record
@@ -868,7 +868,7 @@ impl PipelineOwner<PaintPhase> {
         let recorder = &mut composer.work.recorder.0;
         recorder.begin(
             origin,
-            self.device_pixel_ratio.get(),
+            self.device_pixel_ratio,
             anchor.map(|frame| frame.at(origin)),
         );
         let own_effects = &mut composer.work.own_effects;
@@ -889,7 +889,7 @@ impl PipelineOwner<PaintPhase> {
             composer.work.recorder.0.abandon();
             flui_foundation::panic::discard_payload(payload);
             return Err(crate::error::RenderError::poisoned(
-                debug_name,
+                kind,
                 PoisonPhase::Paint,
             ));
         }
@@ -1981,7 +1981,10 @@ struct PassRecorder(FragmentRecorder);
 
 impl Default for PassRecorder {
     fn default() -> Self {
-        Self(FragmentRecorder::new(Offset::ZERO, 1.0))
+        Self(FragmentRecorder::new(
+            Offset::ZERO,
+            flui_foundation::geometry::DevicePixelRatio::ONE,
+        ))
     }
 }
 

@@ -291,7 +291,7 @@ mod tests {
         // parent — the component element pass-throughs `RootRenderElement`'s
         // render id down to `Leaf`. A render-less root with a pipeline owner
         // would orphan `Leaf`'s render object (the mount-time refusal shape).
-        let render_root = RootRenderView::new(view, 800.0, 600.0);
+        let render_root = RootRenderView::new(view);
         let render_root_element = tree.mount_root_with_pipeline_owner(
             &render_root,
             Some(PipelineCell::new(PipelineOwner::new(

@@ -15,10 +15,14 @@
 //! tree assistive technology reads, projected onto the wire's nodes, and the OS's own capture of
 //! the window ([`Lane::capture_window`]).
 //!
-//! The lanes: [`windows`], [`macos`].
+//! The lanes: [`windows`], [`macos`], [`x11`] and [`wayland`] (its OS half with the `wayland`
+//! feature); both Linux lanes read the app through [`atspi`].
 
+pub mod atspi;
 pub mod macos;
+pub mod wayland;
 pub mod windows;
+pub mod x11;
 
 use std::fmt;
 use std::sync::Arc;
@@ -45,6 +49,19 @@ pub enum PositionFidelity {
     OrderOnly,
 }
 
+/// The OS accessibility API a lane reads an app through ([`Lane::read_tree`]), which decides the
+/// vocabulary of the native roles it reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AccessibilityApi {
+    /// UI Automation, on Windows: native roles are control types.
+    UiAutomation,
+    /// AT-SPI, on Linux: native roles are AT-SPI role names.
+    AtSpi,
+    /// The macOS Accessibility API (AX): native roles are `AX` role strings.
+    Ax,
+}
+
 /// What a lane can do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -57,6 +74,8 @@ pub struct LaneCapabilities {
     pub isolation: Isolation,
     /// What replay compares of its runs.
     pub fidelity: PositionFidelity,
+    /// The accessibility API it reads the app through; `None` for a lane that reads none.
+    pub accessibility: Option<AccessibilityApi>,
 }
 
 impl LaneCapabilities {
@@ -74,7 +93,15 @@ impl LaneCapabilities {
             keys,
             isolation,
             fidelity,
+            accessibility: None,
         }
+    }
+
+    /// The lane reads the app through `api`.
+    #[must_use]
+    pub fn accessibility(mut self, api: AccessibilityApi) -> Self {
+        self.accessibility = Some(api);
+        self
     }
 }
 
@@ -227,10 +254,12 @@ pub trait Lane: Send {
 ///
 /// # Errors
 ///
-/// [`Error::ReleaseFailed`] naming what every part that answered one still holds, its message
-/// each failed part's first failure in order, joined by `; `; the first failure when no part
-/// holds anything (a part answers [`Error::ReleaseFailed`] whenever it still holds something, so
-/// only a failure that left nothing held, such as the Windows keys' mask, arrives bare).
+/// [`Error::ReleaseFailed`] naming what every part that answered one still holds; its message is
+/// each failed part's first failure in the order the parts ran, joined by `; `: a part's
+/// [`Error::ReleaseFailed`] gives its own message, any other error its whole text. When no part
+/// holds anything, the first failure itself (a part answers [`Error::ReleaseFailed`] whenever it
+/// still holds something, so only a failure that left nothing held, such as the Windows keys'
+/// mask, arrives bare).
 pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()> {
     let mut failures: Vec<Error> = Vec::new();
     let mut stuck: Option<(String, Vec<String>)> = None;
@@ -259,6 +288,31 @@ pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()
         held,
         message,
     })
+}
+
+/// The end of a lane's release whose parts each ran contained in `panicked`: what
+/// [`release_outcome`] makes of the parts that returned. When a part panicked, the panic is all
+/// the caller gets, so what the others leave held is logged at error level first, never dropped.
+///
+/// # Panics
+///
+/// The first part's panic, resumed; discarded instead when the thread is already unwinding, as
+/// [`FirstPanic::resume`] does.
+pub(crate) fn release_settled<const N: usize>(
+    mut panicked: FirstPanic,
+    parts: [Option<Result<()>>; N],
+) -> Result<()> {
+    let outcome = release_outcome(parts.into_iter().flatten());
+    if panicked.is_held()
+        && let Err(error) = &outcome
+    {
+        // A subscriber is user code: its panic stays behind the part's.
+        panicked.contain(|| {
+            tracing::error!("input stays held after a release that panicked: {error}");
+        });
+    }
+    panicked.resume();
+    outcome
 }
 
 /// The OS's capture of a window's surface: tightly packed RGBA rows, top row first.

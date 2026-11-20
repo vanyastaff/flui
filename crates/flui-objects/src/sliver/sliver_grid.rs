@@ -394,7 +394,7 @@ impl RenderSliver for RenderSliverGrid {
         }
 
         // ── 2. Grid layout from delegate ──────────────────────────────────────
-        let tile_layout = self.grid_delegate.get_layout(constraints);
+        let tile_layout = self.grid_delegate.layout(constraints);
 
         // Cache-extended viewport window — classify before any float→index
         // conversion so NaN/+∞ cannot saturate at usize::MAX. Policy ledger:
@@ -435,7 +435,7 @@ impl RenderSliver for RenderSliverGrid {
                 cache_end,
             } => {
                 let last = tile_layout
-                    .get_max_child_index_for_scroll_offset(cache_end)
+                    .max_child_index_for_scroll_offset(cache_end)
                     .min(self.item_count - 1);
                 (cache_start, last, self.item_count)
             }
@@ -497,7 +497,7 @@ impl RenderSliver for RenderSliverGrid {
             }
         };
 
-        let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
+        let first_in_window = tile_layout.min_child_index_for_scroll_offset(cache_start_offset);
 
         // Guard: window is entirely past the last item (e.g. scrolled to end).
         if first_in_window > last_in_window {
@@ -565,9 +565,9 @@ impl RenderSliver for RenderSliverGrid {
         let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
 
         // ── 8. Paint geometry ──────────────────────────────────────────────────
-        let leading_row_offset = tile_layout.get_scroll_offset_of_child(first_in_window);
-        let trailing_row_offset = tile_layout.get_scroll_offset_of_child(last_in_window)
-            + tile_layout.child_main_axis_extent;
+        let leading_row_offset = tile_layout.scroll_offset_of_child(first_in_window);
+        let trailing_row_offset =
+            tile_layout.scroll_offset_of_child(last_in_window) + tile_layout.child_main_axis_extent;
 
         // `from` clamps to the viewport start so partial leading rows don't
         // drive paint_extent negative (`min(scroll_offset, leading)`).
@@ -611,8 +611,8 @@ impl RenderSliver for RenderSliverGrid {
         self.placed.clear();
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
-                let tile_scroll_offset = tile_layout.get_scroll_offset_of_child(logical_index);
-                let tile_cross_offset = tile_layout.get_cross_axis_offset_of_child(logical_index);
+                let tile_scroll_offset = tile_layout.scroll_offset_of_child(logical_index);
+                let tile_cross_offset = tile_layout.cross_axis_offset_of_child(logical_index);
                 self.placed.push(Placed {
                     slot,
                     logical: logical_index,
@@ -664,8 +664,8 @@ impl RenderSliver for RenderSliverGrid {
         self.pinned
             .lay_out(first_in_window..last_in_window + 1, ctx, |index| {
                 (index < effective_item_count).then(|| {
-                    let layout_offset = tile_layout.get_scroll_offset_of_child(index);
-                    let cross = tile_layout.get_cross_axis_offset_of_child(index);
+                    let layout_offset = tile_layout.scroll_offset_of_child(index);
+                    let cross = tile_layout.cross_axis_offset_of_child(index);
                     PinnedPlace {
                         constraints: tile_constraints,
                         layout_offset,

@@ -201,14 +201,8 @@ where
     config.install_error_view_builder(&ui_runtime);
 
     ui_runtime.enter(|ui_runtime| ui_runtime.update_host_lifecycle(host_lifecycle));
-    let logical = geometry.logical;
-    let attach = ui_runtime.enter(|ui_runtime| {
-        ui_runtime.attach_root_widget_with_size(
-            &app_root(root.clone()),
-            logical.width,
-            logical.height,
-        )
-    });
+    let attach =
+        ui_runtime.enter(|ui_runtime| ui_runtime.attach_root_widget(&app_root(root.clone())));
     if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(crate::app::AppWindowError::Mount {

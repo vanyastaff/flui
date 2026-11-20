@@ -36,7 +36,7 @@ pub struct SliverGridLayout {
 
 impl SliverGridLayout {
     /// Returns the scroll offset of the child at the given index.
-    pub fn get_scroll_offset_of_child(&self, index: usize) -> f64 {
+    pub fn scroll_offset_of_child(&self, index: usize) -> f64 {
         let row = index / self.cross_axis_count;
         row as f64 * self.main_axis_stride
     }
@@ -48,7 +48,7 @@ impl SliverGridLayout {
     /// external `cross_axis_extent` argument would drop the
     /// `(stride − child_extent)` spacing term, leaving reversed grids off by the
     /// cross-axis spacing.
-    pub fn get_cross_axis_offset_of_child(&self, index: usize) -> f64 {
+    pub fn cross_axis_offset_of_child(&self, index: usize) -> f64 {
         let column = index % self.cross_axis_count;
         let cross_axis_start = column as f64 * self.cross_axis_stride;
 
@@ -67,7 +67,7 @@ impl SliverGridLayout {
 
     /// Returns the minimum index of children visible at the given scroll
     /// offset.
-    pub fn get_min_child_index_for_scroll_offset(&self, scroll_offset: f64) -> usize {
+    pub fn min_child_index_for_scroll_offset(&self, scroll_offset: f64) -> usize {
         if self.main_axis_stride <= 0.0 {
             return 0;
         }
@@ -83,7 +83,7 @@ impl SliverGridLayout {
     ///
     /// The index is `max(0, crossAxisCount * ceil(scrollOffset / mainAxisStride) - 1)`;
     /// a `(row + 1) * crossAxisCount - 1` form would over-count by one full row.
-    pub fn get_max_child_index_for_scroll_offset(&self, scroll_offset: f64) -> usize {
+    pub fn max_child_index_for_scroll_offset(&self, scroll_offset: f64) -> usize {
         if self.main_axis_stride <= 0.0 {
             return 0;
         }
@@ -130,7 +130,7 @@ impl SliverGridLayout {
 /// }
 ///
 /// impl SliverGridDelegate for FixedCountGridDelegate {
-///     fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+///     fn layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
 ///         let used_cross_axis = self.cross_axis_spacing * (self.cross_axis_count - 1) as f64;
 ///         let child_cross_axis_extent =
 ///             (constraints.cross_axis_extent - used_cross_axis) / self.cross_axis_count as f64;
@@ -165,7 +165,7 @@ pub trait SliverGridDelegate: Debug {
     /// # Returns
     ///
     /// The grid layout configuration.
-    fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout;
+    fn layout(&self, constraints: SliverConstraints) -> SliverGridLayout;
 
     /// Whether to relayout when the delegate changes.
     ///
@@ -243,7 +243,7 @@ impl SliverGridDelegateWithFixedCrossAxisCount {
 }
 
 impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
-    fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+    fn layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
         // The usable cross extent is clamped at 0 so heavy cross-axis spacing
         // can't drive the per-child extent negative.
         let used_cross_axis = self.cross_axis_spacing * (self.cross_axis_count - 1) as f64;
@@ -344,7 +344,7 @@ impl SliverGridDelegateWithMaxCrossAxisExtent {
 }
 
 impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
-    fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+    fn layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
         // count = ceil(crossAxisExtent / (maxCrossAxisExtent + crossAxisSpacing)),
         // floored at 1. The numerator is the bare cross extent — adding the
         // spacing there would over-count columns by one when the extent is an

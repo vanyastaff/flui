@@ -48,7 +48,7 @@ pub enum SliverPaintOrder {
     LastIsTop,
 }
 
-/// Return value for [`RenderAbstractViewport::get_offset_to_reveal`].
+/// Return value for [`RenderAbstractViewport::offset_to_reveal`].
 ///
 /// It indicates the offset required to reveal an element in a viewport and
 /// the rect position said element would have in the viewport at that offset.
@@ -132,7 +132,7 @@ pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
     /// * `rect` - Optional area of the target to reveal. If `None`, reveals the
     ///   entire target's paint bounds.
     /// * `axis` - Optional axis for 2D viewports. Ignored by 1D viewports.
-    fn get_offset_to_reveal(
+    fn offset_to_reveal(
         &self,
         target: &dyn RenderObject<BoxProtocol>,
         alignment: f64,

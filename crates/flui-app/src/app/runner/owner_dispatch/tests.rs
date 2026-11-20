@@ -1168,7 +1168,7 @@ fn first_build_text_sizing(runtime: &mut crate::app::ui_runtime::UiRuntime) -> T
 
     let observed = Rc::default();
     runtime
-        .attach_root_widget_with_size(&InitialPreferences(Rc::clone(&observed)), 800.0, 600.0)
+        .attach_root_widget(&InitialPreferences(Rc::clone(&observed)))
         .expect("mount preference reader");
     let mut sink = flui_runtime::testing::ScriptedSink::always_presents();
     assert!(
@@ -1306,11 +1306,7 @@ fn preferences_wake_each_isolated_window() {
                 let window: Rc<dyn PlatformWindow> = mock.clone();
                 let observed = Rc::new(RefCell::new(Vec::new()));
                 let runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
-                runtime.attach_root_widget_with_size(
-                    &Reader(Rc::clone(&observed)),
-                    800.0,
-                    600.0,
-                )?;
+                runtime.attach_root_widget(&Reader(Rc::clone(&observed)))?;
                 let mut installation = prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
                 let dispatcher = installation.dispatcher();
                 let frame = installation
@@ -1416,7 +1412,7 @@ fn present_sizing_reader(
         }
     }
     runtime
-        .attach_root_widget_with_size(&Reader(Rc::clone(log)), 800.0, 600.0)
+        .attach_root_widget(&Reader(Rc::clone(log)))
         .expect("mount the reader");
     let mut installation = prepare_platform_ui_runtime(runtime, window);
     let dispatcher = installation.dispatcher();
@@ -1917,7 +1913,7 @@ fn platform_brightness_follows_the_window_appearance() {
         .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             let runtime = super::super::host::build_ui_runtime(Rc::clone(&window), 1.0)?;
-            runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
+            runtime.attach_root_widget(&Reader(reader))?;
             let mut installation = prepare_platform_ui_runtime(runtime, window);
             let dispatcher = installation.dispatcher();
             let frame = installation

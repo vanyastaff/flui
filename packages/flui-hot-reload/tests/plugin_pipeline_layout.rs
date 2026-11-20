@@ -42,7 +42,7 @@ fn painted_size(scene: &Scene) -> Size {
 #[test]
 fn a_plugin_pipeline_lays_out_at_the_size_of_each_frame() {
     let mut pipeline =
-        flui_hot_reload::PluginPipeline::mount(Fill, 320.0, 240.0, TextContextHandle::standalone());
+        flui_hot_reload::PluginPipeline::mount(Fill, TextContextHandle::standalone());
 
     for (width, height) in [
         (320.0, 240.0),

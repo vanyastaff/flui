@@ -60,7 +60,7 @@ crate-type = ["rlib", "cdylib"]
 /// A release build is also sized: whole-program LTO, the dependencies at
 /// `opt-level = "s"`, and the crates a frame runs through, together with the
 /// application's own (workspace members, which `"*"` leaves out), at `3`.
-/// `cargo xtask perf --size` builds a generated counter with this profile
+/// CI's `size` job builds a generated counter with this profile
 /// (`perf/size.toml`). `panic = "abort"` would drop the unwind tables too, but
 /// it turns a panic FLUI contains in a widget, a callback or a platform entry
 /// (ADR-0281, ADR-0287) into the end of the application, so it stays `unwind`.

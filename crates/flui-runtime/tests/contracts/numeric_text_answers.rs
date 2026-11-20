@@ -64,18 +64,14 @@ fn abandoned_numeric_answers_are_released(reject_sampling: bool) {
     let source = admission.source();
     assert!(runtime.install_captured_text_sizing_for(runtime.presentation_id(), source.clone()));
     runtime
-        .attach_root_widget_with_size(
-            &flui_widgets::Column::new(vec![
-                flui_widgets::Text::new("first captured answer")
-                    .style(flui_painting::typography::TextStyle::default().with_font_size(16.0))
-                    .boxed(),
-                flui_widgets::Text::new("second missing answer")
-                    .style(flui_painting::typography::TextStyle::default().with_font_size(20.0))
-                    .boxed(),
-            ]),
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&flui_widgets::Column::new(vec![
+            flui_widgets::Text::new("first captured answer")
+                .style(flui_painting::typography::TextStyle::default().with_font_size(16.0))
+                .boxed(),
+            flui_widgets::Text::new("second missing answer")
+                .style(flui_painting::typography::TextStyle::default().with_font_size(20.0))
+                .boxed(),
+        ]))
         .expect("mount text with two distinct numeric requirements");
     let mut sink = Sink;
     assert!(!runtime.pump(&mut clock, &mut sink).presented());

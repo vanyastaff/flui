@@ -81,7 +81,8 @@ pub fn granted(permission: safety::Permission) -> bool {
 ///
 /// # Panics
 ///
-/// The first part's panic, resumed once both parts were tried.
+/// The first part's panic, resumed once both parts were tried and what the other leaves held is
+/// logged at error level; discarded instead when the thread is already unwinding.
 pub fn release_held(
     keys: &mut held::HeldKeys,
     pointer: &mut pointer::Pointer,
@@ -92,8 +93,7 @@ pub fn release_held(
     let released_keys = panicked.contain(|| keys.release_all(post_key));
     let flags = keys.flags();
     let released_mouse = panicked.contain(|| pointer.release_all(|event| post_mouse(event, flags)));
-    panicked.resume();
-    crate::lane::release_outcome([released_keys, released_mouse].into_iter().flatten())
+    crate::lane::release_settled(panicked, [released_keys, released_mouse])
 }
 
 #[cfg(target_os = "macos")]
@@ -115,7 +115,9 @@ mod lane {
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::windows::activity::slices;
-    use crate::lane::{ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// How long the lane waits for the app it brought to the front to be there.
@@ -454,6 +456,7 @@ mod lane {
                 Isolation::Shared,
                 PositionFidelity::Exact,
             )
+            .accessibility(AccessibilityApi::Ax)
         }
 
         fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {

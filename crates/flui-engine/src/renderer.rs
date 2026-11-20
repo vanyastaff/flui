@@ -3178,7 +3178,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn optimized_fxc_tessellated_clip_readback() {
         use flui_foundation::geometry::{Point, RSuperellipse, Radius, Rect};
-        use flui_layer::{PictureLayer, Scene, SceneBuilder};
+        use flui_layer::{PictureLayer, SceneBuilder};
         use flui_painting::paint::{BlendMode, Clip, ClipOp};
         use flui_painting::{Canvas, paint::Paint, styling::Color};
 

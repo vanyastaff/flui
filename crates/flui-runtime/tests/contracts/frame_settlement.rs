@@ -32,7 +32,7 @@ impl FrameSink for Stamps {
 fn each_submitted_frame_takes_the_next_epoch_of_its_runtime() {
     let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("stamped"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("stamped"))
         .expect("mount text");
     // Two frames the sink does not show, each retried, then one it presents.
     let mut sink = Stamps {
@@ -75,7 +75,7 @@ fn a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored() {
 
     let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("queued"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("queued"))
         .expect("mount text");
     let mut sink = Queues { epochs: Vec::new() };
     let mut now = web_time::Instant::now();
@@ -196,7 +196,7 @@ fn a_sink_holding_its_depth_gets_no_frame_until_one_settles() {
         counted.fetch_add(1, Ordering::SeqCst);
     }));
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("paced"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("paced"))
         .expect("mount text");
     let mut sink = Holds { epochs: Vec::new() };
     let mut now = web_time::Instant::now();

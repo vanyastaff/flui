@@ -52,8 +52,48 @@ app's trees, frames and input, and this crate composes that with what only the O
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
   and `WindowsLane` are `cfg(windows)`. `lane::macos` does the same: its key, role, screen,
   activity, pointer, frame and release tables, its safety rules and its callback containment are
-  pure, and `quartz`, `ax`,
-  `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
+  pure, and `quartz`, `ax`, `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
+  `lane::x11` keeps its keysyms, keymap and held input, safety rules, echo count and image layout
+  pure, `lane::atspi::roles` and `lane::wayland::mapping` are pure, and the parts that reach an X
+  server, AT-SPI or libei are Linux only (libei with the `wayland` feature).
+- **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
+  the window is the app's (by the process X-Resource reports for its client, or its
+  `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and
+  no button or key it did not press is held (`lane::x11::safety::Refusal`). XTEST fakes a core
+  pointer and keyboard only, so touch and pen are refused before any event.
+- **Every X11 key goes through one plan over the server's keymap.** `lane::x11::held::HeldInput`
+  plans a key or text against the keymap and what the lane holds, records a press once the server
+  took it, and owns the StickyKeys count across sends; a character on no key is typed through a
+  spare key mapped for the text, with a pause after mapping and before emptying, since an app
+  reads its keymap again only when told it changed. The release of everything empties every
+  mapped key too, and completes no desktop shortcut: while a modifier is held it presses and
+  releases a spare key with nothing on it first (`HeldInput::mask`), which ends a run of lone
+  Shift taps, and a release that would still complete StickyKeys is not sent. A wheel click is a
+  press and a release held as a button's are, so a click left down is released with the rest, and
+  a scroll of more than `held::MAX_WHEEL_CLICKS` clicks is refused before any event.
+- **The X11 guard tells the lane's XTEST input from anyone else's by counting.** It reads XInput
+  2's raw events on its own connection; an event from a device other than the XTEST devices is the
+  person's, and one from them past the count of events the lane faked is another program's, which
+  ends the run as the person's does. Each faked event waits for its echo, so a guard that stopped
+  seeing the lane's input ends the run.
+- **The Wayland lane sends OS input only into a compositor of its own.** Wayland shows a client
+  no input it did not send, so the lane has no guard: on the shared session `lane::admit` refuses
+  its input, and it only reads. Keys and text go through EI's text interface as keysyms and UTF-8,
+  so no keymap is read; a portal that refuses or a compositor that does not answer is a lane the
+  host cannot run, and the portal of the driver's own session bus, the person's desktop, is
+  refused for a compositor of the run's own. A Wayland client is told nothing of where its window is: the lane maps from the
+  origin its owner gives it, or refuses naming `window_position`.
+- **AT-SPI is read, never switched on.** Both Linux lanes read the app through
+  `lane::atspi::client` on the accessibility bus the session bus names, finding the app by the
+  process owning its bus connection; AT-SPI off in the session is a lane the host cannot run, and
+  the lane leaves the person's setting alone.
+- **A launched Linux app dies with its session.** It leads a process group of its own, which the
+  session kills when it ends, what the app started included even after the app exited: the app
+  is read without being reaped (`waitid` with `WNOWAIT`) until then, so its id names its group and
+  no other process's, and the group is killed only while `waitid` still answers for the app (a
+  driver that ignores `SIGCHLD` has its children reaped by the kernel, and kills no group then). It also dies when the thread that started it ends
+  (`PR_SET_PDEATHSIG`): that thread is the session's own (`launch::linux::Starter`), so a driver
+  moved to another thread keeps its app.
 - **The macOS lane posts to the app's process from a private, tagged source.** Every event goes
   out through `CGEventPostToPid` from a `kCGEventSourceStatePrivate` source whose user data is the
   lane's tag, and carries the modifiers the lane holds as its flags (a modifier is a flags-changed
@@ -139,10 +179,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
   A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
   that adds up to no whole pixel yet sends nothing.
-- **A hung app costs one timeout.** Reading a UI Automation or accessibility-API element stops at
-  the first property read that times out or finds the element gone
-  (`lane::windows::walk::Properties`, which both lanes read through), and the walk ends with
-  `timeout`.
+- **A hung app costs one timeout.** Reading a UI Automation, AX or AT-SPI element stops at the
+  first property read that times out or finds the element gone
+  (`lane::windows::walk::Properties`, which all three readers walk through), and the walk ends
+  with `timeout`.
 - **Waits are on the connection's clock.** An action's actionability wait ends at a deadline on
   the clock the connection counts budgets in, or as soon as the window presents no frame before
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts

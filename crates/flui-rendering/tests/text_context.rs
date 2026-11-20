@@ -565,28 +565,18 @@ fn rejected_shrink_wrapping_viewport_text_preserves_metrics() {
 }
 
 fn rejected_root_text_preserves_the_published_view_size() {
-    use flui_rendering::view::{RenderView, RenderViewAdapter};
+    use flui_rendering::view::RenderView;
 
     let (owner, labels) = mount(
         &ui_runtime_text(),
-        box_node(RenderViewAdapter::new(RenderView::new())).child(paragraph("measured")),
+        box_node(RenderView::new()).child(paragraph("measured")),
     );
     let root = owner.root_id().expect("mounted view");
     let paragraph = labels.get("paragraph").expect("labelled paragraph");
     let mut scene = SceneHost::new();
     let (mut owner, result) = scene.run_frame(owner);
     result.expect("initial view lays out");
-    let published_size = |owner: &PipelineOwner| {
-        owner
-            .render_tree()
-            .get(root)
-            .expect("live view")
-            .downcast_render_object::<RenderViewAdapter>()
-            .expect("view adapter")
-            .view
-            .size()
-    };
-    let committed = published_size(&owner);
+    let committed = inspect::box_geometry(&owner, root).expect("committed view size");
     let resized = Size::new(600.0, 500.0);
     owner.set_root_constraints(Some(BoxConstraints::tight(resized)));
     flui_rendering::testing::update_render_object::<RenderParagraph, _>(
@@ -599,7 +589,6 @@ fn rejected_root_text_preserves_the_published_view_size() {
         result.as_ref().map_err(flui_foundation::TreeError::error),
         Err(RenderError::TextLayout(_))
     ));
-    assert_eq!(published_size(&owner), committed);
     assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
     flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
@@ -608,7 +597,6 @@ fn rejected_root_text_preserves_the_published_view_size() {
     );
     let (owner, result) = scene.run_frame(owner);
     result.expect("corrected text completes the pending resize");
-    assert_eq!(published_size(&owner), resized);
     assert_eq!(inspect::box_geometry(&owner, root), Some(resized));
 }
 
