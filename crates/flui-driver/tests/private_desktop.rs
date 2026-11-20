@@ -3,7 +3,7 @@
 //!
 //! The tests of `windows_desktop` open windows, install input hooks and, on the input desktop,
 //! send real input. nextest starts each test on a desktop of its own, `flui-test-<run id>`
-//! (`docs/testing.md`, "The Windows test desktop"; the wrapper is `tools/xtask`'s `test-desktop`,
+//! (`docs/testing.md`, "The Windows test desktop"; the wrapper is `tools/test-desktop`,
 //! and `flui-native`'s `windows_test_desktop` checks the same name); libtest, which `cargo test`
 //! and cargo-gamma use, starts them on `Default`, the desktop the person is working at. A live
 //! test asks [`require`] first and passes the [`LiveDesktop`] it returns to the setup that opens
