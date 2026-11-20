@@ -99,8 +99,8 @@ fn sha256_hex(data: &[u8]) -> String {
 }
 
 fn digest_file(path: &Path) -> String {
-    let bytes = std::fs::read(path)
-        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let bytes =
+        std::fs::read(path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
     sha256_hex(&bytes)
 }
 

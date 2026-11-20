@@ -179,14 +179,14 @@ conversation:
 
 ## Commands
 
-Cargo runs through heli: `cargo heli <cargo arguments>`, repository tasks as
-`cargo heli xtask <task>`.
+Cargo runs through heli: `cargo heli <cargo arguments>`.
 
 ### Checking a change
 
-only the `checks` job's steps: typos, the lychee line in `ci.yml`, the shell steps (MSRV, unmounted tests, ADR numbers) and `cargo heli xtask checks`.
+Before a PR: `cargo fmt --all`, then heli's clippy (`--all-targets -- -D warnings`) and nextest
 on the changed crates, and their dependents when a public API changed. A docs-only change needs
-only the `checks` job's steps: typos, the lychee line in `ci.yml` and `cargo heli xtask checks`.
+only the `checks` job's steps in `ci.yml`: typos, taplo, lychee and the MSRV, unmounted-tests, ADR-number and changelog shell steps. The generated files
+are checked by `cargo heli nextest run` of the crates that own them.
 `flui-native`'s suite runs only on Linux, so a Windows or macOS host change needs
 `cargo heli nextest run -p flui-native` by hand.
 

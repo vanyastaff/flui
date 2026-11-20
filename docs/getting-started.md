@@ -11,14 +11,14 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | Rust | 1.100 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
-| Python | 3.10+ | Only for the font-fixture generator (`tools/decoy-face/generate.py`, which `cargo xtask checks` re-runs to verify the committed bytes). Not required to build or run an application. |
+| Python | 3.10+ | Only for the font-fixture generator (`tools/decoy-face/generate.py`; the `font_assets` tests of `flui-painting` verify the committed bytes). Not required to build or run an application. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |
 
-Repository tasks run as `cargo xtask <command>` (`cargo xtask --help` lists
-them); there is no other task runner to install. The tools a check needs are
-named by the CI job in `.github/workflows/ci.yml` that runs it, and that job installs them.
+There is no repository task runner: the checks are the steps of the jobs in
+`.github/workflows/ci.yml`.
+The job that runs a check installs the tools it needs.
 
 The GPU dependency version is defined by `wgpu` in `[workspace.dependencies]`
 in `Cargo.toml`; consult that manifest when checking driver or backend requirements.

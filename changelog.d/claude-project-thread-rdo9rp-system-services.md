@@ -7,6 +7,3 @@
   `flui::services::system`) adds open and save dialogs modal to the widget's window, one at a time,
   and `SystemPlugin`. No host provides them yet: both answer `Unsupported(NotYetOnThisHost)`. Their
   `testing` kits script them (`ScriptedLauncher`, `ScriptedFileDialogs`, `ScriptedSystem`).
-- **Capability crates** (`xtask`): `tier-kind = "capability"` is checked by `cargo xtask workspace`
-  (tier `pkg`, named only by the facade, normal dependencies on the contract crates and the SDK)
-  and by `cargo xtask reach` (`[reach.kind.capability]`).

@@ -136,7 +136,7 @@ The one repository task among them:
 ```bash
 cargo fmt --all --check; typos; taplo fmt --check   # formatting, spelling, TOML: the first steps of CI's checks job
                                           # then the job's lychee line: markdown links into the checkout, offline
-cargo xtask checks                        # changelog fragments, and the generated files against their sources (font assets, the Material icon constants, the key and recording vocabularies, the Android dex digests, the platform floors); builds only xtask (a self-test runs in `cargo test -p xtask`, ADR-0303 §4)
+cargo nextest run -p flui-platform -p flui-testing -p flui-material -p flui-cli -p flui-painting -p flui-native -p flui-system   # the generated files (key and recording vocabularies, Material icon constants, platform floors, font assets, Android dex digests) against their sources; FLUI_BLESS=1 rewrites them
 ```
 
 The reload-lifecycle fixture is a real plugin image. The `test` job
@@ -190,9 +190,9 @@ as the boundary. Test code is exempt per crate, by `#![cfg_attr(test, allow(..))
 root and `#![allow(..)]` on `tests/main.rs` (ADR-0303 §5). A site that moves to a primitive drops
 its call, and the compiler reports the expectation left behind.
 
-xtask does not schedule its commands. On a host shared by several agents and
+Nothing in the repository schedules builds. On a host shared by several agents and
 checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
-ones xtask spawns included, inherits its pool through `CARGO_MAKEFLAGS` and
+ones a script spawns included, inherits its pool through `CARGO_MAKEFLAGS` and
 draws its jobs from it, and `cargo heli …` shares identical requests and
 remembers passed ones (AGENTS.md, "Checking a change"). Keep separate target
 and build directories per checkout: scheduling does not remove Cargo's own
@@ -200,8 +200,8 @@ directory locks, and a shared target directory links another checkout's code.
 
 **Adding a new gate** means a step in a job of `.github/workflows/ci.yml`
 that calls the tool directly, so a contributor runs the same line. A check
-folded into `cargo xtask checks` gets a CI step at once, since the `checks`
-job runs it. A command with no CI step only runs when someone remembers to
+added as a step of the `checks` job runs in CI at once, since
+that job runs it. A command with no CI step only runs when someone remembers to
 run it by hand.
 
 ### Which compositor runs which Wayland case
@@ -269,7 +269,7 @@ above the others of its band, a topmost one above a window raised topmost after 
 that asks which window is under a point (`WindowFromPoint`, OLE's `DoDragDrop` loop) hides the
 windows the cases before it opened: a dropped platform leaves its windows open
 (`no_case_leaves_a_window_shown` in `drag::windows::tests`). This holds for `cargo heli nextest run`,
-`cargo nextest run` and every `cargo xtask` task that runs nextest; plain `cargo test` starts its tests on the caller's desktop.
+and `cargo nextest run`; plain `cargo test` starts its tests on the caller's desktop.
 `windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` fails when a test nextest
 starts is not there.
 
@@ -494,8 +494,7 @@ them together to the machine and holds slots back while memory runs low. Each wo
 ("One target directory per checkout", under [Nested-cargo tests](#nested-cargo-tests)); memory is bounded by the pool,
 never by sharing a target directory, and disk by the
 [agent-worktree rules](#bounding-disk-use-of-agent-worktrees). A docs-only change never needs a
-workspace build: typos, the `checks` job's lychee line and shell steps, and `cargo xtask checks`, which builds
-only xtask, are the full local gate for it,
+workspace build: typos, the `checks` job's lychee line and shell steps are the full local gate for it,
 so a docs worktree stays green without a multi-GB `target/` or a wait for the workspace builds.
 
 ## Test Commands
@@ -1259,11 +1258,9 @@ workflow files themselves are linted:
 ```bash
 cargo fmt --all --check                                       # checks job, each step running even after one fails:
 typos                                                         # spelling
-                                                              # lychee over the markdown, offline: the job's command line
 RUST_LOG=warn taplo fmt --check                               # TOML formatting
-cargo xtask checks                                            # changelog fragments, the generated files against their sources
-                                                              # then three shell steps: the MSRV equals the toolchain, every tests/*.rs of an `autotests = false` crate compiles, no two ADRs share a number
-cargo test -p xtask --locked                                  # xtask's own tests
+                                                              # lychee over the markdown, offline: the job's command line
+                                                              # the shell steps: changelog fragments, the MSRV equals the toolchain, every tests/*.rs of an `autotests = false` crate compiles, no two ADRs share a number
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -1345,9 +1342,8 @@ measurements): of those, `wasm-check` and `cross-typecheck` are the ones
 that fail alone, so a change to the web or a native backend is the one to
 check by hand before its pull request. Native application
 Windows/macOS and GPU runtime checks are local commands; no labels enable
-them in CI. The host tools: xtask has no Windows or macOS code path, so on Linux `checks` runs
-the suite and `clippy` lints it on every pull request (ADR-0383 §9); `tools/test-desktop` is
-Windows-only and its tests run in the Windows leg of `nightly-platforms.yml`. Native cache-key,
+them in CI. `tools/test-desktop` is Windows-only and its tests run in the Windows leg of
+`nightly-platforms.yml`. Native cache-key,
 host-lock and platform driver regressions are not covered per pull request, and this
 does not replace application or device runtime validation.
 
@@ -1362,7 +1358,7 @@ needs. One row per job:
 
 | CI job | Local command | Difference, or why CI-only |
 |---|---|---|
-| `checks` | `cargo fmt --all --check`, `typos`, `taplo fmt --check`, the lychee line, `cargo xtask checks`, the steps "The MSRV everywhere is the toolchain's", "Every tests/*.rs of an autotests = false crate compiles" and "No two ADRs share a number", `cargo test -p xtask`, `actionlint`, `zizmor .` | each step runs even when one before it failed; CI installs every tool, so none is skipped |
+| `checks` | `cargo fmt --all --check`, `typos`, `taplo fmt --check`, the lychee line, the steps "Changelog fragments", "The MSRV everywhere is the toolchain's", "Every tests/*.rs of an autotests = false crate compiles" and "No two ADRs share a number", `actionlint`, `zizmor .` | each step runs even when one before it failed; CI installs every tool, so none is skipped |
 | `plan` | — | CI only: a shell step over the pull request's changed files decides the lane |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings`, then, on main only, `cargo clippy -p flui-native --locked --no-default-features [--features x11\|wayland\|testing] [--all-targets] -- -D warnings` | the last lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`; from a Windows or macOS checkout add `--target x86_64-unknown-linux-gnu` |
 | `test` | after `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`: the workspace nextest run above; `WAYLAND_DISPLAY='' FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) \| test(/^wayland_window::/))'`; the same without `xvfb-run` and with `-E 'test(/^wayland_window::/)'` against a Weston; `-E 'test(/^wayland_window::optional::/)'` with `--test-threads 1` under a headless sway (`FLUI_REQUIRE_COMPOSITOR`); with `FLUI_REQUIRE_GPU=1` and `WGPU_BACKEND=vulkan`, then `gl` (main only), `cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1` and `cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1`; then `cargo build --workspace --exclude flui-native --all-targets --locked --features flui/material,flui/cupertino,flui/native` (main only) | the GPU steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native legs need `xvfb-run`, Weston and sway (Linux) |

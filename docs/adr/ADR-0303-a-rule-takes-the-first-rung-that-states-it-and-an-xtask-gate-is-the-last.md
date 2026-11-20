@@ -23,7 +23,7 @@
   only for the command lines that must match between a contributor and CI (`test`, `clippy`,
   `miri`, `feature-matrix`, the `wasm-check` step, `wasm-link`, `wasm-test`, `cross-typecheck`):
   a workflow step calls the tool; and for `perf` among the tools for working in the repository:
-  the perf scenarios hold their own baseline, and the other comparisons are workflow steps; and for `worktree` and `doctor`, removed (§9).
+  the perf scenarios hold their own baseline, and the other comparisons are workflow steps; and for `worktree` and `doctor`, removed (§9); and for the generators and the changelog check, which left `tools/xtask` too (§10).
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry

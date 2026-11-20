@@ -75,7 +75,7 @@ convention a reviewer has to remember. -->
 ### Confirmation
 
 <!-- How compliance is checked, in this order of preference: the compiler (a bound, a sealed
-trait, a compile-fail fixture), a clippy lint, a `cargo xtask` gate, a test named here, an executed
+trait, a compile-fail fixture), a clippy lint, a CI step, a test named here, an executed
 run on the environment (`docs/platform-parity.md` names it). "Review" alone is not a confirmation. -->
 
 ## Pros and cons of the options

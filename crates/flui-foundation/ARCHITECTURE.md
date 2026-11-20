@@ -272,8 +272,8 @@ on the SDK. A guard on the SDK alone would not separate an application on one
 `flui` train from a package on another `flui-sdk` train.
 
 Invariant: this crate declares the guard and no other member does.
-`two_trains_refuse_to_resolve` in `tools/xtask` builds two copies of this crate with this
-manifest's `links` value into one graph and requires the resolver to refuse it. Dropping the key,
+Two copies of this crate with this
+manifest's `links` value in one graph are refused by the resolver. Dropping the key,
 or moving it to a crate that not every train depends on, re-opens the E0308 failure the guard
 exists to prevent.
 

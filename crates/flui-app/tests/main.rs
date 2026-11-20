@@ -65,7 +65,7 @@ mod headless_storage;
 
 // The escape hatch from a widget, through the same headless kit. It exists
 // with the `native` feature, which CI's `test` job turns on through the
-// facade's `flui/native` (`TEST_FEATURES` in `tools/xtask/src/tasks.rs`).
+// facade's `flui/native` (`TEST_FEATURES` in `ci.yml`).
 #[cfg(all(
     feature = "native",
     not(target_os = "android"),
