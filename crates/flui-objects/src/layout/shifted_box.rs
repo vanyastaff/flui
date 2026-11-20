@@ -11,21 +11,9 @@
 //!
 //! # Composition pattern
 //!
-//! A `RenderBox` impl stores an `AligningShiftedBox` and forwards the relevant
-//! calls:
-//!
-//! ```ignore
-//! fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> flui_rendering::RenderResult<Size> {
-//!     let child_size = ctx.layout_single_child_loose()?;
-//!     let parent_size = positioned_box_size(&constraints, child_size, wf, hf);
-//!     self.inner.align_child(ctx, parent_size, child_size);
-//!     Ok(parent_size)
-//! }
-//! fn compute_dry_baseline(...) -> flui_rendering::RenderResult<Option<f64>> {
-//!     // ...
-//!     Ok(Some(self.inner.dry_baseline(parent_size, child_size, child_baseline)))
-//! }
-//! ```
+//! A `RenderBox` impl stores an `AligningShiftedBox`. Its `perform_layout` sizes
+//! itself with `positioned_box_size` and places the child with `align_child`;
+//! its `compute_dry_baseline` reports `dry_baseline`.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};

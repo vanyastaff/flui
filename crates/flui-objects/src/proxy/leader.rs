@@ -4,25 +4,18 @@
 //!
 //! Backs `CompositedTransformTarget`.
 //!
-//! # Scope — Tier 1 of a two-tier plan
+//! # Scope
 //!
-//! This type makes the `LayerTree` node structurally correct and
-//! harness-verifiable — a real `Layer::Leader` with the right `link`/`size`/
-//! `offset` fields, matching the ShaderMask/BackdropFilter precedent's own
-//! "structurally correct, wiring not yet consumed" scoping. `Layer::Leader`'s
-//! own GPU rendering (`LayerRender<LeaderLayer>`,
-//! `crates/flui-engine/src/layer_render.rs`) is already complete and
-//! self-contained — it needs no further engine work once this node pushes
-//! the layer. See the
-//! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-leader-follower-layer-plan.md).
+//! The object pushes a `Layer::Leader` carrying its `link` and `size`.
+//! Rendering that layer belongs to the engine.
 //!
 //! # Rust-native shape
 //!
 //! Not a shared generic with
-//! [`RenderFollowerLayer`](super::follower::RenderFollowerLayer) — Leader has
-//! **no** hit-test or paint-transform override at all (it relies entirely on
-//! the plain proxy defaults), while Follower has a materially different,
-//! non-trivial hit-test path and three extra fields with no Leader analogue.
+//! [`RenderFollowerLayer`](super::follower::RenderFollowerLayer) — Leader's
+//! hit test only forwards to its child within its own bounds, while Follower
+//! has a different, non-trivial hit-test path and configuration fields (offset,
+//! anchors, clip) with no Leader analogue.
 //!
 //! # Difference from ShaderMask/BackdropFilter
 //!

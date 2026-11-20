@@ -33,11 +33,13 @@ use flui_rendering::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use flui_objects::RenderLimitedBox;
 ///
 /// // Cap width at 240, leave height alone.
-/// let _node = RenderLimitedBox::new(Some(240.0), None);
+/// let node = RenderLimitedBox::new(Some(240.0), None);
+/// assert_eq!(node.max_width(), Some(240.0));
+/// assert_eq!(node.max_height(), None);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderLimitedBox {

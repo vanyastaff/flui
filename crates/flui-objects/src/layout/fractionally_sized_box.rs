@@ -103,15 +103,17 @@ impl From<FractionFactor> for f64 {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use flui_objects::{FractionFactor, RenderFractionallySizedBox};
 /// use flui_painting::Alignment;
 ///
 /// // Child takes 50% width × 75% height of the parent, top-centered.
 /// let node = RenderFractionallySizedBox::new()
 ///     .with_width_factor(FractionFactor::HALF)
-///     .with_height_factor(FractionFactor::try_new(0.75).unwrap())
+///     .with_height_factor(FractionFactor::try_new(0.75).expect("0.75 is a valid factor"))
 ///     .with_alignment(Alignment::TOP_CENTER);
+/// assert_eq!(node.width_factor(), Some(FractionFactor::HALF));
+/// assert_eq!(node.alignment(), Alignment::TOP_CENTER);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderFractionallySizedBox {

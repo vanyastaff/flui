@@ -39,9 +39,12 @@ use flui_rendering::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use flui_objects::RenderCenter;
+///
 /// let center = RenderCenter::new();
-/// // Add a child, then layout with constraints.
+/// assert_eq!(center.width_factor(), None);
+/// assert_eq!(center.height_factor(), None);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderCenter {

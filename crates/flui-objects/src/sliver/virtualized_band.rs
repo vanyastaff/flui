@@ -170,11 +170,7 @@ pub(super) fn accumulate_anchor_correction(
 /// Emitted whenever it is non-zero, in either scroll direction. The anchor
 /// (the first visible item) stays pixel-stationary only if the offset moves
 /// by exactly the growth above it in the same pass; deferring the correction
-/// on a backward scroll — what this used to do, after ADR-0003's consumer
-/// note — is itself the one-frame content jump it meant to prevent, and with
-/// requests serviced inside the frame every build re-runs layout at an
-/// unchanged offset anyway, so the deferral could only ever last one pass.
-/// The direction-independent rule is recorded in ADR-0051.
+/// would itself be a one-frame content jump.
 ///
 /// # Returns
 ///
