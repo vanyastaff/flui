@@ -655,40 +655,61 @@ conversation of 2 KiB comes nowhere near.
 
 A target is an example of the crate it tests, `crates/<crate>/fuzz/<name>.rs`,
 so it builds from the workspace's lockfile, with the versions an application
-ships. `cargo xtask fuzz` builds it under `--cfg fuzzing` with coverage
-counters and AddressSanitizer and runs it; the manifest names `libfuzzer-sys`
-under `cfg(fuzzing)`, so no other build compiles it. That flag reaches every
-crate of the build, and `png` and `fdeflate` skip their checksums under it,
-so that a mutated image gets past its CRC to the decoder behind it.
+ships. `.cargo/fuzz.toml` holds what a fuzz build adds: `--cfg fuzzing`,
+coverage counters and AddressSanitizer, for x86_64 Linux. The manifest names
+`libfuzzer-sys` under `cfg(fuzzing)`, so no other build compiles it. That
+flag reaches every crate of the build, and `png` and `fdeflate` skip their
+checksums under it, so that a mutated image gets past its CRC to the decoder
+behind it. Each target's package, seeds, longest input and limits are its row
+in `fuzz.yml`'s matrix; the run and the replay below take them from there:
 
 ```bash
-cargo xtask fuzz                          # every target, 60 seconds each
-cargo xtask fuzz image_decode --seconds 600
-cargo xtask fuzz agent_wire --replay target/fuzz/agent_wire/findings/crash-<hash>
+# a run: <package>, <seeds>, <max_len> and <limits> are the target's row
+mkdir -p target/fuzz/<target>/corpus target/fuzz/<target>/findings
+cargo +nightly --config .cargo/fuzz.toml run --locked --target x86_64-unknown-linux-gnu \
+  -p <package> --example fuzz_<target> -- \
+  target/fuzz/<target>/corpus <seeds> \
+  -artifact_prefix=target/fuzz/<target>/findings/ -max_total_time=60 \
+  -max_len=<max_len> <limits>
+# a replay: the finding's file in place of the corpus and seeds, with the row's limits
+cargo +nightly --config .cargo/fuzz.toml run --locked --target x86_64-unknown-linux-gnu \
+  -p <package> --example fuzz_<target> -- target/fuzz/<target>/findings/crash-<hash> <limits>
 ```
 
-It needs the nightly toolchain on x86_64 Linux. The inputs libFuzzer keeps
-are in `target/fuzz/<name>/corpus/`; the input that ended a run is in
-`target/fuzz/<name>/findings/`, named by what it did (`crash-`, `timeout-`,
-`oom-`, `leak-`). `--replay` runs one input in the build that found it. The
-example built without the flag reads the files named on its command line
-with the shipped decoders and no sanitizer: it shows what an application
-does with an input, and it refuses a PNG whose checksum the fuzzer never
-repaired, so it does not stand in for the replay.
+It needs the nightly toolchain on x86_64 Linux; on another host cargo fails
+to build the sanitizer target. A `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` in
+the environment replaces the file's flags, and any `target.<triple>` or
+`target.<cfg>` rustflags another config file sets (your `~/.cargo/config.toml`,
+a linker flag), or `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS`, is
+joined to them, so a replay leaves them out; `cargo +nightly -Zunstable-options
+--config .cargo/fuzz.toml config get target` shows what it builds with. The night's nightly is in its log: the toolchain step prints `rustc
++nightly --version --verbose` with its commit hash. rustup's
+`nightly-<date>` is the date it was published, usually the day after that
+commit date, so a finding that depends on codegen replays with the
+`nightly-<date>` whose `rustc --version` names the same hash. libFuzzer keeps
+the inputs that reached new code in the corpus
+directory and writes the input that ended a run to `findings/`, named by what
+it did (`crash-`, `timeout-`, `oom-`, `leak-`). It reads a directory as a
+corpus and fuzzes it without end, so a replay names a file. The example built
+without the file reads the files named on its command line with the shipped
+decoders and no sanitizer: it shows what an application does with an input,
+and it refuses a PNG whose checksum the fuzzer never repaired, so it does not
+stand in for the replay.
 
 `fuzz.yml` runs each target as a job of its own for ten minutes every night
 against main, carries the corpus from one night to the next, uploads what a
 failing run found as `fuzz-findings-<target>` and keeps the "Fuzzing failed
-on main" issue open while a run is red. No pull request runs it (ADR-0376): a
-change to a target, its seeds or what it is built from runs `cargo xtask fuzz
-<target>` locally, and the night's run sees every other change.
+on main" issue open while a run is red. No pull request runs it (ADR-0376): a change to a target,
+its seeds or what it is built from runs the workflow on its branch (`gh
+workflow run Fuzz --ref <branch>`) at the head that merges, and the night's
+run sees every other change.
 
 A finding is fixed with a named case in the owning crate's tests that holds
 the input (as `a_header_past_the_limit_is_refused_before_decoding` holds its
 header), not with the raw file; a PNG's case restates the checksums the
 fuzzer left wrong, or the test's decoder refuses it before the defect. A new
-parser of foreign bytes adds its target as a row of `TARGETS` in
-`tools/xtask/src/tasks/fuzz.rs`.
+parser of foreign bytes adds its target as an example of its crate and a row
+of `fuzz.yml`'s matrix.
 
 ## Benchmarks
 

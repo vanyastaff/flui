@@ -1,9 +1,9 @@
-//! The fuzz target of `Image::decode`: `cargo xtask fuzz image_decode` builds
+//! The fuzz target of `Image::decode`: the nightly fuzz workflow builds
 //! it under `--cfg fuzzing` and libFuzzer mutates encoded images toward code
 //! no input has reached yet, starting from `tests/fixtures/`. A panic, an
 //! abort, a read out of bounds, a block past `MAX_DECODED_IMAGE_BYTES` or a
 //! decode past the time limit ends the run and leaves the input that did it;
-//! `cargo xtask fuzz image_decode --replay <file>` runs that input again in
+//! its replay (docs/testing.md, "Fuzzing") runs that input again in
 //! the same build.
 //!
 //! Built without that flag it decodes each file named on its command line
