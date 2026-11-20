@@ -763,7 +763,10 @@ impl RenderBox for RenderAnimatedSize {
     // Closure is load-bearing: `PaintContext::paint_child` is ambiguous as a method path
     // (Single's zero-arg overload vs the indexed variant on other arities), so the
     // closure cannot be replaced by a method reference.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "paint_child` is ambiguous as a method path across `PaintContext` arities (E0034), so the lint's rewrite does not compile"
+    )]
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());

@@ -1054,7 +1054,10 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "a `child_*` method path is rejected as `FnMut` not general enough because the fn item's ctx lifetime is not higher-ranked, so the closure is required"
+    )]
     fn compute_min_intrinsic_width(
         &self,
         height: f64,
@@ -1075,7 +1078,10 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "a `child_*` method path is rejected as `FnMut` not general enough because the fn item's ctx lifetime is not higher-ranked, so the closure is required"
+    )]
     fn compute_max_intrinsic_width(
         &self,
         height: f64,
@@ -1096,7 +1102,10 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "a `child_*` method path is rejected as `FnMut` not general enough because the fn item's ctx lifetime is not higher-ranked, so the closure is required"
+    )]
     fn compute_min_intrinsic_height(
         &self,
         width: f64,
@@ -1115,7 +1124,10 @@ impl RenderBox for RenderFlex {
     // Closure is load-bearing: a `BoxIntrinsicsContext::child_*` method path is rejected
     // ("implementation of `FnMut` is not general enough" -- the fn item's ctx lifetime
     // is not higher-ranked), so the closure cannot be replaced by a method reference.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "a `child_*` method path is rejected as `FnMut` not general enough because the fn item's ctx lifetime is not higher-ranked, so the closure is required"
+    )]
     fn compute_max_intrinsic_height(
         &self,
         width: f64,
