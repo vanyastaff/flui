@@ -25,8 +25,9 @@
 //! The Material spec centers the title on iOS/macOS with fewer than two
 //! actions and start-aligns it elsewhere. FLUI's desktop targets are Linux and
 //! Win32 — both start-aligned — so this substrate always start-aligns the
-//! title (no `center_title` override, no navigation-toolbar-style toggle
-//! yet). **Named limitation**: the centered macOS behavior waits for a
+//! title, at the start edge of the ambient `Directionality` (no
+//! `center_title` override, no navigation-toolbar-style toggle yet).
+//! **Named limitation**: the centered macOS behavior waits for a
 //! platform-adaptive seam; today every platform gets the
 //! Android/Linux/Windows answer.
 //!
@@ -74,7 +75,7 @@
 //! ## Deferred, and named
 //!
 //! - `center_title` / a full navigation-toolbar layout — the title area here
-//!   is a plain `Expanded` + `Align(center_left)`, not an overflow-aware
+//!   is a plain `Expanded` + `Align(center_start)`, not an overflow-aware
 //!   middle-widget layout.
 //! - Scrolled-under styling — no scroll-notification substrate to observe yet.
 //! - `flexibleSpace` — stacked behind the toolbar+bottom; no consumer or
@@ -117,6 +118,8 @@
 //! that. No `leading_width`/`AppBarTheme` override exists yet (named V1
 //! deferral), so `LEADING_WIDTH` is the only width this slot ever takes.
 
+use flui_sdk::geometry::Size;
+use flui_sdk::painting::AlignmentDirectional;
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
@@ -126,7 +129,6 @@ use flui_sdk::widgets::{
     Flexible, HeadingLevel, IconTheme, IconThemeData, MainAxisAlignment, PageHandle, Positioned,
     PreferredSizeView, Row, SafeArea, Semantics, SizedBox, Stack,
 };
-use flui_sdk::{geometry::Size, painting::Alignment};
 
 use crate::back_button::BackButton;
 use crate::material::Material;
@@ -476,7 +478,8 @@ impl StatelessView for AppBar {
             );
         }
         if let Some(title) = &self.title {
-            // Always start-aligned — see the module docs' title-alignment note.
+            // Always start-aligned, against the ambient `Directionality`'s start
+            // edge — see the module docs' title-alignment note.
             // `title_style` is scoped to JUST this slot via its own
             // `DefaultTextStyle` — it must NOT reach the toolbar-wide wrap
             // below (which carries `toolbar_text_style` instead), or a
@@ -486,7 +489,7 @@ impl StatelessView for AppBar {
             // screen reader can jump to it.
             toolbar_children.push(
                 Expanded::new(
-                    Align::new(Alignment::CENTER_LEFT).child(
+                    Align::new(AlignmentDirectional::CENTER_START).child(
                         Semantics::new()
                             .heading_level(HeadingLevel::H1)
                             .child(DefaultTextStyle::new(title_style, title.clone())),

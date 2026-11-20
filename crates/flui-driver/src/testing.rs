@@ -197,8 +197,38 @@ pub enum Reply {
     Error(ErrorObject),
     /// With this result, then closing the connection.
     ResultThenClose(Value),
+    /// With `result`, then sending each of `lines` (event lines, say), then doing what `then`
+    /// says.
+    ResultThenLines {
+        /// The answer.
+        result: Value,
+        /// The lines sent after it, in order.
+        lines: Vec<Value>,
+        /// What the stand-in does once they are sent.
+        then: AfterLines,
+    },
+    /// With `result`, then writing `bytes` as they are (an unfinished line, say), then closing
+    /// the connection.
+    ResultThenBytes {
+        /// The answer.
+        result: Value,
+        /// What is written after it, with no newline added.
+        bytes: Vec<u8>,
+    },
     /// By closing the connection, unanswered.
     Close,
+}
+
+/// What a [`ScriptedAgent`] does once it has sent the lines of a [`Reply::ResultThenLines`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AfterLines {
+    /// Serves the next request.
+    Serve,
+    /// Closes the connection.
+    Close,
+    /// Reads nothing for this long, then closes the connection: an app that stopped reading.
+    StopReading(Duration),
 }
 
 /// The script of a [`ScriptedAgent`]: the answer to each request, by its method and parameters.
@@ -209,6 +239,8 @@ pub struct ScriptedAgent {
     endpoint: String,
     token: String,
     thread: Option<JoinHandle<io::Result<()>>>,
+    /// Lines written whole, shared with the serving thread.
+    written: Arc<AtomicUsize>,
 }
 
 impl ScriptedAgent {
@@ -225,10 +257,12 @@ impl ScriptedAgent {
         let endpoint = place.address.clone();
         let served_token = token.clone();
         let methods: Vec<String> = methods.iter().map(|method| (*method).to_owned()).collect();
+        let written = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&written);
         let thread = thread::Builder::new()
             .name("flui-driver-scripted-agent".into())
             .spawn(move || {
-                let served = serve_one(&listener, &served_token, &methods, script);
+                let served = serve_one(&listener, &served_token, &methods, script, &counted);
                 // The socket's directory (Unix) is removed once the connection was served.
                 drop(place);
                 served
@@ -237,7 +271,14 @@ impl ScriptedAgent {
             endpoint,
             token,
             thread: Some(thread),
+            written,
         })
+    }
+
+    /// How many lines it has written whole so far, the hello's answer included.
+    #[must_use]
+    pub fn lines_written(&self) -> usize {
+        self.written.load(Ordering::SeqCst)
     }
 
     /// The endpoint, as a driver attaches to it.
@@ -307,6 +348,7 @@ fn serve_one(
     token: &str,
     methods: &[String],
     mut script: Script,
+    written: &AtomicUsize,
 ) -> io::Result<()> {
     use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
     let stream = listener
@@ -344,7 +386,9 @@ fn serve_one(
             }
             lines.push(&chunk[..read]);
         };
-        let mut close_after = false;
+        let mut after = AfterLines::Serve;
+        let mut then: Vec<Value> = Vec::new();
+        let mut raw: Vec<u8> = Vec::new();
         let answer = if greeted {
             let Ok(request) = serde_json::from_slice::<Request<Value>>(&line) else {
                 return Ok(());
@@ -353,7 +397,21 @@ fn serve_one(
                 Reply::Result(result) => ServerLine::answer(request.id, Ok(result)),
                 Reply::Error(error) => ServerLine::answer(request.id, Err(error)),
                 Reply::ResultThenClose(result) => {
-                    close_after = true;
+                    after = AfterLines::Close;
+                    ServerLine::answer(request.id, Ok(result))
+                }
+                Reply::ResultThenLines {
+                    result,
+                    lines,
+                    then: next,
+                } => {
+                    after = next;
+                    then = lines;
+                    ServerLine::answer(request.id, Ok(result))
+                }
+                Reply::ResultThenBytes { result, bytes } => {
+                    after = AfterLines::Close;
+                    raw = bytes;
                     ServerLine::answer(request.id, Ok(result))
                 }
                 Reply::Close => return Ok(()),
@@ -373,12 +431,23 @@ fn serve_one(
                     .capabilities(capabilities),
             )
         };
-        let mut bytes = serde_json::to_vec(&answer).map_err(io::Error::other)?;
-        bytes.push(b'\n');
-        writing.write_all(&bytes)?;
-        writing.flush()?;
-        if close_after {
-            return Ok(());
+        let answer = serde_json::to_value(&answer).map_err(io::Error::other)?;
+        // Handed to the OS, never flushed: flushing a Windows pipe waits until the driver has read
+        // everything, and a driver that stops reading would hold the stand-in.
+        for line in std::iter::once(answer).chain(then) {
+            let mut bytes = serde_json::to_vec(&line).map_err(io::Error::other)?;
+            bytes.push(b'\n');
+            writing.write_all(&bytes)?;
+            written.fetch_add(1, Ordering::SeqCst);
+        }
+        writing.write_all(&raw)?;
+        match after {
+            AfterLines::Serve => {}
+            AfterLines::Close => return Ok(()),
+            AfterLines::StopReading(hold) => {
+                thread::sleep(hold);
+                return Ok(());
+            }
         }
     }
 }

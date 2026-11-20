@@ -16,7 +16,7 @@
 //!        └─ RenderNode::Box(RenderEntry<BoxProtocol>)
 //!             ├─ render_object: Box<dyn RenderObject<P>>  (owned by value, no lock)
 //!             ├─ state: RenderState<BoxProtocol>
-//!             │    ├─ flags: AtomicRenderFlags
+//!             │    ├─ flags: RenderFlagsCell
 //!             │    ├─ layout: P::LayoutRecord  (last geometry and constraints)
 //!             │    └─ offset: OffsetCell
 //!             └─ links: NodeLinks
@@ -25,11 +25,11 @@
 //!                  └─ depth: u16
 //! ```
 //!
-//! # Slab Offset Pattern
+//! # Ids
 //!
-//! RenderId uses 1-based indexing (NonZeroUsize), while Slab uses 0-based:
-//! - `RenderId(1)` → `nodes[0]`
-//! - `RenderId(2)` → `nodes[1]`
+//! A `RenderId` is a generational key: its index names a slab slot and its
+//! generation the occupant, so an id kept past `remove` misses instead of
+//! naming the node inserted into the same slot later.
 //!
 //! # Why a separate tree
 //!
@@ -71,7 +71,7 @@ pub use entry::RenderEntry;
 pub use erased::{
     ErasedConstraints, ErasedConstraintsMismatch, ErasedGeometry, ErasedGeometryMismatch,
 };
-pub use flags::{AtomicRenderFlags, RenderFlags};
+pub use flags::{RenderFlags, RenderFlagsCell};
 pub use links::NodeLinks;
 pub use node::RenderNode;
 pub use state::RenderState;

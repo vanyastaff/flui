@@ -16,12 +16,6 @@
 //! is — but they hold no state, receive no events, and never occupy the global
 //! default subscriber slot, so nothing here can observe another module's
 //! capture.
-//!
-//! `semantics_listener_retirement_preserves_independent_envelopes` re-executes
-//! this binary once per case, because the failure it guards against is an
-//! abort. It is a test of its own rather than a table row, so each child runs
-//! exactly one case, and it sets the child's environment only on the spawned
-//! command.
 
 #![allow(
     clippy::disallowed_methods,
@@ -296,8 +290,6 @@ fn owner_local_write_paths() {
         ],
     );
 }
-#[path = "owner_scope.rs"]
-mod owner_scope;
 mod ownership_table;
 #[path = "pointer_script_replay.rs"]
 mod pointer_script_replay;
@@ -416,11 +408,6 @@ fn containment_and_isolation_matrix() {
             ("window_insets::a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go", window_insets::a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go as fn()),
         ],
     );
-}
-
-#[test]
-fn semantics_listener_retirement_preserves_independent_envelopes() {
-    owner_scope::semantics_listener_retirement_preserves_independent_envelopes();
 }
 
 /// A capture of a panicking `on_complete` closure is kept through the

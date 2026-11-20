@@ -25,7 +25,6 @@ use flui_interaction::{
 use flui_platform::PlatformTextInput;
 use flui_platform::text::store::TextStoreHost;
 use flui_platform::{Cursor, CursorError, CursorIcon, PlatformWindow};
-use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
@@ -512,9 +511,9 @@ pub struct PresentationState {
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery. `close()` clears its announce/event
-    /// callbacks unconditionally (production write); `UiRuntime::construct`
-    /// reads `platform_semantics_enabled_handle()` to wire the UI runtime's
-    /// renderer fan-out (production read) — announce/event delivery itself
+    /// callbacks unconditionally (production write); attaching the platform
+    /// bridge reads `platform_semantics_enabled_handle()` to wire the bridge's
+    /// activation listener (production read) — announce/event delivery itself
     /// still has no production caller.
     semantics: SemanticsHost,
     /// The semantics agent a development agent hook reads this presentation
@@ -575,12 +574,9 @@ pub struct PresentationState {
     /// may proceed, and the owner settles it on its turn. One per
     /// presentation, so it outlives every remount of the root.
     close_guard: CloseGuardSource,
-    /// Render tree, layout/paint pipeline coordination, and this
-    /// presentation's own semantics-enablement fan-out. Moved from the
-    /// retired UI runtime-level singular `UiRuntime::renderer`: `render_views`,
-    /// `first_frame_sent`, and the semantics-enabled listener are
-    /// per-presentation-window facts, not shareable once a UI runtime hosts more
-    /// than one presentation.
+    /// This presentation's root pipeline owner, its hit testing and its
+    /// first-frame gate: per-presentation facts, not shareable once a UI
+    /// runtime hosts more than one presentation.
     renderer: RenderingBinding,
     /// Total frames rendered successfully for this presentation. Moved here
     /// from the retired `AppBinding`: per-window frame accounting, beside
@@ -1017,8 +1013,7 @@ impl PresentationState {
             ));
         });
 
-        let renderer =
-            RenderingBinding::new_with_pipeline(pipeline.clone(), capabilities.scheduler);
+        let renderer = RenderingBinding::new_with_pipeline(pipeline.clone());
 
         // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
         // fires this callback so a quiescent event loop produces the frame.
@@ -1116,11 +1111,6 @@ impl PresentationState {
         });
 
         let semantics = SemanticsHost::new();
-        // Semantics-enabled fan-out -> this presentation's own SemanticsHost.
-        let semantics_flag = semantics.platform_semantics_enabled_handle();
-        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
-            semantics_flag.store(enabled, Ordering::Relaxed);
-        }));
 
         // Whether this window's adapter says where the assistive technology's
         // cursor is: a widget that acts on it asks before relying on it.
@@ -1245,8 +1235,7 @@ impl PresentationState {
     /// Standalone assembly with no UI runtime above it: this presentation's
     /// `WidgetsBinding` lazily self-owns a private `GlobalKeyScope` on first
     /// `GlobalKey` registration (never shared, so it never conflicts with
-    /// anything), and its `RenderingBinding` owns its own throwaway
-    /// `UpdateScheduler` (see [`RenderingBinding::new_for_test_with_pipeline`]).
+    /// anything).
     /// Used only by this module's own unit tests, which exercise
     /// presentation-local behavior (gestures/focus/haptics/overlay) in
     /// isolation; UI runtime-backed tests use [`Self::new`] through
@@ -1284,15 +1273,11 @@ impl PresentationState {
             owner.capabilities_mut().url_owner = Some(url_owner.clone());
         });
 
-        let renderer = RenderingBinding::new_for_test_with_pipeline(pipeline.clone());
+        let renderer = RenderingBinding::new_with_pipeline(pipeline.clone());
         // This path wires no platform accessibility (see the doc above).
         let accessibility: Option<Arc<dyn PlatformAccessibility>> = None;
 
         let semantics = SemanticsHost::new();
-        let semantics_flag = semantics.platform_semantics_enabled_handle();
-        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
-            semantics_flag.store(enabled, Ordering::Relaxed);
-        }));
 
         let snapshot = window.state();
         let state = Self {

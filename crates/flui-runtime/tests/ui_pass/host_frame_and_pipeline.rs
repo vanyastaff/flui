@@ -1,4 +1,3 @@
-use flui_rendering::binding::RendererBinding;
 use flui_runtime::pump::SampledClock;
 use flui_runtime::renderer_binding::RenderingBinding;
 use flui_runtime::sink::FrameSink;

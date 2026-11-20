@@ -45,6 +45,7 @@ use flui_semantics::{
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
+    error::SemanticsError,
     pipeline::{
         phase::{Idle, Semantics},
         scheduler::PhaseKind,
@@ -257,7 +258,7 @@ impl PipelineOwner<Semantics> {
                         Err(error) => {
                             regions.callbacks.rejected = true;
                             let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
-                            return Err(crate::error::RenderError::semantics(error.to_string()));
+                            return Err(crate::error::RenderError::Semantics(error));
                         }
                     };
                     if let SemanticsPlan::Rebuild(Some(root)) = &mut planned {
@@ -270,7 +271,7 @@ impl PipelineOwner<Semantics> {
                         regions.callbacks.rejected = true;
                         let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
                         retire_rejected_plan(planned);
-                        return Err(crate::error::RenderError::semantics(error.to_string()));
+                        return Err(crate::error::RenderError::Semantics(error));
                     }
                     self.semantics_regions
                         .assign_text_runs(&mut planned, &self.render_tree);
@@ -635,12 +636,12 @@ impl RegionIdentities {
         &mut self,
         regions: &AssemblyRegions<'_>,
         tree: &RenderTree,
-    ) -> Result<(), SemanticsAssemblyError> {
+    ) -> Result<(), SemanticsError> {
         if let Some(host) = regions.invalid_sort_key {
-            return Err(SemanticsAssemblyError::InvalidSortKey { host });
+            return Err(SemanticsError::InvalidSortKey { host });
         }
         if let Some(source) = regions.duplicate {
-            return Err(SemanticsAssemblyError::DuplicateRegion {
+            return Err(SemanticsError::DuplicateRegion {
                 host: source.host,
                 key: source.key.0,
             });
@@ -654,7 +655,7 @@ impl RegionIdentities {
         let ids = self
             .source
             .allocate(missing.len())
-            .map_err(|_| SemanticsAssemblyError::RegionIdentityExhausted)?;
+            .map_err(|_| SemanticsError::RegionIdentityExhausted)?;
         let identities = &mut self.source;
         self.retained.retain(|source, id| {
             let keep = tree.contains(source.host)
@@ -911,6 +912,10 @@ struct PendingSemanticsNode<'f> {
     /// The content merged into the node, which has no node of its own, lies
     /// inside its rect.
     absorbed_inside: bool,
+    /// The clips hide this node's own rect. The hidden flag belongs to the
+    /// node it forms, not to its configuration: merged into an ancestor, it
+    /// says nothing about the ancestor, whose own rect decides.
+    hidden_by_clip: bool,
 }
 
 impl<'f> PendingSemanticsNode<'f> {
@@ -940,7 +945,10 @@ impl<'f> PendingSemanticsNode<'f> {
     /// A child with an empty or non-finite rect keeps the flag off: AccessKit
     /// counts a child with no area as outside its clipping parent and drops
     /// it unless a sibling next to it lies inside.
-    fn form(self) -> BuiltSemanticsNode<'f> {
+    fn form(mut self) -> BuiltSemanticsNode<'f> {
+        if self.hidden_by_clip {
+            self.config.set_hidden(true);
+        }
         let contained = self.absorbed_inside
             && self.children.iter().all(|child| {
                 has_area(&child.rect) && inside(&child.rect, &self.rect) && child.contained
@@ -1273,34 +1281,11 @@ struct SemanticsAssemblyContext {
     names_a_control: bool,
 }
 
-#[derive(Debug, thiserror::Error)]
-enum SemanticsAssemblyError {
-    #[error("render object {host:?} authored a non-finite semantics sort order")]
-    InvalidSortKey { host: RenderId },
-    #[error(
-        "render object {host:?} authored duplicate semantics region key {key} in one contribution list"
-    )]
-    DuplicateRegion { host: RenderId, key: u64 },
-
-    #[error("synthetic semantics identity space exhausted")]
-    RegionIdentityExhausted,
-    #[error("semantics root render object {root:?} is missing from the render tree")]
-    MissingRootRenderObject { root: RenderId },
-
-    #[error(
-        "semantics root assembly produced {actual} fragments; exactly one formed root is required"
-    )]
-    InvalidRootFragmentCount { actual: usize },
-
-    #[error("semantics root {root:?} remained pending instead of forming a node")]
-    PendingRoot { root: RenderId },
-}
-
 fn assemble_semantics_root<'f>(
     tree: &RenderTree,
     root: Option<RenderId>,
     regions: &mut AssemblyRegions<'f>,
-) -> Result<Option<BuiltSemanticsNode<'f>>, SemanticsAssemblyError> {
+) -> Result<Option<BuiltSemanticsNode<'f>>, SemanticsError> {
     let Some(root) = root else {
         return Ok(None);
     };
@@ -1320,7 +1305,7 @@ fn assemble_semantics_root<'f>(
         false,
         regions,
     )
-    .ok_or(SemanticsAssemblyError::MissingRootRenderObject { root })?;
+    .ok_or(SemanticsError::MissingRootRenderObject { root })?;
 
     extract_formed_root(root, fragments.nodes).map(Some)
 }
@@ -1328,17 +1313,17 @@ fn assemble_semantics_root<'f>(
 fn extract_formed_root<'f>(
     root: RenderId,
     fragments: FrameVec<'f, SemanticsFragment<'f>>,
-) -> Result<BuiltSemanticsNode<'f>, SemanticsAssemblyError> {
+) -> Result<BuiltSemanticsNode<'f>, SemanticsError> {
     if fragments.len() != 1 {
-        return Err(SemanticsAssemblyError::InvalidRootFragmentCount {
+        return Err(SemanticsError::InvalidRootFragmentCount {
             actual: fragments.len(),
         });
     }
 
     match fragments.into_iter().next() {
         Some(SemanticsFragment::Formed(root_node)) => Ok(root_node),
-        Some(SemanticsFragment::Pending(_)) => Err(SemanticsAssemblyError::PendingRoot { root }),
-        None => Err(SemanticsAssemblyError::InvalidRootFragmentCount { actual: 0 }),
+        Some(SemanticsFragment::Pending(_)) => Err(SemanticsError::PendingRoot { root }),
+        None => Err(SemanticsError::InvalidRootFragmentCount { actual: 0 }),
     }
 }
 
@@ -1382,10 +1367,13 @@ struct NodeAssemblyDecisions {
 
 fn assembly_decisions(
     config: &SemanticsConfiguration,
+    hidden_by_clip: bool,
     context: SemanticsAssemblyContext,
 ) -> NodeAssemblyDecisions {
     let boundary = config.is_semantics_boundary() || config.is_merge_boundary();
-    let contributes = context.is_root || boundary || config.has_been_annotated();
+    // A node the clips hide contributes: as its own node it carries the
+    // hidden flag (see `PendingSemanticsNode::hidden_by_clip`).
+    let contributes = context.is_root || boundary || config.has_been_annotated() || hidden_by_clip;
     // A node that merges its own descendants is a unit a screen reader stops
     // on, even inside an outer merge: the outer one takes it as a child rather
     // than absorbing it (ADR-0206, decision 4). A merge boundary stops the
@@ -1465,11 +1453,7 @@ fn build_semantics_fragments_impl<'f>(
         ),
     };
     let rect = clipped.rect;
-    if clipped.hidden {
-        config.set_hidden(true);
-    }
-
-    let decisions = assembly_decisions(&config, context);
+    let decisions = assembly_decisions(&config, clipped.hidden, context);
 
     regions.visited.insert(id);
     let authored = match node {
@@ -1637,6 +1621,7 @@ fn build_semantics_fragments_impl<'f>(
         clip_inside,
         children,
         absorbed_inside,
+        hidden_by_clip: clipped.hidden,
     };
 
     let mut nodes = Vec::with_capacity_in(1, arena);
@@ -1730,10 +1715,7 @@ fn append_region_fragments<'f>(
         config.set_semantics_boundary(true);
         config.set_blocks_user_actions(blocks_user_actions || config.blocks_user_actions());
         config.set_has_reveal_ancestor(context.has_reveal_ancestor);
-        if clipped.hidden {
-            config.set_hidden(true);
-        }
-        let decisions = assembly_decisions(&config, context);
+        let decisions = assembly_decisions(&config, clipped.hidden, context);
         let pending = PendingSemanticsNode {
             source: SemanticsSource::Region(source),
             config,
@@ -1742,6 +1724,7 @@ fn append_region_fragments<'f>(
             clip_inside: clips.paint.is_some_and(|clip| inside(&clip, &clipped.rect)),
             children: Vec::new_in(regions.built),
             absorbed_inside: true,
+            hidden_by_clip: clipped.hidden,
         };
         fragments.push(if decisions.forms_node {
             SemanticsFragment::Formed(pending.form())
@@ -2121,7 +2104,8 @@ fn plan_graft_pass<'f>(
 /// `false` when that cannot be shown: a node on the way contributes (a
 /// pending fragment, a boundary the clip dropped last pass), authors
 /// regions, bars its earlier siblings, or lands where a paint clip above it
-/// hides it, which annotates it the way assembly does. The caller then treats
+/// could hide it, which makes it contribute the way assembly counts a node the
+/// clips hide. The caller then treats
 /// `moved` as an ordinary semantics mark.
 fn placement_anchors(
     tree: &RenderTree,
@@ -2173,11 +2157,11 @@ fn placement_anchors(
         {
             return false;
         }
-        // Assembly marks a node that lands outside the paint clip hidden,
-        // and a hidden node contributes: a move can turn a transparent
-        // wrapper into a node of its own, or end the hidden flag it gave the
-        // node above last pass. Neither pass's state is kept for a wrapper,
-        // so wherever the clips can hide one the walk refuses.
+        // Assembly counts a node the clips hide as contributing, so a move
+        // can turn a transparent wrapper into a node of its own. No pass's
+        // state is kept for a wrapper that formed nothing, so wherever the
+        // clips can hide one the walk refuses. (A wrapper that formed a node
+        // last pass is an anchor, found above.)
         if clips.can_hide(context.has_reveal_ancestor) {
             return false;
         }
@@ -2206,7 +2190,7 @@ fn placement_anchors(
             continue;
         }
         let parent_generation = node.layout_generation();
-        let child_context = assembly_decisions(&config, context).child_context;
+        let child_context = assembly_decisions(&config, false, context).child_context;
         // Pushed in reverse so the walk visits children in slot order, the
         // order the anchors' grafts are later sorted into anyway.
         for (child_slot, &child_id) in node.children().iter().enumerate().rev() {
@@ -2372,6 +2356,7 @@ fn assembly_inputs_into(
             if context.merge_into_ancestor
                 && !assembly_decisions(
                     &describe_semantics_configuration(id, node, regions),
+                    false,
                     context,
                 )
                 .forms_node
@@ -2397,7 +2382,7 @@ fn assembly_inputs_into(
         let (local_paint, local_semantics) = child_clips_of(node, transform, child_slot);
         clips = clips.descend(local_paint, local_semantics);
         transform = child_transform(node, tree.get(chain[index + 1])?, child_slot, transform)?;
-        context = assembly_decisions(&config, context).child_context;
+        context = assembly_decisions(&config, false, context).child_context;
     }
 
     // The chain always contains `target`, so the loop returns before

@@ -1500,15 +1500,6 @@ presentation inbox admission, preserving numeric values and explicit
 expand/collapse requests. Payload admission remains with the current semantics
 owner at delivery.
 
-`RenderingBinding` keeps its semantics-enabled listeners in their own storage,
-and `set_semantics_enabled` calls an owned snapshot of them after releasing the
-lock, so a callback may add or remove listeners or toggle the state again. Both
-the storage (when the binding drops) and each snapshot retire their envelopes
-in registration order. A panic from a callback or a capture destructor
-propagates with the committed semantics state intact; while it unwinds, the
-snapshot is dropped as a `Vec` is, and a capture destructor that panics there
-aborts, as in std (ADR-0281).
-
 ### A dropping UI runtime destroys its application values before it raises a failure
 
 **Rule:** `UiRuntime::drop` raises its first failure only once no field it still owns holds an

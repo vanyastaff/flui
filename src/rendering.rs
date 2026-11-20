@@ -45,7 +45,9 @@ pub use flui_rendering::traits::{
     HitTestOutcome, PaintClip, PaintEffects, PaintOpacity, RenderBox, RenderObject, RenderSliver,
     SemanticsClip, TextBaseline,
 };
-pub use flui_rendering::{PoisonPhase, RenderError, RenderResult, RenderUpdateImpact};
+pub use flui_rendering::{
+    PoisonPhase, RenderError, RenderResult, RenderUpdateImpact, SemanticsError,
+};
 pub use flui_rendering::{
     forward_single_child_box_hit_test, forward_single_child_box_layout,
     forward_single_child_box_queries, forward_single_child_intrinsics,

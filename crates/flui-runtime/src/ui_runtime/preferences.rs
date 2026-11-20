@@ -7,7 +7,6 @@ use flui_interaction::gesture::GestureProfiles;
 use flui_platform::{
     DisplayId, GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
 };
-use flui_rendering::binding::RendererBinding as _;
 
 use super::UiRuntime;
 use crate::{owner::SystemPreferencesSnapshot, presentation::PresentationState};

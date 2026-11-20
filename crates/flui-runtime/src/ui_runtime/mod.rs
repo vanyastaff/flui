@@ -58,7 +58,6 @@ use flui_interaction::pointer::InteractionLane;
 #[cfg(test)]
 use flui_platform::{PlatformInput, PlatformWindow};
 #[cfg(test)]
-use flui_rendering::binding::RendererBinding as _;
 #[cfg(test)]
 use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]

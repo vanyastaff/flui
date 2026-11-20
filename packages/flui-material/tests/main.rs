@@ -259,6 +259,10 @@ fn action_component_contracts() {
             chip::tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap,
         ),
         (
+            "chip::a right to left chip puts its delete icon on the left",
+            chip::a_right_to_left_chip_puts_its_delete_icon_on_the_left,
+        ),
+        (
             "list_tile::a selectable tile is an option whether or not selected",
             list_tile::a_selectable_tile_is_an_option_whether_or_not_selected,
         ),
@@ -588,6 +592,10 @@ fn navigation_and_layout_contracts() {
         (
             "app_bar::the title announces as a level one heading",
             app_bar::the_title_announces_as_a_level_one_heading,
+        ),
+        (
+            "app_bar::a right to left app bar starts its toolbar at the right",
+            app_bar::a_right_to_left_app_bar_starts_its_toolbar_at_the_right,
         ),
         (
             "sliver_app_bar::a pinned bar holds its collapsed height at deep scroll",

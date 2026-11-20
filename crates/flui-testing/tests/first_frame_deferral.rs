@@ -4,12 +4,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
-use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
 use flui_rendering::testing::SceneHost;
 use flui_runtime::renderer_binding::RenderingBinding;
-use flui_scheduler::UpdateScheduler;
 
 pub(crate) fn unmatched_first_frame_release_preserves_the_next_deferral() {
     let pipeline = PipelineCell::new(PipelineOwner::new(TextContextHandle::standalone()));
@@ -21,8 +19,7 @@ pub(crate) fn unmatched_first_frame_release_preserves_the_next_deferral() {
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
         root
     });
-    let scheduler = UpdateScheduler::new();
-    let binding = RenderingBinding::new_with_pipeline(pipeline, &scheduler);
+    let binding = RenderingBinding::new_with_pipeline(pipeline);
     for _ in 0..2 {
         assert!(catch_unwind(AssertUnwindSafe(|| binding.allow_first_frame())).is_err());
     }

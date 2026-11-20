@@ -73,7 +73,6 @@
 #[doc(hidden)]
 pub use flui_foundation::geometry::Size as __MacroSize;
 
-pub mod binding;
 pub mod constraints;
 pub mod context;
 pub mod delegates;
@@ -132,7 +131,7 @@ pub mod prelude {
         SliverHitTestContext, SliverLayoutContext,
     };
     // Error types
-    pub use crate::error::{PoisonPhase, RenderError, RenderResult};
+    pub use crate::error::{PoisonPhase, RenderError, RenderResult, SemanticsError};
     // Hit testing. The parallel `BoxHitTestEntry`/`BoxHitTestResult`/
     // `SliverHitTestEntry`/`SliverHitTestResult` exports that used to live
     // here have been removed; the protocol-canonical versions live in
@@ -152,10 +151,6 @@ pub mod prelude {
     pub use crate::storage::{RenderNode, RenderTree};
     pub use crate::{
         RenderUpdateImpact,
-        binding::{
-            RendererBinding, ViewHitTest, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
-            debug_dump_render_tree,
-        },
         parent_data::{
             BoxParentData, FlexFit, FlexParentData, ParentData, SliverMultiBoxAdaptorParentData,
             SliverParentData, SliverPhysicalParentData, StackParentData,
@@ -187,7 +182,7 @@ pub use context::{
     BoxHitTestContext, BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext,
     PaintContext, PaintFragment, SliverHitTestContext, SliverLayoutContext,
 };
-pub use error::{PoisonPhase, RenderError, RenderResult};
+pub use error::{PoisonPhase, RenderError, RenderResult, SemanticsError};
 pub use parent_data::ParentData;
 pub use pipeline::{
     LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextContextMut, TextSource,

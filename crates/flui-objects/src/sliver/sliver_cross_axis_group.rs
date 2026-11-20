@@ -55,6 +55,7 @@ impl RenderSliver for RenderSliverCrossAxisGroup {
         }
         if !constraints.cross_axis_extent.is_finite() {
             return Err(RenderError::invalid_constraints(
+                "RenderSliverCrossAxisGroup",
                 "cross-axis sliver tracks require finite available extent",
             ));
         }
@@ -83,6 +84,7 @@ impl RenderSliver for RenderSliverCrossAxisGroup {
                         extent.is_finite() && *extent >= 0.0 && *extent <= remaining
                     }) else {
                         return Err(RenderError::invalid_constraints(
+                            "RenderSliverCrossAxisGroup",
                             "content-sized sliver track must report an extent within its available cross axis",
                         ));
                     };
@@ -163,6 +165,7 @@ impl RenderSliver for RenderSliverCrossAxisGroup {
                 || !main_position.is_finite()
             {
                 return Err(RenderError::invalid_constraints(
+                    "RenderSliverCrossAxisGroup",
                     "sliver track positions exceed representable physical geometry",
                 ));
             }
