@@ -494,6 +494,7 @@ fn overlay_contracts() {
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
+        ("drawer::a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction", drawer::a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction),
         ("drawer::grabbing_a_closing_drawer_preserves_its_panel", drawer::grabbing_a_closing_drawer_preserves_its_panel),
         ("drawer::drawer_slides_without_rebuilding_per_frame", drawer::drawer_slides_without_rebuilding_per_frame),
         ("drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel", drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel),
@@ -780,6 +781,10 @@ fn navigation_and_layout_contracts() {
         (
             "scaffold::floating action button floats above the keyboard",
             scaffold::floating_action_button_floats_above_the_keyboard,
+        ),
+        (
+            "scaffold::the floating action button sits at the reading end clear of that sides inset",
+            scaffold::the_floating_action_button_sits_at_the_reading_end_clear_of_that_sides_inset,
         ),
         (
             "scaffold::plain body text takes the theme body style and components keep theirs",

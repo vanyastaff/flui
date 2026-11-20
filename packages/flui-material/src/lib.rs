@@ -83,6 +83,7 @@ mod event_callback;
 pub mod filled_button;
 pub mod flexible_space_bar;
 pub mod floating_action_button;
+mod horizontal_side;
 pub mod icon_button;
 pub mod ink_well;
 pub mod input_decorator;

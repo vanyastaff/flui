@@ -130,31 +130,30 @@
 //! `Some`, mounts a `SnackBarPresenter` at `SLOT_SNACK_BAR` — see
 //! `crate::snack_bar`'s module docs for what that presenter renders.
 //!
-//! **Named divergence: no `TextDirection` / RTL.** The oracle's
-//! `_ScaffoldLayout` carries a `textDirection` field, both to mirror
-//! `MediaQuery`/`Directionality` into `shouldRelayout`'s comparison and
-//! because `endFloat` resolves "end" against it (`AxisDirection` — `end` is
-//! `left` under RTL). `ScaffoldLayoutDelegate` hardcodes the FAB to the
-//! right edge and carries no `text_direction` field at all, so an RTL
-//! subtree gets the LTR position and `should_relayout` cannot react to a
-//! direction change. `flui_sdk::widgets::Directionality` exists, but neither
-//! `Scaffold` nor `ScaffoldLayoutDelegate` reads it (see [`crate::AppBar`]'s
-//! own centerTitle note for the matching directionality gap there); revisit
-//! together.
+//! **The floating action button sits at the reading end.** `build` resolves
+//! the end against the ambient `Directionality` (left-to-right without one)
+//! into the side the button hugs, and `ScaffoldLayoutDelegate` carries that
+//! side: right, clearing the right safe-area inset, left-to-right; left,
+//! clearing the left inset, right-to-left. A direction change rebuilds the
+//! scaffold with a delegate whose side differs, so `should_relayout` moves
+//! the button without remounting the page. Each drawer resolves its own
+//! start or end the same way (see [`crate::drawer`]'s module docs).
 
 use std::any::Any;
 
 use flui_sdk::foundation::ElementId;
 use flui_sdk::geometry::{EdgeInsets, Offset, Size};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::{Color, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{
-    ConstrainedBox, CustomMultiChildLayout, LayoutId, MultiChildLayoutContext,
+    ConstrainedBox, CustomMultiChildLayout, Directionality, LayoutId, MultiChildLayoutContext,
     MultiChildLayoutDelegate, PreferredSizeView,
 };
+
+use crate::horizontal_side::HorizontalSide;
 
 use crate::drawer::{
     Drawer, DrawerAlignment, DrawerController, DrawerControllerState, DrawerHandle,
@@ -647,9 +646,11 @@ impl ViewState<Scaffold> for ScaffoldState {
                 media_query.view_padding.bottom
             };
 
+        let direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
         let delegate = ScaffoldLayoutDelegate {
             min_insets,
             min_view_padding_bottom,
+            floating_action_button_side: HorizontalSide::end(direction),
         };
 
         ScaffoldScope {
@@ -753,6 +754,10 @@ struct ScaffoldLayoutDelegate {
     /// being resized around. See `Scaffold::build`'s citation of
     /// `_ScaffoldState.build`'s `minViewPadding`.
     min_view_padding_bottom: f64,
+    /// The side the floating action button hugs: the reading end, resolved
+    /// in `Scaffold::build`. Oracle: `_ScaffoldLayout.textDirection`, which
+    /// `FabEndOffsetX` resolves "end" against.
+    floating_action_button_side: HorizontalSide,
 }
 
 impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
@@ -835,9 +840,14 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
 
             // `FloatingActionButtonLocation.endFloat` (`FabEndOffsetX` +
             // `FabFloatOffsetY`, `floating_action_button_location.dart:517-528,
-            // 554-581`).
-            let fab_x =
-                size.width - FLOATING_ACTION_BUTTON_MARGIN - self.min_insets.right - fab_size.width;
+            // 554-581`): the margin and that side's safe-area inset from the
+            // reading end.
+            let side = self.floating_action_button_side;
+            let from_side = FLOATING_ACTION_BUTTON_MARGIN + side.inset(&self.min_insets);
+            let fab_x = match side {
+                HorizontalSide::Left => from_side,
+                HorizontalSide::Right => size.width - from_side - fab_size.width,
+            };
 
             // `FabFloatOffsetY`: `safeMargin = max(margin,
             // minViewPadding.bottom - bottomContentHeight + margin)`, where
@@ -899,9 +909,9 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
 
     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
         // Oracle: `oldDelegate.minInsets != minInsets || ...` (`:1300`) —
-        // `min_insets` is the only field this narrowed delegate captures, so
-        // comparing it covers every relayout trigger this substrate has
-        // (chiefly: the keyboard showing/hiding).
+        // every field is a layout input (the keyboard showing or hiding, a
+        // direction change moving the floating action button), so any
+        // difference relays out.
         old_delegate
             .as_any()
             .downcast_ref::<Self>()
