@@ -65,12 +65,12 @@
 //! 5. `max_scroll_obstruction_extent` must be reported on the Pinned /
 //!    FloatingPinned variants even though nothing inside this render object
 //!    consumes it: it feeds `RenderViewport::max_scroll_obstruction_extent_before`
-//!    (`crates/flui-objects/src/sliver/viewport.rs:190-200`), which
+//!    (`crates/flui-objects/src/sliver/viewport/viewport.rs`), which
 //!    `RenderViewport::offset_to_reveal`-style scroll-into-view machinery
 //!    would use. It does **not** feed the *next sibling's*
 //!    `SliverConstraints.overlap`: the viewport computes `overlap` from an
 //!    accumulated paint offset built from `paint_extent`
-//!    (`viewport.rs:410-411`), not from the obstruction extent. Its real
+//!    (`layout_child_sequence` in `viewport/core.rs`), not from the obstruction extent. Its real
 //!    consumer is `max_scroll_obstruction_extent_before`, used to compute the
 //!    offset to reveal a child.
 //! 6. The stretch-trigger signal is **edge-triggered** (`stretch_offset >=
