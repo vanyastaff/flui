@@ -33,7 +33,8 @@ app's trees, frames and input, and this crate composes that with what only the O
   `may_have_run` for a method that acts; a late answer is passed over by its id.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
-  `Lane::guard`) refuses OS input in process and on the shared desktop without a guard, before the
+  `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
+  without a guard, before the
   run is announced and again at every `lane::send_guarded`, which asks the guard before every
   event and releases everything on every exit; `OsInputLock` holds one session per user's
   desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
@@ -55,7 +56,24 @@ app's trees, frames and input, and this crate composes that with what only the O
   pure, and `quartz`, `ax`, `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
   `lane::x11` keeps its keysyms, keymap and held input, safety rules, echo count and image layout
   pure, `lane::atspi::roles` and `lane::wayland::mapping` are pure, and the parts that reach an X
-  server, AT-SPI or libei are Linux only (libei with the `wayland` feature).
+  server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
+  host code that drives `adb`, so all of it builds on every host, and its tests script the device
+  (`testing::ScriptedAdb`).
+- **The Android lane reaches the device through one door.** Every `adb` command runs through
+  `lane::android::adb::Adb` with a deadline and a bound on its output, a timed-out command being
+  `timeout` with `may_have_run`; a stream (`getevent`, `uinput`) hands over bounded records, at
+  most a fixed number waiting; a value from outside the lane enters a device shell line only
+  through `adb::quote`. What the device prints is read as untrusted input: sizes checked before
+  decoding (`screencap`, `uiautomator dump`), node, depth and device counts bounded.
+- **The Android lane holds what `input` holds, and records it once taken.** `input` holds no key
+  between commands, so `lane::android::held::HeldInput` sends a key at its release (alone, or as
+  one `keycombination` with the modifiers held) and holds only the one `motionevent` contact and
+  the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
+  device answered a sync); a timed-out press is held and cancelled at the release, and a key a
+  timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
+  It refuses a second contact, the keys and chords that leave the app or change the device, and a
+  contact going down at the display's edge; before each press, key and text the app's window
+  must hold the focus. It never takes a device nobody named (`FLUI_ANDROID_SERIAL`).
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

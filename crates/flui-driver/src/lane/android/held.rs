@@ -610,6 +610,12 @@ impl HeldInput {
         self.modifier_used = false;
     }
 
+    /// Forget the keys a timed-out command may have left down, once they were named: `input` has
+    /// no release for them.
+    pub fn forget_unsure(&mut self) {
+        self.unsure.clear();
+    }
+
     /// The pen's device is gone, and with it everything it held: the kernel removes a device's
     /// contacts with it.
     pub fn pen_device_gone(&mut self) {

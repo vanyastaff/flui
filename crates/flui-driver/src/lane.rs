@@ -357,12 +357,14 @@ pub fn release_outcome(keys: Result<()>, pointer: Result<()>) -> Result<()> {
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
-/// pressed is released on every exit, a failed send included.
+/// pressed is released on every exit, a failed send included; input the release leaves held is
+/// what the run answers, whatever ended it.
 ///
 /// # Errors
 ///
-/// As [`admit`] and [`Lane::check`], before any event; [`Error::InterruptedByUser`]; the lane's
-/// own failure.
+/// As [`admit`] and [`Lane::check`], before any event; [`Error::ReleaseFailed`] naming what stays
+/// held, its message naming the run's own failure too when there was one;
+/// [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
     lane.check(events)?;
@@ -375,7 +377,22 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
         guard.disarm();
     }
     let released = lane.release_all();
-    sent.and(released)
+    match (sent, released) {
+        // Input left held outranks why the run ended: the person must be told what stays down.
+        (
+            Err(failure),
+            Err(Error::ReleaseFailed {
+                lane,
+                held,
+                message,
+            }),
+        ) => Err(Error::ReleaseFailed {
+            lane,
+            held,
+            message: format!("{message}; the run had failed first: {failure}"),
+        }),
+        (sent, released) => sent.and(released),
+    }
 }
 
 fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {

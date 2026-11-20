@@ -47,7 +47,9 @@ use flui_protocol::input::PointerDevice;
 use flui_protocol::launch::{ENDPOINT_EXTRA, EXIT_ON_DISCONNECT_EXTRA, TOKEN_EXTRA};
 use flui_protocol::session::{Isolation, Placement};
 
-use self::adb::{Adb, AdbCommand, AdbReply, AdbStream, Framing, command_failed, lane_error};
+use self::adb::{
+    Adb, AdbCommand, AdbReply, AdbStream, Framing, Printed, command_failed, lane_error,
+};
 use self::device::DeviceFacts;
 use self::guard::GeteventGuard;
 use self::held::{Abilities, Command, HeldInput, PenChange};
@@ -174,9 +176,8 @@ impl AndroidLane {
     pub fn connect(mut adb: Box<dyn Adb>, package: impl Into<String>) -> Result<Self> {
         let package = package.into();
         device::check_component(&package, "application id")?;
-        let (sdk, isolation) = device::parse_properties(
-            &run_shell(adb.as_mut(), device::PROPERTIES, SMALL, SHORT)?.text(),
-        );
+        let (sdk, isolation) =
+            device::parse_properties(&run_shell(adb.as_mut(), device::PROPERTIES, DATA)?.text());
         safety::admit_isolation(isolation).map_err(Refusal::into_error)?;
         // Unchecked: an older `input` prints its usage with an error and an exit code.
         let usage = adb.run(
@@ -185,7 +186,7 @@ impl AndroidLane {
             SHORT,
         )?;
         let input = device::parse_input_usage(&usage.text());
-        let printed = run_shell(adb.as_mut(), device::DISPLAY, SMALL, SHORT)?.text();
+        let printed = run_shell(adb.as_mut(), device::DISPLAY, DATA)?.text();
         let display = device::parse_display(&printed).ok_or_else(|| {
             lane_error(format!(
                 "`wm size` and `wm density` printed no size the lane reads: {printed:?}"
@@ -254,13 +255,20 @@ impl AndroidLane {
             })?;
             let install =
                 AdbCommand::Host(["install", "-r", "-t", path].map(str::to_owned).to_vec());
-            checked(self.adb.as_mut(), &install, SMALL, INSTALL)?;
+            let run = Run {
+                timeout: INSTALL,
+                ..STATUS
+            };
+            checked(self.adb.as_mut(), &install, run)?;
         }
         self.shell(&adb::shell_line(&["am", "force-stop", &self.package]))?;
         let token = crate::launch::launch_token()?;
         let name = format!("flui-agent-{}", &crate::launch::launch_token()?[..16]);
         let endpoint = format!("@{name}");
         let component = format!("{}/{}", app.package, app.activity);
+        // From here on the app may run, a failed start included: the lane stops it at its end
+        // whatever comes next.
+        self.app_started = true;
         self.shell(&adb::shell_line(&[
             "am",
             "start",
@@ -277,14 +285,12 @@ impl AndroidLane {
             EXIT_ON_DISCONNECT_EXTRA,
             "1",
         ]))?;
-        // From here on the app runs: the lane stops it at its end whatever comes next.
-        self.app_started = true;
         let forward = AdbCommand::Host(vec![
             "forward".to_owned(),
             "tcp:0".to_owned(),
             format!("localabstract:{name}"),
         ]);
-        let printed = checked(self.adb.as_mut(), &forward, SMALL, SHORT)?.text();
+        let printed = checked(self.adb.as_mut(), &forward, STATUS)?.text();
         let port: u16 = printed
             .trim()
             .parse()
@@ -301,9 +307,9 @@ impl AndroidLane {
         })
     }
 
-    /// Run the shell line `line`, failing on the device's failure.
+    /// Run the shell line `line`, which prints a status, failing on the device's failure.
     fn shell(&mut self, line: &str) -> Result<AdbReply> {
-        run_shell(self.adb.as_mut(), line, SMALL, SHORT)
+        run_shell(self.adb.as_mut(), line, STATUS)
     }
 
     /// What the plan reads of the device.
@@ -328,7 +334,12 @@ impl AndroidLane {
     /// The active window, dumped and read.
     fn dump(&mut self) -> Result<UiDump> {
         let command = AdbCommand::ExecOut(uiautomator::dump_line());
-        let reply = checked(self.adb.as_mut(), &command, uiautomator::MAX_DUMP, LONG)?;
+        let run = Run {
+            printed: Printed::Data,
+            limit: uiautomator::MAX_DUMP,
+            timeout: LONG,
+        };
+        let reply = checked(self.adb.as_mut(), &command, run)?;
         UiDump::parse(&reply.text())
             .map_err(|why| lane_error(format!("`uiautomator dump` answered no window: {why}")))
     }
@@ -363,7 +374,7 @@ impl AndroidLane {
 
     /// The safety rule before a command that acts on the app: its window holds the focus.
     fn check_focus(&mut self) -> Result<()> {
-        let printed = self.shell(device::FOCUS)?.text();
+        let printed = run_shell(self.adb.as_mut(), device::FOCUS, DATA)?.text();
         let focus = device::parse_focus(&printed);
         safety::check_focus(focus.as_deref(), &self.package).map_err(Refusal::into_error)
     }
@@ -371,7 +382,7 @@ impl AndroidLane {
     /// Send `command`, recording what the device took.
     fn deliver(&mut self, command: &Command) -> Result<()> {
         let sent = match command.line() {
-            Some(line) => run_shell(self.adb.as_mut(), &line, SMALL, SHORT).map(drop),
+            Some(line) => run_shell(self.adb.as_mut(), &line, STATUS).map(drop),
             None => self.pen_report(command),
         };
         match &sent {
@@ -509,27 +520,48 @@ fn probe_uinput(adb: &mut dyn Adb) -> bool {
     if !registered {
         return false;
     }
-    run_shell(adb, uinput::DEVICES, uinput::MAX_DEVICE_LIST, SHORT)
+    let list = Run {
+        limit: uinput::MAX_DEVICE_LIST,
+        ..DATA
+    };
+    run_shell(adb, uinput::DEVICES, list)
         .is_ok_and(|list| uinput::lists_device(&list.text(), uinput::PROBE_NAME))
 }
 
-/// Run `command`, failing on the device's failure.
-fn checked(
-    adb: &mut dyn Adb,
-    command: &AdbCommand,
+/// How a command is run: what it prints, how much of it is read, how long it may take.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    printed: Printed,
     limit: usize,
     timeout: Duration,
-) -> Result<AdbReply> {
-    let reply = adb.run(command, limit, timeout)?;
-    match reply.failure() {
+}
+
+/// A command that prints a status, briefly.
+const STATUS: Run = Run {
+    printed: Printed::Status,
+    limit: SMALL,
+    timeout: SHORT,
+};
+
+/// A command that prints a few lines of data.
+const DATA: Run = Run {
+    printed: Printed::Data,
+    limit: SMALL,
+    timeout: SHORT,
+};
+
+/// Run `command` as `run` says, failing on the device's failure.
+fn checked(adb: &mut dyn Adb, command: &AdbCommand, run: Run) -> Result<AdbReply> {
+    let reply = adb.run(command, run.limit, run.timeout)?;
+    match reply.failure(run.printed) {
         Some(failure) => Err(command_failed(command, &reply, &failure)),
         None => Ok(reply),
     }
 }
 
-/// Run the shell line `line`, failing on the device's failure.
-fn run_shell(adb: &mut dyn Adb, line: &str, limit: usize, timeout: Duration) -> Result<AdbReply> {
-    checked(adb, &AdbCommand::Shell(line.to_owned()), limit, timeout)
+/// Run the shell line `line` as `run` says, failing on the device's failure.
+fn run_shell(adb: &mut dyn Adb, line: &str, run: Run) -> Result<AdbReply> {
+    checked(adb, &AdbCommand::Shell(line.to_owned()), run)
 }
 
 impl Lane for AndroidLane {
@@ -605,9 +637,13 @@ impl Lane for AndroidLane {
         if !self.held.holds_anything() {
             return Ok(());
         }
+        let held = self.held.held_names();
+        // A key a timed-out command may have left down has no release through `input`: it is
+        // named once, here, and the next release does not fail on it again.
+        self.held.forget_unsure();
         Err(Error::ReleaseFailed {
             lane: LANE.to_owned(),
-            held: self.held.held_names(),
+            held,
             message: first.map_or_else(
                 || "`input` cannot release a key without pressing it".to_owned(),
                 |error| error.to_string(),
@@ -617,11 +653,15 @@ impl Lane for AndroidLane {
 
     fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
         let screen = self.find(placement)?;
+        let capture = Run {
+            printed: Printed::Data,
+            limit: screencap::MAX_CAPTURE,
+            timeout: LONG,
+        };
         let raw = checked(
             self.adb.as_mut(),
             &AdbCommand::ExecOut(screencap::RAW.to_owned()),
-            screencap::MAX_CAPTURE,
-            LONG,
+            capture,
         )?;
         let raw = screencap::parse_raw(&raw.stdout).map_err(lane_error)?;
         let (width, height, rgba) = if let screencap::Raw::Rgba {
@@ -636,8 +676,7 @@ impl Lane for AndroidLane {
             let png = checked(
                 self.adb.as_mut(),
                 &AdbCommand::ExecOut(screencap::PNG.to_owned()),
-                screencap::MAX_CAPTURE,
-                LONG,
+                capture,
             )?;
             screencap::parse_png(&png.stdout).map_err(lane_error)?
         };
@@ -666,8 +705,7 @@ impl Drop for AndroidLane {
             let _ = run_shell(
                 self.adb.as_mut(),
                 &adb::shell_line(&["am", "force-stop", &self.package]),
-                SMALL,
-                SHORT,
+                STATUS,
             );
         }
         if let Some(port) = self.forwarded {
@@ -709,7 +747,7 @@ pub fn host_device() -> Result<adb::HostAdb> {
         return Err(device::unnamed());
     };
     let mut host = adb::HostAdb::locate();
-    let listing = checked(&mut host, &AdbCommand::Devices, SMALL, SHORT)?;
+    let listing = checked(&mut host, &AdbCommand::Devices, DATA)?;
     let entry = device::choose(&device::parse_devices(&listing.text()), Some(&serial))?;
     Ok(host.device(entry.serial))
 }

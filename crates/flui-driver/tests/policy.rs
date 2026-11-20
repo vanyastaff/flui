@@ -275,6 +275,31 @@ fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
     }
 }
 
+/// A run that ends early and then cannot release what it pressed answers with what stays held,
+/// naming why it ended too: the person must hear of a key left down.
+#[test]
+fn input_left_held_outranks_why_the_run_ended() {
+    let an_event = || OsEvent::Pause(Duration::from_millis(1));
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane
+        .foreign_input_after(1, "a mouse move")
+        .failing_releases(1);
+    match lane::send_guarded(&mut lane, &[an_event(), an_event()]) {
+        Err(Error::ReleaseFailed { held, message, .. }) => {
+            assert_eq!(held, vec!["Control".to_owned()]);
+            assert!(message.contains("a mouse move"), "{message}");
+        }
+        other => panic!("expected what stays held, got {other:?}"),
+    }
+    // A run that ends early and releases everything still answers why it ended.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(1, "a mouse move");
+    assert!(matches!(
+        lane::send_guarded(&mut lane, &[an_event(), an_event()]),
+        Err(Error::InterruptedByUser { .. })
+    ));
+}
+
 #[test]
 fn an_rtl_windows_button_is_aimed_at_from_the_surfaces_physical_left() {
     use flui_foundation::TextDirection;

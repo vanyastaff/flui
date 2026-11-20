@@ -126,9 +126,11 @@ impl AdbReply {
 
     /// Why the command failed, when it did: an exit code other than 0, or a device-side failure
     /// the device's shell reported with exit 0 (an older `adb` passes no exit code through, and a
-    /// Java command prints its exception and may still exit 0).
+    /// Java command prints its exception and may still exit 0). What it printed is searched for a
+    /// failure only when it printed a status (`Printed::Status`): data (a window dump, an image)
+    /// may hold any text.
     #[must_use]
-    pub fn failure(&self) -> Option<String> {
+    pub fn failure(&self, printed: Printed) -> Option<String> {
         let said = |text: &str| {
             text.lines()
                 .map(str::trim)
@@ -139,8 +141,10 @@ impl AdbReply {
                 })
                 .map(str::to_owned)
         };
-        let stdout = self.text();
-        let reason = said(&self.stderr).or_else(|| said(&stdout));
+        let reason = said(&self.stderr).or_else(|| match printed {
+            Printed::Status => said(&self.text()),
+            Printed::Data => None,
+        });
         match (self.exit, reason) {
             (Some(0), None) => None,
             (_, Some(reason)) => Some(cut(&reason)),
@@ -155,6 +159,17 @@ impl AdbReply {
             (None, None) => Some("it ended without an exit code".to_owned()),
         }
     }
+}
+
+/// What a command prints, which decides whether its output is searched for a failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Printed {
+    /// A status a Java command or `am` writes, where a failure is written too (`input`, `am`,
+    /// `install`, `forward`).
+    Status,
+    /// Data that may hold any text: a window dump, an image, a property, a window title.
+    Data,
 }
 
 /// `text` cut to what a message carries.

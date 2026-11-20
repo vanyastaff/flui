@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use flui_driver::coordinates::DevicePoint;
-use flui_driver::lane::android::adb::{self, AdbReply, Splitter};
+use flui_driver::lane::android::adb::{self, AdbReply, Printed, Splitter};
 use flui_driver::lane::android::device::{self, DeviceEntry};
 use flui_driver::lane::android::getevent::{self, Line, Watch};
 use flui_driver::lane::android::held::{
@@ -285,20 +285,22 @@ fn a_stream_is_cut_into_lines_and_json_objects_and_a_record_is_bounded() {
 
 #[test]
 fn a_command_fails_on_its_exit_code_or_on_what_the_device_printed() {
-    assert_eq!(AdbReply::new(0, "ok").failure(), None);
-    assert!(AdbReply::new(1, "").failure().is_some());
-    // `am` and Java commands report some failures with exit 0.
-    assert!(
-        AdbReply::new(0, "Error: Activity class {x/y} does not exist.\n")
-            .failure()
-            .is_some()
-    );
-    assert!(
-        AdbReply::new(0, "")
-            .stderr("java.lang.IllegalArgumentException: Unknown action: HOVER")
-            .failure()
-            .is_some()
-    );
+    for printed in [Printed::Status, Printed::Data] {
+        assert_eq!(AdbReply::new(0, "ok").failure(printed), None);
+        assert!(AdbReply::new(1, "").failure(printed).is_some());
+        assert!(
+            AdbReply::new(0, "")
+                .stderr("java.lang.IllegalArgumentException: Unknown action: HOVER")
+                .failure(printed)
+                .is_some()
+        );
+    }
+    // `am` and Java commands report some failures with exit 0 in their status.
+    let said = AdbReply::new(0, "Error: Activity class {x/y} does not exist.\n");
+    assert!(said.failure(Printed::Status).is_some());
+    // Data may hold any text: a window whose button reads so is no failure.
+    let dump = AdbReply::new(0, "<node text=\"NullPointerException\" />\nError: none\n");
+    assert_eq!(dump.failure(Printed::Data), None);
 }
 
 #[test]
@@ -1192,6 +1194,33 @@ fn a_timed_out_press_is_held_and_cancelled() {
         adb.commands("shell input touchscreen motionevent CANCEL"),
         vec!["shell input touchscreen motionevent CANCEL 300 600"]
     );
+}
+
+#[test]
+fn a_key_a_timed_out_command_may_have_left_down_is_named_once() {
+    let adb = scripted(true, true).timeout_once("shell input keyevent");
+    let mut lane = connected(&adb);
+    let failed = lane::send_guarded(
+        &mut lane,
+        &[
+            OsEvent::KeyDown("Enter".to_owned()),
+            OsEvent::KeyUp("Enter".to_owned()),
+        ],
+    )
+    .expect_err("the key timed out");
+    match failed {
+        Error::ReleaseFailed { held, message, .. } => {
+            assert_eq!(held, vec!["KEYCODE_ENTER"]);
+            assert!(message.contains("did not end within"), "{message}");
+        }
+        other => panic!("expected the key named as held, got {other}"),
+    }
+    assert_eq!(
+        inputs(&adb),
+        vec!["shell input keyevent KEYCODE_ENTER"],
+        "never pressed again"
+    );
+    lane.release_all().expect("named once");
 }
 
 #[test]
