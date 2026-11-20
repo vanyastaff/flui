@@ -7,7 +7,6 @@ use super::{DecorationImage, Gradient};
 /// the blend folded into its opacity. The shares add up to one, and paint adds
 /// the layers together, so an opaque crossfade covers the box at every `t`.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct ImageBlend {
     /// The `image` the lerp published beside the blend.
     pub(crate) published: DecorationImage,

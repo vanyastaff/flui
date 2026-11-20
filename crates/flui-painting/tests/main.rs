@@ -531,6 +531,11 @@ fn value_contract() {
                 "deserialized_images_validate_rgba_dimensions_and_data",
                 values::deserialized_images_validate_rgba_dimensions_and_data,
             ),
+            #[cfg(feature = "serde")]
+            (
+                "a_lerp_serializes_its_gradient_fallback_but_not_its_image_blend",
+                values::a_lerp_serializes_its_gradient_fallback_but_not_its_image_blend,
+            ),
         ],
     );
 }

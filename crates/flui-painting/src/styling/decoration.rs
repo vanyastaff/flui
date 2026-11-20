@@ -295,7 +295,14 @@ impl<T: Unit> BoxDecoration<T> {
     #[inline]
     pub fn set_gradient(mut self, gradient: Option<Gradient>) -> Self {
         self.gradient = gradient;
-        LerpRetained::set_gradient(&mut self.lerp_retained, None);
+        // The gradient fallback goes with the gradient; a stale image blend
+        // goes too, so the new decoration does not carry it on.
+        let live = self
+            .lerp_retained
+            .take()
+            .and_then(|kept| kept.image)
+            .filter(|blend| self.image.as_ref() == Some(&blend.published));
+        self.lerp_retained = LerpRetained::boxed(None, live);
         self
     }
 
@@ -327,7 +334,7 @@ where
     /// past four layers the weakest go and the kept ones take up their shares.
     /// `image` holds `b`'s own image as the blend paints it, or, when `b`'s image
     /// is in no layer (none, invisible or of NaN opacity), the strongest
-    /// layer. A layer's opacity is clamped to one before its share is taken. The shape is not interpolated and
+    /// layer; with no layer at all (a NaN `t`) it holds no image. A layer's opacity is clamped to one before its share is taken. The shape is not interpolated and
     /// switches at `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
@@ -341,6 +348,7 @@ where
         let t = t.clamp(0.0, 1.0);
         if t == 0.0 || t == 1.0 {
             let mut endpoint = if t == 0.0 { a.clone() } else { b.clone() };
+            endpoint.drop_stale_image_blend();
             if let (Some(a_gradient), Some(b_gradient)) = (&a.gradient, &b.gradient)
                 && let Some(mut gradient) = Gradient::lerp(a_gradient, b_gradient, gradient_t)
             {
@@ -456,6 +464,14 @@ where
     pub(crate) fn image_layers(&self) -> &[DecorationImage] {
         self.image_blend()
             .map_or(self.image.as_slice(), |blend| blend.layers.as_slice())
+    }
+
+    /// Drops an image blend the public `image` no longer holds the published
+    /// value of, so a decoration built from this one does not carry it on.
+    fn drop_stale_image_blend(&mut self) {
+        let gradient = self.gradient_fallback().cloned();
+        let image = self.image_blend().cloned();
+        self.lerp_retained = LerpRetained::boxed(gradient, image);
     }
 
     /// The raw gradient a lerp published and its bounded endpoint.

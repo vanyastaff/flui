@@ -411,7 +411,7 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
         "the strongest layer, not the first, is published"
     );
 
-    // A non-finite `t` adds no layer rather than one of unknown opacity.
+    // A NaN `t` adds no layer rather than one of unknown opacity.
     let undefined = painted(&BoxDecoration::lerp(
         &with(&red),
         &BoxDecoration::new(),
@@ -445,6 +445,17 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
         painted(&through).len(),
         1,
         "a stale blend does not come back through a lerp"
+    );
+    // Nor through a new gradient or an extrapolated endpoint: both drop it.
+    assert_eq!(
+        stale.clone().set_gradient(None),
+        with(&green),
+        "a new gradient drops a stale blend"
+    );
+    assert_eq!(
+        BoxDecoration::lerp(&stale, &with(&blue), -1.0),
+        with(&green),
+        "an extrapolated endpoint drops a stale blend"
     );
 
     // b's image invisible and in no layer of a's: the strongest layer is
@@ -574,29 +585,6 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
             .map(|(_, opacity, _)| opacity)
             .collect::<Vec<_>>()
     );
-
-    // The image blend is not serialized, decoration images being skipped: a
-    // round trip writes no retained state and paints no blend.
-    #[cfg(feature = "serde")]
-    {
-        let written = serde_json::to_value(&crossfaded).expect("a decoration serializes");
-        assert!(
-            written.get("lerp_retained").is_none(),
-            "a blend without a gradient fallback writes no retained state: {written}"
-        );
-        let restored: BoxDecoration =
-            serde_json::from_value(written).expect("a decoration deserializes");
-        let image = restored
-            .image
-            .clone()
-            .expect("the published image round-trips");
-        assert_eq!(
-            restored,
-            BoxDecoration::with_image(image),
-            "a restored blend is the plain decoration it paints like"
-        );
-        assert_eq!(layers(&restored), 0, "and paints no blend");
-    }
 
     let mut replaced = crossfaded;
     replaced.image = Some(DecorationImage::new(blue.clone()));

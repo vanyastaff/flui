@@ -1583,3 +1583,63 @@ pub(crate) fn image_transforms_refuse_what_they_cannot_invert() {
         }
     }
 }
+
+/// A lerp's retained state serializes its gradient fallback but never its image
+/// blend, decoration images being skipped: a decoration that retains only a
+/// blend writes no retained state and reads back as the plain decoration, and
+/// one that retains both writes the gradient alone.
+#[cfg(feature = "serde")]
+pub(crate) fn a_lerp_serializes_its_gradient_fallback_but_not_its_image_blend() {
+    use flui_painting::paint::Image;
+    use flui_painting::styling::DecorationImage;
+
+    let with = |color: Color| {
+        BoxDecoration::<f64>::with_image(DecorationImage::new(Image::solid_color(4, 4, color)))
+    };
+    let blend_only = BoxDecoration::lerp(&with(Color::RED), &with(Color::BLUE), 0.25);
+    let written = serde_json::to_value(&blend_only).expect("a decoration serializes");
+    assert!(
+        written.get("lerp_retained").is_none(),
+        "a blend without a gradient fallback writes no retained state: {written}"
+    );
+    let restored: BoxDecoration =
+        serde_json::from_value(written).expect("a decoration deserializes");
+    let image = restored
+        .image
+        .clone()
+        .expect("the published image round-trips");
+    assert_eq!(
+        restored,
+        BoxDecoration::with_image(image),
+        "a restored blend is the plain decoration it paints like"
+    );
+
+    // An extrapolated gradient keeps a bounded fallback; images on both
+    // endpoints add a blend beside it.
+    let mut begin = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
+    begin.begin = Alignment::CENTER;
+    begin.end = Alignment::new(0.0, 1.0);
+    let mut end = begin.clone();
+    end.end.y = 2.0;
+    let extrapolated = |color: Color| {
+        let mut decoration = BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(Gradient::Linear(begin.clone())),
+            &BoxDecoration::with_gradient(Gradient::Linear(end.clone())),
+            1e10,
+        );
+        decoration.image = with(color).image;
+        decoration
+    };
+    let both = BoxDecoration::lerp(&extrapolated(Color::RED), &extrapolated(Color::BLUE), 0.5);
+    let written = serde_json::to_value(&both).expect("a decoration serializes");
+    let retained = written
+        .get("lerp_retained")
+        .expect("a gradient fallback is written");
+    assert!(
+        retained
+            .get("gradient")
+            .is_some_and(|gradient| !gradient.is_null())
+            && retained.get("image").is_none(),
+        "the gradient fallback is written and the blend is not: {retained}"
+    );
+}
