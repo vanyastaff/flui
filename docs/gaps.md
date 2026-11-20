@@ -769,6 +769,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `flui-view`, `flui-painting`, `flui-engine`, `flui-interaction` and `flui-semantics` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-native` and `flui-widgets` the most.
 - A crate leaves this entry when it opts into the lint at its root; a table whose keys come from outside the process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`. The entry closes when the workspace default in `Cargo.toml` turns from `allow` to the lint's own level and the root attributes go.
 
+### Widgets fold caught panics in `PanicRecovery` instead of `FirstPanic`
+
+> **Environments:** all · **Who it hurts:** contributors · **Parity:** none
+
+- `flui-widgets`' `scroll/` and `navigator/` modules and `animated/animated_lerp.rs`, and `flui-material`'s `scaffold_messenger.rs`, `tabs.rs` and `snack_bar.rs`, still create a `PanicRecovery` only to run, retire and resume within one function, lending its scope to no seam: the fold `FirstPanic` is for. `rg -l PanicRecovery crates/flui-widgets/src packages | xargs rg --files-without-match 'RecoveryScope|FailureClass|_classified|first_failure_class|blocking_failure_class|into_failure|inherit_failure|finish_reporting|commit_into|RecoveryFailure|\.scope\(\)|run_with'` lists them; a file it leaves out also lends a scope to a seam and keeps `PanicRecovery` for that part.
+- The entry closes when those folds move to `FirstPanic`.
+
 ### Only Win32 says when the user places a window, and not for every placement
 
 > **Environments:** desktop, mobile, web · **Who it hurts:** Users whose window could not read its remembered placement at launch and who then move it · **Parity:** [Windows](platform-parity.md#windows)

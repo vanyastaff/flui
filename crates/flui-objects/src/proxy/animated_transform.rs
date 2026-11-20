@@ -55,7 +55,7 @@ use std::rc::{Rc, Weak};
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Offset, Size};
-use flui_foundation::{Single, panic::PanicRecovery};
+use flui_foundation::{Single, panic::FirstPanic};
 use flui_rendering::{
     RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
@@ -287,7 +287,7 @@ impl Source {
         cell: &Rc<SampleCell>,
         kind: Kind,
         handle: &LocalRenderInvalidationHandle,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Option<RenderSubscription> {
         fn listen<T>(
             proxy: &Rc<ProxyAnimation<T>>,
@@ -295,7 +295,7 @@ impl Source {
             cell: &Rc<SampleCell>,
             kind: Kind,
             handle: &LocalRenderInvalidationHandle,
-            recovery: &mut PanicRecovery,
+            failure: &mut FirstPanic,
         ) -> Option<RenderSubscription>
         where
             T: Clone + std::fmt::Debug + 'static,
@@ -316,13 +316,13 @@ impl Source {
                         commit(&cell, kind, generation, value, &handle);
                     }
                 }),
-                recovery,
+                failure,
             )
         }
         match self {
-            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle, recovery),
-            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle, recovery),
-            Self::Pixels(proxy) => listen(proxy, offset_sample, cell, kind, handle, recovery),
+            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle, failure),
+            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle, failure),
+            Self::Pixels(proxy) => listen(proxy, offset_sample, cell, kind, handle, failure),
         }
     }
 }
@@ -611,11 +611,11 @@ impl RenderBox for RenderAnimatedTransform {
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.detach();
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         self.listener_id = self
             .source
-            .subscribe(&self.cell, self.kind, &handle, &mut recovery);
-        recovery.finish();
+            .subscribe(&self.cell, self.kind, &handle, &mut failure);
+        failure.resume();
         // Catch up with a change made while nothing listened (a reattach).
         // Its ticket is taken before the read like a listener's, so a
         // listener delivery that read later wins over this reading.
@@ -631,9 +631,9 @@ impl RenderBox for RenderAnimatedTransform {
 
     fn detach(&mut self) {
         if let Some(subscription) = self.listener_id.take() {
-            let mut recovery = PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

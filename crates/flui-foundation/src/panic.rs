@@ -124,6 +124,14 @@ impl FirstPanic {
         }
     }
 
+    /// Drop `value` under this collector's containment, as
+    /// [`contain`](Self::contain) runs a callback. A destructor that panics
+    /// is a competing failure: its panic is held unless an earlier one is.
+    /// One that panics while the thread unwinds aborts, as in std (ADR-0281).
+    pub fn retire<T>(&mut self, value: T) {
+        self.contain(|| drop(value));
+    }
+
     /// Hold `payload` unless an earlier panic is held; discard it otherwise.
     pub fn record(&mut self, payload: Box<dyn Any + Send>) {
         Self::fold(&mut self.0, Some(payload));

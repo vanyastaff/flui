@@ -37,7 +37,7 @@ use flui_animation::{
     Animation, AnimationController, MotionSpec, SpringSimulation, Tolerance, curves,
 };
 use flui_foundation::geometry::{Axis, Offset};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_rendering::constraints::{SliverConstraints, right_way_up};
 use flui_rendering::pipeline::LocalRenderInvalidationHandle;
 
@@ -344,22 +344,22 @@ impl PlacementTrack {
     /// Relayout on every tick of the installed clock while attached.
     fn subscribe(&mut self) {
         if let (Some(placement), Some(handle)) = (&self.placement, &self.handle) {
-            let mut recovery = PanicRecovery::new();
+            let mut failure = FirstPanic::new();
             self.listener = RenderSubscription::subscribe(
                 || Some(Rc::new(placement.clock.clone())),
                 Some(handle),
                 flui_rendering::RenderUpdateImpact::LAYOUT,
-                &mut recovery,
+                &mut failure,
             );
-            recovery.finish();
+            failure.resume();
         }
     }
 
     fn unsubscribe(&mut self) {
         if let Some(subscription) = self.listener.take() {
-            let mut recovery = PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 

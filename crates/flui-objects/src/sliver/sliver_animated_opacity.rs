@@ -28,7 +28,7 @@ use flui_foundation::geometry::Size;
 use flui_foundation::inspect::{Fields, Inspect, Unit};
 
 use flui_animation::{Animation, ProxyAnimation};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 
 use flui_rendering::{
     constraints::SliverGeometry,
@@ -187,7 +187,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.detach();
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
@@ -196,17 +196,17 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
             Rc::new(move || {
                 Self::recompute_alpha(&animation, &alpha, &mark_handle);
             }),
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
         Self::recompute_alpha(&self.animation, &self.alpha, &handle);
     }
 
     fn detach(&mut self) {
         if let Some(subscription) = self.listener_id.take() {
-            let mut recovery = PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

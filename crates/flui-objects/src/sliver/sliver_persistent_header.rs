@@ -1074,27 +1074,27 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     pub fn set_snap_controller(&mut self, controller: Option<AnimationController>) {
         let outgoing = std::mem::replace(&mut self.controller, controller);
         let listener = self.listener_id.take();
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some(listener) = listener {
-            listener.close(&mut recovery);
+            listener.close(&mut failure);
         }
-        recovery.run(|| self.subscribe_snap_controller());
-        recovery.retire(outgoing);
-        recovery.finish();
+        failure.contain(|| self.subscribe_snap_controller());
+        failure.retire(outgoing);
+        failure.resume();
     }
 
     fn subscribe_snap_controller(&mut self) {
         if let (Some(controller), Some(handle)) =
             (self.controller.as_ref(), self.invalidation.clone())
         {
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            let mut failure = flui_foundation::panic::FirstPanic::new();
             self.listener_id = crate::subscription::RenderSubscription::subscribe(
                 || Some(std::rc::Rc::new(controller.clone())),
                 Some(&handle),
                 flui_rendering::RenderUpdateImpact::LAYOUT,
-                &mut recovery,
+                &mut failure,
             );
-            recovery.finish();
+            failure.resume();
         }
     }
 
@@ -1325,9 +1325,9 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         // object. Stopping here would also race a fresh `attach` on a
         // remove+insert reparent.
         if let Some(subscription) = self.listener_id.take() {
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = flui_foundation::panic::FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

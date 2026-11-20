@@ -55,7 +55,7 @@ use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 
 use flui_animation::{Animation, ProxyAnimation};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 
 use flui_rendering::{
     RenderUpdateImpact,
@@ -257,7 +257,7 @@ impl RenderBox for RenderAnimatedOpacity {
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.detach();
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
@@ -270,9 +270,9 @@ impl RenderBox for RenderAnimatedOpacity {
             Rc::new(move || {
                 Self::recompute_alpha(&animation, &alpha, &mark_handle);
             }),
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
 
         // Refresh once more in case the animation's value changed while this
         // node wasn't listening (e.g. a detach/reattach).
@@ -281,9 +281,9 @@ impl RenderBox for RenderAnimatedOpacity {
 
     fn detach(&mut self) {
         if let Some(subscription) = self.listener_id.take() {
-            let mut recovery = PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

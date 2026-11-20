@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_painting::Canvas;
 
 use flui_rendering::{
@@ -92,7 +92,7 @@ impl RenderCustomPaint {
     fn subscribe(
         painter: Option<&Rc<dyn CustomPainter>>,
         handle: Option<&LocalRenderInvalidationHandle>,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Option<RenderSubscription> {
         let painter = painter?;
         RenderSubscription::subscribe(
@@ -100,15 +100,15 @@ impl RenderCustomPaint {
             handle,
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
-            recovery,
+            failure,
         )
     }
 
     /// Tears down a subscription created by [`Self::subscribe`], removing it
     /// from the *same* painter's repaint listenable it was added to.
-    fn unsubscribe(subscription: Option<RenderSubscription>, recovery: &mut PanicRecovery) {
+    fn unsubscribe(subscription: Option<RenderSubscription>, failure: &mut FirstPanic) {
         if let Some(subscription) = subscription {
-            subscription.close(recovery);
+            subscription.close(failure);
         }
     }
 
@@ -169,27 +169,26 @@ impl RenderCustomPaint {
         painter: Option<Rc<dyn CustomPainter>>,
         handle: Option<&LocalRenderInvalidationHandle>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let mut recovery = PanicRecovery::new();
-        let mut impact = None;
-        recovery.run(|| impact = Some(painter_update_impact(current.as_ref(), painter.as_ref())));
+        let mut failure = FirstPanic::new();
+        let impact = failure.contain(|| painter_update_impact(current.as_ref(), painter.as_ref()));
         let Some(impact) = impact else {
-            recovery.retire(painter);
-            recovery.finish();
+            failure.retire(painter);
+            failure.resume();
             return flui_rendering::RenderUpdateImpact::NONE;
         };
         let outgoing = std::mem::replace(current, painter);
         let outgoing_subscription = subscription.take();
-        Self::unsubscribe(outgoing_subscription, &mut recovery);
-        *subscription = Self::subscribe(current.as_ref(), handle, &mut recovery);
-        recovery.retire(outgoing);
-        if recovery.has_failure()
+        Self::unsubscribe(outgoing_subscription, &mut failure);
+        *subscription = Self::subscribe(current.as_ref(), handle, &mut failure);
+        failure.retire(outgoing);
+        if failure.is_held()
             && let Some(handle) = handle
         {
-            recovery.run(|| {
+            failure.contain(|| {
                 let _ = handle.request_update(impact);
             });
         }
-        recovery.finish();
+        failure.resume();
         impact
     }
 
@@ -436,18 +435,18 @@ impl RenderBox for RenderCustomPaint {
     /// so an animation-driven painter repaints without a widget rebuild.
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.render_invalidation_handle = Some(handle);
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         self.painter_listener = Self::subscribe(
             self.painter.as_ref(),
             self.render_invalidation_handle.as_ref(),
-            &mut recovery,
+            &mut failure,
         );
         self.foreground_listener = Self::subscribe(
             self.foreground_painter.as_ref(),
             self.render_invalidation_handle.as_ref(),
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
     }
 
     /// Tears down both repaint subscriptions and drops the self-dirty handle.
@@ -455,10 +454,10 @@ impl RenderBox for RenderCustomPaint {
         self.render_invalidation_handle = None;
         let background = self.painter_listener.take();
         let foreground = self.foreground_listener.take();
-        let mut recovery = PanicRecovery::new();
-        Self::unsubscribe(background, &mut recovery);
-        Self::unsubscribe(foreground, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        Self::unsubscribe(background, &mut failure);
+        Self::unsubscribe(foreground, &mut failure);
+        failure.resume();
     }
 }
 
@@ -469,11 +468,11 @@ impl Drop for RenderCustomPaint {
         let foreground_subscription = self.foreground_listener.take();
         let background = self.painter.take();
         let foreground = self.foreground_painter.take();
-        let mut recovery = PanicRecovery::new();
-        Self::unsubscribe(background_subscription, &mut recovery);
-        Self::unsubscribe(foreground_subscription, &mut recovery);
-        recovery.retire(background);
-        recovery.retire(foreground);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        Self::unsubscribe(background_subscription, &mut failure);
+        Self::unsubscribe(foreground_subscription, &mut failure);
+        failure.retire(background);
+        failure.retire(foreground);
+        failure.resume();
     }
 }

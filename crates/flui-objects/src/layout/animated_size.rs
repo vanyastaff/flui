@@ -48,7 +48,7 @@ use flui_animation::{
     AnimatedValue, AnimatedValueView, Animation, AnimationRunFuture, MotionSpec, Vsync,
     VsyncRegistrationError,
 };
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 
 use crate::layout::shifted_box::AligningShiftedBox;
 use flui_rendering::{
@@ -779,14 +779,14 @@ impl RenderBox for RenderAnimatedSize {
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.detach();
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         self.listener_id = RenderSubscription::subscribe(
             || Some(Rc::new(self.size.view.clone())),
             Some(&handle),
             flui_rendering::RenderUpdateImpact::LAYOUT,
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
 
         // Show a resize that moved while detached, in case the node wasn't
         // marked dirty already.
@@ -805,9 +805,9 @@ impl RenderBox for RenderAnimatedSize {
         // Stopping here would also race a fresh `attach` on a remove+insert
         // reparent.
         if let Some(subscription) = self.listener_id.take() {
-            let mut recovery = PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

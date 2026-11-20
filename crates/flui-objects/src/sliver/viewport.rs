@@ -13,7 +13,7 @@ use flui_foundation::Variable;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_foundation::inspect::{Fields, Inspect, Unit};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_painting::paint::Clip;
 use flui_rendering::constraints::{
     AxisDirection,
@@ -85,12 +85,12 @@ fn offset_relayout_listener(
 fn unregister_offset_listener<O>(
     offset: &O,
     listener: &mut Option<OffsetListener<O>>,
-    recovery: &mut PanicRecovery,
+    failure: &mut FirstPanic,
 ) {
     if let Some(listener) = listener.take() {
         listener.active.set(false);
-        recovery.run(|| (listener.cancel)(offset, &listener.callback));
-        recovery.retire(listener);
+        failure.contain(|| (listener.cancel)(offset, &listener.callback));
+        failure.retire(listener);
     }
 }
 
@@ -99,16 +99,12 @@ fn unregister_offset_listener<O>(
 fn register_offset_listener<O: ViewportOffset>(
     offset: &O,
     handle: LocalRenderInvalidationHandle,
-    recovery: &mut PanicRecovery,
+    failure: &mut FirstPanic,
 ) -> Option<OffsetListener<O>> {
     let active = Rc::new(Cell::new(true));
     let callback = offset_relayout_listener(handle, active.clone());
-    let mut registered = false;
-    recovery.run(|| {
-        offset.add_listener(callback.clone());
-        registered = true;
-    });
-    if registered {
+    let registered = failure.contain(|| offset.add_listener(callback.clone()));
+    if registered.is_some() {
         Some(OffsetListener {
             callback,
             active,
@@ -118,8 +114,8 @@ fn register_offset_listener<O: ViewportOffset>(
         active.set(false);
         // Pointer identity is already a cancellation capability even when
         // admission panics before acknowledging whether it installed it.
-        recovery.run(|| offset.remove_listener(&callback));
-        recovery.retire(callback);
+        failure.contain(|| offset.remove_listener(&callback));
+        failure.retire(callback);
         None
     }
 }
@@ -402,20 +398,20 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
         let outgoing = std::mem::replace(&mut self.offset, offset);
         let mut listener = self.offset_listener.take();
-        let mut recovery = PanicRecovery::new();
-        unregister_offset_listener(&outgoing, &mut listener, &mut recovery);
+        let mut failure = FirstPanic::new();
+        unregister_offset_listener(&outgoing, &mut listener, &mut failure);
         if let Some(handle) = self.render_invalidation_handle.clone() {
-            self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
+            self.offset_listener = register_offset_listener(&self.offset, handle, &mut failure);
         }
-        recovery.retire(outgoing);
-        if recovery.has_failure()
+        failure.retire(outgoing);
+        if failure.is_held()
             && let Some(handle) = &self.render_invalidation_handle
         {
-            recovery.run(|| {
+            failure.contain(|| {
                 let _ = handle.mark_needs_layout();
             });
         }
-        recovery.finish();
+        failure.resume();
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
@@ -1034,9 +1030,9 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
 impl<O> Drop for RenderViewport<O> {
     fn drop(&mut self) {
         self.render_invalidation_handle = None;
-        let mut recovery = PanicRecovery::new();
-        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut failure);
+        failure.resume();
     }
 }
 
@@ -1078,16 +1074,16 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.detach();
         self.render_invalidation_handle = Some(handle.clone());
-        let mut recovery = PanicRecovery::new();
-        self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        self.offset_listener = register_offset_listener(&self.offset, handle, &mut failure);
+        failure.resume();
     }
 
     fn detach(&mut self) {
         self.render_invalidation_handle = None;
-        let mut recovery = PanicRecovery::new();
-        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut failure);
+        failure.resume();
     }
 
     fn perform_layout(
@@ -1389,20 +1385,20 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
         let outgoing = std::mem::replace(&mut self.offset, offset);
         let mut listener = self.offset_listener.take();
-        let mut recovery = PanicRecovery::new();
-        unregister_offset_listener(&outgoing, &mut listener, &mut recovery);
+        let mut failure = FirstPanic::new();
+        unregister_offset_listener(&outgoing, &mut listener, &mut failure);
         if let Some(handle) = self.render_invalidation_handle.clone() {
-            self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
+            self.offset_listener = register_offset_listener(&self.offset, handle, &mut failure);
         }
-        recovery.retire(outgoing);
-        if recovery.has_failure()
+        failure.retire(outgoing);
+        if failure.is_held()
             && let Some(handle) = &self.render_invalidation_handle
         {
-            recovery.run(|| {
+            failure.contain(|| {
                 let _ = handle.mark_needs_layout();
             });
         }
-        recovery.finish();
+        failure.resume();
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
@@ -1832,9 +1828,9 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
 impl<O> Drop for RenderShrinkWrappingViewport<O> {
     fn drop(&mut self) {
         self.render_invalidation_handle = None;
-        let mut recovery = PanicRecovery::new();
-        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut failure);
+        failure.resume();
     }
 }
 
@@ -1877,16 +1873,16 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.detach();
         self.render_invalidation_handle = Some(handle.clone());
-        let mut recovery = PanicRecovery::new();
-        self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        self.offset_listener = register_offset_listener(&self.offset, handle, &mut failure);
+        failure.resume();
     }
 
     fn detach(&mut self) {
         self.render_invalidation_handle = None;
-        let mut recovery = PanicRecovery::new();
-        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut failure);
+        failure.resume();
     }
 
     fn perform_layout(
