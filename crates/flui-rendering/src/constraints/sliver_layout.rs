@@ -33,7 +33,7 @@ pub fn child_paint_offset(
 /// Extends [`child_paint_offset`] with a `cross_axis_offset` argument, placing
 /// the child at `(cross, main)` for a vertical sliver or `(main, cross)` for a
 /// horizontal one.  The `cross_axis_offset` is already in the layout's chosen
-/// direction (forward or mirrored) because `SliverGridLayout::get_cross_axis_offset_of_child`
+/// direction (forward or mirrored) because `SliverGridLayout::cross_axis_offset_of_child`
 /// applies the `reverse_cross_axis` flip before this function is called.
 #[inline]
 pub fn grid_child_paint_offset(

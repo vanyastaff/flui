@@ -669,8 +669,8 @@ struct ShapeRecorder {
 }
 
 impl SliverGridDelegate for ShapeRecorder {
-    fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
-        let layout = self.inner.get_layout(constraints);
+    fn layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+        let layout = self.inner.layout(constraints);
         self.shape.set(Some(GridShape {
             stride: layout.cross_axis_count.max(1),
             main_reversed: constraints.axis_direction.is_reversed(),

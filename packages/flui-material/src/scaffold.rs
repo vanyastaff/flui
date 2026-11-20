@@ -888,7 +888,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         Ok(())
     }
 
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         debug_assert!(
             constraints.has_bounded_width() && constraints.has_bounded_height(),
             "Scaffold requires bounded constraints from its parent — mount it under a \

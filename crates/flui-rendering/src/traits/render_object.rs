@@ -262,7 +262,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// `size` is the node's laid-out paint size in local pixels — for
     /// the box protocol it is `RenderState::geometry` (the box's
     /// `Size`); for the sliver protocol it is the absolute paint size
-    /// (`get_absolute_size(paint_extent)`). The pipeline resolves it
+    /// (`absolute_size(paint_extent)`). The pipeline resolves it
     /// from [`RenderState`](crate::storage::RenderState) — the **sole**
     /// owner of geometry — and hands it in, so paint code reads
     /// `ctx.size()` instead of a per-object `size` field (2B field
@@ -963,26 +963,6 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// implementors keep the box-protocol default.
     fn child_parent_data_type_id(&self) -> TypeId {
         TypeId::of::<crate::parent_data::BoxParentData>()
-    }
-
-    /// Stable static identifier for this render object.
-    ///
-    /// Used by the pipeline owner in error messages (specifically
-    /// [`crate::error::RenderError::Poisoned`]) to identify the offending
-    /// render object without holding a `String` or allocating per call.
-    ///
-    /// The default body monomorphizes per concrete `Self` and returns
-    /// [`core::any::type_name::<Self>()`]. Vtables for `dyn
-    /// RenderObject<P>` carry a pointer to that monomorphized default,
-    /// so calling `obj.debug_name()` through a dyn pointer yields the
-    /// concrete type name. Concrete impls may override to provide a
-    /// shorter / more human-readable name.
-    ///
-    /// Introduced 2026-05-20 alongside the `std::panic::catch_unwind`
-    /// plumbing that turns trait-call panics into `RenderError::Poisoned`
-    /// rather than process aborts.
-    fn debug_name(&self) -> &'static str {
-        core::any::type_name::<Self>()
     }
 
     // ========================================================================

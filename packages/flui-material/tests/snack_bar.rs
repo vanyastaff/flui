@@ -200,7 +200,7 @@ impl StatelessView for HandleProbe {
 /// Mounts `ScaffoldMessenger` over one or more `Scaffold`s (each given an
 /// equal `Expanded` share of the root's height, behind a `HandleProbe`
 /// sibling so the test can drive the shared handle), and returns the
-/// laid-out tree plus the captured handle. Each `Scaffold::get_size`
+/// laid-out tree plus the captured handle. Each `Scaffold::size`
 /// requires BOUNDED constraints from its parent (see `scaffold.rs`'s own
 /// debug assertion) — `Expanded` is what gives every one of several stacked
 /// scaffolds a finite share, rather than each claiming the Column's full

@@ -812,15 +812,11 @@ struct FadingFlow {
 }
 
 impl FlowDelegate for FadingFlow {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 

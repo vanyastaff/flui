@@ -1263,12 +1263,12 @@ The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_se
 
 Isolation is deliberately strict: a panic in `paint_effects` (`PoisonPhase::Paint`) or in `layer_patches_for`'s rebuild (`PoisonPhase::LayerUpdate`) discards the WHOLE frame as `Poisoned` rather than isolating the one node — the dirty queue survives, so the node is retried next frame, but nothing from the poisoned frame reaches the compositor. The trade-off: no partially painted frame is ever presented, at the cost that a node stuck panicking blocks the whole frame from completing until it is replaced or stops panicking.
 
-`RenderObject<P>::debug_name(&self) -> &'static str` is the static identifier embedded in `RenderError::Poisoned`. Its default body monomorphizes per concrete impl via `core::any::type_name::<Self>()`; calling through `&dyn RenderObject<P>` yields the concrete type name because the vtable carries the monomorphized stub.
+`Inspect::kind(&self) -> &'static str`, the supertrait of every render object, is the static identifier embedded in `RenderError::Poisoned`; `RenderNode::kind` forwards it. A type that does not override it gets the last path segment of `core::any::type_name::<Self>()`.
 
 **Alternatives:**
 
 - **Process-wide `panic::set_hook`** -- rejected, leaks pipeline concerns into global process state and can't differentiate phase-of-origin.
-- **Cache `debug_name` on `RenderEntry<P>` at insertion** -- considered. Would avoid one vtable dispatch per error case. Not adopted because the dispatch happens only on the failure path (cold by definition), and the cache adds a `&'static str` field that pollutes every `RenderEntry<P>` in the common case.
+- **Cache `kind` on `RenderEntry<P>` at insertion** -- considered. Would avoid one vtable dispatch per error case. Not adopted because the dispatch happens only on the failure path (cold by definition), and the cache adds a `&'static str` field that pollutes every `RenderEntry<P>` in the common case.
 - **Return `(PipelineOwner<Idle>, RenderError)` tuple on error** (shape (a) in the original design) -- rejected, awkward to compose; pattern-matching on `(_, Result<_>)` is cleaner than splitting the success and error tuples.
 
 **Accepted trade-off:** `AssertUnwindSafe` is documented inline at each wrapper. The render object's internal state may be torn after a panic; the pipeline treats the node as poisoned and lets the caller drop or replace it. Process-level safety is preserved; the render tree itself is not corrupted.

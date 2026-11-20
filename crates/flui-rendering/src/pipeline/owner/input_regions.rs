@@ -108,7 +108,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             is_source || walk.sink.is_empty(),
             "BUG: {} adds input regions but does not declare REPORTS_INPUT_REGIONS, so \
              they are collected only when the walk happens to pass it",
-            node.debug_name(),
+            node.kind(),
         );
         // A move area starts cutting out below it. A caption button or a resize border is
         // chrome of its own: the button that draws it takes its presses through the system,
@@ -195,7 +195,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
     /// Maps the regions `id` just reported into window coordinates.
     fn map_reported_regions(&self, id: RenderId, walk: &mut RegionWalk<'_>) {
-        let reporter = self.render_tree.get(id).map_or("?", RenderNode::debug_name);
+        let reporter = self.render_tree.get(id).map_or("?", RenderNode::kind);
         let Some((transform, clip)) = self.transform_and_clip_to_root(id, walk) else {
             for (kind, rect) in walk.sink.drain() {
                 tracing::warn!(
