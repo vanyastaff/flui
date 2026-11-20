@@ -579,11 +579,9 @@ impl<R: PersistentHeaderRenderObject> ElementBehavior<PersistentHeaderView<R>, V
         let installed = core.pipeline_owner().is_some_and(|pipeline| {
             pipeline.with_mut(|owner| {
                 owner
-                    .render_tree_mut()
-                    .get_mut(render_id)
-                    .and_then(|node| node.downcast_render_object_mut::<R>())
-                    .map(|render_object| {
+                    .update_render_object::<R>(render_id, |render_object| {
                         render_object.install_shrink_cell(Rc::clone(&cell));
+                        flui_rendering::RenderUpdateImpact::NONE
                     })
                     .is_some()
             })

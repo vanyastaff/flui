@@ -1,18 +1,9 @@
 use flui_objects::RenderColoredBox;
-use flui_rendering::{pipeline::PipelineOwner, storage::RenderNode};
+use flui_rendering::{pipeline::PipelineOwner, testing::raw_tree};
 
 fn clear_node_dirty_flags(owner: &mut PipelineOwner, id: flui_foundation::RenderId) {
-    let node = owner.render_tree().get(id).expect("inserted render node");
-    node.clear_needs_paint();
-    node.clear_needs_compositing_bits_update();
-    match owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("inserted render node")
-    {
-        RenderNode::Box(entry) => entry.state().clear_needs_layout(),
-        RenderNode::Sliver(entry) => entry.state().clear_needs_layout(),
-    }
+    assert!(owner.render_tree().contains(id), "inserted render node");
+    raw_tree::clear_dirty_flags(owner, id);
 }
 
 pub(crate) fn pure_reorder_marks_layout_only() {

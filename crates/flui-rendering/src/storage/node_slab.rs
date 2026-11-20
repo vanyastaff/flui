@@ -124,10 +124,6 @@ impl NodeSlab {
         self.len == 0
     }
 
-    pub(super) fn reserve(&mut self, additional: usize) {
-        self.slots.reserve(additional);
-    }
-
     /// The slot `id`'s node occupies, or `None` for a stale id.
     fn resolve(&self, id: RenderId) -> Option<&Slot> {
         self.slots
@@ -195,6 +191,7 @@ impl NodeSlab {
 
     /// Takes every node out, leaving each slot vacant under its next generation or retired, and
     /// returns the nodes for the caller to drop after its own bookkeeping.
+    #[cfg(any(test, feature = "testing"))]
     pub(super) fn take_all(&mut self) -> Vec<RenderNode> {
         let mut nodes = Vec::with_capacity(self.len);
         for index in 0..self.slots.len() {
@@ -244,19 +241,6 @@ impl NodeSlab {
                 SlotState::Vacant { .. } | SlotState::Retired => None,
             }
         })
-    }
-
-    pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = (RenderId, &mut RenderNode)> + '_ {
-        self.slots
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(index, slot)| {
-                let generation = slot.generation;
-                match slot.state.get_mut() {
-                    SlotState::Occupied(node) => Some((id_at(index, generation), node)),
-                    SlotState::Vacant { .. } | SlotState::Retired => None,
-                }
-            })
     }
 
     /// The occupant's parent as the slot header holds it, or `None` for a stale id.

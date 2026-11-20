@@ -194,8 +194,7 @@ pub(crate) fn sliver_hit_direction_matrix_through_box_host() {
             constraints: sliver_hit_constraints(axis, growth),
         }) as BoxedRenderObject);
         let sliver_id = owner
-            .render_tree_mut()
-            .insert_sliver_child(
+            .insert_sliver_child_render_object(
                 host_id,
                 Box::new(MainAxisBandSliver::new(40.0, 0.0, 15.0)) as BoxedSliverObject,
             )

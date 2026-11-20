@@ -90,7 +90,7 @@ impl<P: Protocol> RenderState<P> {
     /// child_state.set_offset(Offset::new(10.0, 20.0));
     /// ```
     #[inline]
-    pub fn set_offset(&self, offset: Offset) {
+    pub(crate) fn set_offset(&self, offset: Offset) {
         self.offset.store(offset);
     }
 
@@ -115,7 +115,7 @@ impl<P: Protocol> RenderState<P> {
     /// the parent's *current* value, so a wrap would have to coincide with a
     /// child untouched for exactly 2^64 of its parent's layouts.
     #[inline]
-    pub fn advance_layout_generation(&self) -> u64 {
+    pub(crate) fn advance_layout_generation(&self) -> u64 {
         let next = self.layout_generation.get().wrapping_add(1);
         self.layout_generation.set(next);
         next
@@ -129,7 +129,7 @@ impl<P: Protocol> RenderState<P> {
     /// times, so a child reparented between two of them would match on the
     /// number alone.
     #[inline]
-    pub fn set_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) {
+    pub(crate) fn set_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) {
         self.placed_generation.set(parent_generation);
         self.placed_by.set(Some(parent));
     }

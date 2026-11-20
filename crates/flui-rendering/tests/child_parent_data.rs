@@ -137,14 +137,9 @@ fn host_over_a_leaf(host: Host) -> (PipelineOwner, RenderId, RenderId) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let host = owner.insert(Box::new(host) as BoxedRenderObject);
     let child = owner
-        .render_tree_mut()
-        .insert_box_child(host, Box::new(Leaf) as BoxedRenderObject)
+        .insert_child_render_object(host, Box::new(Leaf) as BoxedRenderObject)
         .expect("box child");
-    owner
-        .render_tree_mut()
-        .get_mut(child)
-        .expect("just inserted")
-        .set_parent_data(Box::new(BoxParentData::new(SEEDED)));
+    crate::common::seed_parent_data(&mut owner, child, Box::new(BoxParentData::new(SEEDED)));
     owner.set_root_id(Some(host));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
     (owner, host, child)
@@ -188,7 +183,7 @@ fn a_child_keeps_the_parent_data_its_parent_left_it() {
 fn a_child_listed_twice_keeps_what_its_first_slot_wrote() {
     let probe = Host::default();
     let (mut owner, host, child) = host_over_a_leaf(probe.shares());
-    owner.render_tree_mut().append_unlinked_child(host, child);
+    flui_rendering::testing::raw_tree::append_unlinked_child(&mut owner, host, child);
     let mut owner = owner.into_layout();
     owner.run_layout().expect("layout succeeds");
 
@@ -204,10 +199,8 @@ fn a_torn_list_reads_a_copy_of_a_child_it_does_not_own() {
     let inner = Host::default();
     let (mut owner, inner_id, child) = host_over_a_leaf(inner.shares());
     let outer_id = owner.insert(Box::new(outer.shares()) as BoxedRenderObject);
-    owner.render_tree_mut().adopt_child(outer_id, inner_id);
-    owner
-        .render_tree_mut()
-        .append_unlinked_child(outer_id, child);
+    owner.adopt_render_child(outer_id, inner_id);
+    flui_rendering::testing::raw_tree::append_unlinked_child(&mut owner, outer_id, child);
     owner.set_root_id(Some(outer_id));
     let mut owner = owner.into_layout();
     owner.run_layout().expect("layout succeeds");
@@ -260,8 +253,7 @@ fn a_sliver_list_child_keeps_the_layout_offset_its_list_wrote() {
         constraints: vertical_constraints(0.0),
     }) as BoxedRenderObject);
     let list = owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             host,
             Box::new(RenderSliverFixedExtentList::new(item_extent, 3)) as BoxedSliverObject,
         )
@@ -269,14 +261,13 @@ fn a_sliver_list_child_keeps_the_layout_offset_its_list_wrote() {
     let children: Vec<RenderId> = (0..3)
         .map(|index| {
             let child = owner
-                .render_tree_mut()
-                .insert_box_child(list, Box::new(Leaf) as BoxedRenderObject)
+                .insert_child_render_object(list, Box::new(Leaf) as BoxedRenderObject)
                 .expect("box child");
-            owner
-                .render_tree_mut()
-                .get_mut(child)
-                .expect("just inserted")
-                .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(index)));
+            crate::common::seed_parent_data(
+                &mut owner,
+                child,
+                Box::new(SliverMultiBoxAdaptorParentData::new(index)),
+            );
             child
         })
         .collect();

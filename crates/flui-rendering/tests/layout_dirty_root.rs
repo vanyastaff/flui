@@ -83,28 +83,27 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
     // the slab (without removing the link from Padding.children()) —
     // simulates a torn tree state where parent.children() contains a
     // stale id.
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
-        .expect("child insert must succeed");
+    let padding_id = flui_rendering::testing::raw_tree::insert_box(
+        &mut pipeline,
+        Box::new(RenderPadding::all(5.0)),
+    );
+    let child_id = flui_rendering::testing::raw_tree::insert_box_child(
+        &mut pipeline,
+        padding_id,
+        Box::new(RenderColoredBox::red(20.0, 20.0)),
+    )
+    .expect("child insert must succeed");
 
     // Remove the child node from the slab WITHOUT updating the
     // parent's children list — this synthesises the stale-id condition.
     // (In production this shouldn't happen; the test deliberately
     // constructs it.)
-    pipeline
-        .render_tree_mut()
-        .remove_shallow(child_id)
+    flui_rendering::testing::raw_tree::remove_shallow(&mut pipeline, child_id)
         .expect("shallow remove must succeed");
     // remove_shallow also strips the child from parent.children() per
     // its impl, so we have to re-add it manually to simulate the stale
     // link.
-    pipeline
-        .render_tree_mut()
-        .append_unlinked_child(padding_id, child_id);
+    flui_rendering::testing::raw_tree::append_unlinked_child(&mut pipeline, padding_id, child_id);
 
     let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(padding_id, constraints);
@@ -428,7 +427,8 @@ pub(crate) fn a_moved_node_marks_its_new_ancestors() {
 
     // Settles the path leaf → moved → donor → root.
     owner.mark_needs_layout(leaf);
-    let update = owner.render_tree_mut().set_children(destination, &[moved]);
+    // Raw, so that the only mark the new parent can get is the moved node's own.
+    let update = flui_rendering::testing::raw_tree::set_children(&mut owner, destination, &[moved]);
     assert!(update.membership_changed);
     assert_eq!(update.donors, [donor]);
     assert_eq!(owner.render_tree().children(donor), &[]);

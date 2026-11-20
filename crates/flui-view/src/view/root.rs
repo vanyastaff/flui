@@ -282,11 +282,11 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
             // Update configuration if size changed
             if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
             {
-                // Mutable access to the render object goes through
-                // `&mut RenderTree` (`render_tree_mut().get_mut`) rather than
-                // acquiring a per-node lock guard. The owner itself is
-                // reached through `PipelineCell::with_mut`'s closure-scoped
-                // checkout (owner-local, not a shared-infrastructure lock).
+                // The render object is updated through the owner
+                // (`update_render_object`) rather than a per-node lock guard.
+                // The owner itself is reached through `PipelineCell::with_mut`'s
+                // closure-scoped checkout (owner-local, not a
+                // shared-infrastructure lock).
                 pipeline_owner.with_mut(|owner| {
                     // Read the owner's real DPR before re-deriving the config —
                     // `mount` sources the DPR the same way (`device_pixel_ratio()`).
@@ -295,19 +295,15 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
                     // since the config `mount` built with the real DPR would be
                     // silently overwritten by this one.
                     let dpr = owner.device_pixel_ratio().get();
-                    if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
-                        // RenderView uses BoxProtocol
-                        let render_object = node.box_render_object_mut();
-                        if let Some(render_view) = render_object
-                            .as_any_mut()
-                            .downcast_mut::<RenderViewObject>()
-                        {
-                            let (width, height) = self.view.size;
-                            let logical_size = Size::new(width, height);
-                            let config = ViewConfiguration::from_size(logical_size, dpr);
+                    let (width, height) = self.view.size;
+                    let config = ViewConfiguration::from_size(Size::new(width, height), dpr);
+                    // The configuration is installed without an impact: the
+                    // update marks nothing.
+                    let _ =
+                        owner.update_render_object::<RenderViewObject>(render_id, |render_view| {
                             render_view.set_configuration(config);
-                        }
-                    }
+                            flui_rendering::RenderUpdateImpact::NONE
+                        });
                 });
             }
         }
@@ -397,7 +393,7 @@ impl<V: View + Clone + 'static> RenderTreeRootElement for RootRenderElement<V> {
     // Attach / detach to the PipelineOwner is handled inline in `mount()`
     // and `unmount()` above (see lines ~180-220): mount inserts the
     // `RenderView` via `RenderViewAdapter` into
-    // `pipeline_owner.render_tree_mut()`, calls `set_root_id`, and
+    // the render tree (`PipelineOwner::insert_render_node`), calls `set_root_id`, and
     // requests a visual update; unmount inverts that sequence. The
     // pre-Mythos `attach_to_pipeline_owner` / `detach_from_pipeline_owner`
     // trait stubs were removed during the framework spine repair because

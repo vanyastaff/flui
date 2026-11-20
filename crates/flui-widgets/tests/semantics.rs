@@ -1828,13 +1828,9 @@ fn mounted_configuration(laid: &LaidOut) -> flui_rendering::semantics::Semantics
     let [id] = laid.find_semantics_wrappers()[..] else {
         panic!("one Semantics wrapper is mounted");
     };
-    laid.pipeline_owner().with_mut(|owner| {
+    laid.pipeline_owner().with(|owner| {
         owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| {
-                node.downcast_render_object_mut::<flui_objects::RenderSemanticsAnnotations>()
-            })
+            .render_object::<flui_objects::RenderSemanticsAnnotations>(id)
             .map(|render| render.configuration().clone())
             .expect("the wrapper is a RenderSemanticsAnnotations")
     })

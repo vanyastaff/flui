@@ -19,7 +19,7 @@ impl<P: Protocol> RenderState<P> {
     /// This provides direct access to the flags for callers that need
     /// fine-grained control over flag operations.
     #[inline]
-    pub fn flags(&self) -> &RenderFlagsCell {
+    pub(crate) fn flags(&self) -> &RenderFlagsCell {
         &self.flags
     }
 
@@ -80,7 +80,7 @@ impl<P: Protocol> RenderState<P> {
     /// assert!(state.needs_layout());
     /// ```
     #[inline]
-    pub fn mark_needs_layout(&self) {
+    pub(crate) fn mark_needs_layout(&self) {
         self.flags.mark_needs_layout();
     }
 
@@ -94,7 +94,7 @@ impl<P: Protocol> RenderState<P> {
     /// Only call this after layout succeeds. Clearing prematurely
     /// will cause incorrect rendering.
     #[inline]
-    pub fn clear_needs_layout(&self) {
+    pub(crate) fn clear_needs_layout(&self) {
         self.flags.remove(RenderFlags::NEEDS_LAYOUT);
     }
 
@@ -107,7 +107,7 @@ impl<P: Protocol> RenderState<P> {
     /// Only call this after paint succeeds. Clearing prematurely
     /// will cause visual artifacts.
     #[inline]
-    pub fn clear_needs_paint(&self) {
+    pub(crate) fn clear_needs_paint(&self) {
         self.flags.remove(RenderFlags::NEEDS_PAINT);
     }
 
@@ -116,15 +116,9 @@ impl<P: Protocol> RenderState<P> {
     /// Cleared wherever [`Self::clear_needs_paint`] is: a repaint rebuilds the
     /// layer from current properties anyway, so it subsumes the update.
     #[inline]
-    pub fn clear_needs_composited_layer_update(&self) {
+    pub(crate) fn clear_needs_composited_layer_update(&self) {
         self.flags
             .remove(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
-    }
-
-    /// Clears the compositing dirty flag.
-    #[inline]
-    pub fn clear_needs_compositing(&self) {
-        self.flags.remove(RenderFlags::NEEDS_COMPOSITING);
     }
 }
 
@@ -173,7 +167,7 @@ impl<P: Protocol> RenderState<P> {
     /// Records whether the pass that just committed this node's geometry read
     /// a stand-in (see [`RenderFlags::GEOMETRY_DEGRADED`]).
     #[inline]
-    pub fn set_geometry_degraded(&self, degraded: bool) {
+    pub(crate) fn set_geometry_degraded(&self, degraded: bool) {
         self.flags.set_geometry_degraded(degraded);
     }
 
@@ -186,28 +180,11 @@ impl<P: Protocol> RenderState<P> {
     /// state.set_relayout_boundary(true);
     /// ```
     #[inline]
-    pub fn set_relayout_boundary(&self, is_boundary: bool) {
+    pub(crate) fn set_relayout_boundary(&self, is_boundary: bool) {
         if is_boundary {
             self.flags.set(RenderFlags::IS_RELAYOUT_BOUNDARY);
         } else {
             self.flags.remove(RenderFlags::IS_RELAYOUT_BOUNDARY);
-        }
-    }
-
-    /// Sets whether this render object is a repaint boundary.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Make this a repaint boundary to isolate paint changes
-    /// state.set_repaint_boundary(true);
-    /// ```
-    #[inline]
-    pub fn set_repaint_boundary(&self, is_boundary: bool) {
-        if is_boundary {
-            self.flags.set(RenderFlags::IS_REPAINT_BOUNDARY);
-        } else {
-            self.flags.remove(RenderFlags::IS_REPAINT_BOUNDARY);
         }
     }
 
@@ -222,11 +199,5 @@ impl<P: Protocol> RenderState<P> {
     #[inline]
     pub fn was_repaint_boundary(&self) -> bool {
         self.flags.was_repaint_boundary()
-    }
-
-    /// Sets the previous-frame `IS_REPAINT_BOUNDARY` value.
-    #[inline]
-    pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
-        self.flags.set_was_repaint_boundary(was_boundary);
     }
 }

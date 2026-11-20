@@ -41,14 +41,17 @@ use crate::common::fresh_layout_pipeline;
 /// for their declared first child, so the cycle is reachable.
 pub(crate) fn callback_reentry_poisons_structural_cycle() {
     let mut pipeline = fresh_layout_pipeline();
-    let p1 = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let p2 = pipeline
-        .render_tree_mut()
-        .insert_box_child(p1, Box::new(RenderPadding::all(2.0)))
-        .expect("p2 insert");
-    pipeline.render_tree_mut().append_unlinked_child(p2, p1);
+    let p1 = flui_rendering::testing::raw_tree::insert_box(
+        &mut pipeline,
+        Box::new(RenderPadding::all(5.0)),
+    );
+    let p2 = flui_rendering::testing::raw_tree::insert_box_child(
+        &mut pipeline,
+        p1,
+        Box::new(RenderPadding::all(2.0)),
+    )
+    .expect("p2 insert");
+    flui_rendering::testing::raw_tree::append_unlinked_child(&mut pipeline, p2, p1);
 
     let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     // P1.perform_layout → layout_child(0) → recurses into P2.
@@ -147,13 +150,16 @@ pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
     }
 
     let mut pipeline = fresh_layout_pipeline();
-    let parent_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(PanicOnceWidget::default()));
-    let _child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(parent_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
-        .expect("child insert");
+    let parent_id = flui_rendering::testing::raw_tree::insert_box(
+        &mut pipeline,
+        Box::new(PanicOnceWidget::default()),
+    );
+    let _child_id = flui_rendering::testing::raw_tree::insert_box_child(
+        &mut pipeline,
+        parent_id,
+        Box::new(RenderColoredBox::red(20.0, 20.0)),
+    )
+    .expect("child insert");
 
     let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
 

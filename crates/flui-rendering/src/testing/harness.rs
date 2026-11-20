@@ -27,7 +27,6 @@ use crate::{
     constraints::BoxConstraints,
     error::RenderError,
     pipeline::{Compositing, Idle, Layout, PaintPhase, PipelineOwner, Semantics},
-    storage::RenderNode,
     testing::{
         inspect::{self, Probe},
         report::FrameReport,
@@ -61,32 +60,22 @@ pub fn edit_render_object<T: 'static, P: crate::pipeline::PipelinePhase, R>(
     id: RenderId,
     edit: impl FnOnce(&mut T) -> R,
 ) -> R {
-    let node = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("render id must be live");
-    match node {
-        RenderNode::Box(entry) => edit(
-            entry
-                .render_object_mut()
-                .as_any_mut()
-                .downcast_mut::<T>()
-                .expect("render object is not of the requested type"),
-        ),
-        RenderNode::Sliver(entry) => edit(
-            entry
-                .render_object_mut()
-                .as_any_mut()
-                .downcast_mut::<T>()
-                .expect("render object is not of the requested type"),
-        ),
-    }
+    let mut output = None;
+    let found = owner.update_render_object::<T>(id, |render_object| {
+        output = Some(edit(render_object));
+        crate::RenderUpdateImpact::NONE
+    });
+    assert!(
+        found.is_some(),
+        "render id must be live and hold the requested render object type"
+    );
+    output.expect("BUG: update_render_object ran the edit when it found the object")
 }
 
 /// Downcasts the render object at `id` to `T`, runs `update`, and applies the
 /// [`RenderUpdateImpact`](crate::RenderUpdateImpact) it reports — the same
 /// setter-then-apply seam a widget rebuild drives
-/// (`PipelineOwner::apply_render_update_impact`).
+/// ([`PipelineOwner::update_render_object`], which this unwraps).
 ///
 /// Dispatches on the node's Box/Sliver protocol; `T` must match the concrete
 /// type stored at `id`.
@@ -97,8 +86,11 @@ pub fn update_render_object<T: 'static, P: crate::pipeline::PipelinePhase>(
     id: RenderId,
     update: impl FnOnce(&mut T) -> crate::RenderUpdateImpact,
 ) {
-    let impact = edit_render_object(owner, id, update);
-    owner.apply_render_update_impact(id, impact);
+    let found = owner.update_render_object::<T>(id, update);
+    assert!(
+        found.is_some(),
+        "render id must be live and hold the requested render object type"
+    );
 }
 
 /// A configured-but-not-yet-run render-object test.

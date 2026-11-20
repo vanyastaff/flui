@@ -430,12 +430,11 @@ fn rejected_text_scale_recovers(scale: f64) {
     result.expect("the initial text frame succeeds");
     let committed = inspect::box_geometry(&owner, root).expect("committed root size");
 
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(scale),
     );
-    owner.apply_render_update_impact(paragraph, impact);
 
     let queries = [
         owner
@@ -474,12 +473,11 @@ fn rejected_text_scale_recovers(scale: f64) {
         assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
     }
 
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (owner, result) = scene.run_frame(owner);
     result.expect("corrected text succeeds in the existing tree");
     assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
@@ -533,12 +531,11 @@ fn rejected_viewport_text_preserves_committed_metrics(shrink_wrap: bool) {
     };
     let committed = metrics(&owner);
     assert!(committed.0 > 0.0, "real text contributes a scroll extent");
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = scene.run_frame(owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
@@ -549,12 +546,11 @@ fn rejected_viewport_text_preserves_committed_metrics(shrink_wrap: bool) {
         committed,
         "a rejected pass publishes no metrics"
     );
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (owner, result) = scene.run_frame(owner);
     result.expect("corrected text recovers in the mounted viewport");
     assert_eq!(metrics(&owner), committed);
@@ -593,12 +589,11 @@ fn rejected_root_text_preserves_the_published_view_size() {
     let committed = published_size(&owner);
     let resized = Size::new(600.0, 500.0);
     owner.set_root_constraints(Some(BoxConstraints::tight(resized)));
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = scene.run_frame(owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
@@ -606,12 +601,11 @@ fn rejected_root_text_preserves_the_published_view_size() {
     ));
     assert_eq!(published_size(&owner), committed);
     assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (owner, result) = scene.run_frame(owner);
     result.expect("corrected text completes the pending resize");
     assert_eq!(published_size(&owner), resized);
@@ -659,12 +653,11 @@ fn page_resize_survives_text_failure(resize_cross_axis: bool) {
     assert_eq!(committed.viewport_dimension, 400.0);
     let width = if resize_cross_axis { 500.0 } else { 400.0 };
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, 600.0))));
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = scene.run_frame(owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
@@ -685,12 +678,11 @@ fn page_resize_survives_text_failure(resize_cross_axis: bool) {
         },
         "only a successful viewport layout publishes content dimensions"
     );
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (_, result) = scene.run_frame(owner);
     result.expect("valid text completes the pending page resize");
     assert_eq!(position.viewport_dimension(), 600.0);
@@ -739,12 +731,11 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     let mut scene = SceneHost::new();
     let (mut owner, result) = scene.run_frame(owner);
     result.expect("initial text lays out");
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(2.0),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = scene.run_frame(owner);
     result.expect("larger text lays out and starts a resize");
     let committed = inspect::box_geometry(&owner, root);
@@ -752,12 +743,11 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     driver.tick_all(&clock.frame(Duration::from_millis(20)));
     assert!(driver.vsync().has_running(), "the resize run is in flight");
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (mut owner, result) = scene.run_frame(owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
@@ -769,12 +759,11 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
         driver.vsync().has_running(),
         "rejected child layout cannot stop accepted animation"
     );
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (owner, result) = scene.run_frame(owner);
     result.expect("valid text accepts the tight size");
     assert_eq!(
@@ -1467,12 +1456,11 @@ fn text_failure_retains_independent_pending_layout() {
     let (mut owner, result) = scene.run_frame(owner);
     result.expect("both independent boundaries lay out");
     assert_eq!(position.max_scroll_extent(), 900.0);
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
         &mut owner,
         content,
@@ -1493,12 +1481,11 @@ fn text_failure_retains_independent_pending_layout() {
         900.0,
         "later boundary has not run yet"
     );
-    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    owner.apply_render_update_impact(paragraph, impact);
     let (_, result) = scene.run_frame(owner);
     result.expect("correcting only the first boundary resumes the accepted tail");
     assert_eq!(

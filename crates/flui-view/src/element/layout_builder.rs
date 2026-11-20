@@ -305,11 +305,9 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
         };
 
         let cell = core.pipeline_owner().and_then(|pipeline| {
-            pipeline.with_mut(|owner| {
+            pipeline.with(|owner| {
                 owner
-                    .render_tree_mut()
-                    .get_mut(render_id)
-                    .and_then(|node| node.downcast_render_object_mut::<RenderLayoutBuilder>())
+                    .render_object::<RenderLayoutBuilder>(render_id)
                     .map(|render_object| Rc::clone(render_object.cell()))
             })
         });

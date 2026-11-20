@@ -68,18 +68,9 @@ fn mount(opacity: f64) -> (PipelineOwner, flui_foundation::RenderId) {
 }
 
 fn set_opacity(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f64) {
-    let impact = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("opacity node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderOpacity>()
-        .expect("RenderOpacity")
-        .set_opacity(value);
-    owner.apply_render_update_impact(id, impact);
+    let updated =
+        owner.update_render_object::<RenderOpacity>(id, |opacity| opacity.set_opacity(value));
+    assert!(updated.is_some(), "opacity node is a RenderOpacity");
 }
 
 /// Rasterize the second frame after changing the opacity to `value`.
@@ -191,18 +182,9 @@ fn mount_transform(seed: Matrix4) -> (PipelineOwner, flui_foundation::RenderId) 
 }
 
 fn set_transform(owner: &mut PipelineOwner, id: flui_foundation::RenderId, matrix: Matrix4) {
-    let impact = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("transform node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderTransform>()
-        .expect("RenderTransform")
-        .set_transform(matrix);
-    owner.apply_render_update_impact(id, impact);
+    let updated = owner
+        .update_render_object::<RenderTransform>(id, |transform| transform.set_transform(matrix));
+    assert!(updated.is_some(), "transform node is a RenderTransform");
 }
 
 /// Rasterize the second frame after changing the matrix to `matrix`.
@@ -320,18 +302,10 @@ fn mount_clip_rrect(radius: f64) -> (PipelineOwner, flui_foundation::RenderId) {
 }
 
 fn set_border_radius(owner: &mut PipelineOwner, id: flui_foundation::RenderId, radius: f64) {
-    let impact = owner
-        .render_tree_mut()
-        .get_mut(id)
-        .expect("clip node")
-        .as_box_mut()
-        .expect("box entry")
-        .render_object_mut()
-        .as_any_mut()
-        .downcast_mut::<RenderClipRRect>()
-        .expect("RenderClipRRect")
-        .set_border_radius(Some(BorderRadius::circular(radius)));
-    owner.apply_render_update_impact(id, impact);
+    let updated = owner.update_render_object::<RenderClipRRect>(id, |clip| {
+        clip.set_border_radius(Some(BorderRadius::circular(radius)))
+    });
+    assert!(updated.is_some(), "clip node is a RenderClipRRect");
 }
 
 /// Rasterize the second frame after changing the border radius to `radius`.

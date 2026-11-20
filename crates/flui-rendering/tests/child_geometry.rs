@@ -83,8 +83,7 @@ fn a_child_has_a_size_once_this_pass_lays_it_out() {
     }) as BoxedRenderObject);
     for _ in 0..2 {
         owner
-            .render_tree_mut()
-            .insert_box_child(host, Box::new(Leaf) as BoxedRenderObject)
+            .insert_child_render_object(host, Box::new(Leaf) as BoxedRenderObject)
             .expect("box child");
     }
     let mut owner = crate::common::laid_out_tight_300x100(owner, host);
