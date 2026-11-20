@@ -19,7 +19,10 @@
 
 mod handle;
 mod routable;
-#[expect(clippy::module_inception)]
+#[expect(
+    clippy::module_inception,
+    reason = "`router::router` follows the one-type family module naming of the catalog"
+)]
 mod router;
 
 /// The helpers `#[derive(Routable)]` generates calls to: no semver

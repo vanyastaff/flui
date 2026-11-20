@@ -856,7 +856,10 @@ fn header_cell(
 /// start-aligned otherwise, at the resolved data text style and row height
 /// range, wrapped in an [`InkWell`] when the cell or its row is tappable
 /// (edit-icon/placeholder omitted — see the module docs).
-#[expect(clippy::too_many_arguments)] // per-cell parameter list; a patch struct would only relocate this
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the per-cell parameters are independent resolved values; a patch struct would only relocate the list"
+)]
 fn data_cell(
     cell: &DataCell,
     numeric: bool,

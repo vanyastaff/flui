@@ -271,7 +271,13 @@ impl ChangeNotifier {
             // `panic!` above diverges; the attribute below documents that. In release the
             // `panic!` is compiled out, the block IS reachable, and no lint
             // fires — hence `cfg_attr`, not a bare `expect`.
-            #[cfg_attr(debug_assertions, expect(unreachable_code))]
+            #[cfg_attr(
+                debug_assertions,
+                expect(
+                    unreachable_code,
+                    reason = "the `panic!` above diverges in debug builds; the release-only block is reachable"
+                )
+            )]
             {
                 tracing::warn!(target: "flui.notifier", "ChangeNotifier used after dispose");
                 return true;

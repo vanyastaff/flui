@@ -36,7 +36,10 @@
 // The content view is reached through its raw AppKit pointer, and the
 // capability that reaches it is shared across threads: the module is one of
 // the crate's `unsafe` islands, opted out at its boundary.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the content view is reached through its raw AppKit pointer, and the capability that reaches it is shared across threads"
+)]
 
 use std::rc::Rc;
 

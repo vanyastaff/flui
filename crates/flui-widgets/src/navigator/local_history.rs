@@ -34,14 +34,10 @@
 //! exactly the `EntryInner → closure → state → handle → EntryInner` cycle Rust
 //! would leak forever (ADR-0025).
 
-// The mechanism ships without a public surface: the module is `pub(crate)`,
-// its handles are nameable outside the crate only through the doc-hidden,
-// temporary `__test_access` (ADR-0083 §4), and its only producers are the
-// tests until the public surface lands beside the first
-// Catalog consumer (ADR-0025) — the seam-before-consumer shape
-// `hero_controller.rs` documents. Deleting and re-deriving later is how a
-// seam stops matching the ADR that specified it.
-#![expect(dead_code)]
+#![expect(
+    dead_code,
+    reason = "the module is `pub(crate)` with no production producer: its handles are reachable outside the crate only through the doc-hidden `__test_access` (ADR-0083 §4), and tests construct them (ADR-0025)"
+)]
 
 use std::cell::Cell;
 use std::rc::{Rc, Weak};

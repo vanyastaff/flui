@@ -39,10 +39,10 @@
 //! the clear are one step, so a copy another process makes can land only
 //! before the check, which then sees it, or after the clear.
 
-// This module calls the operating system directly, which has no safe wrapper:
-// the workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "calls the operating system directly, which has no safe wrapper"
+)]
 
 use std::mem::ManuallyDrop;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};

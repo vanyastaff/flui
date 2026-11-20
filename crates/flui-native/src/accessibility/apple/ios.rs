@@ -24,10 +24,10 @@
 //! and the hit element come back as autoreleased object pointers, and a
 //! point crosses as its two coordinates.
 
-// This module calls the operating system directly, which has no safe wrapper:
-// the workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "calls the operating system directly, which has no safe wrapper"
+)]
 
 use std::ffi::c_void;
 use std::rc::Rc;

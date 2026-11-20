@@ -67,7 +67,10 @@ fn scissor_covers_clip(run: &DrawRun) -> bool {
 
 // Ordered replay over immutable typed arena slices.
 impl super::GpuReplay {
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, queue, pipelines, resources and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     pub(crate) fn flush_segment(
         &mut self,
         segment: &DrawSegment,
@@ -521,7 +524,10 @@ impl super::GpuReplay {
         }
     }
 
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the pass and the replay state are `&mut` borrows disjoint from `self`, and pipelines and stops are separate shared borrows"
+    )]
     fn replay_gradient_run(
         &self,
         segment: &DrawSegment,

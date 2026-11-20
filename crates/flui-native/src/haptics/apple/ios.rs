@@ -14,10 +14,10 @@
 //! which restarts the engine; a pattern requested while it is down plays its
 //! tier-1 fallback. Hardware without Core Haptics falls every pattern back.
 
-// This module calls the operating system directly, which has no safe wrapper:
-// the workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "calls the operating system directly, which has no safe wrapper"
+)]
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -32,7 +32,7 @@ fn record() {
 
 // SAFETY: every operation delegates the caller's original pointer, layout and
 // requested size to System; recording does not allocate or retain any pointer.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "a counting `GlobalAlloc` is an unsafe impl")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record();

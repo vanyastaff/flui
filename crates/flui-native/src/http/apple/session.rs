@@ -5,7 +5,10 @@
 // which has no safe wrapper: the workspace lint `unsafe_code = "warn"` is
 // opted out here, at the module boundary, rather than for the whole crate (see
 // `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "subclassing `NSObject` and handing the subclass to the session has no safe wrapper"
+)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

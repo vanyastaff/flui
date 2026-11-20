@@ -56,15 +56,13 @@
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
-// The types (ADR-0076) and the mutation surface the navigator needs
-// (ADR-0076) are public. The rest -- `insert_all`, `entry_ids`, the
-// builder-form constructors, `OverlayScope`, the `Theater` machinery -- stays
-// `pub(crate)`: `Navigator` and `Draggable`'s feedback layer are its only
-// callers.
-//
-// The `navigator` module needs no such allow: every item there has a production
-// caller, a `#[cfg(test)]`, or a `crate::__test_access` re-export (ADR-0083 §4).
-#![expect(dead_code)]
+// The types (ADR-0076) and the mutation surface the navigator needs are public;
+// `navigator` needs no such exception, since every item there has a production
+// caller, a `#[cfg(test)]` or a `crate::__test_access` re-export (ADR-0083 §4).
+#![expect(
+    dead_code,
+    reason = "overlay items that only tests reach (`insert_all`, `entry_ids`, builder-form constructors, parts of `OverlayScope` and the `Theater` machinery) are dead in the lib target"
+)]
 
 mod entry;
 mod theater;

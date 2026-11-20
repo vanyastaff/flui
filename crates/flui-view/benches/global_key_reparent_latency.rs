@@ -6,9 +6,6 @@
 //! order at the build boundary. Fixture construction is outside the timed
 //! closure.
 
-// Bench harness, not public API; `criterion_group!` generates the entry point.
-#![allow(missing_docs)]
-
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::{ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;

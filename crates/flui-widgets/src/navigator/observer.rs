@@ -59,7 +59,10 @@ use super::route::RouteId;
 /// They are route-internal — they drive secondary animations, which no observer
 /// surface exposes — so an observer sees a strictly more settled stack, never a
 /// different one.
-#[expect(unused_variables)]
+#[expect(
+    unused_variables,
+    reason = "every callback has a no-op default body that ignores its arguments; their names document the signature an override receives"
+)]
 pub trait NavigatorObserver {
     /// This observer was registered on a navigator that is now mounted.
     ///

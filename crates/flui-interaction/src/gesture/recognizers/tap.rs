@@ -76,7 +76,10 @@ pub struct TapDetails {
 }
 
 #[derive(Default)]
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields are named after the callbacks they hold, so each keeps its `on_*` name"
+)]
 struct TapCallbacks {
     on_tap_down: Option<TapDownCallback>,
     on_tap_move: Option<TapCallback>,

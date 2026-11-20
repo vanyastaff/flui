@@ -17,7 +17,10 @@
 //! | [`Angle`] | plane angle in radians; whole turns are kept |
 
 // Math-crate idiom: single-letter coordinate names are the domain's vocabulary.
-#![expect(clippy::many_single_char_names)]
+#![expect(
+    clippy::many_single_char_names,
+    reason = "single-letter coordinate names are the geometry domain's vocabulary"
+)]
 // The crate root re-enables all of `clippy::pedantic`; value types follow the workspace's
 // relaxations instead: exact float comparison is how the tests pin results, and builder-style
 // value methods are pure by construction.

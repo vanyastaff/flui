@@ -44,10 +44,10 @@ app_plugin!(FixtureRoot);
 static TICK: AtomicU32 = AtomicU32::new(0);
 
 /// Increment and return this image's tick counter.
-// This IS the crate's whole point (a symbol `reload_lifecycle.rs` resolves
-// via `dlsym` after each dlopen) — the crate-type is `cdylib` specifically
-// to export it.
-#[expect(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "`#[unsafe(no_mangle)]` exports the symbol the lifecycle test resolves with `dlsym`"
+)]
 #[unsafe(no_mangle)]
 pub extern "C" fn fixture_tick() -> u32 {
     TICK.fetch_add(1, Ordering::SeqCst) + 1

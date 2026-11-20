@@ -8,10 +8,10 @@
 //! floor, so no gate is needed. The text DirectWrite reads is handed over
 //! through an `IDWriteTextAnalysisSource` of FLUI's.
 
-// This module calls the operating system directly, which has no safe wrapper:
-// the workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "calls the operating system directly, which has no safe wrapper"
+)]
 
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt as _;

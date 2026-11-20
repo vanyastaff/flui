@@ -17,7 +17,10 @@
 //! ([`AppKitPreferences`]).
 
 // The notification-name constants are AppKit's and Foundation's statics.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the notification-name constants are AppKit's and Foundation's statics, which are read through `unsafe`"
+)]
 
 use std::{
     sync::{Arc, Weak},
