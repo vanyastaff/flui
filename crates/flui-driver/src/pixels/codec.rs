@@ -78,26 +78,18 @@ pub(crate) fn decode(bytes: &[u8]) -> std::result::Result<Image, String> {
     let mut reader = decoder
         .read_info()
         .map_err(|error| format!("not a PNG: {error}"))?;
+    // The size the header declares, in the output format the transformations give: what the
+    // pixels would take, read before any of them is decoded.
     let (width, height) = (reader.info().width, reader.info().height);
-    let declared = u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|pixels| pixels.checked_mul(4));
-    let fits = declared
-        .and_then(|declared| usize::try_from(declared).ok())
-        .is_some_and(|declared| declared <= MAX_DECODED_BYTES);
-    if !fits {
-        return Err(format!(
-            "a {width} x {height} image, past the {MAX_DECODED_BYTES} pixel bytes a PNG may decode to"
-        ));
-    }
     let size = reader
         .output_buffer_size()
-        .ok_or_else(|| format!("a {width} x {height} image does not fit in memory"))?;
-    if size > MAX_DECODED_BYTES {
-        return Err(format!(
-            "it decodes to {size} bytes, past the {MAX_DECODED_BYTES} a PNG may"
-        ));
-    }
+        .filter(|size| *size <= MAX_DECODED_BYTES)
+        .ok_or_else(|| {
+            format!(
+                "a {width} x {height} image, past the {MAX_DECODED_BYTES} pixel bytes a PNG may \
+                 decode to"
+            )
+        })?;
     let mut pixels = vec![0_u8; size];
     let frame = reader
         .next_frame(&mut pixels)

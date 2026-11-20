@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use flui_driver::protocol::input::{ActionSequence, InputSource};
 use flui_driver::protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES, MAX_ROWS};
 use flui_driver::trace::{self, GapReason, Row, Trace, TraceOptions, native};
 use flui_driver::{Driver, Error, Launch, Locator, Report};
@@ -102,6 +103,26 @@ fn native_recordings_are_read_from_the_index_under_their_one_name() {
         &[("0.jsonl", ONE_ROW)],
     ));
     assert!(twice.contains("named twice"), "{twice}");
+    // At the bounds, both are still read.
+    let at_bound: Vec<String> = (0..trace::MAX_NATIVE_STREAMS)
+        .map(|stream| format!("{{\"stream\":{stream}}}"))
+        .collect();
+    read(
+        "at_bound",
+        &format!("{{\"streams\":[{}]}}", at_bound.join(",")),
+        &[],
+    )
+    .expect("as many streams as the bound");
+    let empty = "{\"streams\":[],\"pad\":\"\"}";
+    let full = format!(
+        "{{\"streams\":[],\"pad\":\"{}\"}}",
+        "x".repeat(usize::try_from(trace::MAX_NATIVE_INDEX_BYTES).expect("small") - empty.len())
+    );
+    assert_eq!(
+        u64::try_from(full.len()).expect("small"),
+        trace::MAX_NATIVE_INDEX_BYTES
+    );
+    read("full", &full, &[]).expect("an index as long as the bound");
     let many: Vec<String> = (0..=trace::MAX_NATIVE_STREAMS)
         .map(|stream| format!("{{\"stream\":{stream}}}"))
         .collect();
@@ -214,6 +235,7 @@ fn a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction() {
         .locate(Locator::named("Increment"))
         .type_text("hunter2")
         .expect("typed");
+    driver.windows().expect("a command after the typing");
     driver.finish_trace(&mut Report::new()).expect("finished");
     let trace = Trace::open(&dir).expect("it reads");
     let typed = trace
@@ -237,6 +259,25 @@ fn a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction() {
         "nothing after the refusal is sent"
     );
     assert!(!report.matched());
+
+    // Text redacted inside a list (an input sequence's text source) is refused the same way.
+    let dir = root.path().join("performed.flui-trace");
+    let mut driver = counter();
+    driver
+        .start_trace(TraceOptions::new(&dir))
+        .expect("the trace starts");
+    driver
+        .main_window()
+        .expect("a window")
+        .perform(ActionSequence::new(vec![InputSource::Text {
+            text: "hunter2".into(),
+        }]))
+        .expect("typed");
+    driver.finish_trace(&mut Report::new()).expect("finished");
+    let report = trace::replay(&Trace::open(&dir).expect("it reads"), &mut counter())
+        .expect("the replay runs");
+    let refused = report.refused.expect("the input sequence is refused");
+    assert_eq!(refused.method, "input.perform");
 }
 
 #[cfg(any(unix, windows))]
@@ -244,6 +285,7 @@ mod scripted {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use flui_driver::protocol::error::{ErrorCode, ErrorObject};
     use flui_driver::protocol::events::Event;
     use flui_driver::protocol::record::RecordLayer;
     use flui_driver::protocol::session::Capabilities;
@@ -380,21 +422,29 @@ mod scripted {
     }
 
     /// A stand-in that serves a recording and counts the starts and stops it was sent.
-    fn counting() -> (ScriptedAgent, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    /// A stand-in that serves a recording (number 1), refusing to start one when `refuse`, and
+    /// counts the starts it was sent and the stops of recording 1.
+    fn counting(refuse: bool) -> (ScriptedAgent, Arc<AtomicUsize>, Arc<AtomicUsize>) {
         let starts = Arc::new(AtomicUsize::new(0));
         let stops = Arc::new(AtomicUsize::new(0));
         let (started, stopped) = (Arc::clone(&starts), Arc::clone(&stops));
         let agent = ScriptedAgent::start_with(
             capabilities(),
-            Box::new(move |method, _| match method {
+            Box::new(move |method, params| match method {
                 "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
                 "window.placement" => Reply::Result(placement()),
                 "record.start" => {
                     started.fetch_add(1, Ordering::SeqCst);
-                    Reply::Result(recording())
+                    if refuse {
+                        Reply::Error(ErrorObject::new(ErrorCode::Busy, "a recording is running"))
+                    } else {
+                        Reply::Result(recording())
+                    }
                 }
                 "record.stop" => {
-                    stopped.fetch_add(1, Ordering::SeqCst);
+                    if params["recording"] == 1 {
+                        stopped.fetch_add(1, Ordering::SeqCst);
+                    }
                     Reply::Result(json!({ "rows": 0, "lost_rows": 0, "complete": true }))
                 }
                 _ => Reply::Close,
@@ -409,7 +459,7 @@ mod scripted {
         let root = tempfile::tempdir().expect("a temporary directory");
 
         // The trace's own file cannot be made: the app is never asked to record.
-        let (agent, starts, stops) = counting();
+        let (agent, starts, stops) = counting(false);
         let mut driver = attach(&agent);
         let taken = root.path().join("taken.flui-trace");
         std::fs::create_dir_all(&taken).expect("a directory");
@@ -424,16 +474,47 @@ mod scripted {
             .expect("the stand-in ends");
         assert_eq!(stops.load(Ordering::SeqCst), 0);
 
-        // The recording's files cannot be made once the app records: it is stopped.
-        let (agent, starts, stops) = counting();
+        // The app refuses to record: the trace's files go, and there is nothing to stop.
+        let (agent, starts, stops) = counting(true);
         let mut driver = attach(&agent);
+        let refused = root.path().join("refused.flui-trace");
+        let error = driver
+            .start_trace(TraceOptions::new(&refused))
+            .expect_err("the app refuses");
+        assert!(matches!(error, Error::Busy { .. }), "{error:?}");
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert!(!refused.join("trace.jsonl").exists(), "no trace is left");
+        drop(driver);
+        agent
+            .join(Duration::from_secs(5))
+            .expect("the stand-in ends");
+        assert_eq!(stops.load(Ordering::SeqCst), 0);
+
+        // The recording's files cannot be made once the app records: it is stopped. A file of
+        // that name is never written over.
+        let (agent, starts, stops) = counting(false);
+        let mut driver = attach(&agent);
+        let kept = root.path().join("kept.flui-trace");
+        std::fs::create_dir_all(&kept).expect("a directory");
+        std::fs::write(kept.join("input.jsonl"), "someone's recording").expect("a file there");
+        driver
+            .start_trace(TraceOptions::new(&kept))
+            .expect_err("the recording's file is there");
+        assert_eq!(
+            std::fs::read_to_string(kept.join("input.jsonl")).expect("still there"),
+            "someone's recording"
+        );
         let held = root.path().join("held.flui-trace");
         std::fs::create_dir_all(held.join("input.jsonl")).expect("something in the way");
         driver
             .start_trace(TraceOptions::new(&held))
             .expect_err("the recording's file is in the way");
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        assert_eq!(stops.load(Ordering::SeqCst), 1, "the recording was stopped");
+        assert_eq!(starts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            stops.load(Ordering::SeqCst),
+            2,
+            "each recording was stopped"
+        );
         assert!(
             !held.join("trace.jsonl").exists(),
             "the trace that never started is gone"
@@ -448,7 +529,7 @@ mod scripted {
             .start_trace(TraceOptions::new(&held))
             .expect("the trace starts");
         driver.finish_trace(&mut Report::new()).expect("finished");
-        assert_eq!(stops.load(Ordering::SeqCst), 2);
+        assert_eq!(stops.load(Ordering::SeqCst), 3);
         drop(driver);
         agent
             .join(Duration::from_secs(5))
@@ -468,22 +549,36 @@ mod scripted {
             json!({ "result": { "seq": 1, "t_ms": 0, "ok": { "windows": ["w1"] } } }).to_string(),
             json!({ "command": { "seq": 2, "t_ms": 0, "method": "semantics.locate", "params": {
                 "locator": { "window": "w1", "name": { "match": "exact", "text": "w1" } },
+                "windows": ["w1"],
             } } })
             .to_string(),
             json!({ "result": { "seq": 2, "t_ms": 0, "ok": { "matches": [] } } }).to_string(),
+            json!({ "command": { "seq": 3, "t_ms": 0, "method": "semantics.locate", "params": {
+                "locator": { "window": "w1" },
+            } } })
+            .to_string(),
+            json!({ "result": { "seq": 3, "t_ms": 0, "ok": { "matches": [], "note": "w1" } } })
+                .to_string(),
             json!({ "end": {} }).to_string(),
         ];
         std::fs::write(dir.join("trace.jsonl"), rows.join("\n") + "\n").expect("the rows");
 
         let sent = Arc::new(Mutex::new(Value::Null));
         let seen = Arc::clone(&sent);
+        let mut located = 0;
         let agent = ScriptedAgent::start(
             &["windows.list", "semantics.locate"],
             Box::new(move |method, params| match method {
                 "windows.list" => Reply::Result(json!({ "windows": ["w7"] })),
                 "semantics.locate" => {
-                    *seen.lock().expect("the record") = params.clone();
-                    Reply::Result(json!({ "matches": [] }))
+                    located += 1;
+                    if located == 1 {
+                        *seen.lock().expect("the record") = params.clone();
+                        Reply::Result(json!({ "matches": [] }))
+                    } else {
+                        // A text that differs, shaped like the handle the replay paired: text.
+                        Reply::Result(json!({ "matches": [], "note": "w7" }))
+                    }
                 }
                 _ => Reply::Close,
             }),
@@ -492,13 +587,18 @@ mod scripted {
         let mut driver = attach(&agent);
         let report = trace::replay(&Trace::open(&dir).expect("it reads"), &mut driver)
             .expect("the replay runs");
-        assert!(report.matched(), "{report:?}");
-        let locator = sent.lock().expect("the record")["locator"].clone();
-        assert_eq!(locator["window"], "w7", "the window handle is the replay's");
+        let params = sent.lock().expect("the record").clone();
         assert_eq!(
-            locator["name"]["text"], "w1",
+            params["locator"]["window"], "w7",
+            "the window handle is the replay's"
+        );
+        assert_eq!(params["windows"], json!(["w7"]), "a list of handles too");
+        assert_eq!(
+            params["locator"]["name"]["text"], "w1",
             "a name that looks like a handle is text"
         );
+        let divergence = report.divergence.expect("a text that differs diverges");
+        assert_eq!((divergence.seq, divergence.at.as_str()), (3, "/note"));
         drop(driver);
         agent
             .join(Duration::from_secs(5))

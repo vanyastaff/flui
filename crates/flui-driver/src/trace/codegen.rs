@@ -163,10 +163,10 @@ fn statement(command: &CommandRow, main: Option<&str>) -> Statement {
                 expects: true,
             };
         }
-    } else if row.name.starts_with("session.") {
-        return Statement::NotGenerated("it begins or ends a session, which the test holds");
     } else if row.effect == MethodEffect::ReadOnly {
         return Statement::Read;
+    } else if row.name.starts_with("session.") {
+        return Statement::NotGenerated("it begins or ends a session, which the test holds");
     }
     let line = gesture(&command.method, &command.params).unwrap_or_else(|| {
         let mut uses_window = false;

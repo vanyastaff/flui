@@ -201,6 +201,13 @@ fn a_trace_records_commands_as_written_with_their_results() {
     let dir = trace_dir(&root, "steps");
     let mut driver = counter();
     let trace = record(&mut driver, &dir, TraceOptions::new(&dir), tap_once);
+    assert_eq!(
+        trace
+            .native_recordings()
+            .expect("a trace without the native layer has none")
+            .len(),
+        0
+    );
     let steps = trace.steps();
     let methods: Vec<&str> = steps
         .iter()
@@ -363,6 +370,14 @@ fn evidence_is_kept_once_and_past_the_budget_becomes_a_gap() {
     let file = trace.evidence(names[0]).expect("an evidence name");
     let kept = flui_driver::pixels::read_png(&file).expect("the evidence reads back");
     assert_eq!(kept.pixel(0, 0), Some([40, 80, 120, 255]));
+    let json_name = names[0].replace(".png", ".json");
+    assert!(trace.evidence(&json_name).is_err(), "evidence is PNG only");
+    // A replay sends the captures nowhere: their rows are not in the method table yet, so it
+    // lists them, and a replay that skipped a command did not match.
+    let replayed = trace::replay(&trace, &mut counter()).expect("the replay runs");
+    assert_eq!(replayed.divergence, None, "{replayed:?}");
+    assert_eq!(replayed.skipped.len(), 2);
+    assert!(!replayed.matched());
     assert!(
         trace.evidence("evidence/../trace.jsonl").is_err(),
         "no path out of the trace"
@@ -588,6 +603,134 @@ fn a_replay_leaves_out_frames_and_compares_positions_only_at_exact_fidelity() {
     assert_eq!(
         order.divergence, None,
         "frames never compare, and positions not at order fidelity"
+    );
+}
+
+#[test]
+fn codegen_marks_what_it_cannot_write_and_writes_the_main_window_as_the_tests_own() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let write = |name: &str, rows: &[serde_json::Value]| {
+        let dir = trace_dir(&root, name);
+        std::fs::create_dir_all(&dir).expect("the directory");
+        let header = r#"{"flui_trace":1,"protocol":"0.28","target":{"kind":"headless","os":"any","app":"counter"},"isolation":"in_process","fidelity":{"positions":"exact"},"started_unix_ms":0,"privacy":"keep_text"}"#;
+        let mut text = format!("{header}\n");
+        for row in rows {
+            text.push_str(&row.to_string());
+            text.push('\n');
+        }
+        std::fs::write(dir.join("trace.jsonl"), text).expect("the rows");
+        let trace = Trace::open(&dir).expect("it reads");
+        trace::codegen(
+            &trace,
+            &CodegenOptions::new("generated", "Launch::headless(app)"),
+        )
+        .expect("a test")
+    };
+    let command = |seq: u64, method: &str, params: serde_json::Value| serde_json::json!({ "command": { "seq": seq, "t_ms": 0, "method": method, "params": params } });
+    let ok = |seq: u64, value: serde_json::Value| serde_json::json!({ "result": { "seq": seq, "t_ms": 0, "ok": value } });
+
+    let plain = write(
+        "plain",
+        &[
+            command(1, "windows.list", serde_json::json!({})),
+            ok(1, serde_json::json!({ "windows": ["w5"] })),
+            command(
+                2,
+                "element.tap",
+                serde_json::json!({ "target": { "locator": { "identifier": "increment", "window": "w5" } } }),
+            ),
+            ok(
+                2,
+                serde_json::json!({ "via": "synthetic", "effect": { "kind": "ran" } }),
+            ),
+        ],
+    );
+    assert!(
+        plain.contains("driver.main_window()?.locate(Locator::identifier(\"increment\")).tap()?;"),
+        "{plain}"
+    );
+    assert!(
+        !plain.contains("windows.list"),
+        "a read is left out: {plain}"
+    );
+    assert!(
+        !plain.contains("serde_json"),
+        "nothing sent as recorded: {plain}"
+    );
+    assert!(
+        !plain.contains("Not generated"),
+        "nothing left out: {plain}"
+    );
+    assert!(!plain.contains("let window"), "no window to name: {plain}");
+
+    let marked = write(
+        "marked",
+        &[
+            command(1, "windows.list", serde_json::json!({})),
+            ok(1, serde_json::json!({ "windows": ["w5"] })),
+            command(
+                2,
+                "semantics.act",
+                serde_json::json!({
+                    "element": "w5/e3", "action": "focus", "window": "w5",
+                    "notes": ["w5"], "other": "w5", "nothing": null,
+                }),
+            ),
+            ok(2, serde_json::json!({})),
+            command(3, "session.close", serde_json::json!({})),
+            ok(3, serde_json::json!({})),
+            command(
+                4,
+                "pixels.check",
+                serde_json::json!({ "window": "w5", "source": "os" }),
+            ),
+        ],
+    );
+    assert!(
+        marked.contains("let window = driver.main_window()?.id();"),
+        "{marked}"
+    );
+    assert!(marked.contains("\"window\": window"), "{marked}");
+    assert!(
+        marked.contains("\"notes\": [\"w5\"]"),
+        "a list is not the window field: {marked}"
+    );
+    assert!(marked.contains("\"other\": \"w5\""), "{marked}");
+    assert!(marked.contains("\"nothing\": null"), "{marked}");
+    assert!(
+        marked.contains("// not generated: session.close (seq 3)"),
+        "{marked}"
+    );
+    assert!(
+        marked.contains("// not generated: pixels.check (seq 4)"),
+        "{marked}"
+    );
+    assert!(
+        marked.contains("//! Not generated: 2 command(s)"),
+        "{marked}"
+    );
+    assert!(marked.contains("needs `serde_json`"), "{marked}");
+}
+
+#[test]
+fn a_trace_records_the_apps_layers_only_when_asked() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = trace_dir(&root, "no_layers");
+    let trace = record(
+        &mut counter(),
+        &dir,
+        TraceOptions::new(&dir).record_layers(false),
+        |driver| driver.windows().map(drop),
+    );
+    assert_eq!(trace.header().layers, []);
+    assert_eq!(trace.input_recording(), None);
+    let dir = trace_dir(&root, "layers");
+    let trace = record(&mut counter(), &dir, TraceOptions::new(&dir), |driver| {
+        driver.windows().map(drop)
+    });
+    assert_eq!(
+        trace.header().layers,
+        [flui_driver::protocol::record::RecordLayer::Input]
     );
 }
 
