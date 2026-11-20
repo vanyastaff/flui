@@ -36,8 +36,8 @@ use flui_protocol::tree::{ElementId, Node, OUTLINE_TEXT_LIMIT, Rect, Tree};
 use flui_protocol::wire::Checked;
 
 use crate::error::Result;
+use crate::lane::walk::{self, Properties, Provider, ProviderError};
 use crate::lane::windows::roles::{self, ControlType, RoleFlags};
-use crate::lane::windows::walk::{self, Properties, Provider, ProviderError};
 use crate::lane::windows::win32::{Apartment, Hwnd, lane_error};
 
 /// How long the client waits for a provider to answer one call, in milliseconds.

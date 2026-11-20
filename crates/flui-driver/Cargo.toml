@@ -188,7 +188,12 @@ objc2-core-graphics = { workspace = true, features = [
 
 # The Windows tests' own foreign input.
 [target.'cfg(windows)'.dev-dependencies]
-windows = { workspace = true, features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 # The X11 lane's runs start an X server of their own (`flui-native`'s Xvfb launcher, which picks a
 # free display); the X11 tests' own foreign input is a second XTEST client. The Wayland lane's

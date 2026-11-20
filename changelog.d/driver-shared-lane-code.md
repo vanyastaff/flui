@@ -1,0 +1,2 @@
+### Changed
+- `flui-driver`: the bounded accessibility walk (`lane::windows::walk`), the guard-watched pause slices and echo deadline (`lane::windows::activity::{slices, WATCH_SLICE, ECHO_WITHIN}`) and a window's geometry from its device origin (`lane::windows::screen::{logical_origin, window_geometry}`) are `lane::walk`, `lane::pacing` and `lane::screen`; no lane imports another's module for them.
