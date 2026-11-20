@@ -33,8 +33,12 @@ pub type Responder = fn(&str) -> Vec<String>;
 struct StreamRule {
     prefix: String,
     records: Vec<String>,
+    /// Records that come only to a read that waits: what arrives while the lane waits.
+    late: Vec<String>,
     responder: Option<Responder>,
     refuse: bool,
+    /// Whether the program has ended once its records are read.
+    ends: bool,
 }
 
 /// A record pushed into an open stream when a command runs.
@@ -48,6 +52,7 @@ struct Push {
 #[derive(Debug, Default)]
 struct StreamState {
     records: VecDeque<String>,
+    late: VecDeque<String>,
     ended: Option<String>,
     responder: Option<Responder>,
 }
@@ -119,8 +124,40 @@ impl ScriptedAdb {
         lock(&self.script).streams.push(StreamRule {
             prefix: prefix.into(),
             records,
+            late: Vec::new(),
             responder,
             refuse: false,
+            ends: false,
+        });
+        self
+    }
+
+    /// The stream for a command starting with `prefix` also prints `records`, each only to a
+    /// read that waits: lines that arrive while the lane waits for them.
+    #[must_use]
+    pub fn late_records(self, prefix: &str, records: Vec<String>) -> Self {
+        if let Some(rule) = lock(&self.script)
+            .streams
+            .iter_mut()
+            .rev()
+            .find(|rule| rule.prefix == prefix)
+        {
+            rule.late.extend(records);
+        }
+        self
+    }
+
+    /// Open a stream for a command starting with `prefix` that prints `records` and ends, as a
+    /// program that exits at once does.
+    #[must_use]
+    pub fn ending_stream(self, prefix: impl Into<String>, records: Vec<String>) -> Self {
+        lock(&self.script).streams.push(StreamRule {
+            prefix: prefix.into(),
+            records,
+            late: Vec::new(),
+            responder: None,
+            refuse: false,
+            ends: true,
         });
         self
     }
@@ -132,10 +169,26 @@ impl ScriptedAdb {
         lock(&self.script).streams.push(StreamRule {
             prefix: prefix.into(),
             records: Vec::new(),
+            late: Vec::new(),
             responder: None,
             refuse: true,
+            ends: false,
         });
         self
+    }
+
+    /// Push `record` into every open stream whose command starts with `stream`, now.
+    pub fn push(&self, stream: &str, record: &str) {
+        let script = lock(&self.script);
+        for (command, state) in &script.open {
+            if command.starts_with(stream) {
+                state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .records
+                    .push_back(record.to_owned());
+            }
+        }
     }
 
     /// When a command starting with `command` runs, push `record` into the open stream whose
@@ -269,7 +322,8 @@ impl Adb for ScriptedAdb {
         };
         let state = Arc::new(Mutex::new(StreamState {
             records: rule.records.into_iter().collect(),
-            ended: None,
+            late: rule.late.into_iter().collect(),
+            ended: rule.ends.then(|| format!("`adb {text}` ended")),
             responder: rule.responder,
         }));
         script.open.push((text.clone(), Arc::clone(&state)));
@@ -316,6 +370,11 @@ impl AdbStream for ScriptedStream {
     fn next_record(&mut self, wait: Duration) -> Result<Option<String>> {
         let mut state = self.state();
         if let Some(record) = state.records.pop_front() {
+            return Ok(Some(record));
+        }
+        if !wait.is_zero()
+            && let Some(record) = state.late.pop_front()
+        {
             return Ok(Some(record));
         }
         if let Some(why) = &state.ended {

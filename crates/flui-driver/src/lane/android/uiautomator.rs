@@ -1,10 +1,10 @@
 //! What `uiautomator dump` shows of the screen, read as untrusted input: where the app's window
-//! is, how the display is turned, and the system UI around the app.
+//! is and how the display is turned.
 //!
 //! The dump is the active window's view hierarchy as accessibility reads it:
-//! `<hierarchy rotation="N">` and its `<node>`s, each with its `package`, `class`, `text`,
-//! `content-desc`, `resource-id` and `bounds="[left,top][right,bottom]"` in display pixels as the
-//! display is turned. It is read whole only after its size is checked ([`MAX_DUMP`]), with a
+//! `<hierarchy rotation="N">` and its `<node>`s, each with its `package` and
+//! `bounds="[left,top][right,bottom]"` in display pixels as the display is turned, which is all
+//! the lane reads of them. It is read whole only after its size is checked ([`MAX_DUMP`]), with a
 //! bound on its nodes ([`MAX_NODES`]) and on its depth ([`MAX_DEPTH`]).
 //!
 //! FLUI's own nodes are not read from it: the adapter that serves them (`accesskit_android`) sets
@@ -80,14 +80,6 @@ impl Bounds {
 pub struct UiNode {
     /// The application that shows it.
     pub package: String,
-    /// Its class: `android.widget.Button`, `android.view.View`.
-    pub class: String,
-    /// Its text.
-    pub text: String,
-    /// Its description.
-    pub content_desc: String,
-    /// Its view id, `package:id/name`.
-    pub resource_id: String,
     /// Where it is; `None` when the dump gave no bounds it could read.
     pub bounds: Option<Bounds>,
     /// The nodes inside it.
@@ -183,13 +175,8 @@ fn nodes_of(parent: roxmltree::Node<'_, '_>, depth: usize) -> Result<Vec<UiNode>
         .children()
         .filter(|child| child.has_tag_name("node"))
         .map(|node| {
-            let text = |name: &str| node.attribute(name).unwrap_or_default().to_owned();
             Ok(UiNode {
-                package: text("package"),
-                class: text("class"),
-                text: text("text"),
-                content_desc: text("content-desc"),
-                resource_id: text("resource-id"),
+                package: node.attribute("package").unwrap_or_default().to_owned(),
                 bounds: node.attribute("bounds").and_then(Bounds::parse),
                 children: nodes_of(node, depth + 1)?,
             })

@@ -53,7 +53,6 @@ pub enum Line {
 /// `line` of `getevent -l`, read.
 #[must_use]
 pub fn parse_line(line: &str) -> Line {
-    let line = line.trim_end();
     if let Some(rest) = line.strip_prefix("add device ") {
         return rest
             .split_once(": ")

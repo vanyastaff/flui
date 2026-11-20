@@ -701,8 +701,6 @@ impl Lane for AndroidLane {
 
 impl Drop for AndroidLane {
     fn drop(&mut self) {
-        // The pen's device goes with its command.
-        drop(self.pen.take());
         // The app also exits on its own once its driver's connection closes
         // (`flui.agent.exit_on_disconnect`): a failure here leaves nothing running past that.
         if self.app_started {

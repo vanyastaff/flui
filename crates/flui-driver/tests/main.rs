@@ -2,6 +2,9 @@
 
 #[cfg(any(unix, windows))]
 mod android_device;
+mod android_edges;
+#[cfg(unix)]
+mod android_host;
 mod android_lane;
 mod apps;
 mod coordinates;

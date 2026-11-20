@@ -25,24 +25,24 @@ use flui_driver::protocol::input::{PointerButton, PointerDevice};
 use flui_driver::protocol::session::{Isolation, Placement};
 use flui_driver::protocol::tree::WindowId;
 use flui_driver::steps::OsEvent;
-use flui_driver::testing::ScriptedAdb;
+use flui_driver::testing::{Responder, ScriptedAdb};
 use flui_driver::{Endpoint, Error};
 
-const PACKAGE: &str = "dev.flui.scenario";
-const USAGE: &str = include_str!("android/input_usage.txt");
-const WINDOW: &str = include_str!("android/window.xml");
-const GETEVENT: &str = include_str!("android/getevent.txt");
+pub(crate) const PACKAGE: &str = "dev.flui.scenario";
+pub(crate) const USAGE: &str = include_str!("android/input_usage.txt");
+pub(crate) const WINDOW: &str = include_str!("android/window.xml");
+pub(crate) const GETEVENT: &str = include_str!("android/getevent.txt");
 
 /// The kernel's device list while the probe's device is registered.
-const PROBED: &str = "I: Bus=0003 Vendor=18d1 Product=abcc Version=0001\n\
+pub(crate) const PROBED: &str = "I: Bus=0003 Vendor=18d1 Product=abcc Version=0001\n\
                       N: Name=\"FLUI Driver Probe\"\n\
                       P: Phys=\n";
 
-const FOCUSED: &str =
+pub(crate) const FOCUSED: &str =
     "  mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}\n";
 
 /// `uinput`'s answer to each sync written to it.
-fn answer_syncs(line: &str) -> Vec<String> {
+pub(crate) fn answer_syncs(line: &str) -> Vec<String> {
     let Ok(command) = serde_json::from_str::<serde_json::Value>(line) else {
         return Vec::new();
     };
@@ -57,8 +57,18 @@ fn answer_syncs(line: &str) -> Vec<String> {
 
 /// A device with the app in front, its `input` the fixture's: an emulator when `emulator`, a
 /// device in someone's hands otherwise; its shell may open `uinput` when `uinput`.
-fn scripted(emulator: bool, uinput: bool) -> ScriptedAdb {
-    let mut adb = ScriptedAdb::new()
+pub(crate) fn scripted(emulator: bool, uinput: bool) -> ScriptedAdb {
+    if uinput {
+        scripted_with(emulator, Some(answer_syncs))
+    } else {
+        scripted_with(emulator, None).refuse_stream("shell uinput -")
+    }
+}
+
+/// [`scripted`], its `uinput` devices answering what they are written with `uinput` (the kernel
+/// then lists the probe's), or with no rule for `uinput` at all when `None`.
+pub(crate) fn scripted_with(emulator: bool, uinput: Option<Responder>) -> ScriptedAdb {
+    let adb = ScriptedAdb::new()
         .reply(
             "shell getprop",
             AdbReply::new(0, if emulator { "34\n\n1\n" } else { "34\n\n\n" }),
@@ -76,33 +86,31 @@ fn scripted(emulator: bool, uinput: bool) -> ScriptedAdb {
             GETEVENT.lines().map(str::to_owned).collect(),
             None,
         );
-    if uinput {
-        adb = adb
+    match uinput {
+        Some(responder) => adb
             .reply(
                 "shell cat /proc/bus/input/devices",
                 AdbReply::new(0, PROBED),
             )
-            .stream("shell uinput -", Vec::new(), Some(answer_syncs));
-    } else {
-        adb = adb.refuse_stream("shell uinput -");
+            .stream("shell uinput -", Vec::new(), Some(responder)),
+        None => adb,
     }
-    adb
 }
 
 /// The app's surface in the fixture's window: 1080 by 2340 pixels, 60 below the display's top.
-fn placement() -> Placement {
+pub(crate) fn placement() -> Placement {
     let window: WindowId = "w1".parse().expect("a window handle");
     Placement::new(window, LogicalSize::new(540.0, 1170.0), 2.0)
 }
 
-fn connected(adb: &ScriptedAdb) -> AndroidLane {
+pub(crate) fn connected(adb: &ScriptedAdb) -> AndroidLane {
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
     lane.locate_window(&placement())
         .expect("the window is found");
     lane
 }
 
-fn tap(device: PointerDevice, at: DevicePoint) -> Vec<OsEvent> {
+pub(crate) fn tap(device: PointerDevice, at: DevicePoint) -> Vec<OsEvent> {
     let pointer = format!("scenario.{}", device.name());
     vec![
         OsEvent::PointerMove {
@@ -124,7 +132,7 @@ fn tap(device: PointerDevice, at: DevicePoint) -> Vec<OsEvent> {
     ]
 }
 
-fn display() -> Display {
+pub(crate) fn display() -> Display {
     Display {
         width: 1080,
         height: 2400,
@@ -132,7 +140,7 @@ fn display() -> Display {
     }
 }
 
-fn abilities() -> Abilities {
+pub(crate) fn abilities() -> Abilities {
     Abilities {
         input: device::parse_input_usage(USAGE),
         uinput: true,
@@ -140,7 +148,7 @@ fn abilities() -> Abilities {
     }
 }
 
-fn capability(error: &Error) -> Option<&str> {
+pub(crate) fn capability(error: &Error) -> Option<&str> {
     match error {
         Error::NotSupported { capability, .. } => capability.as_deref(),
         _ => None,
@@ -149,12 +157,12 @@ fn capability(error: &Error) -> Option<&str> {
 
 /// Whether the logged command `line` sends input: every `input` command but the usage the lane
 /// reads when it connects.
-fn is_input(line: &str) -> bool {
+pub(crate) fn is_input(line: &str) -> bool {
     line.starts_with("shell input ") && !line.starts_with("shell input help")
 }
 
 /// The input commands the lane sent, in order.
-fn inputs(adb: &ScriptedAdb) -> Vec<String> {
+pub(crate) fn inputs(adb: &ScriptedAdb) -> Vec<String> {
     adb.log()
         .into_iter()
         .filter(|line| is_input(line))
@@ -452,7 +460,7 @@ fn the_dump_gives_the_rotation_and_the_apps_surface() {
 }
 
 /// A raw capture of `width` by `height` pixels in `format`, its header `header` bytes long.
-fn raw_capture(width: u32, height: u32, format: u32, header: usize) -> Vec<u8> {
+pub(crate) fn raw_capture(width: u32, height: u32, format: u32, header: usize) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(width.to_le_bytes());
     bytes.extend(height.to_le_bytes());
