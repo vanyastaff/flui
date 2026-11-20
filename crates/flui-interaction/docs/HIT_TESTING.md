@@ -160,7 +160,7 @@ miss. Raw pushes remain the caller's responsibility (ADR-0113).
 ### Sliver child transforms
 
 The sliver walk (`PipelineOwner::hit_test_subtree_impl`/
-`hit_test_sliver_subtree_impl`, `crates/flui-rendering/src/pipeline/owner/accessors.rs`)
+`hit_test_sliver_subtree_impl`, `crates/flui-rendering/src/pipeline/owner/hit_test.rs`)
 descends through both sliver→sliver and sliver→box edges. Each edge decides
 independently whether to push a child offset onto the `HitTestResult`
 transform stack, governed by one rule: **push iff the position handed to the
@@ -211,7 +211,7 @@ call (`crates/flui-rendering/src/protocol/box_protocol.rs`,
 onto the SAME `HitTestResult` this document describes, scoped to that one
 recursive call, via `with_paint_transform` — the identical mechanism the
 walk already uses for `hit_test_transform` and resolved follower offsets
-(`crates/flui-rendering/src/pipeline/owner/accessors.rs`). The sliver
+(`crates/flui-rendering/src/pipeline/owner/hit_test.rs`). The sliver
 protocol's ctx-level stack stays a permanent no-op (main-axis position
 covers its needs); its own transform-stack gap (sliver→box edges skipping
 the push) was fixed separately — see "Sliver child transforms" above.

@@ -588,7 +588,7 @@ impl RenderSliver for RenderSliverGrid {
             // Omitting this left `visible` at `SliverGeometry::ZERO`'s `false`
             // unconditionally, which blocked the viewport's hit-test walk
             // (`sliver_child_is_visible`,
-            // `flui-rendering/src/pipeline/owner/accessors.rs`) from ever
+            // `flui-rendering/src/pipeline/owner/hit_test.rs`) from ever
             // reaching a grid's children.
             visible: paint_extent > 0.0,
             has_visual_overflow: scroll_extent > paint_extent
