@@ -68,12 +68,16 @@ pub fn desktop_takes_input() -> bool {
 
 /// Release everything the lane holds: the keys through `send_stroke`, then the mouse buttons
 /// through `release_button`, then the touch and pen contacts through `inject`, every part tried
-/// whatever the one before it came to.
+/// whatever the one before it came to, a panic included.
 ///
 /// # Errors
 ///
 /// What [`release_outcome`](crate::lane::release_outcome) makes of the three releases:
 /// [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming everything still held.
+///
+/// # Panics
+///
+/// The first part's panic, resumed once every part was tried.
 pub fn release_held(
     keys: &mut held::HeldKeys,
     buttons: &mut held::HeldButtons,
@@ -82,10 +86,12 @@ pub fn release_held(
     release_button: impl FnMut(u8) -> crate::Result<()>,
     inject: impl FnMut(&contacts::Frame) -> crate::Result<()>,
 ) -> crate::Result<()> {
-    let keys = keys.release_all(send_stroke);
-    let buttons = buttons.release_all(release_button);
-    let lifted = contacts.release_all(inject);
-    crate::lane::release_outcome([keys, buttons, lifted])
+    let mut panicked = flui_foundation::panic::FirstPanic::new();
+    let keys = panicked.contain(|| keys.release_all(send_stroke));
+    let buttons = panicked.contain(|| buttons.release_all(release_button));
+    let lifted = panicked.contain(|| contacts.release_all(inject));
+    panicked.resume();
+    crate::lane::release_outcome([keys, buttons, lifted].into_iter().flatten())
 }
 
 #[cfg(windows)]

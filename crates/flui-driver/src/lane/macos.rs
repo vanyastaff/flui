@@ -71,23 +71,29 @@ pub fn granted(permission: safety::Permission) -> bool {
 }
 
 /// Release everything the lane holds: the keys through `post_key`, then the mouse buttons through
-/// `post_mouse`, each event with the modifier flags the lane holds as it goes out; the mouse is
-/// tried whatever the keys came to.
+/// `post_mouse`, each event with the modifier flags the lane holds once the keys' release is over;
+/// the mouse is tried whatever the keys came to, a panic included.
 ///
 /// # Errors
 ///
 /// What [`release_outcome`](crate::lane::release_outcome) makes of the two releases:
 /// [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming everything still held.
+///
+/// # Panics
+///
+/// The first part's panic, resumed once both parts were tried.
 pub fn release_held(
     keys: &mut held::HeldKeys,
     pointer: &mut pointer::Pointer,
     post_key: impl FnMut(held::Keystroke, u64) -> crate::Result<()>,
     mut post_mouse: impl FnMut(&pointer::MouseEvent, u64) -> crate::Result<()>,
 ) -> crate::Result<()> {
-    let released_keys = keys.release_all(post_key);
+    let mut panicked = flui_foundation::panic::FirstPanic::new();
+    let released_keys = panicked.contain(|| keys.release_all(post_key));
     let flags = keys.flags();
-    let released_mouse = pointer.release_all(|event| post_mouse(event, flags));
-    crate::lane::release_outcome([released_keys, released_mouse])
+    let released_mouse = panicked.contain(|| pointer.release_all(|event| post_mouse(event, flags)));
+    panicked.resume();
+    crate::lane::release_outcome([released_keys, released_mouse].into_iter().flatten())
 }
 
 #[cfg(target_os = "macos")]

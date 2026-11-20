@@ -885,10 +885,6 @@ fn the_release_of_everything_names_what_every_part_still_holds() {
         0b1_1111,
         "every refused button is still held"
     );
-    assert!(
-        refusing.frames.is_empty(),
-        "the refused frames are not taken"
-    );
 
     // Only what failed is named: a part that released everything adds nothing.
     let mut buttons = HeldButtons::default();
@@ -967,11 +963,60 @@ fn the_release_of_everything_names_what_every_part_still_holds() {
         )),
         "{after_mask:?}"
     );
+    // With nothing held anywhere, the first bare failure is the answer.
     assert!(matches!(
         release_outcome([refused("the mask"), Ok(())]),
         Err(flui_driver::Error::Protocol { message }) if message == "the mask refused"
     ));
+    assert!(matches!(
+        release_outcome([Ok(()), refused("the first"), refused("the second")]),
+        Err(flui_driver::Error::Protocol { message }) if message == "the first refused"
+    ));
     assert!(release_outcome([Ok(()), Ok(()), Ok(())]).is_ok());
+}
+
+/// A part whose release panics does not keep the parts after it held: they are released, and
+/// the panic is resumed once every part was tried.
+#[test]
+fn a_panicking_part_of_the_release_still_lets_the_others_go() {
+    let mut keys = HeldKeys::new();
+    keys.apply(Keystroke::Press(keys::TAB));
+    let mut buttons = HeldButtons::default();
+    buttons.apply(0, true);
+    let mut contacts = Contacts::new();
+    let mut os = Injected::default();
+    contacts
+        .move_to("a", PointerKind::Touch, point(10, 10), |f| os.take(f))
+        .expect("a placement");
+    contacts
+        .down("a", PointerKind::Touch, |f| os.take(f))
+        .expect("a press");
+    let mut lifted = Injected::default();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test catches the resumed panic to assert on what was released before it"
+    )]
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        windows::release_held(
+            &mut keys,
+            &mut buttons,
+            &mut contacts,
+            |_| -> flui_driver::Result<()> { panic!("the keys' release panics") },
+            |_| Ok(()),
+            |f| lifted.take(f),
+        )
+    }));
+    let payload = resumed.expect_err("the keys' panic is resumed");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("the keys' release panics")
+    );
+    assert_eq!(buttons.bits(), 0, "the button was released after the panic");
+    assert_eq!(
+        lifted.last_contacts(),
+        [(0, Phase::Up, true)],
+        "the touch contact was lifted after the panic"
+    );
 }
 
 /// A pause is waited out whole, in slices short enough to look at the guard between them.

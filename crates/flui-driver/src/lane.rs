@@ -222,15 +222,15 @@ pub trait Lane: Send {
 }
 
 /// What releasing everything came to, from the releases of a lane's parts (its keys, its mouse,
-/// its contacts) in the order they ran: everything each part still holds, named, with every
-/// part's failure, so one part's failure never hides what another left held or why.
+/// its contacts) in the order they ran: everything each part still holds, named, with each
+/// part's first failure, so one part's failure never hides what another left held or why.
 ///
 /// # Errors
 ///
 /// [`Error::ReleaseFailed`] naming what every part that answered one still holds, its message
-/// every part's failure in order, joined by `; `; the first failure when no part holds anything
-/// (a part answers [`Error::ReleaseFailed`] whenever it still holds something, so only a failure
-/// that left nothing held, such as the Windows keys' mask, arrives bare).
+/// each failed part's first failure in order, joined by `; `; the first failure when no part
+/// holds anything (a part answers [`Error::ReleaseFailed`] whenever it still holds something, so
+/// only a failure that left nothing held, such as the Windows keys' mask, arrives bare).
 pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()> {
     let mut failures: Vec<Error> = Vec::new();
     let mut stuck: Option<(String, Vec<String>)> = None;

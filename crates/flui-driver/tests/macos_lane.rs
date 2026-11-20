@@ -1639,6 +1639,24 @@ fn the_release_of_everything_keeps_what_it_released_apart_from_what_failed() {
         "posted with Control still held"
     );
     assert_ne!(keys.flags(), HeldKeys::new().flags());
+
+    // Once Control's release went out, the mouse's goes out without it.
+    let mut mouse_flags = Vec::new();
+    let released_keys = macos::release_held(
+        &mut keys,
+        &mut pointer,
+        |_, _| Ok(()),
+        |_, flags| {
+            mouse_flags.push(flags);
+            Ok(())
+        },
+    );
+    assert!(released_keys.is_ok(), "{released_keys:?}");
+    assert_eq!(
+        mouse_flags,
+        [HeldKeys::new().flags()],
+        "the mouse is released with the flags left after the keys' release"
+    );
     assert!(release_outcome([Ok(()), Ok(())]).is_ok());
 }
 

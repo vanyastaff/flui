@@ -1,7 +1,7 @@
 ### Added
 
 - `flui_driver::lane::release_outcome` gathers the releases of a lane's parts into one
-  `Error::ReleaseFailed` naming everything still held, with every part's failure; and
+  `Error::ReleaseFailed` naming everything still held, with each part's first failure; and
   `lane::windows::release_held` and `lane::macos::release_held`, each lane's release of
   everything over its held keys, buttons and contacts.
 
