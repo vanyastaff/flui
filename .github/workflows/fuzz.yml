@@ -25,10 +25,7 @@ name: Fuzz
 # limit fails the run and is uploaded as `fuzz-findings-<target>`: the same
 # command with the file in place of the corpus and seeds, and the target's
 # limits, runs it again with the same flags, and its fix adds the input's case
-# to the owning crate's tests (docs/testing.md, "Fuzzing"). The findings are
-# cached beside the corpus and read back as inputs, so every later night runs
-# them first and stays red until the fix lands, instead of turning green
-# when 600 seconds happen not to find the path again.
+# to the owning crate's tests (docs/testing.md, "Fuzzing").
 #
 # No pull request runs it (ADR-0376): a change to a target, its seeds or what it
 # is built from runs the workflow on its branch (`gh workflow run Fuzz --ref
@@ -125,25 +122,14 @@ jobs:
           unzip -q "$zip" -d "$dir"
           echo "Restored $(find "$dir" -type f | wc -l) corpus files from artifact $id"
 
-      # The inputs earlier nights found, an entry of its own so the corpus
-      # entry keeps its path. The run reads them back first; one whose fix
-      # landed passes and stays as an input.
-      - name: Restore the findings
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/fuzz/${{ matrix.target }}/findings
-          key: fuzz-findings-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: fuzz-findings-${{ matrix.target }}-
-
       # The step has the time limit, not only the job: a step that runs out
       # of time fails, and the steps after it still save the corpus and
       # upload what was found. The build of `agent_wire` is the long part
       # (its crate's whole test graph under the sanitizer).
       # libFuzzer keeps the inputs that reached new code in the corpus
-      # directory, its first argument, reads the seeds and the earlier
-      # findings as inputs, and writes the input that ended the run to
-      # `findings/`, named by what it did (`crash-`, `timeout-`, `oom-`,
-      # `leak-<hash>`). Nightly adds lints ahead of stable; this run is for
+      # directory, its first argument, reads the seeds as inputs, and writes
+      # the input that ended the run to `findings/`, named by what it did
+      # (`crash-`, `timeout-`, `oom-`, `leak-<hash>`). Nightly adds lints ahead of stable; this run is for
       # findings, so warnings stay warnings.
       - name: cargo +nightly run the fuzz target
         timeout-minutes: 75
@@ -161,7 +147,7 @@ jobs:
           read -ra limits <<< "$FUZZ_LIMITS"
           cargo +nightly --config .cargo/fuzz.toml run --locked \
             --target x86_64-unknown-linux-gnu -p "$FUZZ_PACKAGE" --example "fuzz_$FUZZ_TARGET" -- \
-            "$dir/corpus" "$FUZZ_SEEDS" "$dir/findings" \
+            "$dir/corpus" "$FUZZ_SEEDS" \
             -artifact_prefix="$dir/findings/" -max_total_time="$FUZZ_SECONDS" \
             -max_len="$FUZZ_MAX_LEN" "${limits[@]}" -print_final_stats=1
 
@@ -176,14 +162,6 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
-
-      # Saved only when there is one, so a night with none adds no entry.
-      - name: Save the findings
-        if: always() && github.ref == 'refs/heads/main' && hashFiles(format('target/fuzz/{0}/findings/*', matrix.target)) != ''
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/fuzz/${{ matrix.target }}/findings
-          key: fuzz-findings-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload the failing inputs
         if: failure()

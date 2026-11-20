@@ -243,10 +243,6 @@ The options:
   `RUSTFLAGS` replaces them, so the docs say to leave both out of a replay, and to replay a
   finding that depends on codegen with the nightly the run's log names.
 
-The workflow also carries each target's findings in a cache entry of their own and reads them
-back as inputs, so a night stays red until the fix of each lands rather than turning green when
-a run of 600 seconds does not reach the same path again.
-
 ### Consequences
 
 - Good, because what a job runs is in the job, and `tools/xtask` loses the subcommands and their
