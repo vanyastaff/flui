@@ -4,8 +4,8 @@
 
 use std::any::Any;
 
+use flui_interaction::pointer::{HitMetadata, HitTestBehavior};
 use flui_objects::RenderMetaData;
-use flui_rendering::hit_testing::{HitMetadata, HitTestBehavior};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
@@ -25,7 +25,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// - `Opaque` — always found within its own bounds, even over empty space.
 /// - `Translucent` — found, without stopping siblings beneath from being hit.
 ///
-/// [`HitTestEntry`]: flui_rendering::hit_testing::HitTestEntry
+/// [`HitTestEntry`]: flui_interaction::pointer::HitTestEntry
 ///
 /// # Example
 ///

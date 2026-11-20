@@ -35,7 +35,7 @@ use flui_testing::window_handler::RecordingWindowHandler;
 /// A drag the OS cannot take: the window has no drag source.
 const NO_OS_DRAG: DragError =
     DragError::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, RuntimeOperation};
 use flui_runtime::presentation::PresentationWindow;

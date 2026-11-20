@@ -3,7 +3,7 @@
 
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Rect, Size};
-use flui_rendering::semantics::{TextContent, TextRunError, TextRunSelection};
+use flui_semantics::{TextContent, TextRunError, TextRunSelection};
 
 use super::RenderEditable;
 use crate::text::runs::text_runs;

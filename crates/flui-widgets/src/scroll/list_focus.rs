@@ -41,7 +41,7 @@ use crate::interaction::focus::Focus;
 use crate::interaction::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 use crate::semantics::{ExcludeSemantics, Semantics, SliverSemantics};
 use flui_objects::SubtreeAnchor;
-use flui_rendering::semantics::{SemanticsConfiguration, SemanticsRole};
+use flui_semantics::{SemanticsConfiguration, SemanticsRole};
 
 // ============================================================================
 // The controller

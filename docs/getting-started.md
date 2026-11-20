@@ -157,7 +157,7 @@ RUST_LOG=flui_native=trace,flui_engine=info cargo test -p flui-native
 | Symptom | Likely cause |
 |---------|--------------|
 | `error: package 'flui-X' not found` | Package names take a hyphen (`-p flui-assets`), crate paths an underscore (`flui_assets::`). [`crates.md`](crates.md) lists the packages. |
-| `error[E0432]: unresolved import 'flui_rendering::prelude::*'` | The crate is not in the dependency graph or the `prelude` module does not exist yet. |
+| `error[E0432]: unresolved import 'flui_rendering::…'` | The crate is not in the dependency graph. |
 | `error: linking with 'link.exe'` on Windows | Install Visual Studio Build Tools 2022 (Desktop development with C++). |
 | `wgpu` crashes or shows blank window | Update graphics drivers; `cargo update -p wgpu` to pick up any patch-level fixes. |
 | Long build times | Use `cargo build --workspace` once, then incremental `cargo check -p <crate>`. `.cargo/config.toml` does not pin an alternate linker by default — the earlier macOS `lld` requirement was removed in favor of the default Apple linker, and the Linux `mold`/`clang` opt-in there is commented out because not every environment has `mold` installed. Uncomment it locally if you have `mold` and want faster links. |

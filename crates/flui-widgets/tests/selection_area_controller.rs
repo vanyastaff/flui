@@ -10,7 +10,7 @@ use std::time::Duration;
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_rendering::semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
+use flui_semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
 use flui_testing::replay::MouseScript;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::prelude::{BuildContext, IntoView, StatelessView};

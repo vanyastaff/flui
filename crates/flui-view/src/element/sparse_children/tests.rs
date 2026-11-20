@@ -5,9 +5,10 @@ use std::sync::{
 
 use flui_foundation::Leaf;
 use flui_foundation::ViewKey;
+use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, RenderBox, Size};
+use flui_rendering::{BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
 
 use super::SparseChildren;
 use crate::GlobalKey;

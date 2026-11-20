@@ -24,6 +24,8 @@ flui-foundation = { workspace = true }
 flui-macros = { workspace = true }
 flui-painting = { workspace = true }
 flui-rendering = { workspace = true }
+flui-layer = { workspace = true }
+flui-semantics = { workspace = true }
 # Owner-routed interaction targets/dispatch handles (ADR-0027).
 flui-interaction = { workspace = true }
 # Concrete render-object catalog (moved out of flui-rendering into flui-objects).

@@ -28,8 +28,8 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
+use flui_layer::BackdropGroupKey;
 use flui_painting::paint::{BlendMode, ImageFilter};
-use flui_rendering::layer::BackdropGroupKey;
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintContext},

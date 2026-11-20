@@ -70,8 +70,8 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Axis, Point, Rect, Vec2};
+use flui_interaction::pointer::HitTestBehavior;
 use flui_rendering::constraints::AxisDirection;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_view::prelude::StatefulView;
@@ -115,8 +115,8 @@ use flui_platform::{
     input::keyboard::Modifiers,
     input::pointer::{ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit},
 };
-use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_scheduler::PostFrameHandle;
+use flui_semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_view::environment::GestureArenaScope;
 use flui_view::environment::VsyncScope;
 

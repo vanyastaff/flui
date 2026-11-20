@@ -6,11 +6,11 @@
 
 use flui_foundation::geometry::{Axis, AxisDirection};
 use flui_foundation::{ChangeNotifier, Single};
-use flui_rendering::semantics::{CustomActionId, NumericRange, SemanticsAction};
 use flui_rendering::{
     pipeline::LocalRenderInvalidationHandle,
     view::{ScrollPosition, ViewportOffset},
 };
+use flui_semantics::{CustomActionId, NumericRange, SemanticsAction};
 use std::rc::Rc;
 
 struct ScrollSubscription {
@@ -30,12 +30,9 @@ impl Drop for ScrollSubscription {
     }
 }
 
-use flui_rendering::{
-    hit_testing::LocalPayloadTarget,
-    parent_data::BoxParentData,
-    semantics::{AssistiveFocusHandler, SemanticsActionHandler, SemanticsConfiguration},
-    traits::RenderBox,
-};
+use flui_interaction::pointer::LocalPayloadTarget;
+use flui_rendering::{parent_data::BoxParentData, traits::RenderBox};
+use flui_semantics::{AssistiveFocusHandler, SemanticsActionHandler, SemanticsConfiguration};
 
 /// A custom action a widget offers only while its gate holds.
 ///

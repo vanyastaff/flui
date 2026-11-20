@@ -24,10 +24,12 @@
 // the flui-view and flui-testing benches carry the same allow).
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use flui_foundation::{Leaf, geometry::Size};
 use flui_rendering::pipeline::phase::Idle;
-use flui_rendering::prelude::{
-    BoxLayoutContext, BoxParentData, Leaf, PipelineOwner, RenderBox, SemanticsConfiguration, Size,
+use flui_rendering::{
+    BoxLayoutContext, PipelineOwner, parent_data::BoxParentData, traits::RenderBox,
 };
+use flui_semantics::SemanticsConfiguration;
 
 /// A minimal semantics-carrying leaf, built on the public `RenderBox`
 /// surface (the in-crate test fixtures are `cfg(test)` and invisible here).

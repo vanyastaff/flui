@@ -20,7 +20,7 @@ use flui_semantics::SemanticsRegion;
 ///
 /// ```ignore
 /// use flui_rendering::delegates::CustomPainter;
-/// use flui_rendering::pipeline::Canvas;
+/// use flui_painting::Canvas;
 /// use flui_foundation::geometry::Size;
 ///
 /// #[derive(Debug)]

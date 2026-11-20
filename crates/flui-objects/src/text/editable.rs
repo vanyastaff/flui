@@ -51,6 +51,7 @@ use flui_painting::{
     typography::{InlineSpan, TextAffinity, TextAlign, TextDecoration, TextPosition},
 };
 
+use flui_layer::LayerLink;
 use flui_rendering::{
     RenderResult,
     constraints::BoxConstraints,
@@ -58,11 +59,10 @@ use flui_rendering::{
         BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
         BoxLayoutContext, PaintContext,
     },
-    layer::LayerLink,
     parent_data::BoxParentData,
-    semantics::SemanticsConfiguration,
     traits::{RenderBox, TextBaseline},
 };
+use flui_semantics::SemanticsConfiguration;
 
 const DEFAULT_CARET_WIDTH: f64 = 1.0;
 const DEFAULT_CARET_HEIGHT: f64 = 18.0;

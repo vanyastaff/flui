@@ -102,9 +102,9 @@ pub(crate) fn callback_reentry_poisons_structural_cycle() {
 /// without needing a separate mock for the set state.
 pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
     use flui_foundation::Single;
+    use flui_interaction::pointer::HitTestBehavior;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
-        hit_testing::HitTestBehavior,
         parent_data::BoxParentData,
         traits::RenderBox,
     };

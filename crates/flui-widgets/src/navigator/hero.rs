@@ -807,8 +807,8 @@ impl HeroHandle {
     /// tree alive.
     #[cfg(test)]
     pub(super) fn test_laid_out(view: &Hero) -> (Self, PipelineCell) {
+        use flui_rendering::constraints::BoxConstraints;
         use flui_rendering::pipeline::PipelineOwner;
-        use flui_rendering::prelude::BoxConstraints;
         let handle = Self::new(view, None);
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         owner.set_root_render_object(Box::new(flui_objects::RenderSubtreeAnchor::new(

@@ -43,10 +43,10 @@ use flui_painting::{
 };
 
 use flui_foundation::inspect::{Fields, Unit};
+use flui_interaction::pointer::{PathClipTarget, resolve_path_clip_target};
 use flui_rendering::{
     RenderUpdateImpact,
     context::{BoxHitTestContext, PaintContext},
-    hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };

@@ -2037,16 +2037,14 @@ fn chord_keys(chord: &str) -> Vec<&str> {
 /// as the engine places it ([`SceneVersion::follower_transform`]), and one
 /// its leader does not place is skipped with everything under it.
 ///
-/// [`SceneVersion::follower_transform`]: flui_rendering::layer::SceneVersion::follower_transform
+/// [`SceneVersion::follower_transform`]: flui_layer::SceneVersion::follower_transform
 fn scene_commands(
-    version: &flui_rendering::layer::SceneVersion,
-    node: flui_rendering::layer::SceneNodeId,
+    version: &flui_layer::SceneVersion,
+    node: flui_layer::SceneNodeId,
     selects: impl Fn(flui_foundation::RenderId) -> bool,
 ) -> Vec<flui_painting::DrawCommandBuf> {
     use flui_foundation::geometry::Matrix4;
-    use flui_rendering::layer::{
-        BoundaryContent, Entry, EntryAddress, EntryIndex, Layer, SceneNodeId,
-    };
+    use flui_layer::{BoundaryContent, Entry, EntryAddress, EntryIndex, Layer, SceneNodeId};
 
     /// A content the walk is inside, and the space each of its entries so
     /// far paints its children in: `None` under a follower nothing places.
@@ -2136,11 +2134,11 @@ fn scene_commands(
 #[cfg(test)]
 mod tests {
     use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
-    use flui_painting::{Canvas, DrawOp, paint::Paint, styling::Color};
-    use flui_rendering::layer::{
+    use flui_layer::{
         FollowerLayer, Layer, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
         PictureLayer, SceneVersion,
     };
+    use flui_painting::{Canvas, DrawOp, paint::Paint, styling::Color};
 
     /// A one-pixel swatch of `shade`, painted by a render object of that slot.
     fn swatch(shade: u8) -> LayerNode {

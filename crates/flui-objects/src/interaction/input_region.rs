@@ -8,7 +8,7 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_interaction::pointer::FirstClickTarget;
-use flui_rendering::hit_testing::HitMetadata;
+use flui_interaction::pointer::HitMetadata;
 use flui_rendering::input_regions::{InputRegionKind, InputRegionSink};
 use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::RenderBox};
 

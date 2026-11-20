@@ -281,9 +281,11 @@ fn a_development_window_locates_and_reads_facts_until_its_presentation_closes() 
 /// element, and nothing reached the app.
 #[test]
 fn a_render_object_that_panics_in_the_hit_test_answers_platform_before_the_owner_resumes() {
+    use flui_foundation::Leaf;
     use flui_foundation::geometry::Size;
-    use flui_rendering::prelude::{
-        BoxHitTestContext, BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox,
+    use flui_rendering::{
+        BoxHitTestContext, BoxLayoutContext, PaintContext, parent_data::BoxParentData,
+        traits::RenderBox,
     };
     use flui_view::{IntoView, RenderView, View};
     use flui_widgets::{RawButton, Stack, Text};

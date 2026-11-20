@@ -8,8 +8,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_rendering::hit_testing::HitMetadata;
-use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsConfiguration};
+use flui_interaction::pointer::HitMetadata;
+use flui_semantics::{ActionCall, SemanticsAction, SemanticsConfiguration};
 use flui_widgets::{WidgetStateProperty, WidgetStatesController};
 
 static_assertions::assert_not_impl_any!(WidgetStateProperty<u32>: Send, Sync);

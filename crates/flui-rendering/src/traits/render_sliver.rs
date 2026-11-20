@@ -307,7 +307,7 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     /// hit walk reads it exactly as the box walk does; without this forward it
     /// would read the `RenderObject` default and no sliver could ever attach a
     /// payload, which is a quieter failure than not offering the hook at all.
-    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
+    fn metadata(&self) -> Option<flui_interaction::pointer::HitMetadata> {
         None
     }
 
@@ -410,8 +410,8 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     fn semantics_regions(
         &self,
         _size: flui_foundation::geometry::Size,
-    ) -> crate::semantics::SemanticsRegions {
-        crate::semantics::SemanticsRegions::default()
+    ) -> flui_semantics::SemanticsRegions {
+        flui_semantics::SemanticsRegions::default()
     }
 
     /// Describes semantic properties for accessibility.
@@ -419,7 +419,7 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     /// Default: no-op. See [`RenderObject::describe_semantics_configuration`].
     fn describe_semantics_configuration(
         &self,
-        _config: &mut crate::semantics::SemanticsConfiguration,
+        _config: &mut flui_semantics::SemanticsConfiguration,
     ) {
     }
 
@@ -597,7 +597,7 @@ where
     // Effect-layer and lifecycle forwards — same pattern as the BoxProtocol
     // blanket: call into the RenderSliver method so overrides are visible
     // through `&dyn RenderObject<SliverProtocol>`.
-    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
+    fn metadata(&self) -> Option<flui_interaction::pointer::HitMetadata> {
         <T as RenderSliver>::metadata(self)
     }
 
@@ -630,7 +630,7 @@ where
 
     fn describe_semantics_configuration(
         &self,
-        config: &mut crate::semantics::SemanticsConfiguration,
+        config: &mut flui_semantics::SemanticsConfiguration,
     ) {
         <T as RenderSliver>::describe_semantics_configuration(self, config);
     }
@@ -638,7 +638,7 @@ where
     fn semantics_regions(
         &self,
         size: flui_foundation::geometry::Size,
-    ) -> crate::semantics::SemanticsRegions {
+    ) -> flui_semantics::SemanticsRegions {
         <T as RenderSliver>::semantics_regions(self, size)
     }
 

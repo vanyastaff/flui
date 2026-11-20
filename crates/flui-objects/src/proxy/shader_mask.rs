@@ -27,9 +27,9 @@ use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Point, Rect};
 use flui_painting::paint::{BlendMode, Shader};
 
+use flui_interaction::pointer::{ShaderMaskTarget, resolve_shader_mask_target};
 use flui_rendering::{
     context::{BoxHitTestContext, PaintContext},
-    hit_testing::{ShaderMaskTarget, resolve_shader_mask_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };

@@ -37,6 +37,8 @@ use flui_painting::{
     Invalidation, TextPainter, paint::Paint, typography::TextBaseline as PainterBaseline,
 };
 
+use flui_interaction::{events::Cursor, pointer::CursorRequest};
+use flui_layer::LayerLink;
 use flui_rendering::{
     RenderResult,
     constraints::BoxConstraints,
@@ -44,12 +46,10 @@ use flui_rendering::{
         BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
         BoxLayoutContext, PaintContext,
     },
-    hit_testing::{Cursor, CursorRequest},
-    layer::LayerLink,
     parent_data::BoxParentData,
-    semantics::{SemanticsAnchor, SemanticsConfiguration, SemanticsRegions, TextContent},
     traits::{RenderBox, TextBaseline},
 };
+use flui_semantics::{SemanticsAnchor, SemanticsConfiguration, SemanticsRegions, TextContent};
 
 use links::SpanRuns;
 
@@ -912,7 +912,7 @@ impl RenderBox for RenderParagraph {
                 content
                     .runs()
                     .iter()
-                    .map(flui_rendering::semantics::TextRun::byte_range)
+                    .map(flui_semantics::TextRun::byte_range)
                     .collect()
             });
         SemanticsRegions {

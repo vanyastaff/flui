@@ -25,6 +25,8 @@ autotests = false
 [dependencies]
 serde = { workspace = true, optional = true }
 flui-rendering = { workspace = true }
+flui-layer = { workspace = true }
+flui-semantics = { workspace = true }
 flui-painting = { workspace = true }
 flui-foundation = { workspace = true }
 flui-animation = { workspace = true }
