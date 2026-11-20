@@ -22,7 +22,7 @@
 //! # Scrolling is a layout event, not a build event
 //!
 //! `RenderViewport` subscribes to the offset and marks itself needing layout
-//! (`crates/flui-objects/src/sliver/viewport.rs`), so a scroll re-lays out the
+//! (`crates/flui-objects/src/sliver/viewport/core.rs`), so a scroll re-lays out the
 //! viewport and rebuilds nothing. The one thing that needs the controller's
 //! notify is servicing an `animate_to`/`jump_to` command, a listener installed
 //! alongside the fling ones (`install_command_listener`).
@@ -931,7 +931,7 @@ impl ViewState<Scrollable> for ScrollableState {
 
         // The viewport re-lays itself out from the render side:
         // `RenderViewport` subscribes to the offset and marks needs-layout
-        // (`crates/flui-objects/src/sliver/viewport.rs`). So this build runs when the
+        // (`crates/flui-objects/src/sliver/viewport/core.rs`). So this build runs when the
         // *configuration* changes, never per scroll pixel — the
         // `AnimatedBuilder` that used to wrap it rebuilt the viewport and
         // every sliver view underneath on every offset write. What genuinely

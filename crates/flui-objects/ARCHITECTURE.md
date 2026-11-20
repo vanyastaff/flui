@@ -16,6 +16,8 @@ recorded so far.
 |---|---|---|
 | `RenderSliverFixedExtentList` | [`src/sliver/sliver_fixed_extent_list.rs`](src/sliver/sliver_fixed_extent_list.rs) | Index math + request-strategy retain band; see mapping decision below. |
 | `RenderSliverGrid` | [`src/sliver/sliver_grid.rs`](src/sliver/sliver_grid.rs) | Delegate-windowed geometry + the same finite-domain scroll-window policy. |
+| `RenderViewport` | [`src/sliver/viewport/viewport.rs`](src/sliver/viewport/viewport.rs) | `center`/`anchor` layout over the shared `ViewportCore` ([`src/sliver/viewport/core.rs`](src/sliver/viewport/core.rs)): offset subscription, child walk, paint, hit testing, clips. |
+| `RenderShrinkWrappingViewport` | [`src/sliver/viewport/shrink_wrapping.rs`](src/sliver/viewport/shrink_wrapping.rs) | Main axis sized to its slivers, over the same `ViewportCore`. |
 
 ---
 

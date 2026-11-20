@@ -368,7 +368,7 @@ The ordering is three steps, each shippable alone, all in `flui-view` plus the c
    `PaintContext::with_read_scope`, which does not merge before this step.
 
 `ScrollPosition` is not the first subscriber: the viewport writes it from `perform_layout`
-(`crates/flui-objects/src/sliver/viewport.rs:1057`, `:1104`, `:1827-1828`) and there is no
+(`perform_layout` in `crates/flui-objects/src/sliver/viewport/viewport.rs` and `shrink_wrapping.rs`) and there is no
 policy for writes during layout yet. `CustomPainter` is not either: the trait is `Send + Sync`
 (`crates/flui-rendering/src/delegates/custom_painter.rs:105`) and cannot hold a `!Send`
 `Signal<T>` without an API change of its own.
