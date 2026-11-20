@@ -33,10 +33,10 @@ use std::fmt;
 
 pub use baseline::{BaselineKey, BaselineStatus, Baselines, Comparison, Environment, UpdateMode};
 pub use capture::{BaselineOptions, MAX_STABLE_CAPTURES, MAX_STABLE_FRAMES};
+pub use codec::{MAX_DECODED_BYTES, MAX_PNG_FILE_BYTES, read as read_png};
 pub use flui_protocol::capture::CaptureSource;
 use flui_protocol::geometry::{LogicalPoint, LogicalRect};
 use flui_protocol::locator::Locator;
-pub use codec::{MAX_DECODED_BYTES, MAX_PNG_FILE_BYTES, read as read_png};
 pub use metric::{Difference, Tolerance};
 
 use crate::error::{Error, Result};

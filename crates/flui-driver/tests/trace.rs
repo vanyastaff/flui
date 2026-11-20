@@ -87,8 +87,12 @@ fn record(
 ) -> Trace {
     driver.start_trace(options).expect("the trace starts");
     let mut report = Report::new();
-    report.check("the run", || run(driver)).expect("the run passes");
-    let summary = driver.finish_trace(&mut report).expect("the trace finishes");
+    report
+        .check("the run", || run(driver))
+        .expect("the run passes");
+    let summary = driver
+        .finish_trace(&mut report)
+        .expect("the trace finishes");
     assert_eq!(summary.dir.as_deref(), Some(dir));
     Trace::open(dir).expect("the trace reads back")
 }
@@ -116,9 +120,15 @@ fn normalized_rows(dir: &Path) -> Vec<serde_json::Value> {
 }
 
 /// Each handle in `value` (`w3`, `e12`) as the `n`th of its kind to appear.
-fn renumber(value: &mut serde_json::Value, handles: &mut std::collections::BTreeMap<String, String>) {
+fn renumber(
+    value: &mut serde_json::Value,
+    handles: &mut std::collections::BTreeMap<String, String>,
+) {
     let mut one = |part: &str| -> Option<String> {
-        let kind = part.chars().next().filter(|kind| matches!(kind, 'w' | 'e'))?;
+        let kind = part
+            .chars()
+            .next()
+            .filter(|kind| matches!(kind, 'w' | 'e'))?;
         let digits = &part[1..];
         if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
@@ -138,8 +148,12 @@ fn renumber(value: &mut serde_json::Value, handles: &mut std::collections::BTree
                 *text = parts.join("/");
             }
         }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(|item| renumber(item, handles)),
-        serde_json::Value::Object(fields) => fields.values_mut().for_each(|item| renumber(item, handles)),
+        serde_json::Value::Array(items) => {
+            items.iter_mut().for_each(|item| renumber(item, handles))
+        }
+        serde_json::Value::Object(fields) => {
+            fields.values_mut().for_each(|item| renumber(item, handles))
+        }
         _ => {}
     }
 }
@@ -171,7 +185,8 @@ fn a_headless_trace_matches_its_golden_rows() {
         std::fs::create_dir_all(golden.parent().expect("a folder")).expect("the folder");
         std::fs::write(&golden, &written).expect("the golden file");
     }
-    let expected = std::fs::read_to_string(&golden).expect("the golden file; FLUI_OVERWRITE=1 writes it");
+    let expected =
+        std::fs::read_to_string(&golden).expect("the golden file; FLUI_OVERWRITE=1 writes it");
     assert_eq!(written, expected, "the rows of {}", dir.display());
 }
 
@@ -182,16 +197,24 @@ fn a_trace_records_commands_as_written_with_their_results() {
     let mut driver = counter();
     let trace = record(&mut driver, &dir, TraceOptions::new(&dir), tap_once);
     let steps = trace.steps();
-    let methods: Vec<&str> = steps.iter().map(|step| step.command.method.as_str()).collect();
-    assert_eq!(methods, ["windows.list", "element.tap", "windows.list", "wait.until"]);
+    let methods: Vec<&str> = steps
+        .iter()
+        .map(|step| step.command.method.as_str())
+        .collect();
+    assert_eq!(
+        methods,
+        ["windows.list", "element.tap", "windows.list", "wait.until"]
+    );
     let tap = steps[1];
     assert_eq!(
-        tap.command.params["target"]["locator"]["name"]["text"],
-        "Increment",
+        tap.command.params["target"]["locator"]["name"]["text"], "Increment",
         "the locator as written, never only the handle it resolved to"
     );
     let result = tap.result.expect("the tap answered");
-    assert_eq!(result.ok.as_ref().expect("it succeeded")["via"], "synthetic");
+    assert_eq!(
+        result.ok.as_ref().expect("it succeeded")["via"],
+        "synthetic"
+    );
     assert!(steps.iter().all(|step| step.result.is_some()));
     let seqs: Vec<u64> = steps.iter().map(|step| step.command.seq).collect();
     assert_eq!(seqs, [1, 2, 3, 4]);
@@ -203,7 +226,9 @@ fn a_trace_cut_short_reads_as_incomplete() {
     let dir = trace_dir(&root, "cut");
     {
         let mut driver = counter();
-        driver.start_trace(TraceOptions::new(&dir)).expect("the trace starts");
+        driver
+            .start_trace(TraceOptions::new(&dir))
+            .expect("the trace starts");
         driver
             .main_window()
             .expect("a window")
@@ -238,7 +263,10 @@ fn a_reader_refuses_a_newer_format_an_unknown_row_and_a_row_after_the_end() {
     let cases = [
         (
             "newer",
-            format!("{}\n{rest}", header.replace("\"flui_trace\":1", "\"flui_trace\":2")),
+            format!(
+                "{}\n{rest}",
+                header.replace("\"flui_trace\":1", "\"flui_trace\":2")
+            ),
             "format 2",
         ),
         (
@@ -246,7 +274,11 @@ fn a_reader_refuses_a_newer_format_an_unknown_row_and_a_row_after_the_end() {
             format!("{header}\n{{\"bookmark\":{{\"t_ms\":0}}}}\n{rest}"),
             "not a row",
         ),
-        ("after_end", format!("{rows}{{\"end\":{{}}}}\n"), "after the trace's `end`"),
+        (
+            "after_end",
+            format!("{rows}{{\"end\":{{}}}}\n"),
+            "after the trace's `end`",
+        ),
         (
             "orphan_result",
             format!("{header}\n{{\"result\":{{\"seq\":7,\"t_ms\":0,\"ok\":null}}}}\n{rest}"),
@@ -268,7 +300,10 @@ fn a_reader_refuses_a_newer_format_an_unknown_row_and_a_row_after_the_end() {
     std::fs::create_dir_all(&case).expect("the directory");
     std::fs::write(
         case.join("trace.jsonl"),
-        format!("{}\n{rest}", header.replacen('{', "{\"comment\":\"new\",", 1)),
+        format!(
+            "{}\n{rest}",
+            header.replacen('{', "{\"comment\":\"new\",", 1)
+        ),
     )
     .expect("the rows");
     assert!(Trace::open(&case).expect("additions read").is_complete());
@@ -276,13 +311,23 @@ fn a_reader_refuses_a_newer_format_an_unknown_row_and_a_row_after_the_end() {
     let packed = root.path().join("packed.zip");
     std::fs::write(&packed, b"PK").expect("the file");
     let refused = Trace::open(&packed).expect_err("a file");
-    assert_eq!(refused.missing_capability().as_deref(), Some("trace_archive"));
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some("trace_archive")
+    );
 }
 
 /// A screen of one colour, the window's size.
-fn flat_screen(placement: &flui_driver::protocol::session::Placement) -> flui_driver::Result<Image> {
-    let side = |logical: f64| u32::try_from((logical * placement.scale).round() as i64).unwrap_or(1);
-    Image::filled(side(placement.size.width), side(placement.size.height), [40, 80, 120, 255])
+fn flat_screen(
+    placement: &flui_driver::protocol::session::Placement,
+) -> flui_driver::Result<Image> {
+    let side =
+        |logical: f64| u32::try_from((logical * placement.scale).round() as i64).unwrap_or(1);
+    Image::filled(
+        side(placement.size.width),
+        side(placement.size.height),
+        [40, 80, 120, 255],
+    )
 }
 
 #[test]
@@ -290,7 +335,9 @@ fn evidence_is_kept_once_and_past_the_budget_becomes_a_gap() {
     let root = tempfile::tempdir().expect("a temporary directory");
     let dir = trace_dir(&root, "evidence");
     let (lane, _) = ScriptedLane::new(Isolation::InProcess);
-    let mut driver = counter().with_lane(lane.screen(flat_screen)).expect("the lane");
+    let mut driver = counter()
+        .with_lane(lane.screen(flat_screen))
+        .expect("the lane");
     let trace = record(&mut driver, &dir, TraceOptions::new(&dir), |driver| {
         let mut window = driver.main_window()?;
         window.capture(CaptureSource::Os)?;
@@ -311,11 +358,16 @@ fn evidence_is_kept_once_and_past_the_budget_becomes_a_gap() {
     let file = trace.evidence(names[0]).expect("an evidence name");
     let kept = flui_driver::pixels::read_png(&file).expect("the evidence reads back");
     assert_eq!(kept.pixel(0, 0), Some([40, 80, 120, 255]));
-    assert!(trace.evidence("evidence/../trace.jsonl").is_err(), "no path out of the trace");
+    assert!(
+        trace.evidence("evidence/../trace.jsonl").is_err(),
+        "no path out of the trace"
+    );
 
     let dir = trace_dir(&root, "budget");
     let (lane, _) = ScriptedLane::new(Isolation::InProcess);
-    let mut driver = counter().with_lane(lane.screen(flat_screen)).expect("the lane");
+    let mut driver = counter()
+        .with_lane(lane.screen(flat_screen))
+        .expect("the lane");
     let trace = record(
         &mut driver,
         &dir,
@@ -336,7 +388,10 @@ fn evidence_is_kept_once_and_past_the_budget_becomes_a_gap() {
         .into_iter()
         .find(|step| step.command.method == "capture.os")
         .expect("the capture");
-    assert_eq!(capture.result.expect("an answer").evidence, Vec::<String>::new());
+    assert_eq!(
+        capture.result.expect("an answer").evidence,
+        Vec::<String>::new()
+    );
     assert!(!dir.join("evidence").exists());
 }
 
@@ -358,7 +413,10 @@ fn text_is_redacted_unless_the_session_keeps_it() {
     let rows = std::fs::read_to_string(dir.join("trace.jsonl")).expect("the rows");
     assert!(!rows.contains(secret), "typed text is redacted");
     assert!(!rows.contains("Count: "), "the app's text is redacted");
-    assert!(rows.contains("Increment"), "the caller's locator is kept, so a replay resolves it");
+    assert!(
+        rows.contains("Increment"),
+        "the caller's locator is kept, so a replay resolves it"
+    );
     let read = trace
         .steps()
         .into_iter()
@@ -375,7 +433,12 @@ fn text_is_redacted_unless_the_session_keeps_it() {
     assert_eq!(typing.command.params["text"], REDACTED);
 
     let dir = trace_dir(&root, "kept");
-    let trace = record(&mut counter(), &dir, TraceOptions::new(&dir).keep_text(true), typed);
+    let trace = record(
+        &mut counter(),
+        &dir,
+        TraceOptions::new(&dir).keep_text(true),
+        typed,
+    );
     assert_eq!(trace.header().privacy, Privacy::KeepText);
     let rows = std::fs::read_to_string(dir.join("trace.jsonl")).expect("the rows");
     assert!(rows.contains(secret), "typed text is kept: {rows}");
@@ -391,8 +454,12 @@ fn a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one(
         .start_trace(TraceOptions::new(&dir).mode(TraceMode::RetainOnFailure))
         .expect("the trace starts");
     let mut report = Report::new();
-    report.check("the run", || tap_once(&mut driver)).expect("it passes");
-    let summary = driver.finish_trace(&mut report).expect("the trace finishes");
+    report
+        .check("the run", || tap_once(&mut driver))
+        .expect("it passes");
+    let summary = driver
+        .finish_trace(&mut report)
+        .expect("the trace finishes");
     assert_eq!(summary.dir, None);
     assert!(!dir.exists(), "a passing run leaves no trace");
     assert!(report.to_json()["trace"].is_null());
@@ -409,7 +476,9 @@ fn a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one(
             .to_have_name("Count: 9")
     });
     assert_eq!(report.verdict(), Verdict::Fail);
-    let summary = driver.finish_trace(&mut report).expect("the trace finishes");
+    let summary = driver
+        .finish_trace(&mut report)
+        .expect("the trace finishes");
     assert_eq!(summary.dir.as_deref(), Some(dir.as_path()));
     assert_eq!(report.to_json()["trace"], dir.display().to_string());
     assert!(Trace::open(&dir).expect("kept").is_complete());
@@ -417,9 +486,14 @@ fn a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one(
     let refused = driver
         .finish_trace(&mut Report::new())
         .expect_err("no trace is being recorded");
-    assert!(matches!(refused, Error::InvalidArgument { .. }), "{refused:?}");
+    assert!(
+        matches!(refused, Error::InvalidArgument { .. }),
+        "{refused:?}"
+    );
     let mut again = counter();
-    again.start_trace(TraceOptions::new(&dir)).expect_err("a trace never writes over another");
+    again
+        .start_trace(TraceOptions::new(&dir))
+        .expect_err("a trace never writes over another");
 }
 
 #[test]
@@ -435,7 +509,10 @@ fn a_headless_replay_has_no_divergence_and_a_changed_app_diverges_at_its_wait() 
 
     let changed = trace::replay(&trace, &mut stepper(2)).expect("the replay runs");
     let divergence = changed.divergence.expect("the changed app diverges");
-    assert_eq!((divergence.seq, divergence.method.as_str()), (4, "wait.until"));
+    assert_eq!(
+        (divergence.seq, divergence.method.as_str()),
+        (4, "wait.until")
+    );
     assert_eq!(divergence.at, "/satisfied");
     assert_eq!(
         (divergence.expected, divergence.actual),
@@ -469,7 +546,10 @@ fn codegen_writes_the_checked_in_test_from_a_trace() {
          suite; FLUI_OVERWRITE=1 rewrites it"
     );
     let refused = trace::codegen(&trace, &CodegenOptions::new("not a name", "x"));
-    assert!(matches!(refused, Err(Error::InvalidArgument { .. })), "{refused:?}");
+    assert!(
+        matches!(refused, Err(Error::InvalidArgument { .. })),
+        "{refused:?}"
+    );
 }
 
 #[test]
@@ -538,7 +618,9 @@ fn every_text_field_of_the_wire_is_redacted_or_named_as_kept() {
     free_strings(&schema, &mut free);
     let unclassified: Vec<&String> = free
         .iter()
-        .filter(|name| !trace::TEXT_FIELDS.contains(&name.as_str()) && !KEPT.contains(&name.as_str()))
+        .filter(|name| {
+            !trace::TEXT_FIELDS.contains(&name.as_str()) && !KEPT.contains(&name.as_str())
+        })
         .collect();
     assert!(
         unclassified.is_empty(),
@@ -574,7 +656,10 @@ fn is_free_string(property: &serde_json::Value) -> bool {
             Some(serde_json::Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
             _ => false,
         };
-        typed && ["const", "enum", "pattern", "format"].iter().all(|key| schema.get(*key).is_none())
+        typed
+            && ["const", "enum", "pattern", "format"]
+                .iter()
+                .all(|key| schema.get(*key).is_none())
     };
     if plain(property) {
         return true;
@@ -620,9 +705,14 @@ fn a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core() 
     use serde_json::json;
 
     let mut capabilities = Capabilities::default();
-    capabilities.methods = ["windows.list", "window.placement", "record.start", "record.stop"]
-        .map(str::to_owned)
-        .to_vec();
+    capabilities.methods = [
+        "windows.list",
+        "window.placement",
+        "record.start",
+        "record.stop",
+    ]
+    .map(str::to_owned)
+    .to_vec();
     capabilities.record = vec![RecordLayer::Input, RecordLayer::Native];
     let mut asked_native = false;
     let agent = ScriptedAgent::start_with(
@@ -662,31 +752,73 @@ fn a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core() 
         Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(5)).expect("attached");
     let root = tempfile::tempdir().expect("a temporary directory");
     let dir = trace_dir(&root, "native");
-    driver.start_trace(TraceOptions::new(&dir)).expect("the trace starts");
-    driver.windows().expect("a command between the start and the stop");
+    driver
+        .start_trace(TraceOptions::new(&dir))
+        .expect("the trace starts");
+    driver
+        .windows()
+        .expect("a command between the start and the stop");
     let mut report = Report::new();
-    report.push(flui_driver::Check::new("recorded", flui_driver::Outcome::Passed));
-    let summary = driver.finish_trace(&mut report).expect("the trace finishes");
-    let stopped = summary.recording.expect("the app's recording came to an end");
-    assert!(stopped.complete, "record.start asked for the input and native layers");
-    assert_eq!((summary.native.len(), summary.native[0].rows, summary.native[0].lost_rows), (1, 1, 2));
+    report.push(flui_driver::Check::new(
+        "recorded",
+        flui_driver::Outcome::Passed,
+    ));
+    let summary = driver
+        .finish_trace(&mut report)
+        .expect("the trace finishes");
+    let stopped = summary
+        .recording
+        .expect("the app's recording came to an end");
+    assert!(
+        stopped.complete,
+        "record.start asked for the input and native layers"
+    );
+    assert_eq!(
+        (
+            summary.native.len(),
+            summary.native[0].rows,
+            summary.native[0].lost_rows
+        ),
+        (1, 1, 2)
+    );
 
     let trace = Trace::open(&dir).expect("the trace reads back");
-    assert_eq!(trace.header().layers, [RecordLayer::Input, RecordLayer::Native]);
-    let input = std::fs::read_to_string(trace.input_recording().expect("input.jsonl")).expect("it reads");
+    assert_eq!(
+        trace.header().layers,
+        [RecordLayer::Input, RecordLayer::Native]
+    );
+    let input =
+        std::fs::read_to_string(trace.input_recording().expect("input.jsonl")).expect("it reads");
     let lines: Vec<&str> = input.lines().collect();
     assert_eq!(lines.len(), 3, "the header, the row and the end: {input}");
     assert!(lines[2].contains("\"end\""), "{input}");
-    let native = trace.native_recordings().expect("the native layer reads through the protocol");
+    let native = trace
+        .native_recordings()
+        .expect("the native layer reads through the protocol");
     assert_eq!(native.len(), 1);
     assert_eq!(native[0].header.backend, Backend::Win32);
     let rows: Vec<&NativeRow> = native[0].rows().collect();
-    assert!(matches!(rows.as_slice(), [NativeRow::ClickSettings { settings: None, .. }]), "{rows:?}");
-    assert_eq!(native[0].lost_rows(), 2, "the gap stays where the stream lost rows");
+    assert!(
+        matches!(
+            rows.as_slice(),
+            [NativeRow::ClickSettings { settings: None, .. }]
+        ),
+        "{rows:?}"
+    );
+    assert_eq!(
+        native[0].lost_rows(),
+        2,
+        "the gap stays where the stream lost rows"
+    );
     let (events, dropped) = driver.take_events();
-    assert!(events.is_empty() && dropped == 0, "the recording's rows were the trace's: {events:?}");
+    assert!(
+        events.is_empty() && dropped == 0,
+        "the recording's rows were the trace's: {events:?}"
+    );
     drop(driver);
-    agent.join(Duration::from_secs(5)).expect("the stand-in ends");
+    agent
+        .join(Duration::from_secs(5))
+        .expect("the stand-in ends");
 }
 
 #[test]
@@ -702,13 +834,24 @@ fn a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused() {
     assert_eq!(read.rows().count(), 1);
 
     let cases = [
-        ("newer", r#"{"flui_native_recording":99,"backend":"headless"}"#.to_owned() + "\n", "version 99"),
+        (
+            "newer",
+            r#"{"flui_native_recording":99,"backend":"headless"}"#.to_owned() + "\n",
+            "version 99",
+        ),
         (
             "long",
-            format!("{header}\n{{\"row\":\"click_settings\",\"pad\":\"{}\"}}\n", "x".repeat(MAX_LINE_BYTES)),
+            format!(
+                "{header}\n{{\"row\":\"click_settings\",\"pad\":\"{}\"}}\n",
+                "x".repeat(MAX_LINE_BYTES)
+            ),
             "longer than",
         ),
-        ("unknown", format!("{header}\n{{\"row\":\"teleport\"}}\n"), "not a row"),
+        (
+            "unknown",
+            format!("{header}\n{{\"row\":\"teleport\"}}\n"),
+            "not a row",
+        ),
     ];
     for (name, text, says) in cases {
         std::fs::write(&path, text).expect("the file");

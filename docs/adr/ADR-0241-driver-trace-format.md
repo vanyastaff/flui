@@ -21,7 +21,9 @@ versioned header (ADR-0215 §3).
 1. A trace is a directory `<name>.flui-trace/` with:
    - `trace.jsonl`;
    - `input.jsonl`, an ADR-0215 recording verbatim, when recorded;
-   - `native/<backend>.jsonl`, in the native recording codec, when captured;
+   - `native/<n>.jsonl`, one native recording per stream the backend journals (ADR-0288 §11),
+     in the native recording codec, with `native/index.json` naming each file's backend and
+     stream, when captured;
    - `evidence/<sha256>.<ext>`, content-addressed captures and tree snapshots.
 
    `flui drive trace pack` zips it for transport; readers accept both.

@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 is built and under review, FD11 is built and under review (its runs on the input desktop owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -665,6 +665,65 @@ graph LR
   - a headless record → replay round trip has no divergence, and a changed app diverges at the
     expected `seq`;
   - codegen output compiles and passes in a trybuild-style nested test.
+- **Status (2026-11-20):** built; the pull request is under review. Two items of the card are met
+  another way or in part, and three of R21–R27 wait on other tasks (below).
+- **Evidence (2026-11-20, `driver_it` on Windows 11 build 26300 and WSL Ubuntu 24.04):**
+  - Metric: `pixels::the_metric_measures_pixelmatchs_yiq_distance` (distances worked out by hand
+    from pixelmatch's formula, its `35215` bound), `the_threshold_lets_close_colours_pass_and_far_ones_fail`,
+    `anti_aliased_pixels_count_unless_the_tolerance_excuses_them`. pixelmatch's own PNG fixture
+    pairs (`1a.png`/`1b.png` and their expected counts) are not in the tree: vendoring them is a
+    download the owner approves, so the table pins the formula, not those counts.
+  - Masks, baselines and predicates: `pixels::a_mask_hides_a_changing_clock` (the count's bounds
+    from the headless counter's semantics, its pixels from a scripted lane's screen that shades
+    them anew at every capture; unmasked, the capture never settles),
+    `a_missing_baseline_fails_and_leaves_the_capture_as_new`,
+    `update_modes_write_baselines_and_a_written_one_still_fails`,
+    `an_update_is_refused_in_ci_and_a_misspelled_one_everywhere`,
+    `a_baseline_past_its_bounds_or_not_a_png_is_refused_before_it_is_decoded` (a header declaring
+    20000 x 20000 refused before any pixel buffer), `a_logical_region_covers_every_device_pixel_it_touches`,
+    `the_predicates_check_one_capture_without_a_baseline`,
+    `a_window_stable_for_n_frames_passes_and_a_moving_one_names_the_frame`,
+    `the_apps_own_sources_are_named_as_not_supported_until_the_app_serves_them`.
+  - Trace: `trace::a_headless_trace_matches_its_golden_rows` (`tests/golden/counter.trace.jsonl`),
+    `a_trace_records_commands_as_written_with_their_results`, `a_trace_cut_short_reads_as_incomplete`
+    (a session ended unfinished, and a last line torn mid-write),
+    `a_reader_refuses_a_newer_format_an_unknown_row_and_a_row_after_the_end`,
+    `evidence_is_kept_once_and_past_the_budget_becomes_a_gap`,
+    `text_is_redacted_unless_the_session_keeps_it`,
+    `every_text_field_of_the_wire_is_redacted_or_named_as_kept` (every free string field of
+    `protocol-0.28.json` is in `trace::TEXT_FIELDS` or the test's kept list),
+    `a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`,
+    `a_headless_replay_has_no_divergence_and_a_changed_app_diverges_at_its_wait` (a counter
+    stepping by 2 diverges at seq 4, `wait.until`, `/satisfied`),
+    `codegen_writes_the_checked_in_test_from_a_trace` with `trace_generated::a_generated_test_taps_the_counter`
+    compiled and run in the same suite,
+    `a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core` (over a scripted
+    agent's socket: `record.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
+    `flui-protocol`, the stream's `gap` in place), `a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`.
+- **As built:**
+  - `flui_driver::pixels` and `flui_driver::trace`, as the Rust API; their protocol rows
+    (`capture.os`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
+    FD11's `os.*` rows do, so a replay lists a pixel command as skipped rather than compare it.
+  - One image type: `lane::OsCapture` became `pixels::Image`, and `Window::capture_os` became
+    `Window::capture(CaptureSource::Os)`.
+  - The `presented` and `rendered` sources answer `not_supported` naming the method while the app
+    does not serve it (FD8 is not built), and naming `capture_payload` once it does, since the
+    connections read no binary frame yet; the headless target has no pixel source until FD8's
+    `rendered`, so the pixel tests on it take their pixels from `ScriptedLane::screen`.
+  - A comparison records its source, backend, OS and scale; the renderer (adapter, backend) and
+    the font set R22 also asks for are not reported by any source yet, and wait for FD8's capture
+    answer to carry them.
+  - Codegen is held by a checked-in module of the suite (`tests/trace_generated.rs`) that the
+    golden test compares and the suite compiles and runs, instead of a nested cargo build: the same
+    proof, on every PR.
+  - The writer of a recording's native layer moved from `flui-cli` into the driver
+    (`trace::native::NativeFiles`), which `flui record --native` and a trace share; its files are
+    one per stream (`native/<n>.jsonl` with `index.json`), as ADR-0241 §1 now says.
+  - `retain_on_failure` writes the trace in place and removes it when the report does not fail.
+  - Left for later tasks: blessing `flui-native`'s native goldens through the driver in place of
+    `FLUI_NATIVE_RECORDING_BLESS` (R26) comes with the scenarios that record through
+    `record.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,
+    `trace codegen`, `trace pack` and the inspector's player (R25) are FD17's and FD18's.
 
 ### FD11. Windows lane
 
@@ -791,9 +850,9 @@ graph LR
     not `uiautomation` and `windows-capture`.
   - `Lane` gains `check` (asked by `send_guarded` before the guard arms), `read_tree`, `invoke` and
     `capture_window`, each `not_supported` by default; the Rust API reaches them as
-    `Window::os_tree`, `compare_projection`, `os_invoke` and `capture_os`. The protocol rows
-    `os.tree`, `os.compare_projection` and `capture.os` are not in `flui_protocol::method` yet: they
-    join it with the front ends, and FD10 makes `capture_window` its `os` source.
+    `Window::os_tree`, `compare_projection`, `os_invoke` and `capture(CaptureSource::Os)` (FD10's
+    `os` source). The protocol rows `os.tree`, `os.compare_projection` and `capture.os` are not in
+    `flui_protocol::method` yet: they join it with the front ends.
   - ADR-0095 §4's projection is `flui_protocol::tree::normalized_outline`; it leaves out the
     window node, a title bar and the framework's own identifiers (`flui:`, the announcer's live
     regions), and reads an OS automation id as the identifier.
@@ -812,8 +871,9 @@ graph LR
     the gallery (`windows-gallery`), the accessibility checks with the roles page
     (`windows-a11y`, on a page of every role of the table instead of `a11y_probe`), `windows-input`
     and `windows-notes` (on a note field instead of `two_screens`). DPI after a resize and native
-    goldens through `record.start{native}` are not checked: the driver neither resizes a window nor
-    records native input yet (FD6, FD10).
+    goldens through `record.start{native}` are not checked: the driver resizes no window, and its
+    trace records the native layer (FD10) only from an app built with the `native-capture`
+    journal, which no scenario run on Windows has made yet.
   - The headless target's window offers text input (`HeadlessWindow::with_text_input`): without it
     `element.type_text` and a composition reached no field.
   - The isolation modes are refused, `not_supported` naming `windows_isolation_<mode>`

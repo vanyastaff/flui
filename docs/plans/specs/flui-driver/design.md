@@ -598,10 +598,10 @@ no-go escalates to the owner, never to a silent Swift fallback.
 
 ### Pixels
 
-`pixels` compares RGBA8 images (`image` for codecs):
+`pixels` compares RGBA8 images (`png` for the codec, the one `image` already brings in):
 
 - **Stable capture.** Capture, then capture the next presented frame, until two consecutive
-  captures are equal or the timeout passes (`toHaveScreenshot`).
+  captures, masked, are equal or the timeout passes (`toHaveScreenshot`).
 - **Masks.** Each mask locator's rect is painted a fixed colour in both images before comparing.
 - **Metric.** Per-pixel YIQ ΔE (the pixelmatch metric Playwright and kittest use), default
   threshold 0.1, plus `max_diff_pixels` (default 0) or `max_diff_ratio`. Anti-aliased pixels are
@@ -609,13 +609,14 @@ no-go escalates to the owner, never to a silent Swift fallback.
   unless asked: FLUI's own rasterizer is the thing under test, and its anti-aliasing is part of what
   a baseline pins. `ignore_antialiasing` is an opt-in for app-level screens. Each comparison
   records the adapter, backend, font set and scale factor beside its result.
-- **Baselines.** `<baseline dir>/<name>/<backend>-<os>.png`, backend from the capture
-  (`presented-win32`, `rendered-headless`, …). The baseline dir defaults to `tests/baselines/`
-  of the calling crate. A missing baseline fails and writes `.new.png`; a mismatch writes
-  `.new.png` and `.diff.png`. `FLUI_DRIVER_UPDATE_BASELINES=failing|all` rewrites them, and is
-  refused when `CI` is set.
-- **Predicates.** `color_at(point, rgba, tolerance)`, `differs_from(&capture, region)`,
-  `equals(&capture, region)`, `uniform(region, tolerance)`, `stable_for(frames)`.
+- **Baselines.** `<baseline dir>/<name>/<source>-<backend>-<os>.png`, source and backend from
+  the capture (`presented-win32`, `rendered-headless`, `os-windows`, …), under the directory the
+  caller names. A missing baseline fails and writes `.new.png`; a mismatch writes `.new.png` and
+  `.diff.png`. `FLUI_DRIVER_UPDATE_BASELINES=none|missing|changed|all` writes them, is refused
+  when `CI` is set, and a check that wrote a baseline still fails.
+- **Predicates.** On a capture: `expect_color_at(point, rgba, tolerance)`,
+  `expect_differs_from(&capture, region)`, `expect_same_as(&capture, region)`,
+  `expect_uniform(region, tolerance)`; on a window, `expect_stable_for(frames)`.
 - Fonts: captures come from apps on bundled fonts (`FontCollection::new()`), which
   `docs/testing.md` already requires of tests. A baseline is recorded per backend because GPU
   rasterization differs (kittest documents the sources: MSAA, filtering, float rounding).
@@ -626,8 +627,8 @@ A trace is a directory `<name>.flui-trace/`:
 
 - `trace.jsonl`: a header, then rows;
 - `input.jsonl`: an ADR-0215 recording, verbatim;
-- `native/<backend>.jsonl`: native recordings in the codec of
-  `crates/flui-platform/tests/native_recording/`;
+- `native/<n>.jsonl`: one native recording per stream the backend journals, in the protocol's
+  native recording format (`flui_protocol::native_recording`), with `native/index.json`;
 - `evidence/<sha256>.<png|json>`: content-addressed, so a repeated tree snapshot costs nothing.
 
 ```text
@@ -643,7 +644,8 @@ Commands carry locators as the caller wrote them, never only the resolved handle
 re-resolves (Playwright traces keep the locator). Evidence has a size budget per trace (default
 256 MiB). Over budget, it writes a `gap` row and keeps going. A trace is complete only when it ends
 with `end`, and a crash leaves an incomplete trace that readers report as such (ADR-0215's rule).
-Modes: `off`, `on`, `retain_on_failure` (written to a temp dir, kept only when the report fails).
+Modes: `off`, `on`, `retain_on_failure` (written in place, removed when the report does not
+fail).
 
 - `trace.replay(trace, target)` re-issues the commands and compares each result with the recorded
   one modulo volatile fields: handles renumbered by first appearance, times, frame ids. Evidence is
