@@ -1958,6 +1958,7 @@ dependencies = [
  "objc2-core-graphics",
  "png",
  "reis",
+ "roxmltree",
  "rustix 1.1.6",
  "schemars",
  "serde",
