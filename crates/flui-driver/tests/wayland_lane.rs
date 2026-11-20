@@ -52,6 +52,32 @@ fn a_device_point_lands_in_the_compositors_logical_space_or_is_refused() {
         );
     }
     assert_eq!(mapping::ei_point(DevicePoint::new(0, 0), 1.0, &[]), None);
+    // A region's edges: its first column and row are in it, its last are, the next are not.
+    let offset = [EiRegion {
+        x: 10,
+        y: 20,
+        width: 30,
+        height: 40,
+    }];
+    for (point, inside) in [
+        (DevicePoint::new(10, 20), true),
+        (DevicePoint::new(39, 59), true),
+        (DevicePoint::new(9, 20), false),
+        (DevicePoint::new(10, 19), false),
+        (DevicePoint::new(40, 20), false),
+        (DevicePoint::new(10, 60), false),
+    ] {
+        assert_eq!(
+            mapping::ei_point(point, 1.0, &offset).is_some(),
+            inside,
+            "{point:?}"
+        );
+    }
+    // A negative scale is refused, though the point it would map to lies in a region.
+    assert_eq!(
+        mapping::ei_point(DevicePoint::new(-100, -50), -1.0, &regions),
+        None
+    );
 }
 
 #[test]

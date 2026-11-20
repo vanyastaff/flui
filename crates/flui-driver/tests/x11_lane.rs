@@ -85,6 +85,14 @@ fn text_is_typed_as_its_characters_and_line_breaks_as_keys() {
         ])
     );
     assert_eq!(keys::text_strokes("bell\u{7}"), Err('\u{7}'));
+    assert_eq!(
+        keys::text_strokes("\rb"),
+        Ok(vec![
+            TextStroke::Key(keys::RETURN),
+            TextStroke::Char(Keysym(0x62))
+        ]),
+        "a lone carriage return is one Return, the next character kept"
+    );
 }
 
 #[test]
@@ -142,6 +150,11 @@ fn an_atspi_role_folds_to_the_wire_role_the_app_publishes_where_atspi_keeps_it_a
         }
     }
     assert_eq!(atspi::wire_role(AtspiRole::TABLE), Role::Table);
+    assert_eq!(
+        atspi::wire_role(AtspiRole::TITLE_BAR),
+        Role::TitleBar,
+        "a title bar, which the projection leaves out"
+    );
     assert_eq!(atspi::wire_role(AtspiRole::PANEL), Role::Group);
     assert_eq!(atspi::wire_role(AtspiRole(0)), Role::Unknown);
 }
@@ -220,13 +233,15 @@ fn each_safety_rule_refuses_with_its_code() {
         ..Desk::quiet()
     };
     assert_eq!(check_event(&desk, None, &mine), Ok(()));
-    for refusal in [
-        Refusal::ShellHotkey { handler: "x" },
-        Refusal::UnknownKey { name: "x".into() },
-        Refusal::UnsentInput { what: "x".into() },
-        Refusal::NoSpareKey { text: "x".into() },
+    for (refusal, capability) in [
+        (Refusal::ShellHotkey { handler: "x" }, "os_shell_hotkey"),
+        (Refusal::UnknownKey { name: "x".into() }, "os_key"),
+        (Refusal::UnsentInput { what: "x".into() }, "os_input_device"),
+        (Refusal::NoSpareKey { text: "x".into() }, "os_key"),
     ] {
-        assert_eq!(code(refusal), Some(ErrorCode::NotSupported));
+        let error = refusal.into_error();
+        assert_eq!(error.code(), Some(ErrorCode::NotSupported));
+        assert_eq!(error.missing_capability().as_deref(), Some(capability));
     }
 }
 
@@ -439,6 +454,124 @@ fn chords_the_desktop_takes_are_refused_and_app_chords_are_not() {
     assert_eq!(refused(&[down("F1")]), None);
 }
 
+/// Every chord the desktop takes is named by what takes it, and the same keys without the
+/// modifiers that make them a desktop chord go to the app.
+#[test]
+fn each_desktop_chord_names_what_takes_it() {
+    use flui_driver::lane::x11::keys::Modifier::{Alt, Control, Shift, Super};
+    let rows: &[(u32, &[Modifier], Option<&str>)] = &[
+        (0xFFEB, &[], Some("the desktop shell (the Super key)")),
+        (0x61, &[Super], Some("the desktop shell (the Super key)")),
+        (
+            0xFFE5,
+            &[],
+            Some("the keyboard's lock state, shared by every window"),
+        ),
+        (
+            0xFF7F,
+            &[],
+            Some("the keyboard's lock state, shared by every window"),
+        ),
+        (
+            0xFF14,
+            &[],
+            Some("the keyboard's lock state, shared by every window"),
+        ),
+        (0xFF61, &[], Some("the screenshot tool")),
+        (
+            0x1008_FF11,
+            &[],
+            Some("the system's volume and media controls"),
+        ),
+        (
+            0x1008_FF17,
+            &[],
+            Some("the system's volume and media controls"),
+        ),
+        (0x1008_FE01, &[], Some("the virtual-terminal switch")),
+        (0x1008_FE0C, &[], Some("the virtual-terminal switch")),
+        (0xFED5, &[], Some("the X server's terminate key")),
+        (0xFFBF, &[Control, Alt], Some("the virtual-terminal switch")),
+        (
+            0xFF08,
+            &[Control, Alt],
+            Some("the X server's terminate key"),
+        ),
+        (
+            0xFFFF,
+            &[Control, Alt],
+            Some("the session's log-out dialog"),
+        ),
+        (0xFF09, &[Alt], Some("the window manager's switcher")),
+        (0xFF1B, &[Alt], Some("the window manager's switcher")),
+        (0xFFBF, &[Alt], Some("the window manager's keys")),
+        // The same keys under fewer modifiers are the app's.
+        (0xFFBF, &[Control], None),
+        (0xFF08, &[Alt], None),
+        (0xFF08, &[Control], None),
+        (0xFFFF, &[Control], None),
+        (0xFFFF, &[Alt], None),
+        (0xFF09, &[Control, Shift], None),
+        (0x1008_FE0D, &[], None),
+        (0x61, &[Control, Alt], None),
+    ];
+    for (keysym, held, expected) in rows {
+        assert_eq!(
+            safety::press_takes(Keysym(*keysym), held),
+            *expected,
+            "{keysym:#x} under {held:?}"
+        );
+    }
+}
+
+/// The run of lone Shift taps counts Shift alone: another key pressed starts it again, a key
+/// released is no tap, and Shift pressed beside a held key is not alone.
+#[test]
+fn only_a_lone_shift_counts_toward_sticky_keys() {
+    let keymap = keymap();
+    let tap = [down("Shift"), up("Shift")];
+    // Five releases of a letter are not five Shift taps.
+    let mut letters = HeldInput::new();
+    for _ in 0..5 {
+        send(&mut letters, &[down("a"), up("a")]);
+    }
+    assert_eq!(letters.shell_hotkey(&tap, &keymap), Ok(None));
+    // Four taps, then a key pressed and released: the run starts again.
+    let mut broken = HeldInput::new();
+    for _ in 0..4 {
+        send(&mut broken, &tap);
+    }
+    send(&mut broken, &[down("a"), up("a")]);
+    for _ in 0..4 {
+        assert_eq!(broken.shell_hotkey(&tap, &keymap), Ok(None));
+        send(&mut broken, &tap);
+    }
+    assert_eq!(broken.shell_hotkey(&tap, &keymap), Ok(Some(STICKY_KEYS)));
+    // Shift pressed while another key is down is not alone: five such taps are no shortcut.
+    let held_a: Vec<KeyInput> = std::iter::once(down("a"))
+        .chain((0..5).flat_map(|_| [down("Shift"), up("Shift")]))
+        .collect::<Vec<KeyInput>>();
+    assert_eq!(HeldInput::new().shell_hotkey(&held_a, &keymap), Ok(None));
+    // A key pressed while Shift is down ends Shift's being alone, though Shift is released first.
+    let crossed: Vec<KeyInput> = (0..5)
+        .flat_map(|_| [down("Shift"), down("a"), up("Shift"), up("a")])
+        .collect::<Vec<KeyInput>>();
+    assert_eq!(HeldInput::new().shell_hotkey(&crossed, &keymap), Ok(None));
+    // A tap after a shortcut-free run that ended in a press of Shift itself still counts.
+    let mut again = HeldInput::new();
+    for _ in 0..4 {
+        send(&mut again, &tap);
+    }
+    send(
+        &mut again,
+        &[down("Shift"), down("a"), up("a"), up("Shift")],
+    );
+    for _ in 0..4 {
+        send(&mut again, &tap);
+    }
+    assert_eq!(again.shell_hotkey(&tap, &keymap), Ok(Some(STICKY_KEYS)));
+}
+
 #[test]
 fn only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut() {
     let keymap = keymap();
@@ -545,6 +678,102 @@ fn a_release_or_emptying_the_server_refused_stays_held() {
         "{released:?}"
     );
     assert_eq!(buttons.bits(), 0b100);
+}
+
+/// What the lane records is what the server took: each key held once, each mapped key once, a
+/// key released by the code it was pressed with, a mapping waiting for no echo, and a keymap read
+/// at any number of keysyms a key.
+#[test]
+fn the_held_records_follow_what_the_server_took() {
+    let keymap = keymap();
+    assert_eq!(keymap.per_keycode(), 2);
+    let one_level = Keymap::new(10, 0, vec![Keysym(0x61), Keysym(0x62)]);
+    assert_eq!(one_level.place(Keysym(0x62)), Some((Keycode(11), false)));
+    let three_levels = Keymap::new(10, 3, vec![Keysym(0x62), keys::NO_SYMBOL, Keysym(0x99)]);
+    assert_eq!(
+        three_levels.place(Keysym(0x42)),
+        Some((Keycode(10), true)),
+        "a lower case alone on its first two levels types its capital"
+    );
+
+    let mut held = HeldInput::new();
+    send(&mut held, &[down("Shift"), down("a"), down("a")]);
+    assert_eq!(
+        held.keys(),
+        vec![Keycode(50), Keycode(38)],
+        "a key held once"
+    );
+    assert_eq!(
+        held.plan(&up("a"), &keymap),
+        Ok(vec![Keystroke::Release(Keycode(38))]),
+        "released by the code it was pressed with"
+    );
+    let map = Keystroke::Map {
+        key: Keycode(255),
+        keysym: Keysym(0xFC),
+    };
+    held.deliver(map, &keymap, || Ok(()), refuse)
+        .expect("a mapping waits for no echo");
+    held.deliver(map, &keymap, || Ok(()), || Ok(()))
+        .expect("mapped again");
+    assert_eq!(held.mapped(), vec![Keycode(255)], "a key mapped once");
+
+    // No Shift on the keymap: a capital is typed through a spare key, never its key unshifted.
+    let no_shift = Keymap::new(
+        8,
+        2,
+        vec![Keysym(0x61), Keysym(0x41), keys::NO_SYMBOL, keys::NO_SYMBOL],
+    );
+    assert_eq!(
+        HeldInput::new().plan(&KeyInput::Text("A".into()), &no_shift),
+        Ok(vec![
+            Keystroke::Map {
+                key: Keycode(9),
+                keysym: Keysym(0x41),
+            },
+            Keystroke::Settle,
+            Keystroke::Press(Keycode(9)),
+            Keystroke::Release(Keycode(9)),
+            Keystroke::Settle,
+            Keystroke::Unmap(Keycode(9)),
+        ])
+    );
+    // As many characters off the keymap as spare keys: planned.
+    assert!(
+        HeldInput::new()
+            .plan(&KeyInput::Text("ü".into()), &no_shift)
+            .is_ok()
+    );
+
+    // A mask the server refused, every key then released: that first failure, not a release
+    // failure, since nothing stays held.
+    let mut masked = HeldInput::new();
+    send(&mut masked, &[down("Control")]);
+    let released = masked.release_all(&keymap, |stroke| match stroke {
+        Keystroke::Press(Keycode(255)) => refuse(),
+        _ => Ok(()),
+    });
+    assert!(matches!(released, Err(Error::Lane { .. })), "{released:?}");
+    assert!(masked.keys().is_empty(), "Control was released after the mask");
+
+    // Buttons are released by their own numbers, and one refused is named.
+    let mut buttons = HeldButtons::default();
+    for button in [1, 3] {
+        buttons
+            .deliver(button, true, || Ok(()), || Ok(()))
+            .expect("down");
+    }
+    let mut sent = Vec::new();
+    let released = buttons.release_all(|button| {
+        sent.push(button);
+        if button == 1 { refuse() } else { Ok(()) }
+    });
+    assert_eq!(sent, vec![1, 3]);
+    assert!(
+        matches!(&released, Err(Error::ReleaseFailed { held, .. })
+            if held == &vec!["mouse button 1".to_owned()]),
+        "{released:?}"
+    );
 }
 
 /// A wheel click is a press and a release held as a button's are: a click whose echo never came
@@ -730,6 +959,14 @@ fn only_the_xtest_events_the_lane_sent_are_its_own() {
         count.foreign(Observed::new(RawKind::Touch, false)),
         Some("a touch")
     );
+    assert_eq!(
+        count.foreign(Observed::new(RawKind::Button, false)),
+        Some("a mouse button")
+    );
+    assert_eq!(
+        count.foreign(Observed::new(RawKind::Key, false)),
+        Some("a key press")
+    );
 }
 
 #[test]
@@ -785,6 +1022,46 @@ fn an_image_reads_into_rgba_rows_whatever_its_layout() {
         vec![0xFF, 0, 0, 0xFF, 0, 0, 0xFF, 0xFF]
     );
     assert!(image::rgba(&format, &data[..12]).is_err(), "too short");
+    // 24 bits a pixel, three pixels a row padded to 32 bits: each row is 12 bytes, 9 of them
+    // pixels, so the second row starts after three bytes of padding.
+    let packed = PixmapFormat {
+        width: 3,
+        height: 2,
+        bits_per_pixel: 24,
+        scanline_pad: 32,
+        ..format
+    };
+    let rows = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 0xEE, 0xEE, 0xEE, //
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 0xEE, 0xEE, 0xEE,
+    ];
+    assert_eq!(
+        image::rgba(&packed, &rows).expect("read"),
+        vec![
+            3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, //
+            12, 11, 10, 255, 15, 14, 13, 255, 18, 17, 16, 255,
+        ]
+    );
+    assert!(
+        image::rgba(&packed, &rows[..23]).is_err(),
+        "one byte short of the last row's padding"
+    );
+    // A five-bit channel is scaled to eight bits with rounding: 16 of 31 is 132, 30 of 31 is 247;
+    // a channel no mask names is 0.
+    let five = PixmapFormat {
+        width: 2,
+        height: 1,
+        bits_per_pixel: 16,
+        scanline_pad: 16,
+        lsb_first: true,
+        red_mask: 0x001F,
+        green_mask: 0,
+        blue_mask: 0x001F,
+    };
+    assert_eq!(
+        image::rgba(&five, &[16, 0, 30, 0]).expect("read"),
+        vec![132, 0, 132, 255, 247, 0, 247, 255]
+    );
     let odd = PixmapFormat {
         bits_per_pixel: 8,
         ..format
