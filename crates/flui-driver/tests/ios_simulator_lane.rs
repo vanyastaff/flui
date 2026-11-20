@@ -625,9 +625,21 @@ fn a_screen_of_another_size_than_the_window_is_refused_before_it_is_decoded() {
     // A header that declares a screen past the bound, or no PNG at all, is never decoded.
     let mut huge = png_of(1, 1, &[0, 0, 0, 255]);
     huge[16..20].copy_from_slice(&9000_u32.to_be_bytes());
-    let mut tall = png_of(1, 1, &[0, 0, 0, 255]);
-    tall[20..24].copy_from_slice(&8193_u32.to_be_bytes());
-    for refused in [huge, tall, b"GIF89a".to_vec(), Vec::new()] {
+    let declared = |width: u32, height: u32| {
+        let mut png = png_of(1, 1, &[0, 0, 0, 255]);
+        png[16..20].copy_from_slice(&width.to_be_bytes());
+        png[20..24].copy_from_slice(&height.to_be_bytes());
+        png
+    };
+    for refused in [
+        huge,
+        declared(1, 8193),
+        declared(8193, 1),
+        declared(0, 1),
+        declared(1, 0),
+        b"GIF89a".to_vec(),
+        Vec::new(),
+    ] {
         let error = screenshot::window_image(&refused, &placement()).expect_err("refused");
         assert!(matches!(error, Error::Lane { .. }), "{error:?}");
     }
@@ -638,6 +650,10 @@ fn a_screen_of_another_size_than_the_window_is_refused_before_it_is_decoded() {
     let image = screenshot::window_image(&png_of(1, 8192, &vec![0; 8192 * 4]), &column)
         .expect("a side of the bound");
     assert_eq!((image.width(), image.height()), (1, 8192));
+    let row = Placement::new(window(), LogicalSize::new(8192.0, 1.0), 1.0);
+    let image = screenshot::window_image(&png_of(8192, 1, &vec![0; 8192 * 4]), &row)
+        .expect("a side of the bound, the other of one pixel");
+    assert_eq!((image.width(), image.height()), (8192, 1));
     let bad_scale =
         |width: f64, scale: f64| Placement::new(window(), LogicalSize::new(width, 852.0), scale);
     for placement in [
