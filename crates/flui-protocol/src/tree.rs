@@ -735,6 +735,92 @@ pub fn outline(roots: &[Node]) -> String {
     out
 }
 
+/// The namespace of the identifiers the framework itself publishes (ADR-0240): no widget
+/// identifier begins with it.
+pub const FRAMEWORK_IDENTIFIER_PREFIX: &str = "flui:";
+
+/// The normalized outline of ADR-0095 §4: what is left of `roots` when what only one backend
+/// reports is taken out, so the in-process tree and an OS accessibility tree of the same app
+/// state project to the same text.
+///
+/// - Each root is its window, whose frame and title are the OS's: the outline starts at the
+///   roots' children, and a title bar (with its buttons and system menu) is left out with
+///   everything under it.
+/// - A node whose identifier is in the framework's own namespace, [`FRAMEWORK_IDENTIFIER_PREFIX`]
+///   (the announcer's live regions, which a read reports as announcements rather than nodes),
+///   is left out with everything under it.
+/// - Roles are the wire's, which is already the fold to what UI Automation can express.
+/// - A node's identifier is its identifier, or the OS's automation id where it has none: an
+///   adapter publishes the identifier as the automation id (ADR-0240 §3).
+/// - Handles, native names (`native_role`, `class_name`), rectangles, focus and actions are left
+///   out: they differ by backend or by the moment of the read.
+/// - One node per line, indented by depth: `- role "name" [identifier="…"] [value="…"]
+///   [description="…"] [true|false|mixed] [expanded|collapsed] [selected] [disabled]`.
+///
+/// ```
+/// use flui_protocol::{tree::ElementId, tree::Node, tree::normalized_outline, wire::Role};
+///
+/// let id = |n| ElementId::from_u64(n).expect("the handle is nonzero");
+/// let mut window = Node::new(id(1), Role::Window, "Window");
+/// let mut button = Node::new(id(7), Role::Button, "Button");
+/// button.name = Some("Increment".to_owned());
+/// button.automation_id = Some("increment".to_owned());
+/// window.children.push(button);
+/// assert_eq!(
+///     normalized_outline(&[window]),
+///     "- button \"Increment\" [identifier=\"increment\"]\n",
+/// );
+/// ```
+#[must_use]
+pub fn normalized_outline(roots: &[Node]) -> String {
+    fn line(node: &Node, depth: usize, out: &mut String) {
+        use std::fmt::Write as _;
+        let identifier = node.identifier.as_ref().or(node.automation_id.as_ref());
+        let framework = identifier.is_some_and(|id| id.starts_with(FRAMEWORK_IDENTIFIER_PREFIX));
+        if node.role == Role::TitleBar || framework {
+            return;
+        }
+        let _ = write!(out, "{}- {}", "  ".repeat(depth), node.role.name());
+        if let Some(name) = &node.name {
+            let _ = write!(out, " {name:?}");
+        }
+        if let Some(identifier) = identifier {
+            let _ = write!(out, " [identifier={identifier:?}]");
+        }
+        if let Some(value) = &node.value {
+            let _ = write!(out, " [value={value:?}]");
+        }
+        if let Some(description) = &node.description {
+            let _ = write!(out, " [description={description:?}]");
+        }
+        if let Some(checked) = node.checked {
+            let _ = write!(out, " [{checked}]");
+        }
+        if let Some(expanded) = node.expanded {
+            out.push_str(if expanded {
+                " [expanded]"
+            } else {
+                " [collapsed]"
+            });
+        }
+        if node.selected == Some(true) {
+            out.push_str(" [selected]");
+        }
+        if node.disabled {
+            out.push_str(" [disabled]");
+        }
+        out.push('\n');
+        for child in &node.children {
+            line(child, depth + 1, out);
+        }
+    }
+    let mut out = String::new();
+    for child in roots.iter().flat_map(|root| &root.children) {
+        line(child, 0, &mut out);
+    }
+    out
+}
+
 /// How many elements `roots` hold.
 fn count(roots: &[Node]) -> usize {
     roots.iter().map(|n| 1 + count(&n.children)).sum()

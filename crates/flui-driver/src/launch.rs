@@ -166,17 +166,29 @@ impl Launch {
             .env(TOKEN_ENV, &token)
             .env(EXIT_ON_DISCONNECT_ENV, "1")
             .stdin(Stdio::null());
+        // The job comes first: a job Windows refuses to make leaves nothing started.
+        #[cfg(windows)]
+        let job = crate::lane::windows::job::KillOnCloseJob::try_new()?;
         let child = command.spawn().map_err(|error| {
             Error::Io(io::Error::new(
                 error.kind(),
                 format!("could not start {}: {error}", executable.display()),
             ))
         })?;
+        #[cfg(windows)]
+        if let Err(error) = job.assign(&child) {
+            let mut child = child;
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         Ok(Launched {
             endpoint: place.address.clone(),
             token,
             process: AppProcess {
                 child,
+                #[cfg(windows)]
+                _job: job,
                 _place: place,
             },
         })
@@ -208,9 +220,13 @@ pub(crate) struct Launched {
     pub(crate) token: String,
 }
 
-/// A process the session owns: killed when the session ends while it still runs.
+/// A process the session owns: killed when the session ends while it still runs. On Windows it
+/// runs in a kill-on-close job, so whatever it started ends with it, and so does the app when the
+/// driver's process ends without dropping the session.
 pub(crate) struct AppProcess {
     child: Child,
+    #[cfg(windows)]
+    _job: crate::lane::windows::job::KillOnCloseJob,
     /// Where its agent listens: the private directory its socket lives in (Unix), removed with the
     /// session, after the process ended.
     _place: EndpointPlace,

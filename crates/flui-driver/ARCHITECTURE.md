@@ -33,6 +33,31 @@ app's trees, frames and input, and this crate composes that with what only the O
   event and releases everything on every exit; `OsInputLock` holds one session per user's
   desktop; the first OS event of a session is announced once; once OS input went out, a failed
   read of what it did is `may_have_run`, never not run.
+- **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
+  `Lane::check` over the whole sequence before it arms the guard: a key a lane has no code for, a
+  device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
+  released.
+- **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
+  the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
+  Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
+  and `WindowsLane` are `cfg(windows)`.
+- **The Windows lane rechecks the desktop before every event.** It sends nothing off the desktop
+  that takes the user's input (`UOI_IO`), and that refusal is a lane the host cannot run
+  (`cannot_verify`); then the window, the foreground, the window under the point and the physical
+  input held, each refusal with its wire code (`safety::Refusal`). Every event carries the lane's
+  tag, which is how its guard tells the lane's input from anyone else's.
+- **No trampoline for the guard.** A low-level hook procedure gets no context, and a process-global
+  cell would be a trampoline only `flui-app` and `flui-native` may hold (ADR-0097): the procedure
+  posts what it saw to its own thread's queue, and the loop that owns the state classifies it.
+- **A lane stays `Send` without a new `unsafe impl`.** OS handles a lane keeps (a window, a
+  synthetic pointer device) are kept as integers; a COM object (UI Automation, Direct3D, a
+  capture session) and its apartment live for one call on the lane's thread.
+- **A launched Windows app runs in a kill-on-close job.** The job is made before the app starts,
+  and its handle closes with the session or with the driver's process, however that ends.
+- **The OS tree is read against the app's through one projection.** A lane projects its OS tree
+  onto the wire's nodes, and `projection::Projection` compares the two through
+  `flui_protocol::tree::normalized_outline` (ADR-0095 §4), the one definition of what only one
+  backend reports.
 - **Mapping refuses, never clamps.** `coordinates::to_device` maps in `f64` with every step checked
   and refuses a point outside the surface; `steps::os_events` hands a lane single-step moves, each
   followed by a pause, at most `steps::MAX_STEPS` per tick, the moving sources of a tick stepping
