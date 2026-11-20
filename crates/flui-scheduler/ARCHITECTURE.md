@@ -347,7 +347,7 @@ lifecycle (an owner that resumed, a test driving frames).
 **Mapping decision** (ADR-0027 leapfrog zone: runtime/scheduling topology
 is a sanctioned divergence point): the pipeline carrier goes through
 `UpdateScheduler`. `PipelineOwner::request_visual_update`
-(`flui-rendering/src/pipeline/owner/accessors.rs`) delivers the
+(`flui-rendering/src/pipeline/owner/invalidation.rs`) delivers the
 pipeline's visual-update wake (`flui-rendering/src/pipeline/notifier.rs`,
 an owned snapshot run with no notifier guard held), which invokes the
 closure a presentation registers via `owner.set_on_need_visual_update`
