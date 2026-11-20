@@ -1,6 +1,6 @@
 //! What the lane reads of the device, as pure parsers over what `adb` printed: the devices the adb
 //! server lists and which one a run takes, whether it is an emulator, its display, the commands
-//! its `input` has, and the window that holds the input focus.
+//! its `input` has, the window that holds the input focus, and whether a screen reader runs.
 //!
 //! Everything here is the device's output, so each parser reads it as untrusted: a line it cannot
 //! read is skipped or answers `None`, never a panic, and what it collects is bounded.
@@ -218,6 +218,64 @@ pub fn parse_focus(printed: &str) -> Option<String> {
     let _user = words.next()?;
     let title = words.next()?.trim();
     (!title.is_empty()).then(|| title.to_owned())
+}
+
+/// The line that prints the accessibility services the user turned on and whether touch
+/// exploration is on, one a line (`Settings.Secure`).
+pub const ACCESSIBILITY_SETTINGS: &str = "settings get secure enabled_accessibility_services; settings get secure touch_exploration_enabled";
+
+/// The most bytes of the [`ACCESSIBILITY_SETTINGS`] reply the lane reads, which bounds the list
+/// of services it scans.
+pub const MAX_ACCESSIBILITY_SETTINGS: usize = 16 * 1024;
+
+/// The packages of the screen readers the lane knows by name: Google's TalkBack, and the TalkBack
+/// Samsung ships in its place. Any other screen reader is told by touch exploration, which every
+/// one of them turns on.
+pub const SCREEN_READERS: &[&str] = &[
+    "com.google.android.marvin.talkback",
+    "com.samsung.android.accessibility.talkback",
+];
+
+/// A screen reader the device runs, as its settings show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScreenReader {
+    /// A service of [`SCREEN_READERS`] is on: its component, `package/class`.
+    Service(String),
+    /// Touch exploration is on, which a screen reader asks for.
+    TouchExploration,
+}
+
+impl ScreenReader {
+    /// What is on, for people.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Service(component) => format!("the screen reader {component}"),
+            Self::TouchExploration => {
+                "touch exploration, which a screen reader turns on,".to_owned()
+            }
+        }
+    }
+}
+
+/// The screen reader the [`ACCESSIBILITY_SETTINGS`] line's `printed` shows on, if any: a service
+/// of a known screen reader in the colon-separated list (`null` when the user turned none on), or
+/// touch exploration turned on (`1`).
+#[must_use]
+pub fn parse_screen_reader(printed: &str) -> Option<ScreenReader> {
+    let mut lines = printed.lines().map(str::trim);
+    let services = lines.next().unwrap_or_default();
+    let touch_exploration = lines.next() == Some("1");
+    let service = services.split(':').map(str::trim).find(|component| {
+        component
+            .split_once('/')
+            .is_some_and(|(package, _)| SCREEN_READERS.contains(&package))
+    });
+    match service {
+        Some(component) => Some(ScreenReader::Service(component.to_owned())),
+        None => touch_exploration.then_some(ScreenReader::TouchExploration),
+    }
 }
 
 /// A name `am`, `pm` and `input` take whole: an application id or an activity class, its

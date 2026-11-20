@@ -26,6 +26,11 @@ use crate::error::Result;
 use crate::projection::Projection;
 use crate::scenario::WindowSpec;
 
+/// What reading the OS accessibility tree answers in a session without an OS lane.
+fn no_tree_lane() -> crate::Error {
+    crate::Error::not_supported("os_accessibility_tree", "the session has no OS lane")
+}
+
 /// One window of the app.
 pub struct Window<'d> {
     pub(crate) driver: &'d mut Driver,
@@ -83,19 +88,27 @@ impl<'d> Window<'d> {
     }
 
     /// The window as the OS accessibility API shows it, through the session's lane, projected
-    /// onto the wire's nodes ([`Lane::read_tree`](crate::Lane::read_tree)). Its nodes' ids number
-    /// them in the order they were read: they are no handles the app issued.
+    /// onto the wire's nodes ([`Lane::read_tree`](crate::Lane::read_tree)), handed the app's own
+    /// tree of the window, read first. Its nodes' ids number them in the order they were read:
+    /// they are no handles the app issued.
     ///
     /// # Errors
     ///
-    /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_accessibility_tree` without
-    /// a lane that reads one; the lane's and the app's failures.
+    /// As [`Self::read`]; [`Error::NotSupported`](crate::Error::NotSupported) naming
+    /// `os_accessibility_tree` without a lane that reads one; the lane's failures.
     pub fn os_tree(&mut self) -> Result<Tree> {
+        if self.driver.lane().is_none() {
+            return Err(no_tree_lane());
+        }
+        let app = self.read()?;
+        self.os_tree_against(app)
+    }
+
+    /// [`Self::os_tree`], the lane handed `app`, the window's tree as the app published it.
+    fn os_tree_against(&mut self, app: Tree) -> Result<Tree> {
         let placement = self.placement()?;
-        let lane = self.driver.lane().ok_or_else(|| {
-            crate::Error::not_supported("os_accessibility_tree", "the session has no OS lane")
-        })?;
-        lane.run(move |lane| lane.read_tree(&placement))?
+        let lane = self.driver.lane().ok_or_else(no_tree_lane)?;
+        lane.run(move |lane| lane.read_tree(&placement, &app))?
     }
 
     /// Activate the element whose identifier is `identifier` through the OS accessibility API, as
@@ -122,8 +135,8 @@ impl<'d> Window<'d> {
     ///
     /// As [`Self::read`] and [`Self::os_tree`].
     pub fn compare_projection(&mut self) -> Result<Projection> {
-        let os = self.os_tree()?;
         let app = self.read()?;
+        let os = self.os_tree_against(app.clone())?;
         Ok(Projection::of(&app, &os))
     }
 

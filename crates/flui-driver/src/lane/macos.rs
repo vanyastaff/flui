@@ -540,7 +540,7 @@ mod lane {
             )
         }
 
-        fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
+        fn read_tree(&mut self, placement: &Placement, _app: &Tree) -> Result<Tree> {
             Self::permitted(Permission::Accessibility)?;
             let target = self.find(placement)?;
             let mut tree = ax::read(self.pid, target.frame, target.scale)?;

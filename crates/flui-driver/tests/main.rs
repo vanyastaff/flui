@@ -7,6 +7,7 @@ mod android_edges;
 mod android_host;
 mod android_lane;
 mod android_rules;
+mod android_tree;
 mod apps;
 mod chrome_browser;
 mod chrome_host;

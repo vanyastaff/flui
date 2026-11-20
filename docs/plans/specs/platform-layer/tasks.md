@@ -10,11 +10,11 @@
     ввод пользователя: на отдельном рабочем столе nextest он `cannot_verify` (прогон
     2026-11-20 в записи), а на рабочий стол пользователя тесты выходят только с
     `FLUI_TEST_VISIBLE_DESKTOP=1`, и этот прогон делает владелец;
-  - LY96 — сценариев TalkBack и VoiceOver на iOS нет в коде: Android-lane не читает дерево
-    доступности, пока `accesskit_android` не ставит `viewIdResourceName` (правка AccessKit
-    написана, upstream не отправлена: владелец отправляет её, затем lane читает дерево), а
-    iOS-lane нет (FD15 спеки flui-driver, и агент пока не достигает приложения в Simulator);
-    сеансы Narrator, VoiceOver, Orca и TalkBack — долг строки parity;
+  - LY96 — сценария VoiceOver на iOS нет в коде: iOS-lane нет (FD15 спеки flui-driver, и агент
+    пока не достигает приложения в Simulator). Android-lane читает дерево TalkBack из
+    `uiautomator dump` без `viewIdResourceName`, сопоставляя его с деревом приложения, и
+    сценарии `android-roles` и `android-a11y` есть в коде с headless-половиной; их прогоны на
+    устройстве и сеансы Narrator, VoiceOver, Orca и TalkBack — долг строки parity;
   - LY97 — Web: ADR-0288 §11 решил, что страница пишет только слой `input`, поэтому запись
     драйвером через Chrome-lane не держит lifecycle, дисплеи и снимки окна web-сборки, а строка
     задачи требует их и на Web. Нужно решение владельца: ADR, который заменяет это предложение
@@ -5066,8 +5066,8 @@ GPU-память простаивающего или невидимого окн
   Linux и Android с отладочной сборкой приложения и захват настоящего метода ввода — строка
   parity «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY96** (сценариев TalkBack и VoiceOver на iOS нет в коде; сеансы ассистивных технологий в
-  долгу) — Windows-lane
+- [ ] **LY96** (сценария VoiceOver на iOS нет в коде; прогоны Android-сценариев на устройстве и
+  сеансы ассистивных технологий в долгу) — Windows-lane
   драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
   приложение через UI Automation, то дерево, что читает Narrator: нормализованная проекция дерева
   UIA равна дереву приложения, каждая роль таблицы ролей читается своим control type, элемент
@@ -5085,18 +5085,34 @@ GPU-память простаивающего или невидимого окн
   действие через семантический путь), `scenarios::each_role_publishes_the_wire_role_ui_automation_folds_it_to`
   (каждая роль таблицы, поле ввода и список среди них),
   `scenarios::the_conformance_scenario_passes_on_the_headless_target`; на Windows 11 2026-11-20 —
-  3 из 3. **Чего нет в коде.** Android-lane (FD13, #2954) вводит через `adb`, но дерево TalkBack
-  не читает (`read_tree` и `invoke` — `not_supported`): `accesskit_android` не ставит
-  `viewIdResourceName`, и идентификатор узла до UI Automator не доходит; правка AccessKit
-  написана и upstream не отправлена (`docs/gaps.md`, «No accessibility on mobile and the Web» и
-  «The driver's Android lane reads no accessibility tree…»), снимает это владелец отправкой
-  правки и выпуском AccessKit, затем lane читает дерево. iOS-lane нет (FD15 спеки flui-driver), и
-  агент не достигает приложения в Simulator (`docs/gaps.md`, «The driver agent cannot reach an
-  app in the iOS Simulator»): сценария VoiceOver на iOS нет. Chrome-lane (FD12, #2953) дерева
-  доступности страницы не читает (в строке задачи Web нет). `uiautomator dump`, которым
-  Android-lane находит окно, на время дампа приостанавливает службы accessibility, и TalkBack
-  тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает `uiautomator`.
-  Долг: сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
+  3 из 3. Android-lane (FD13) читает дерево, которое читает TalkBack, из `uiautomator dump`:
+  `accesskit_android` не ставит `viewIdResourceName`, поэтому `lane::android::tree` сопоставляет
+  дамп с деревом приложения по структуре, роли (класс, который `accesskit_android` 0.9.1 даёт
+  роли AccessKit, таблица `lane::android::roles`), имени (`content-desc`), состояниям checked и
+  enabled и границам в координатах дисплея; два одинаковых кандидата — типизированная ошибка
+  `Ambiguous`, границы вне дисплея узел никуда не ставят. Сопоставленный узел несёт роль и
+  идентификатор приложения. `invoke` отказывает (`os_invoke`): оболочка UI Automator действий не
+  выполняет, а `ACTION_CLICK` доходит до узла только от службы accessibility или инструментации
+  на устройстве; касание в центре узла — путь ввода, а не активация. `uiautomator dump`
+  приостанавливает службы accessibility, и lane отказывает в любом дампе, пока работает
+  скринридер (служба TalkBack в `enabled_accessibility_services` или включённое touch
+  exploration). Сценарии в коде: `roles` с плечом `AccessibilityApi::UiAutomator` и
+  `accessibility`; headless-половина — `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app`
+  и `scenarios::the_android_accessibility_scenario_passes_through_the_lane_but_its_activation`
+  (через lane на эмуляторе по сценарию, который отдаёт дамп дерева headless-приложения так, как
+  его отдал бы `accesskit_android`), таблицы и отказы — `android_tree::*`; на Windows 11 и
+  WSL Ubuntu 24.04 2026-11-20 проходят. Семь ролей, чью метку FLUI публикует описанием
+  (paragraph, caption, code, emphasis, strong, insertion, deletion), до TalkBack без текста:
+  `accesskit_android` описание не передаёт (`docs/gaps.md`, «Accessibility bridge fidelity»).
+  **Чего нет в коде.** iOS-lane нет (FD15 спеки flui-driver), и агент не достигает приложения в
+  Simulator (`docs/gaps.md`, «The driver agent cannot reach an app in the iOS Simulator»):
+  сценария VoiceOver на iOS нет. Chrome-lane (FD12) дерева доступности страницы не читает (в
+  строке задачи Web нет). Сеанс TalkBack находит окно до включения TalkBack и действует его
+  жестами; ни сохранённой геометрии, ни жестов нет (`docs/gaps.md`, «The driver's Android lane
+  activates nothing through accessibility…»). Долг: прогоны
+  `android_device::the_android_roles_scenario_runs_through_the_os_lane` и
+  `android_device::the_android_accessibility_scenario_runs_through_the_os_lane` на эмуляторе и
+  устройстве; сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
   строка качества parity «Conformance executed with assistive technology on each OS».
 
 - [ ] **LY99** (сценарий есть; прогон через Windows `os`-lane на рабочем столе, принимающем
