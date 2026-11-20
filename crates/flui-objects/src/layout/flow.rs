@@ -227,7 +227,8 @@ impl RenderFlow {
         let mut recovery = PanicRecovery::new();
         let mut impact = None;
         recovery.run(|| {
-            let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
+            let type_changed =
+                !crate::dynamic_type::same_concrete_type(&*self.delegate, &*delegate);
             impact = Some(
                 if type_changed || delegate.should_relayout(&*self.delegate) {
                     flui_rendering::RenderUpdateImpact::LAYOUT

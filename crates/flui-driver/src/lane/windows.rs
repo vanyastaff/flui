@@ -66,6 +66,34 @@ pub fn desktop_takes_input() -> bool {
     win32::on_input_desktop()
 }
 
+/// Release everything the lane holds: the keys through `send_stroke`, then the mouse buttons
+/// through `release_button`, then the touch and pen contacts through `inject`, every part tried
+/// whatever the one before it came to, a panic included.
+///
+/// # Errors
+///
+/// What [`release_outcome`](crate::lane::release_outcome) makes of the three releases:
+/// [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming everything still held.
+///
+/// # Panics
+///
+/// The first part's panic, resumed once every part was tried and what the others leave held is
+/// logged at error level; discarded instead when the thread is already unwinding.
+pub fn release_held(
+    keys: &mut held::HeldKeys,
+    buttons: &mut held::HeldButtons,
+    contacts: &mut contacts::Contacts,
+    send_stroke: impl FnMut(held::Keystroke) -> crate::Result<()>,
+    release_button: impl FnMut(u8) -> crate::Result<()>,
+    inject: impl FnMut(&contacts::Frame) -> crate::Result<()>,
+) -> crate::Result<()> {
+    let mut panicked = flui_foundation::panic::FirstPanic::new();
+    let keys = panicked.contain(|| keys.release_all(send_stroke));
+    let buttons = panicked.contain(|| buttons.release_all(release_button));
+    let lifted = panicked.contain(|| contacts.release_all(inject));
+    crate::lane::release_settled(panicked, [keys, buttons, lifted])
+}
+
 #[cfg(windows)]
 mod lane {
     use std::time::Instant;
@@ -522,19 +550,21 @@ mod lane {
 
         fn release_all(&mut self) -> Result<()> {
             let _units = DeviceUnits::enter();
-            let keys = self.keys.release_all(send_stroke);
-            let buttons = self
-                .buttons
-                .release_all(|button| win32::mouse_button(button, false));
-            let (contacts, touch, pen) = (&mut self.contacts, &mut self.touch, &mut self.pen);
-            let lifted = contacts.release_all(|frame| {
-                let slot = match frame.kind {
-                    PointerKind::Touch => &mut *touch,
-                    _ => &mut *pen,
-                };
-                device(slot, frame.kind)?.inject(frame)
-            });
-            keys.and(buttons).and(lifted)
+            let (touch, pen) = (&mut self.touch, &mut self.pen);
+            super::release_held(
+                &mut self.keys,
+                &mut self.buttons,
+                &mut self.contacts,
+                send_stroke,
+                |button| win32::mouse_button(button, false),
+                |frame| {
+                    let slot = match frame.kind {
+                        PointerKind::Touch => &mut *touch,
+                        _ => &mut *pen,
+                    };
+                    device(slot, frame.kind)?.inject(frame)
+                },
+            )
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {

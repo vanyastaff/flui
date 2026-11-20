@@ -913,13 +913,8 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // every field is a layout input (the keyboard showing or hiding, a
         // direction change moving the floating action button), so any
         // difference relays out.
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| self != old)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

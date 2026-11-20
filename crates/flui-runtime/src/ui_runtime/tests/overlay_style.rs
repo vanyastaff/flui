@@ -24,10 +24,6 @@ impl PlatformSystemChrome for RecordingChrome {
         }
         self.0.lock().push(style);
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// The whole window annotated with the style `scene` selects: `1` is light,

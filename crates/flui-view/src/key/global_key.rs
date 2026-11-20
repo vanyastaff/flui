@@ -276,13 +276,8 @@ impl<T: 'static> Hash for GlobalKey<T> {
 }
 
 impl<T: 'static> ViewKey for GlobalKey<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        other
-            .as_any()
+        (other as &dyn Any)
             .downcast_ref::<Self>()
             .is_some_and(|other| self.id == other.id)
     }

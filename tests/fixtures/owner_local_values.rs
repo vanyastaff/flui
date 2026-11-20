@@ -5,7 +5,6 @@
 //! this consumer from compiling. It names only paths `flui` and `flui-sdk`
 //! share, so the same source checks both.
 
-use std::any::Any;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -64,21 +63,17 @@ impl CustomPainter for PainterWithState {
     fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
         false
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug)]
 struct FlowWithState(Shared);
 
 impl FlowDelegate for FlowWithState {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.smallest()
     }
 
-    fn get_constraints_for_child(
+    fn constraints_for_child(
         &self,
         _index: usize,
         constraints: BoxConstraints,
@@ -97,27 +92,19 @@ impl FlowDelegate for FlowWithState {
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         false
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug)]
 struct SingleWithState(Shared);
 
 impl SingleChildLayoutDelegate for SingleWithState {
-    fn get_position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
+    fn position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
         self.0.set(self.0.get() + 1);
         Offset::ZERO
     }
 
     fn should_relayout(&self, _old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
         false
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -136,10 +123,6 @@ impl MultiChildLayoutDelegate for MultiWithState {
 
     fn should_relayout(&self, _old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
         false
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

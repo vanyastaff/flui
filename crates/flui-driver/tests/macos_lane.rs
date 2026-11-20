@@ -18,7 +18,7 @@ use flui_driver::lane::macos::safety::{
 };
 use flui_driver::lane::macos::screen::{self, PointRect, WindowInfo};
 use flui_driver::lane::macos::version::MacosVersion;
-use flui_driver::lane::macos::{callback, frame};
+use flui_driver::lane::macos::{self, callback, frame};
 use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows;
 use flui_driver::projection::Projection;
@@ -1595,30 +1595,138 @@ fn the_release_of_everything_keeps_what_it_released_apart_from_what_failed() {
     );
     assert_eq!(keys.held(), [keys::CONTROL.0]);
 
-    // The lane's outcome names what the keys and the mouse both still hold, the keys' failure
-    // first.
-    let stuck = |held: &str, message: &str| -> Result<()> {
-        Err(Error::ReleaseFailed {
-            lane: "macos".into(),
-            held: vec![held.to_owned()],
-            message: message.to_owned(),
-        })
-    };
-    let both = release_outcome(
-        stuck("Control", "keys"),
-        stuck("the left mouse button", "mouse"),
+    // The lane's release of everything tries the mouse after the keys failed, posts its releases
+    // with the flags the keys still hold, and names what both hold with each part's first
+    // failure, the keys' first.
+    let device = PointerDevice::Mouse;
+    let mut pointer = Pointer::new();
+    for step in [
+        Step::Move {
+            device,
+            to: at(5.5, 6.5),
+        },
+        Step::Down {
+            device,
+            button: PointerButton::Primary,
+        },
+    ] {
+        let events = pointer.plan(step).expect("a plan");
+        pointer.deliver(&events, |_| Ok(())).expect("posted");
+    }
+    let mut mouse_flags = Vec::new();
+    let both = macos::release_held(
+        &mut keys,
+        &mut pointer,
+        |_, _| Err(no_event()),
+        |_, flags| {
+            mouse_flags.push(flags);
+            Err(Error::Protocol {
+                message: "the mouse refused".into(),
+            })
+        },
     );
+    let expected = format!("{}; protocol: the mouse refused", no_event());
     assert!(
-        matches!(&both, Err(Error::ReleaseFailed { held, message, .. })
-            if held == &["Control", "the left mouse button"] && message == "keys"),
+        matches!(&both, Err(Error::ReleaseFailed { lane, held, message })
+            if lane == "macos"
+                && held == &["Control", "the left mouse button"]
+                && message == &expected),
         "{both:?}"
     );
-    let mouse = release_outcome(Ok(()), stuck("the left mouse button", "mouse"));
-    assert!(
-        matches!(&mouse, Err(Error::ReleaseFailed { message, .. }) if message == "mouse"),
-        "{mouse:?}"
+    assert_eq!(
+        mouse_flags,
+        [keys.flags()],
+        "posted with Control still held"
     );
-    assert!(release_outcome(Ok(()), Ok(())).is_ok());
+    assert_ne!(keys.flags(), HeldKeys::new().flags());
+
+    // Once Control's release went out, the mouse's goes out without it.
+    let mut mouse_flags = Vec::new();
+    let released_keys = macos::release_held(
+        &mut keys,
+        &mut pointer,
+        |_, _| Ok(()),
+        |_, flags| {
+            mouse_flags.push(flags);
+            Ok(())
+        },
+    );
+    assert!(released_keys.is_ok(), "{released_keys:?}");
+    assert_eq!(
+        mouse_flags,
+        [HeldKeys::new().flags()],
+        "the mouse is released with the flags left after the keys' release"
+    );
+    assert!(release_outcome([Ok(()), Ok(())]).is_ok());
+}
+
+/// A part whose release panics keeps the other held no longer: both are tried, the first panic is
+/// resumed, and what the refused part leaves held is logged at error level first.
+#[test]
+fn a_panicking_part_of_the_release_still_lets_the_other_go() {
+    // The part that panics, the part refused, what the log names.
+    let rows = [
+        ("keys", "mouse", "the left mouse button"),
+        ("mouse", "keys", "Control"),
+    ];
+    for (panicking, refusing, logged) in rows {
+        let act = |part: &str| -> Result<()> {
+            assert!(part != panicking, "the {part} panic");
+            if part == refusing {
+                return Err(no_event());
+            }
+            Ok(())
+        };
+        let mut keys = HeldKeys::new();
+        post_all(&mut keys, &[input_down("Control")]);
+        let device = PointerDevice::Mouse;
+        let mut pointer = Pointer::new();
+        for step in [
+            Step::Move {
+                device,
+                to: at(5.5, 6.5),
+            },
+            Step::Down {
+                device,
+                button: PointerButton::Primary,
+            },
+        ] {
+            let events = pointer.plan(step).expect("a plan");
+            pointer.deliver(&events, |_| Ok(())).expect("posted");
+        }
+        let mut mouse_tried = false;
+        let (resumed, captured) = flui_testing::log_capture::capture(|| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the test catches the resumed panic to assert on what ran before it"
+            )]
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                macos::release_held(
+                    &mut keys,
+                    &mut pointer,
+                    |_, _| act("keys"),
+                    |_, _| {
+                        mouse_tried = true;
+                        act("mouse")
+                    },
+                )
+            }))
+        });
+        let payload = resumed.expect_err("the panic is resumed");
+        assert_eq!(
+            payload.downcast_ref::<String>().map(String::as_str),
+            Some(format!("the {panicking} panic").as_str())
+        );
+        assert!(mouse_tried, "{panicking}: the mouse was tried");
+        let errors = captured
+            .at_level(tracing::Level::ERROR)
+            .filter(|record| record.contains("input stays held after a release that panicked"))
+            .collect::<Vec<_>>();
+        assert!(
+            errors.len() == 1 && errors[0].contains(logged),
+            "{panicking}: {logged} is logged: {captured}"
+        );
+    }
 }
 
 /// A press needs a place and a button that is up, a release a button that is down; each button a
