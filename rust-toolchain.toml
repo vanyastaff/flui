@@ -31,7 +31,7 @@
 #   3. Update the prose that states the number: README.md (outside the badge),
 #      crates/flui-cli/README.md, docs/getting-started.md and
 #      book/src/getting-started/installation.md.
-#   4. Run `cargo heli xtask checks`.
+#   4. Run `cargo heli xtask checks`; the `checks` job in `ci.yml` also runs the MSRV step.
 
 [toolchain]
 channel = "1.100.0"

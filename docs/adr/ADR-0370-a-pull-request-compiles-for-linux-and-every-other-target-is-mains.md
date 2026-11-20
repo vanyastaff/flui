@@ -68,8 +68,8 @@ and `doc-test`, which it ran before, and the five this record moves there: `test
 `test-features`, `doc`, `wasm-check` and `cross-typecheck`. No job of `ci.yml` compiles for
 wasm32, Windows, macOS, iOS or Android on a pull request. A change that breaks one of them is
 found by main's run and fixed forward or reverted, as AGENTS.md says of a red main.
-
-Two other workflows still start a native host for a pull request that touches the `paths` each
+One other workflow still starts a native host for a pull request that touches the `paths` it
+names in its own file: `nightly-platforms.yml` (the former native-host workflow is gone, see ADR-0383 §9).
 names in its own file: `nightly-platforms.yml` (the former native-host workflow is gone, see ADR-0383 §9).
 
 ### §3. A job added later

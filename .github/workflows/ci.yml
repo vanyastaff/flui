@@ -10,7 +10,7 @@ name: CI
 # and nothing else changes without a commit.
 # No label enables native application Windows/macOS or GPU jobs. Platform typechecking
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
-# Native host-tool tests live separately in xtask-native.yml.
+# test-desktop's Windows-only tests run in nightly-platforms.yml's Windows leg.
 # test-nested and test-trybuild run independently, each with its own cache.
 # All jobs except the notification are gated by the `ci` job.
 
@@ -248,18 +248,41 @@ jobs:
           set -euo pipefail
           minor=$(sed -n 's/^channel = "\([0-9]*\.[0-9]*\)\.[0-9]*"[[:space:]]*$/\1/p' rust-toolchain.toml)
           [ -n "$minor" ] || { echo "::error::rust-toolchain.toml names no x.y.z channel"; exit 1; }
-          stated=$(git grep -nE 'rust-version = "[0-9]+\.[0-9]+"|MSRV[- ][0-9]+\.[0-9]+' \
-            -- Cargo.toml crates/flui-cli/src/templates README.md llms.txt)
-          [ -n "$stated" ] || { echo "::error::no MSRV statement found"; exit 1; }
-          if wrong=$(grep -vE "(rust-version = \"|MSRV[- ])${minor//./\\.}([^0-9]|$)" <<< "$stated"); then
+          failed=0
+          m=${minor//./\\.}
+          # Each source has to state the minor in its own form.
+          require() {  # require <file> <extended regex>
+            if ! grep -qE "$2" "$1"; then
+              echo "::error file=$1::states no MSRV $minor (looked for: $2)"
+              failed=1
+            fi
+          }
+          require Cargo.toml "^rust-version = \"$m\"$"
+          require README.md "MSRV-$m-"
+          require llms.txt "MSRV $m\)"
+          templates=0
+          for template in crates/flui-cli/src/templates/*.rs; do
+            grep -q 'rust-version' "$template" || continue
+            templates=$((templates + 1))
+            require "$template" "rust-version = \"$m\""
+          done
+          [ "$templates" -gt 0 ] || { echo "::error::no flui create template states rust-version"; failed=1; }
+          # And no number that names another version may sit beside it.
+          if other=$(git grep -noE 'rust-version = "[0-9]+\.[0-9]+"|MSRV[-: ]+[0-9]+\.[0-9]+' \
+              -- Cargo.toml crates/flui-cli/src/templates README.md llms.txt \
+              | grep -vE "[^0-9.]$m\"?$"); then
             echo "::error::these state an MSRV other than rust-toolchain.toml's $minor:"
-            echo "$wrong"
-            exit 1
+            echo "$other"
+            failed=1
           fi
+          exit "$failed"
 
       # A crate with `autotests = false` names its test targets itself, so a
-      # tests/*.rs that no [[test]] declares and no test file mounts (`mod x;`
-      # or `#[path = "x.rs"]`) never compiles and passes by not running.
+      # tests/*.rs that no [[test]] declares and no target root mounts never
+      # compiles and passes by not running. A mount is a line at column 0 of a
+      # test target's own root file, `mod x;` or `#[path = "x.rs"]`: an
+      # indented one sits in an inline module or a comment and names another
+      # path. The `autotests` line is matched in any spacing.
       - name: Every tests/*.rs of an autotests = false crate compiles
         if: ${{ !cancelled() }}
         run: |
@@ -273,14 +296,22 @@ jobs:
           failed=0
           crates=0
           while read -r manifest; do
-            grep -qx 'autotests = false' "$manifest" || continue
+            grep -qE '^[[:space:]]*autotests[[:space:]]*=[[:space:]]*false' "$manifest" || continue
             crates=$((crates + 1))
             dir=$(dirname "$manifest")
+            # This crate's target roots under tests/.
+            roots=()
+            while read -r root; do
+              roots+=("$root")
+            done < <(grep -F "$PWD/$dir/tests/" <<< "$targets" || true)
             for file in "$dir"/tests/*.rs; do
               [ -e "$file" ] || continue
               stem=$(basename "$file" .rs)
               grep -qxF "$PWD/$file" <<< "$targets" && continue
-              grep -qE "^[[:space:]]*(pub(\(crate\))? )?mod $stem;|#\[path = \"$stem\.rs\"\]" "$dir"/tests/*.rs && continue
+              if [ "${#roots[@]}" -gt 0 ] \
+                && grep -qE "^((pub(\(crate\))? )?mod $stem;|#\[path = \"$stem\.rs\"\])" "${roots[@]}"; then
+                continue
+              fi
               echo "::error file=$file::no [[test]] declares $file and no test file mounts it, so it never compiles"
               failed=1
             done
@@ -294,7 +325,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          numbers=$(git ls-files 'docs/adr/ADR-*.md' | sed -n 's|^docs/adr/ADR-\([0-9]\{4\}\)-.*|\1|p')
+          numbers=$(git ls-files 'docs/adr/ADR-*.md' | sed -n 's|^docs/adr/ADR-\([0-9]\{4\}\).*|\1|p')
           [ -n "$numbers" ] || { echo "::error::docs/adr holds no record"; exit 1; }
           if dups=$(sort <<< "$numbers" | uniq -d | grep .); then
             echo "::error::ADR numbers used more than once: $(tr '\n' ' ' <<< "$dups")"
@@ -1670,7 +1701,7 @@ jobs:
       # The test runner must equal the LOCKED wasm-bindgen exactly or it
       # refuses to start, so its version comes from Cargo.lock: a dependency
       # bump moves the tool with the lock. With every feature, `cargo metadata`
-      # lists every package the lock holds, as `cargo xtask doctor full` reads.
+      # lists every package the lock holds.
       - name: Resolve the locked wasm-bindgen version
         id: wasm_bindgen_version
         run: |

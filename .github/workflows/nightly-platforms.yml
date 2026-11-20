@@ -136,6 +136,13 @@ jobs:
           cargo nextest run -p flui-native --locked --all-features --no-fail-fast
           -E 'test(=contract::test_window_lifecycle_contract) | test(/^windows_foreground::/) | test(/^windows_test_desktop::/) | test(=drag::windows::tests::ole_drag_and_drop_on_real_windows)'
 
+      # The wrapper's own tests (ADR-0355): its command-line quoting, and that a
+      # window a started process shows lands on the run's desktop. Windows-only
+      # code, so no Linux job compiles them.
+      - name: cargo nextest run -p test-desktop
+        if: ${{ !cancelled() && matrix.os == 'windows-latest' }}
+        run: cargo nextest run -p test-desktop --locked --no-fail-fast
+
       # The GPU readback suites, as ci.yml's `test` job runs them on Linux.
       # `FLUI_REQUIRE_GPU` turns a missing adapter into a failure. A Windows
       # runner has no GPU, so Direct3D 12 answers with WARP, the fallback

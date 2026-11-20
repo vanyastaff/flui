@@ -99,6 +99,8 @@ These crates compose the rendering and platform substrate largely without knowin
 | `examples/web_demo` | Web/WASM platform demo (`cdylib`) |
 | `examples/painting_demo` | Web/WASM painting + engine demo (`cdylib`) |
 | `tools/desktop-mcp` | MCP server that drives desktop apps from the outside (windows, screenshots, UI Automation, real input) for agent testing |
+| `tools/test-desktop` | The program nextest starts each Windows test through, on a desktop of its own (ADR-0355) |
+| `tools/xtask` | The generators and the changelog check, until they move |
 
 ## Build Order
 
