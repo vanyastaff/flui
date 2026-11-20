@@ -520,7 +520,7 @@ where
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <SliverProtocol as crate::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<SliverProtocol>> {
+    ) -> crate::error::RenderResult<SliverGeometry> {
         // Core.2 W3 — live bridge, mirroring the Box analog in
         // `render_box.rs`.
         //
@@ -560,12 +560,12 @@ where
 
     fn hit_test_raw(
         &self,
-        position: crate::protocol::ProtocolPosition<SliverProtocol>,
+        position: crate::protocol::MainAxisPosition,
         child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
-            Option<crate::protocol::ProtocolPosition<SliverProtocol>>,
+            Option<crate::protocol::MainAxisPosition>,
             Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {
