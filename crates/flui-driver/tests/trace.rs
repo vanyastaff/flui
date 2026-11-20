@@ -895,10 +895,11 @@ fn a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core() 
                     then: AfterLines::Serve,
                 }
             }
-            "record.stop" => Reply::ResultThenLines {
-                result: json!({ "rows": 1, "lost_rows": 0, "native_lost_rows": 2, "complete": asked_native }),
+            // The app sends the recording's `end` row before it answers the stop, as the agent
+            // does (ADR-0288 §11).
+            "record.stop" => Reply::LinesThenResult {
                 lines: vec![input_row(json!({ "end": { "lost_rows": 0 } }))],
-                then: AfterLines::Serve,
+                result: json!({ "rows": 1, "lost_rows": 0, "native_lost_rows": 2, "complete": asked_native }),
             },
             _ => Reply::Close,
         }),

@@ -16,10 +16,16 @@
   recording and its native recordings, text redacted unless kept, kept always or only on
   failure; `Trace::open` reads one back within its bounds and reports a trace cut short as
   incomplete; `trace::replay` sends its commands again and names the first divergence;
-  `trace::codegen` writes a Rust test from it; `trace::native::read` reads a native recording
-  through `flui-protocol`'s schema, without the core.
-- `ScriptedLane::screen` gives the scripted lane a screen to capture, and
-  `ScriptedAgent::start_with` introduces the stand-in with capabilities of the test's own.
+  `trace::codegen` writes a Rust test from it, marking what it cannot write; a replay refuses a
+  redacted row and maps handles only in the fields that hold them (`trace::HANDLE_FIELDS`);
+  `trace::native::read` reads a native recording through `flui-protocol`'s schema, without the
+  core, and `Trace::native_recordings` reads only the streams `native/index.json` names, bounded,
+  under their one name and never through a symbolic link. Events lost before a trace took them
+  are a `gap` in the trace and in every recording file they may have touched, and count in
+  `Driver::take_events`'s dropped events.
+- `ScriptedLane::screen` gives the scripted lane a screen to capture,
+  `ScriptedAgent::start_with` introduces the stand-in with capabilities of the test's own, and
+  `Reply::LinesThenResult` sends lines before an answer.
 
 ### Changed
 

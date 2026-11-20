@@ -700,6 +700,27 @@ graph LR
     `a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core` (over a scripted
     agent's socket: `record.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
     `flui-protocol`, the stream's `gap` in place), `a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`.
+  - After the review of `f45a3b4b`, each with its test failing with the fix taken out by hand:
+    `trace_bounds::scripted::events_lost_mid_trace_mark_every_stream_and_the_callers_count`
+    (a `gap` in `input.jsonl` and in every native stream, and the caller's dropped count),
+    `trace_bounds::scripted::a_trace_that_cannot_start_leaves_the_app_recording_nothing`
+    (the trace's files before `record.start`, `record.stop` after a hold that fails),
+    `trace_bounds::a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction`,
+    `trace_bounds::scripted::a_replay_maps_handles_in_handle_fields_only`,
+    `trace::the_fields_a_replay_maps_are_the_wires_handle_fields`,
+    `trace_bounds::native_recordings_are_read_from_the_index_under_their_one_name` (another
+    name, `../`, a stream twice, past 256 streams, an index past its bytes, no index),
+    `trace_bounds::a_native_stream_through_a_symbolic_link_is_refused` (Unix: a linked file and a
+    linked directory),
+    `trace_bounds::a_native_recording_past_its_byte_or_row_budget_or_reading_an_undeclared_device_is_refused`,
+    `pixels::an_image_too_large_to_count_is_refused`, `pixels::the_metric_matches_pixelmatch_5_worked_by_hand`
+    (deltas worked out by hand from pixelmatch 5's published formula, the arithmetic in the test),
+    a `cannot_verify` run keeping its trace in
+    `trace::a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`, and the
+    codegen golden marking `capture.os` as not generated and sending a control character as a
+    Rust literal. The reader's running byte bound (a file that grows as it is read) and the
+    linear `Trace::steps` have no test of their own: the first needs a file past 1 GiB, the
+    second changes no answer.
 - **As built:**
   - `flui_driver::pixels` and `flui_driver::trace`, as the Rust API; their protocol rows
     (`capture.os`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
@@ -715,7 +736,11 @@ graph LR
     answer to carry them.
   - Codegen is held by a checked-in module of the suite (`tests/trace_generated.rs`) that the
     golden test compares and the suite compiles and runs, instead of a nested cargo build: the same
-    proof, on every PR.
+    proof, on every PR. A command codegen cannot write (a pixel command until its row joins the
+    method table, a session's start or end) is a `// not generated:` line where it was sent, and
+    the file's header counts them, as a replay lists the same commands as skipped: emitting the
+    pixel commands would need their masks and tolerance in the trace's parameters, which the
+    rows the front ends add will carry.
   - The writer of a recording's native layer moved from `flui-cli` into the driver
     (`trace::native::NativeFiles`), which `flui record --native` and a trace share; its files are
     one per stream (`native/<n>.jsonl` with `index.json`), as ADR-0241 §1 now says.
