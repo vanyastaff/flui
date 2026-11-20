@@ -55,7 +55,10 @@ pub(crate) fn keep_own_stdio_private() {
             // copies it, not its validity. A handle that is not a real kernel
             // object (a detached console) makes the call fail, which is
             // ignored: there is nothing to leak then.
-            #[expect(unsafe_code)]
+            #[expect(
+                unsafe_code,
+                reason = "handle inheritance is cleared through Win32 FFI"
+            )]
             let _ = unsafe {
                 SetHandleInformation(HANDLE(raw), HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))
             };

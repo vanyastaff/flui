@@ -22,7 +22,13 @@ const EVICTION_THRESHOLD: u64 = 120;
 ///
 /// Stores pre-tessellated vertex positions and triangle indices so that
 /// identical paths do not need to be re-tessellated by lyon every frame.
-#[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports it only under `testing`, for the benches"
+    )
+)]
 pub struct PathCache {
     // Keyed by a fingerprint of authored path geometry: an app that draws
     // untrusted paths could precompute collisions under a fixed hasher, so
@@ -53,7 +59,13 @@ impl PathCache {
     ///
     /// A reasonable default for most UIs is 512.
     #[must_use]
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(
+            unreachable_pub,
+            reason = "the crate root re-exports it only under `testing`, for the benches"
+        )
+    )]
     #[expect(
         clippy::disallowed_types,
         reason = "the entries table keeps the seeded std hasher, see its field"
@@ -72,7 +84,13 @@ impl PathCache {
     ///
     /// Returns `Some((positions, indices))` on a cache hit and updates the
     /// last-used frame counter.  Returns `None` on a cache miss.
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(
+            unreachable_pub,
+            reason = "the crate root re-exports it only under `testing`, for the benches"
+        )
+    )]
     pub fn get(&mut self, path_hash: u64) -> Option<(&[[f32; 2]], &[u32])> {
         if let Some(entry) = self.entries.get_mut(&path_hash) {
             entry.last_used_frame = self.current_frame;
@@ -88,7 +106,13 @@ impl PathCache {
     ///
     /// If the cache is at capacity the oldest entry (by `last_used_frame`) is
     /// evicted to make room.
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(
+            unreachable_pub,
+            reason = "the crate root re-exports it only under `testing`, for the benches"
+        )
+    )]
     pub fn insert(&mut self, path_hash: u64, vertices: Vec<[f32; 2]>, indices: Vec<u32>) {
         // Evict oldest entry when at capacity
         if self.entries.len() >= self.max_entries
@@ -117,7 +141,13 @@ impl PathCache {
     /// Entries not accessed within the last `EVICTION_THRESHOLD` (120) frames are
     /// removed.  Call this once per frame (typically at the start of
     /// `WgpuPainter::render`).
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(
+            unreachable_pub,
+            reason = "the crate root re-exports it only under `testing`, for the benches"
+        )
+    )]
     pub fn advance_frame(&mut self) {
         self.current_frame += 1;
 
@@ -172,7 +202,13 @@ impl PathCache {
     /// reused. A different scale bucket yields a different key so geometry
     /// flattened for scale 1 is never reused at scale 8 (which would facet).
     #[must_use]
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(
+            unreachable_pub,
+            reason = "the crate root re-exports it only under `testing`, for the benches"
+        )
+    )]
     pub fn compute_path_hash(
         path: &Path,
         style: PaintStyle,

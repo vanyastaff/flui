@@ -31,7 +31,13 @@
 // `Send`/`Sync` by hand: the workspace lint `unsafe_code = "warn"` is opted out
 // here, at the module boundary, rather than for the whole crate (see `lib.rs`).
 // Its pure part forbids it.
-#![cfg_attr(target_arch = "wasm32", expect(unsafe_code))]
+#![cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        unsafe_code,
+        reason = "the browser drag state is marked Send and Sync by hand"
+    )
+)]
 
 /// The decidable half of the backend (ADR-0312, ADR-0211 §11): how
 /// `DataTransfer` types and effect names map to transfer formats and actions,
