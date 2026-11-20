@@ -1,7 +1,6 @@
 //! [`ParticleEmitter`] and [`ParticleController`]: the widget that runs a particle system,
 //! and the handle that bursts it.
 
-use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
@@ -445,9 +444,5 @@ impl CustomPainter for ParticlePainter {
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         Some(Rc::new(self.core.clock.clone()) as Rc<dyn Listenable>)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

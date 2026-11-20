@@ -4,7 +4,7 @@
 //! The pipeline operates on `&mut RenderNode` (a protocol-erased enum over
 //! `RenderEntry<BoxProtocol>` and `RenderEntry<SliverProtocol>`).
 //! `RenderEntry::layout` is generic over `P: Protocol` and takes
-//! protocol-typed `ProtocolConstraints<P>` / returns `ProtocolGeometry<P>`.
+//! protocol-typed `P::Constraints` / returns `P::Geometry`.
 //! Bridging the two ends requires an erased enum + per-variant dispatch
 //! through `RenderNode::layout_erased`.
 //!

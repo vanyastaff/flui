@@ -15,32 +15,8 @@
 //! not judge it: the pointer source check does. Touch and pen from a digitizer arrive as raw input
 //! from a device handle, while the lane's synthetic device sends none.
 
-use std::time::Duration;
-
 /// What the lane writes into every event it sends (`dwExtraInfo`): `FLUI` in ASCII.
 pub const LANE_TAG: usize = 0x464C_5549;
-
-/// How long a pause waits between two looks at the guard: a pause is waited out whole, never
-/// cut short, and the person's input during it ends the run before its next event.
-pub const WATCH_SLICE: Duration = Duration::from_millis(50);
-
-/// How long the lane waits for its guard's hook to see an event it sent. A hook Windows removed
-/// (one that answered too slowly, past `LowLevelHooksTimeout`) sees nothing more, and the run
-/// can no longer tell the person's input from the lane's.
-pub const ECHO_WITHIN: Duration = Duration::from_millis(500);
-
-/// `pause` as the slices it is waited out in, each at most [`WATCH_SLICE`], adding up to it.
-pub fn slices(pause: Duration) -> impl Iterator<Item = Duration> {
-    let mut left = pause;
-    std::iter::from_fn(move || {
-        if left.is_zero() {
-            return None;
-        }
-        let slice = left.min(WATCH_SLICE);
-        left -= slice;
-        Some(slice)
-    })
-}
 
 /// The signature Windows writes into a mouse message it promotes from touch or pen input
 /// (`MI_WP_SIGNATURE`), in the extra information's upper 24 bits.

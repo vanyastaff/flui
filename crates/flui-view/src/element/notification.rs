@@ -125,11 +125,7 @@ pub trait NotifiableElement<N: Notification>: crate::view::ElementBase {
 #[derive(Debug, Clone)]
 pub struct LayoutChangedNotification;
 
-impl Notification for LayoutChangedNotification {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+impl Notification for LayoutChangedNotification {}
 
 /// Notification sent when size changes.
 #[derive(Debug, Clone)]
@@ -139,10 +135,6 @@ pub struct SizeChangedNotification {
 }
 
 impl Notification for SizeChangedNotification {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn debug_fill_description(&self, description: &mut Vec<String>) {
         description.push(format!("size: {:?}", self.size));
     }
@@ -158,10 +150,6 @@ pub struct ScrollNotification {
 }
 
 impl Notification for ScrollNotification {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn debug_fill_description(&self, description: &mut Vec<String>) {
         description.push(format!("offset: {}", self.offset));
         description.push(format!("axis: {:?}", self.axis));
@@ -175,11 +163,7 @@ pub struct DragStartNotification {
     pub global_position: flui_foundation::geometry::Offset,
 }
 
-impl Notification for DragStartNotification {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+impl Notification for DragStartNotification {}
 
 /// Notification sent when a drag ends.
 #[derive(Debug, Clone)]
@@ -188,11 +172,7 @@ pub struct DragEndNotification {
     pub velocity: flui_foundation::geometry::Offset,
 }
 
-impl Notification for DragEndNotification {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+impl Notification for DragEndNotification {}
 
 /// Notification sent when focus changes.
 #[derive(Debug, Clone)]
@@ -201,11 +181,7 @@ pub struct FocusNotification {
     pub has_focus: bool,
 }
 
-impl Notification for FocusNotification {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+impl Notification for FocusNotification {}
 
 /// Notification sent when a keep-alive status changes.
 #[derive(Debug, Clone)]
@@ -214,8 +190,4 @@ pub struct KeepAliveNotification {
     pub keep_alive: bool,
 }
 
-impl Notification for KeepAliveNotification {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+impl Notification for KeepAliveNotification {}

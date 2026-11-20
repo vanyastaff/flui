@@ -71,14 +71,6 @@ pub trait BuildDuringLayoutCell: std::fmt::Debug + std::any::Any {
 
     /// Marks the published value as built, clearing `needs_build`.
     fn commit(&self);
-
-    /// Recover the concrete cell, for a caller that knows which kind it is.
-    ///
-    /// The registry is deliberately payload-blind, but the *owner* of a cell
-    /// knows its type and sometimes needs the payload back out of an erased
-    /// handle — a test driving a publish without a real layout pass, or an
-    /// inspector reporting what a node was last laid out with.
-    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Shared constraints mailbox between a render object and its element.
@@ -154,9 +146,5 @@ impl BuildDuringLayoutCell for LayoutConstraintsCell {
 
     fn commit(&self) {
         Self::commit(self);
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

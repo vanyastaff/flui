@@ -61,7 +61,7 @@ use crate::constraints::BoxConstraints;
 ///     }
 ///
 ///     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
-///         if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+///         if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
 ///             self.padding != old.padding
 ///         } else {
 ///             true
@@ -69,7 +69,7 @@ use crate::constraints::BoxConstraints;
 ///     }
 /// }
 /// ```
-pub trait MultiChildLayoutDelegate: Debug {
+pub trait MultiChildLayoutDelegate: Any + Debug {
     /// Perform layout of children.
     ///
     /// Use the context to query, layout, and position children by their IDs.
@@ -108,9 +108,6 @@ pub trait MultiChildLayoutDelegate: Debug {
     ///
     /// `true` if layout should be recalculated, `false` otherwise.
     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool;
-
-    /// Returns self as `Any` for downcasting.
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// Context for multi-child layout operations.

@@ -34,10 +34,6 @@ impl PlatformHaptics for HeadlessHaptics {
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
         HapticCapabilities::FULL
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Each headless window gets an actuator of its own.

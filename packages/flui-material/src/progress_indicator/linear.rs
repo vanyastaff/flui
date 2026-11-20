@@ -299,7 +299,7 @@ impl CustomPainter for BarPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        let Some(old) = old.as_any().downcast_ref::<Self>() else {
+        let Some(old) = (old as &dyn Any).downcast_ref::<Self>() else {
             return true;
         };
         old.track != self.track
@@ -321,9 +321,5 @@ impl CustomPainter for BarPainter {
             Progress::Determinate(_) | Progress::StaticIndeterminate => None,
             Progress::AnimatedIndeterminate { controller, .. } => Some(Rc::new(controller.clone())),
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

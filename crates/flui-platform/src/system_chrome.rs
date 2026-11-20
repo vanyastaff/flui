@@ -22,11 +22,7 @@ pub enum SystemUiOverlayStyle {
 /// Calls arrive on the UI thread, deduplicated: a style equal to the last one
 /// delivered is not repeated until the presentation detaches and attaches
 /// again. Applying it is best-effort.
-pub trait PlatformSystemChrome: Send + Sync {
+pub trait PlatformSystemChrome: std::any::Any + Send + Sync {
     /// Style the system bars drawn over this window.
     fn set_overlay_style(&self, style: SystemUiOverlayStyle);
-
-    /// Downcast support for tests that reach a recording fake behind the
-    /// trait object `PlatformWindow::system_chrome` returns.
-    fn as_any(&self) -> &dyn std::any::Any;
 }

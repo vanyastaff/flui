@@ -518,7 +518,7 @@ impl CustomPainter for DotsPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             old.style != self.style
                 || old.count != self.count
                 || old.direction != self.direction
@@ -529,9 +529,5 @@ impl CustomPainter for DotsPainter {
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         Some(Rc::clone(&self.source))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

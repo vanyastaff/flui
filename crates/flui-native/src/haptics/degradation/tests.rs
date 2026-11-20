@@ -718,7 +718,7 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
         .expect("ready");
     let haptics: Arc<dyn PlatformHaptics> = window.haptics().expect("headless has an actuator");
     assert!(
-        haptics.as_any().is::<HeadlessHaptics>(),
+        (&*haptics as &dyn std::any::Any).is::<HeadlessHaptics>(),
         "the window's own actuator, which knows no device"
     );
     let unplugged = DeviceId::new(std::num::NonZeroU64::new(42).expect("nonzero"));

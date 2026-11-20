@@ -86,17 +86,12 @@ impl RecognizerContext {
 }
 
 /// A recognizer built by a factory and kept by the detector's state.
-pub(super) trait LiveRecognizer: 'static {
-    fn as_any(&self) -> &dyn Any;
+pub(super) trait LiveRecognizer: Any {
     fn recognizer(&self) -> &dyn GestureRecognizer;
     fn attach(self: Rc<Self>, set: &mut RecognizerSet, admission: Option<&ContactAdmission>);
 }
 
 impl<R: GestureRecognizer + 'static> LiveRecognizer for R {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn recognizer(&self) -> &dyn GestureRecognizer {
         self
     }
@@ -195,7 +190,7 @@ impl<F: GestureRecognizerFactory> ErasedFactory for F {
     }
 
     fn update_live(&self, live: &dyn LiveRecognizer) {
-        let recognizer = live.as_any().downcast_ref::<F::Recognizer>().expect(
+        let recognizer = (live as &dyn Any).downcast_ref::<F::Recognizer>().expect(
             "BUG: a live recognizer is matched only to a factory of the type that created it",
         );
         GestureRecognizerFactory::update(self, recognizer);

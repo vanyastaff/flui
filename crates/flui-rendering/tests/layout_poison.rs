@@ -23,12 +23,12 @@ use std::sync::{
 };
 
 use flui_foundation::RenderId;
-use flui_foundation::geometry::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_objects::{RenderConstrainedBox, RenderFlex, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     error::RenderError,
-    protocol::{BoxProtocol, ProtocolGeometry},
+    protocol::BoxProtocol,
     storage::RenderNode,
     testing::{FrameRun, Probe, RenderTester, box_node},
     traits::{HitTestOutcome, RenderObject},
@@ -71,7 +71,7 @@ impl RenderObject<BoxProtocol> for FlakyLeaf {
     fn perform_layout_raw(
         &mut self,
         _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+    ) -> flui_rendering::error::RenderResult<Size> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         if self.fail {
             return Err(match self.mode {
@@ -96,14 +96,10 @@ impl RenderObject<BoxProtocol> for FlakyLeaf {
 
     fn hit_test_raw(
         &self,
-        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut dyn FnMut(
-            usize,
-            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
-            Option<Matrix4>,
-        ) -> bool,
+        _hit_child: &mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }
@@ -399,7 +395,7 @@ impl RenderObject<BoxProtocol> for RetainingLeaf {
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+    ) -> flui_rendering::error::RenderResult<Size> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         assert!(
             !self.panic.load(Ordering::Relaxed),
@@ -422,14 +418,10 @@ impl RenderObject<BoxProtocol> for RetainingLeaf {
 
     fn hit_test_raw(
         &self,
-        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut dyn FnMut(
-            usize,
-            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
-            Option<Matrix4>,
-        ) -> bool,
+        _hit_child: &mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }

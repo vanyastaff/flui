@@ -516,9 +516,6 @@ impl CustomPainter for ListeningPainter {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.0.clone())
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 fn listening_custom_paint(
@@ -674,9 +671,6 @@ impl FlowDelegate for ListeningFlowDelegate {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.0.clone())
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 fn harness_flow_subscription_migration_and_owner_release_finish_after_failure() {
@@ -752,9 +746,6 @@ impl CustomPainter for FaultPainter {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         assert!(!self.faults.getter.replace(false), "repaint getter");
         Some(self.source.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1002,18 +993,13 @@ impl CustomPainter for HarnessPainter {
     }
 
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old.color != self.color || old.hit != self.hit)
     }
 
     fn hit_test(&self, _position: Offset) -> Option<bool> {
         self.hit
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1052,18 +1038,13 @@ impl SingleChildLayoutDelegate for HarnessSingleChildLayoutDelegate {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| {
                 self.size != old.size
                     || self.child_constraints != old.child_constraints
                     || self.offset != old.offset
             })
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1112,14 +1093,9 @@ impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
     }
 
     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| self.size != old.size)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1382,10 +1358,6 @@ fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
 
         fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
             true
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 
@@ -6377,9 +6349,6 @@ impl CustomPainter for RegionPainter {
         self.size.set(size);
         self.regions.borrow().clone()
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 fn semantic_region(key: u64, label: &str, x: f64) -> flui_semantics::SemanticsRegion {
@@ -6410,9 +6379,6 @@ impl CustomPainter for RepaintingRegions {
     }
     fn semantics_regions(&self, _size: Size) -> Vec<flui_semantics::SemanticsRegion> {
         self.regions.borrow().clone()
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -6650,9 +6616,6 @@ impl CustomPainter for CapturingRegionPainter {
                 region
             })
             .collect()
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -9686,10 +9649,6 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
         fn should_relayout(&self, _old_delegate: &dyn SliverGridDelegate) -> bool {
             true
         }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
     }
 
     // Pass 1: an ordinary 2-column delegate over 4 pre-seeded (resident)
@@ -11979,10 +11938,6 @@ impl FlowDelegate for StepFlowDelegate {
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         true
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 /// Paints child 0 with a degenerate (zero-scale, non-invertible) transform;
@@ -12025,9 +11980,6 @@ impl FlowDelegate for SemanticFlowDelegate {
     }
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.notifier.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -12141,10 +12093,6 @@ impl FlowDelegate for FailingFlowDelegate {
 
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         true
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -12277,10 +12225,6 @@ impl FlowDelegate for DegenerateFlowDelegate {
 
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         true
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

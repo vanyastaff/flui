@@ -1,6 +1,5 @@
 //! [`AnimatedIcon`]: an [`AnimatedIconData`] drawn at an animation's progress.
 
-use std::any::Any;
 use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
@@ -392,9 +391,5 @@ impl CustomPainter for IconPainter {
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         Some(Rc::clone(&self.progress) as Rc<dyn Listenable>)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

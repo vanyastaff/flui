@@ -21,7 +21,7 @@ use x11rb::rust_connection::RustConnection;
 use super::activity::{EchoCount, Observed, RawKind, XTEST_DEVICES};
 use super::safety::LANE;
 use crate::error::{Error, Result};
-use crate::lane::windows::activity::ECHO_WITHIN;
+use crate::lane::pacing::ECHO_WITHIN;
 use crate::lane::{ActivityGuard, ForeignInput};
 
 /// What the guard reports when its watcher stopped while armed.

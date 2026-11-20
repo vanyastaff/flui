@@ -161,3 +161,57 @@ pub fn plain_body_text_takes_the_theme_body_style_and_components_keep_theirs() {
         "a ListTile title keeps its own body_large/on_surface style inside a Material"
     );
 }
+
+/// The floating action button sits at the reading end, clear of that side's
+/// safe-area inset: the right side left-to-right, the left side right-to-left.
+/// A direction change on the mounted scaffold moves it there without a remount.
+pub fn the_floating_action_button_sits_at_the_reading_end_clear_of_that_sides_inset() {
+    use flui_sdk::painting::TextDirection;
+    use flui_sdk::widgets::Directionality;
+
+    // Left inset 24, right inset 40. The subtree below the `Directionality`
+    // is preserved across pumps, so a flip reaches the scaffold only through
+    // its dependency.
+    let scaffold = |direction: TextDirection| {
+        Directionality::new(
+            direction,
+            crate::rebuild_exactness::StaticChild {
+                inner: Theme::new(
+                    ThemeData::light(),
+                    MediaQuery::new(
+                        MediaQueryData {
+                            view_padding: EdgeInsets::new(0.0, 40.0, 0.0, 24.0),
+                            ..MediaQueryData::default()
+                        },
+                        Scaffold::new()
+                            .body(SizedBox::new(10.0, 10.0))
+                            .floating_action_button(SizedBox::new(56.0, 56.0)),
+                    ),
+                )
+                .boxed(),
+            },
+        )
+    };
+    // Left-to-right: 400 - margin 16 - right inset 40 - 56. Right-to-left:
+    // margin 16 + left inset 24. y = 800 - 56 - 16 either way.
+    let ltr = offset(288.0, 728.0);
+    let rtl = offset(40.0, 728.0);
+
+    for (direction, expected) in [(TextDirection::Ltr, ltr), (TextDirection::Rtl, rtl)] {
+        let laid = lay_out(scaffold(direction), tight(400.0, 800.0));
+        let fab = laid.child(layout_root(&laid), 1);
+        assert_eq!(laid.offset(fab), expected, "{direction:?}");
+    }
+
+    let mut laid = lay_out(scaffold(TextDirection::Ltr), tight(400.0, 800.0));
+    let layout = layout_root(&laid);
+    for (direction, expected) in [(TextDirection::Rtl, rtl), (TextDirection::Ltr, ltr)] {
+        laid.pump_widget(scaffold(direction));
+        assert_eq!(layout_root(&laid), layout, "the scaffold is not remounted");
+        assert_eq!(
+            laid.offset(laid.child(layout, 1)),
+            expected,
+            "a flip to {direction:?} relays the button out at the new end"
+        );
+    }
+}

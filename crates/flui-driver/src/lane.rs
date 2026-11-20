@@ -24,6 +24,9 @@ pub mod atspi;
 #[cfg(feature = "chrome")]
 pub mod chrome;
 pub mod macos;
+pub mod pacing;
+pub mod screen;
+pub mod walk;
 pub mod wayland;
 pub mod windows;
 pub mod x11;
@@ -259,8 +262,76 @@ pub trait Lane: Send {
     ///
     /// # Errors
     ///
-    /// When the OS refused a release.
+    /// When the OS refused a release: [`Error::ReleaseFailed`] naming everything still held, as
+    /// [`release_outcome`] gathers it from the lane's parts.
     fn release_all(&mut self) -> Result<()>;
+}
+
+/// What releasing everything came to, from the releases of a lane's parts (its keys, its mouse,
+/// its contacts) in the order they ran: everything each part still holds, named, with each
+/// part's first failure, so one part's failure never hides what another left held or why.
+///
+/// # Errors
+///
+/// [`Error::ReleaseFailed`] naming what every part that answered one still holds; its message is
+/// each failed part's first failure in the order the parts ran, joined by `; `: a part's
+/// [`Error::ReleaseFailed`] gives its own message, any other error its whole text. When no part
+/// holds anything, the first failure itself (a part answers [`Error::ReleaseFailed`] whenever it
+/// still holds something, so only a failure that left nothing held, such as the Windows keys'
+/// mask, arrives bare).
+pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()> {
+    let mut failures: Vec<Error> = Vec::new();
+    let mut stuck: Option<(String, Vec<String>)> = None;
+    for mut error in parts.into_iter().filter_map(Result::err) {
+        if let Error::ReleaseFailed { lane, held, .. } = &mut error {
+            stuck
+                .get_or_insert_with(|| (lane.clone(), Vec::new()))
+                .1
+                .append(held);
+        }
+        failures.push(error);
+    }
+    let Some((lane, held)) = stuck else {
+        return failures.into_iter().next().map_or(Ok(()), Err);
+    };
+    let message = failures
+        .into_iter()
+        .map(|failure| match failure {
+            Error::ReleaseFailed { message, .. } => message,
+            other => other.to_string(),
+        })
+        .collect::<Vec<String>>()
+        .join("; ");
+    Err(Error::ReleaseFailed {
+        lane,
+        held,
+        message,
+    })
+}
+
+/// The end of a lane's release whose parts each ran contained in `panicked`: what
+/// [`release_outcome`] makes of the parts that returned. When a part panicked, the panic is all
+/// the caller gets, so what the others leave held is logged at error level first, never dropped.
+///
+/// # Panics
+///
+/// The first part's panic, resumed; discarded instead when the thread is already unwinding, as
+/// [`FirstPanic::resume`] does.
+pub(crate) fn release_settled<const N: usize>(
+    mut panicked: FirstPanic,
+    parts: [Option<Result<()>>; N],
+) -> Result<()> {
+    let outcome = release_outcome(parts.into_iter().flatten());
+    if panicked.is_held()
+        && let Err(error) = &outcome
+    {
+        // A subscriber is user code: its panic stays behind the part's.
+        panicked.contain(|| {
+            tracing::error!("input stays held after a release that panicked: {error}");
+        });
+    }
+    panicked.resume();
+    outcome
 }
 
 /// The OS's capture of a window's surface: tightly packed RGBA rows, top row first.
@@ -328,45 +399,6 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
     let isolation = lane.capabilities().isolation;
     let guarded = lane.guard().is_some();
     crate::os_input::admit(isolation, guarded)
-}
-
-/// What a lane's release of everything came to, from the release of its keys and then of its
-/// pointer, each answering [`Error::ReleaseFailed`] when it leaves anything held and its own error
-/// only when it leaves nothing: the first failure, as one release failure naming what both still
-/// hold when either does.
-///
-/// # Errors
-///
-/// [`Error::ReleaseFailed`] naming what both halves still hold, with the first failure's message,
-/// when either half left anything held; the first half's error when neither did.
-pub fn release_outcome(keys: Result<()>, pointer: Result<()>) -> Result<()> {
-    let (first, second) = match (keys, pointer) {
-        (Ok(()), outcome) | (outcome, Ok(())) => return outcome,
-        (Err(first), Err(second)) => (first, second),
-    };
-    match (first, second) {
-        (
-            Error::ReleaseFailed {
-                lane,
-                mut held,
-                message,
-            },
-            Error::ReleaseFailed { held: more, .. },
-        ) => {
-            held.extend(more);
-            Err(Error::ReleaseFailed {
-                lane,
-                held,
-                message,
-            })
-        }
-        (first, Error::ReleaseFailed { lane, held, .. }) => Err(Error::ReleaseFailed {
-            lane,
-            held,
-            message: first.to_string(),
-        }),
-        (first, _) => Err(first),
-    }
 }
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the

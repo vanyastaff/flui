@@ -125,6 +125,7 @@
 //! - **`maintainBottomViewPadding`** — [`flui_sdk::widgets::SafeArea`] is used
 //!   with its own defaults; this substrate exposes no override for it yet.
 
+use std::any::Any;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -804,17 +805,12 @@ impl CustomPainter for IndicatorPainter {
 
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
         // The fraction repaints through `repaint`.
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old.color != self.color)
     }
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         Some(Rc::new(self.fraction.clone()))
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

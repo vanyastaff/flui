@@ -1,9 +1,6 @@
-//! Box protocol for 2D cartesian layout.
-//!
-//! This module provides the BoxProtocol and its capability implementations:
-//! - [`BoxProtocol`]: Main protocol type
-//! - [`BoxLayout`]: Layout capability (BoxConstraints → Size)
-//! - [`BoxHitTest`]: Hit test capability (Offset → BoxHitTestResult)
+//! Box protocol for 2D cartesian layout: [`BoxProtocol`] (`BoxConstraints` in,
+//! `Size` out, hit-tested at an `Offset`), its typed layout and hit-test
+//! contexts, and the erased layout context the pipeline drives them through.
 
 use flui_foundation::Arity;
 use flui_foundation::RenderId;
@@ -14,7 +11,7 @@ use crate::{
     parent_data::{BoxParentData, ParentData},
     pipeline::{TextContextMut, TextSource, lend_text},
     protocol::{
-        capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
+        context_api::{HitTestContextApi, LayoutContextApi},
         protocol::{Protocol, sealed},
     },
 };
@@ -87,8 +84,22 @@ pub struct BoxProtocol;
 impl sealed::Sealed for BoxProtocol {}
 
 impl Protocol for BoxProtocol {
-    type Layout = BoxLayout;
-    type HitTest = BoxHitTest;
+    type Constraints = BoxConstraints;
+    type Geometry = Size;
+    type CacheKey = BoxConstraintsCacheKey;
+    type LayoutContext<'ctx, A: Arity, PD: ParentData + Default>
+        = RawBoxLayoutContext<'ctx, A, PD>
+    where
+        Self: 'ctx;
+
+    type Position = Offset;
+    type HitResult = BoxHitTestResult;
+    type HitEntry = BoxHitTestEntry;
+    type HitTestContext<'ctx, A: Arity, PD: ParentData>
+        = RawBoxHitTestContext<'ctx, A, PD>
+    where
+        Self: 'ctx;
+
     type DefaultParentData = BoxParentData;
 
     // Protocol-layout-erasure — sanctioned erased layout-context boundary
@@ -99,6 +110,22 @@ impl Protocol for BoxProtocol {
 
     fn name() -> &'static str {
         "box"
+    }
+
+    fn default_geometry() -> Size {
+        Size::ZERO
+    }
+
+    fn validate_constraints(constraints: &BoxConstraints) -> bool {
+        constraints.is_normalized()
+    }
+
+    fn cache_key(constraints: &BoxConstraints) -> Option<BoxConstraintsCacheKey> {
+        BoxConstraintsCacheKey::from_constraints(constraints)
+    }
+
+    fn normalize_constraints(constraints: BoxConstraints) -> BoxConstraints {
+        constraints.round_for_cache()
     }
 
     /// Overrides the default no-op with the actual
@@ -200,16 +227,6 @@ impl Protocol for BoxProtocol {
     }
 }
 
-// ============================================================================
-// BOX LAYOUT CAPABILITY
-// ============================================================================
-
-/// Layout capability for box (2D) layout.
-///
-/// Uses `BoxConstraints` for input and `Size` for output.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BoxLayout;
-
 /// Cache key for BoxConstraints.
 ///
 /// Keys on the exact bit pattern of each bound, so `0.0` and `-0.0` give
@@ -250,32 +267,6 @@ impl BoxConstraintsCacheKey {
     }
 }
 
-impl LayoutCapability for BoxLayout {
-    type Constraints = BoxConstraints;
-    type Geometry = Size;
-    type CacheKey = BoxConstraintsCacheKey;
-    type Context<'ctx, A: Arity, P: ParentData + Default>
-        = RawBoxLayoutContext<'ctx, A, P>
-    where
-        Self: 'ctx;
-
-    fn default_geometry() -> Self::Geometry {
-        Size::ZERO
-    }
-
-    fn validate_constraints(constraints: &Self::Constraints) -> bool {
-        constraints.is_normalized()
-    }
-
-    fn cache_key(constraints: &Self::Constraints) -> Option<Self::CacheKey> {
-        BoxConstraintsCacheKey::from_constraints(constraints)
-    }
-
-    fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
-        constraints.round_for_cache()
-    }
-}
-
 /// Box layout context implementation.
 ///
 /// This context provides access to constraints and children during layout.
@@ -297,7 +288,7 @@ impl LayoutCapability for BoxLayout {
 /// ```compile_fail
 /// use flui_foundation::RenderId;
 /// use flui_rendering::constraints::BoxConstraints;
-/// use flui_rendering::protocol::box_protocol::LayoutChildCallback;
+/// use flui_rendering::protocol::LayoutChildCallback;
 /// use flui_foundation::geometry::Size;
 ///
 /// fn callback(_id: RenderId, _constraints: BoxConstraints) -> flui_rendering::RenderResult<Size> {
@@ -313,7 +304,7 @@ impl LayoutCapability for BoxLayout {
 /// ```
 /// use flui_foundation::RenderId;
 /// use flui_rendering::constraints::BoxConstraints;
-/// use flui_rendering::protocol::box_protocol::LayoutChildCallback;
+/// use flui_rendering::protocol::LayoutChildCallback;
 /// use flui_foundation::geometry::Size;
 ///
 /// fn callback(_id: RenderId, _constraints: BoxConstraints) -> flui_rendering::RenderResult<Size> {
@@ -350,8 +341,8 @@ pub type SliverLayoutChildCallback<'a> = &'a dyn Fn(
     SliverConstraints,
 ) -> crate::error::RenderResult<SliverGeometry>;
 
-/// Callback for querying a Box child's intrinsic dimensions from within a Box
-/// parent's `perform_layout`.
+/// Callback for querying a box child's intrinsic dimensions from within its
+/// parent's `perform_layout`, a box parent's or a sliver parent's.
 ///
 /// Called by `RenderIntrinsicWidth` / `RenderIntrinsicHeight` to measure the
 /// child's intrinsic extent before committing to a layout size.  The callback
@@ -593,7 +584,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> RawBoxLayoutContext<'ctx, A, P> {
     }
 }
 
-impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, A, P>
+impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxProtocol, A, P>
     for RawBoxLayoutContext<'ctx, A, P>
 {
     fn constraints(&self) -> &BoxConstraints {
@@ -762,13 +753,10 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// analogous trait for sliver layout. The sliver bridge is currently
 /// stubbed — see [`crate::traits::RenderSliver`].
 ///
-/// # Thread-safety
+/// # Thread confinement
 ///
-/// No longer `Send + Sync`-bound: the render tree this context walks is
-/// owned by exactly one `PipelineOwner` on exactly one thread, so
-/// `LayoutContextApi` (whose `Proxy` storage carries `&mut dyn
-/// ErasedBoxLayoutContext`) dropped its own `Send + Sync` supertrait
-/// requirement along with it.
+/// No `Send` or `Sync` supertrait: the render tree this context walks is
+/// owned by exactly one `PipelineOwner` on exactly one thread.
 pub trait ErasedBoxLayoutContext {
     /// Box constraints from parent. Cheap copy (`BoxConstraints` is `Copy`).
     fn constraints(&self) -> BoxConstraints;
@@ -965,12 +953,12 @@ impl<A: Arity, P: ParentData + Default> ErasedBoxLayoutContext for RawBoxLayoutC
         // Owned by-value (Copy). Inner storage holds the canonical copy
         // (Direct.constraints or Proxy.constraints cache); read via the
         // LayoutContextApi accessor and deref-copy.
-        *<Self as LayoutContextApi<'_, BoxLayout, A, P>>::constraints(self)
+        *<Self as LayoutContextApi<'_, BoxProtocol, A, P>>::constraints(self)
     }
 
     #[inline]
     fn child_count(&self) -> usize {
-        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::child_count(self)
+        <Self as LayoutContextApi<'_, BoxProtocol, A, P>>::child_count(self)
     }
 
     #[inline]
@@ -979,12 +967,12 @@ impl<A: Arity, P: ParentData + Default> ErasedBoxLayoutContext for RawBoxLayoutC
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
-        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::layout_child(self, index, constraints)
+        <Self as LayoutContextApi<'_, BoxProtocol, A, P>>::layout_child(self, index, constraints)
     }
 
     #[inline]
     fn child_size(&self, index: usize) -> Option<&Size> {
-        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::child_geometry(self, index)
+        <Self as LayoutContextApi<'_, BoxProtocol, A, P>>::child_geometry(self, index)
     }
 
     #[inline]
@@ -1042,7 +1030,7 @@ impl<A: Arity, P: ParentData + Default> ErasedBoxLayoutContext for RawBoxLayoutC
 
     #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
-        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset);
+        <Self as LayoutContextApi<'_, BoxProtocol, A, P>>::position_child(self, index, offset);
     }
 
     #[inline]
@@ -1454,26 +1442,6 @@ impl ErasedBoxLayoutContext for DriverBoxLayoutContext<'_> {
     }
 }
 
-// ============================================================================
-// BOX HIT TEST CAPABILITY
-// ============================================================================
-
-/// Hit test capability for box (2D) layout.
-///
-/// Uses `Offset` for position and standard hit test result.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BoxHitTest;
-
-impl HitTestCapability for BoxHitTest {
-    type Position = Offset;
-    type Result = BoxHitTestResult;
-    type Entry = BoxHitTestEntry;
-    type Context<'ctx, A: Arity, P: ParentData>
-        = RawBoxHitTestContext<'ctx, A, P>
-    where
-        Self: 'ctx;
-}
-
 /// Hit test result for box protocol.
 #[derive(Debug, Default)]
 pub struct BoxHitTestResult {
@@ -1680,7 +1648,7 @@ impl<'ctx, A: Arity, P: ParentData> RawBoxHitTestContext<'ctx, A, P> {
     }
 }
 
-impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
+impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxProtocol, A, P>
     for RawBoxHitTestContext<'ctx, A, P>
 {
     fn position(&self) -> &Offset {

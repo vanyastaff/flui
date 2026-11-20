@@ -801,7 +801,7 @@ impl CustomPainter for TabIndicatorPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        let Some(old) = old.as_any().downcast_ref::<Self>() else {
+        let Some(old) = (old as &dyn Any).downcast_ref::<Self>() else {
             return true;
         };
         !old.position.same_controller(&self.position)
@@ -814,10 +814,6 @@ impl CustomPainter for TabIndicatorPainter {
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         Some(self.position.listenable())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
