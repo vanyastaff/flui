@@ -6,13 +6,18 @@
 //! - [`Controls`], the gallery: a button and its count, a switch, a text field and a pad that
 //!   takes any pointer;
 //! - [`Notes`]: a note field and its length, for keys, chords, text and composition;
-//! - [`Roles`]: one node of each role of the Windows lane's role table, for the projection.
+//! - [`Roles`]: one node of each role of the Windows lane's role table, for the projection;
+//! - [`Insets`]: a marker inside a `SafeArea` and one outside it, and the safe-area padding the
+//!   app reads, for the safe-area scenario.
 
+use flui_foundation::geometry::EdgeInsets;
+use flui_view::environment::MediaQuery;
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView, ViewState};
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{
-    Column, Listener, RawButton, RawTextField, Semantics, SizedBox, Text, TextEditingController,
+    Column, Listener, RawButton, RawTextField, SafeArea, Semantics, SizedBox, Stack, Text,
+    TextEditingController,
 };
 
 use flui_driver::lane::windows::roles::ROLES;
@@ -133,6 +138,33 @@ impl StatelessView for Roles {
                 })
                 .collect::<Vec<_>>(),
         )
+    }
+}
+
+/// A 40 by 40 marker at the window's top left (`outside`), one inside a `SafeArea` there
+/// (`inside`), and the safe-area padding the app reads (`insets`, labelled `top right bottom
+/// left`), so a scenario reads the padding UIKit's `safeAreaInsets` gave beside where `SafeArea`
+/// put its child.
+#[derive(Clone, StatelessView)]
+pub struct Insets;
+
+impl StatelessView for Insets {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let padding = MediaQuery::padding_of(ctx).unwrap_or(EdgeInsets::ZERO);
+        let marker = |identifier: &str| {
+            Semantics::new()
+                .identifier(identifier)
+                .label(identifier)
+                .child(SizedBox::new(40.0, 40.0))
+        };
+        Stack::new((
+            marker("outside"),
+            SafeArea::new(marker("inside")),
+            Semantics::new().identifier("insets").label(format!(
+                "{} {} {} {}",
+                padding.top, padding.right, padding.bottom, padding.left
+            )),
+        ))
     }
 }
 

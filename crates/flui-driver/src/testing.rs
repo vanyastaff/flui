@@ -8,6 +8,7 @@
 //!   request by a script, so the socket transport's cases (an app that closes mid-call or answers
 //!   slowly, a driver that leaves) run without a FLUI app.
 //! - [`ScriptedAdb`]: a device scripted for the Android lane.
+//! - [`ScriptedXcrun`]: a Simulator scripted for the iOS Simulator lane.
 //! - [`ScriptedBrowser`] (with `chrome`): a stand-in for a ChromeDriver's WebDriver BiDi session on
 //!   a loopback WebSocket, playing a page whose agent a [`Script`] answers, so the Chrome lane and
 //!   the page's connection run without a browser, and [`chrome`], the lane's host side (the page's
@@ -22,8 +23,10 @@ pub mod chrome;
 pub use browser::{BrowserLog, BrowserReply, BrowserScript, ScriptedBrowser};
 
 mod adb;
+mod xcrun;
 
 pub use adb::{Responder, ScriptedAdb};
+pub use xcrun::ScriptedXcrun;
 
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};

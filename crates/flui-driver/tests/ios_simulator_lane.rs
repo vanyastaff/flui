@@ -1,0 +1,649 @@
+//! The iOS Simulator lane on every host: its parsers against what `simctl` and `xcodebuild`
+//! print, its choice of simulator, and the lane itself against a scripted Simulator
+//! (`ScriptedXcrun`): every input refused before anything is sent, naming the Xcode and runtime,
+//! the screen read as the window, and the app started with its launch values and ended with the
+//! lane.
+
+use std::time::Duration;
+
+use flui_driver::Error;
+use flui_driver::coordinates::{self, DevicePoint};
+use flui_driver::lane::ios_simulator::device::{self, DeviceState, Simulator, Udid};
+use flui_driver::lane::ios_simulator::screenshot;
+use flui_driver::lane::ios_simulator::xcode::{self, HID_CAPABILITY};
+use flui_driver::lane::ios_simulator::xcrun::{XcrunCommand, XcrunReply};
+use flui_driver::lane::ios_simulator::{IosSimulatorLane, LANE, SimulatorApp};
+use flui_driver::lane::{self, Lane as _, PositionFidelity};
+use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
+use flui_driver::protocol::input::{PointerButton, PointerDevice};
+use flui_driver::protocol::session::{Isolation, Placement};
+use flui_driver::protocol::tree::WindowId;
+use flui_driver::steps::OsEvent;
+use flui_driver::testing::ScriptedXcrun;
+
+use crate::android_lane::png_of;
+
+pub(crate) const UDID: &str = "1F2E3D4C-5B6A-4798-8A7B-6C5D4E3F2A1B";
+pub(crate) const BUNDLE: &str = "dev.flui.scenario";
+
+/// What `simctl list devices --json` prints: the named simulator booted on iOS 18.0 beside
+/// others, one entry missing its state, one with no UDID and a tvOS one.
+pub(crate) fn listing(state: &str, available: bool) -> String {
+    format!(
+        r#"{{"devices": {{
+  "com.apple.CoreSimulator.SimRuntime.iOS-18-0": [
+    {{"udid": "{UDID}", "isAvailable": {available}, "state": "{state}", "name": "iPhone 16",
+      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16"}},
+    {{"udid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", "isAvailable": true, "name": "iPad Air"}},
+    {{"udid": "not-a-udid", "isAvailable": true, "state": "Booted", "name": "Broken"}}
+  ],
+  "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [
+    {{"udid": "0A1B2C3D-4E5F-4061-8728-394A5B6C7D8E", "isAvailable": true, "state": "Booted",
+      "name": "Apple TV"}}
+  ]
+}}}}"#
+    )
+}
+
+/// `xcodebuild -version` as Xcode `version` (`build`) prints it.
+fn xcodebuild(version: &str, build: &str) -> String {
+    format!("Xcode {version}\nBuild version {build}\n")
+}
+
+/// A Simulator with the named simulator booted, under Xcode 27.1.
+pub(crate) fn scripted() -> ScriptedXcrun {
+    ScriptedXcrun::new()
+        .reply(
+            "simctl list devices",
+            XcrunReply::new(0, listing("Booted", true)),
+        )
+        .reply(
+            "xcodebuild -version",
+            XcrunReply::new(0, xcodebuild("27.1", "27A9269")),
+        )
+}
+
+fn udid() -> Udid {
+    Udid::try_new(UDID).expect("a UDID")
+}
+
+fn connect(xcrun: &ScriptedXcrun) -> IosSimulatorLane {
+    IosSimulatorLane::connect(xcrun.simulator(), &udid(), BUNDLE).expect("the lane connects")
+}
+
+fn window() -> WindowId {
+    "w1".parse().expect("a window handle")
+}
+
+/// An iPhone's window: 393 by 852 points at 3x.
+fn placement() -> Placement {
+    Placement::new(window(), LogicalSize::new(393.0, 852.0), 3.0)
+}
+
+fn tap() -> Vec<OsEvent> {
+    let pointer = || "finger".to_owned();
+    vec![
+        OsEvent::PointerMove {
+            pointer: pointer(),
+            device: PointerDevice::Touch,
+            to: DevicePoint::new(600, 1200),
+        },
+        OsEvent::PointerDown {
+            pointer: pointer(),
+            device: PointerDevice::Touch,
+            button: PointerButton::Primary,
+        },
+        OsEvent::PointerUp {
+            pointer: pointer(),
+            device: PointerDevice::Touch,
+            button: PointerButton::Primary,
+        },
+    ]
+}
+
+#[test]
+fn a_udid_is_a_uuid_and_is_held_in_upper_case() {
+    let lower = Udid::try_new(UDID.to_ascii_lowercase()).expect("a lower-case UDID");
+    assert_eq!(lower, udid(), "two spellings of one UDID are one simulator");
+    assert_eq!(lower.as_str(), UDID);
+    for refused in [
+        "",
+        "booted",
+        "-1F2E3D4C-5B6A-4798-8A7B-6C5D4E3F2A1B",
+        "1F2E3D4C5B6A47988A7B6C5D4E3F2A1B",
+        "1F2E3D4C-5B6A-4798-8A7B-6C5D4E3F2A1",
+        "1F2E3D4C-5B6A-4798-8A7B-6C5D4E3F2A1G",
+        "1F2E3D4C-5B6A-4798-8A7B-6C5D4E3F2A1B-0",
+    ] {
+        assert!(
+            matches!(Udid::try_new(refused), Err(Error::InvalidArgument { .. })),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn a_bundle_identifier_is_checked_before_it_becomes_an_argument() {
+    for accepted in ["dev.flui.scenario", "com.example.My-App2", "a"] {
+        device::check_bundle_id(accepted).expect(accepted);
+    }
+    let long = "a".repeat(256);
+    for refused in [
+        "",
+        "-dev.flui",
+        ".dev.flui",
+        "dev flui",
+        "dev.flui;rm",
+        "dev/flui",
+        "dév.flui",
+        long.as_str(),
+    ] {
+        assert!(
+            matches!(
+                device::check_bundle_id(refused),
+                Err(Error::InvalidArgument { .. })
+            ),
+            "{refused:?}"
+        );
+        assert!(SimulatorApp::try_new(refused).is_err(), "{refused:?}");
+    }
+}
+
+#[test]
+fn an_apps_environment_takes_variable_names_alone() {
+    let app = || SimulatorApp::try_new(BUNDLE).expect("a bundle");
+    for accepted in ["FLUI_DRIVER_SCENARIO_APP", "_A", "a1"] {
+        app().env(accepted, "x").expect(accepted);
+    }
+    for refused in ["", "1ST", "A-B", "A B", "A=B", "É"] {
+        assert!(
+            matches!(app().env(refused, "x"), Err(Error::InvalidArgument { .. })),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn the_listing_is_read_entry_by_entry() {
+    let simulators = device::parse_devices(listing("Booted", true).as_bytes()).expect("a listing");
+    let names: Vec<&str> = simulators
+        .iter()
+        .map(|simulator| simulator.name.as_str())
+        .collect();
+    // The iPad lacks its state and the third entry its UDID: each is left out alone.
+    assert_eq!(names, ["iPhone 16", "Apple TV"]);
+    assert_eq!(simulators[0].udid, udid());
+    assert_eq!(simulators[0].state, DeviceState::Booted);
+    assert!(simulators[0].available);
+    assert_eq!(simulators[0].runtime_name(), "iOS 18.0");
+    let other = device::parse_devices(listing("Booting", true).as_bytes()).expect("a listing");
+    assert_eq!(other[0].state, DeviceState::Other("Booting".to_owned()));
+    for refused in ["", "[]", "{}", "{\"devices\": []}", "not json"] {
+        assert!(
+            device::parse_devices(refused.as_bytes()).is_err(),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn the_lane_drives_only_a_listed_available_booted_ios_simulator() {
+    let read = |state: &str, available: bool| {
+        device::parse_devices(listing(state, available).as_bytes()).expect("a listing")
+    };
+    let booted = read("Booted", true);
+    assert_eq!(
+        device::choose(&booted, &udid())
+            .expect("the booted iPhone")
+            .name,
+        "iPhone 16"
+    );
+    let unavailable = |simulators: &[Simulator], udid: &Udid, says: &str| {
+        let error = device::choose(simulators, udid).expect_err("refused");
+        assert!(
+            matches!(&error, Error::Lane { unavailable: true, message, .. } if message.contains(says)),
+            "{error:?}"
+        );
+        assert!(error.is_cannot_verify(), "{error:?}");
+    };
+    let unknown = Udid::try_new("FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF").expect("a UDID");
+    unavailable(&booted, &unknown, "is listed");
+    unavailable(&read("Shutdown", true), &udid(), "xcrun simctl boot");
+    unavailable(&read("Booting", true), &udid(), "Booting, not booted");
+    unavailable(&read("Booted", false), &udid(), "not installed");
+    let television = Udid::try_new("0A1B2C3D-4E5F-4061-8728-394A5B6C7D8E").expect("a UDID");
+    let error = device::choose(&booted, &television).expect_err("no iOS runtime");
+    assert_eq!(
+        error.missing_capability().as_deref(),
+        Some("ios_simulator_runtime")
+    );
+}
+
+#[test]
+fn an_ios_runtime_reads_as_its_version() {
+    for (identifier, name) in [
+        (
+            "com.apple.CoreSimulator.SimRuntime.iOS-18-0",
+            Some("iOS 18.0"),
+        ),
+        (
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-4-1",
+            Some("iOS 26.4.1"),
+        ),
+        ("com.apple.CoreSimulator.SimRuntime.iOS-27", Some("iOS 27")),
+        ("com.apple.CoreSimulator.SimRuntime.tvOS-18-0", None),
+        ("com.apple.CoreSimulator.SimRuntime.iOS-", None),
+        ("com.apple.CoreSimulator.SimRuntime.iOS-18-x", None),
+        ("com.apple.CoreSimulator.SimRuntime.iOS-1-2-3-4", None),
+    ] {
+        assert_eq!(
+            device::runtime_name(identifier).as_deref(),
+            name,
+            "{identifier}"
+        );
+    }
+}
+
+#[test]
+fn the_launch_line_gives_the_apps_process() {
+    for (printed, pid) in [
+        ("dev.flui.scenario: 4321\n", Some(4321)),
+        ("note\ndev.flui.scenario:  77 \n", Some(77)),
+        ("dev.flui.scenario.other: 4321\n", None),
+        ("dev.flui.scenario: 0\n", None),
+        ("dev.flui.scenario: -1\n", None),
+        ("dev.flui.scenario 4321\n", None),
+        ("", None),
+    ] {
+        assert_eq!(device::parse_launched(printed, BUNDLE), pid, "{printed:?}");
+    }
+}
+
+#[test]
+fn the_xcode_version_is_read_from_xcodebuild() {
+    let read = xcode::parse_version(&xcodebuild("27.1", "27A9269")).expect("a version");
+    assert_eq!(read.version, "27.1");
+    assert_eq!(read.build.as_deref(), Some("27A9269"));
+    assert_eq!(read.to_string(), "Xcode 27.1 (27A9269)");
+    let cases = [
+        (
+            "Xcode 26.4.1\nBuild version 26E101\n",
+            Some(("26.4.1", Some("26E101"))),
+        ),
+        ("Xcode 27\n", Some(("27", None))),
+        ("Xcode 27.1\nBuild version 27A 9269\n", Some(("27.1", None))),
+        ("Xcode 27.1.0.1\n", None),
+        ("Xcode beta\n", None),
+        (
+            "xcode-select: error: tool 'xcodebuild' requires Xcode\n",
+            None,
+        ),
+        ("", None),
+    ];
+    for (printed, expected) in cases {
+        let read = xcode::parse_version(printed);
+        assert_eq!(
+            read.as_ref()
+                .map(|read| (read.version.as_str(), read.build.as_deref())),
+            expected,
+            "{printed:?}"
+        );
+    }
+}
+
+/// Every input, under each Xcode the lane may meet (one before the Indigo channel lost its keys,
+/// one after, one whose version is not given), is refused before anything is sent, naming the
+/// capability, the Xcode and the runtime; a sequence of pauses alone goes through.
+#[test]
+fn every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_sent() {
+    let versions = [
+        (
+            XcrunReply::new(0, xcodebuild("26.4", "26E5221a")),
+            "Xcode 26.4 (26E5221a)",
+        ),
+        (
+            XcrunReply::new(0, xcodebuild("27.1", "27A9269")),
+            "Xcode 27.1 (27A9269)",
+        ),
+        (
+            XcrunReply::new(1, "").stderr("xcode-select: error: no developer directory"),
+            "whose version",
+        ),
+    ];
+    let inputs = [
+        tap(),
+        vec![
+            OsEvent::KeyDown("Enter".to_owned()),
+            OsEvent::KeyUp("Enter".to_owned()),
+        ],
+        vec![OsEvent::Text("hello".to_owned())],
+        vec![OsEvent::Scroll {
+            at: DevicePoint::new(10, 10),
+            delta_x: 0,
+            delta_y: 30,
+        }],
+        vec![
+            OsEvent::Pause(Duration::from_millis(1)),
+            OsEvent::Text("a".to_owned()),
+        ],
+    ];
+    for (reply, names) in versions {
+        let xcrun = ScriptedXcrun::new()
+            .reply(
+                "simctl list devices",
+                XcrunReply::new(0, listing("Booted", true)),
+            )
+            .reply("xcodebuild -version", reply);
+        let mut lane = connect(&xcrun);
+        let before = xcrun.log();
+        for events in &inputs {
+            let error = lane::send_guarded(&mut lane, events).expect_err("input is refused");
+            assert_eq!(
+                error.missing_capability().as_deref(),
+                Some(HID_CAPABILITY),
+                "{error:?}"
+            );
+            assert!(error.is_cannot_verify(), "{error:?}");
+            let message = error.to_string();
+            assert!(message.contains(names), "{names}: {message}");
+            assert!(message.contains("iOS 18.0"), "{message}");
+            let checked = lane.check(events).expect_err("refused before any event");
+            assert_eq!(
+                checked.missing_capability().as_deref(),
+                Some(HID_CAPABILITY)
+            );
+            let direct = lane
+                .send(&events[events.len() - 1])
+                .expect_err("refused when sent");
+            assert_eq!(direct.missing_capability().as_deref(), Some(HID_CAPABILITY));
+        }
+        assert_eq!(xcrun.log(), before, "nothing went to the Simulator");
+        lane::send_guarded(&mut lane, &[OsEvent::Pause(Duration::from_millis(1))])
+            .expect("a pause alone is waited out");
+        lane.release_all().expect("the lane holds nothing");
+    }
+}
+
+#[test]
+fn the_lane_is_the_simulator_and_has_no_guard() {
+    let mut lane = connect(&scripted());
+    assert_eq!(lane.name(), LANE);
+    let capabilities = lane.capabilities();
+    assert_eq!(capabilities.isolation, Isolation::Simulator);
+    assert!(capabilities.pointers.is_empty(), "{capabilities:?}");
+    assert!(!capabilities.keys);
+    assert!(!capabilities.compositions);
+    assert_eq!(capabilities.accessibility, None);
+    assert_eq!(capabilities.fidelity, PositionFidelity::OrderOnly);
+    assert!(lane.guard().is_none());
+    lane::admit(&mut lane).expect("a simulator is isolated without a guard");
+    assert_eq!(lane.simulator().udid, udid());
+    assert_eq!(
+        lane.xcode().map(ToString::to_string).as_deref(),
+        Some("Xcode 27.1 (27A9269)")
+    );
+    let error = lane.read_tree(&placement()).expect_err("no OS tree");
+    assert_eq!(
+        error.missing_capability().as_deref(),
+        Some("os_accessibility_tree")
+    );
+}
+
+#[test]
+fn the_lane_refuses_a_simulator_it_cannot_drive() {
+    let shut = ScriptedXcrun::new().reply(
+        "simctl list devices",
+        XcrunReply::new(0, listing("Shutdown", true)),
+    );
+    let error = IosSimulatorLane::connect(shut.simulator(), &udid(), BUNDLE)
+        .expect_err("a shut-down simulator");
+    assert!(error.is_cannot_verify(), "{error:?}");
+    assert_eq!(shut.log(), ["simctl list devices --json"]);
+    let no_xcode = ScriptedXcrun::new().reply(
+        "simctl list devices",
+        XcrunReply::new(72, "").stderr("xcrun: error: unable to find utility \"simctl\""),
+    );
+    let error =
+        IosSimulatorLane::connect(no_xcode.simulator(), &udid(), BUNDLE).expect_err("no simctl");
+    assert!(
+        matches!(
+            &error,
+            Error::Lane {
+                unavailable: true,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let error = IosSimulatorLane::connect(scripted().simulator(), &udid(), "-bad")
+        .expect_err("no bundle identifier");
+    assert!(matches!(error, Error::InvalidArgument { .. }), "{error:?}");
+}
+
+#[test]
+fn a_capture_is_the_screen_when_the_window_fills_it() {
+    let (width, height) = (1179, 2556);
+    let mut rgba = vec![255_u8; (width * height * 4) as usize];
+    rgba[..4].copy_from_slice(&[10, 20, 30, 255]);
+    let xcrun = scripted().screenshot(png_of(width, height, &rgba));
+    let mut lane = connect(&xcrun);
+    let image = lane.capture_window(&placement()).expect("the screen");
+    assert_eq!((image.width(), image.height()), (width, height));
+    assert_eq!(image.pixel(0, 0), Some([10, 20, 30, 255]));
+    let geometry = lane
+        .locate_window(&placement())
+        .expect("the window is the screen");
+    let corner = |x: f64, y: f64| {
+        coordinates::to_device(&geometry, LogicalPoint::new(x, y)).expect("on the screen")
+    };
+    assert_eq!(corner(0.0, 0.0), DevicePoint::new(0, 0));
+    assert_eq!(corner(392.9, 851.9), DevicePoint::new(1178, 2555));
+    assert!(
+        xcrun
+            .commands()
+            .iter()
+            .any(|command| matches!(command, XcrunCommand::Screenshot { .. })),
+        "{:?}",
+        xcrun.log()
+    );
+}
+
+#[test]
+fn a_screen_of_another_size_than_the_window_is_refused_before_it_is_decoded() {
+    // A landscape screen under a portrait window, and a window that does not fill its screen.
+    for (width, height) in [(2556, 1179), (1179, 1200), (1182, 2556)] {
+        let xcrun = scripted().screenshot(png_of(
+            width,
+            height,
+            &vec![0; (width * height * 4) as usize],
+        ));
+        let mut lane = connect(&xcrun);
+        let error = lane
+            .capture_window(&placement())
+            .expect_err("not the window");
+        assert_eq!(
+            error.missing_capability().as_deref(),
+            Some("window_position"),
+            "{width} x {height}: {error:?}"
+        );
+        let error = lane
+            .locate_window(&placement())
+            .expect_err("not the window");
+        assert_eq!(
+            error.missing_capability().as_deref(),
+            Some("window_position")
+        );
+    }
+    // Two pixels off on a side is the window laid out in whole pixels.
+    screenshot::check_fills(&placement(), 1181, 2554).expect("within the tolerance");
+    // A header that declares a screen past the bound, or no PNG at all, is never decoded.
+    let mut huge = png_of(1, 1, &[0, 0, 0, 255]);
+    huge[16..20].copy_from_slice(&9000_u32.to_be_bytes());
+    for refused in [huge, b"GIF89a".to_vec(), Vec::new()] {
+        let error = screenshot::window_image(&refused, &placement()).expect_err("refused");
+        assert!(matches!(error, Error::Lane { .. }), "{error:?}");
+    }
+    assert_eq!(screenshot::png_size(&png_of(3, 2, &[0; 24])), Some((3, 2)));
+    let bad_size = Placement::new(window(), LogicalSize::new(f64::NAN, 852.0), 3.0);
+    assert!(matches!(
+        screenshot::check_fills(&bad_size, 1179, 2556),
+        Err(Error::InvalidArgument { .. })
+    ));
+}
+
+#[cfg(unix)]
+mod start {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::PathBuf;
+
+    use flui_driver::Endpoint;
+    use flui_driver::lane::ios_simulator::SimulatorApp;
+    use flui_driver::lane::ios_simulator::xcrun::{XcrunCommand, XcrunReply};
+    use flui_driver::protocol::launch::{ENDPOINT_ENV, TOKEN_ENV};
+
+    use super::{BUNDLE, connect, scripted, udid};
+
+    fn launched(xcrun: &flui_driver::testing::ScriptedXcrun) -> Vec<XcrunCommand> {
+        xcrun
+            .commands()
+            .into_iter()
+            .filter(|command| matches!(command, XcrunCommand::Launch { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn starting_the_app_hands_it_its_endpoint_and_token_as_launch_values() {
+        let xcrun = scripted()
+            .reply("simctl install", XcrunReply::new(0, ""))
+            .reply(
+                "simctl launch",
+                XcrunReply::new(0, format!("{BUNDLE}: 4321\n")),
+            )
+            .reply("simctl terminate", XcrunReply::new(0, ""));
+        let mut lane = connect(&xcrun);
+        let app = SimulatorApp::try_new(BUNDLE)
+            .expect("a bundle")
+            .app_bundle("/tmp/Scenario.app")
+            .env("FLUI_DRIVER_SCENARIO_APP", "insets")
+            .and_then(|app| app.env(TOKEN_ENV, "a token of the app's own"))
+            .expect("environment variables");
+        let started = lane.start(&app).expect("the app starts");
+        assert_eq!(started.pid, Some(4321));
+        assert_eq!(
+            started.token.len(),
+            64,
+            "twice the shortest token an app takes"
+        );
+        let Endpoint::Local(address) = &started.endpoint else {
+            panic!("a Unix socket on the host: {:?}", started.endpoint);
+        };
+        let directory = PathBuf::from(address)
+            .parent()
+            .expect("the socket's directory")
+            .to_owned();
+        let mode = std::fs::metadata(&directory)
+            .expect("the directory is there while the app runs")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "only this user enters it");
+        let install = XcrunCommand::Install {
+            udid: udid(),
+            app: PathBuf::from("/tmp/Scenario.app"),
+        };
+        assert!(xcrun.commands().contains(&install), "{:?}", xcrun.log());
+        let [launch] = launched(&xcrun).try_into().expect("one launch");
+        assert_eq!(
+            launch.args(),
+            [
+                "simctl",
+                "launch",
+                "--terminate-running-process",
+                super::UDID,
+                BUNDLE
+            ]
+        );
+        let child = |key: &str| format!("SIMCTL_CHILD_{key}");
+        assert_eq!(
+            launch.env(),
+            [
+                (child("FLUI_DRIVER_SCENARIO_APP"), "insets".to_owned()),
+                (child(ENDPOINT_ENV), address.clone()),
+                (child(TOKEN_ENV), started.token.clone()),
+            ],
+            "the app's own values, and the agent's the lane's alone"
+        );
+        assert!(
+            xcrun
+                .log()
+                .iter()
+                .all(|line| !line.contains(&started.token)),
+            "the token never reaches a command's text: {:?}",
+            xcrun.log()
+        );
+        drop(lane);
+        let terminate = XcrunCommand::Terminate {
+            udid: udid(),
+            bundle: BUNDLE.to_owned(),
+        };
+        assert_eq!(
+            xcrun.commands().last(),
+            Some(&terminate),
+            "the lane ends the app"
+        );
+        assert!(
+            !directory.exists(),
+            "the socket's directory goes with the lane"
+        );
+    }
+
+    #[test]
+    fn a_launch_that_timed_out_still_ends_the_app() {
+        let xcrun = scripted()
+            .timeout_once("simctl launch")
+            .reply("simctl terminate", XcrunReply::new(0, ""));
+        let mut lane = connect(&xcrun);
+        let error = lane
+            .start(&SimulatorApp::try_new(BUNDLE).expect("a bundle"))
+            .expect_err("the launch timed out");
+        assert!(
+            matches!(error, flui_driver::Error::Timeout { .. }),
+            "{error:?}"
+        );
+        assert!(
+            !xcrun
+                .commands()
+                .iter()
+                .any(|command| matches!(command, XcrunCommand::Install { .. })),
+            "an app named by its bundle alone is not installed"
+        );
+        drop(lane);
+        assert!(
+            matches!(
+                xcrun.commands().last(),
+                Some(XcrunCommand::Terminate { .. })
+            ),
+            "{:?}",
+            xcrun.log()
+        );
+    }
+
+    #[test]
+    fn a_lane_that_started_nothing_ends_nothing() {
+        let xcrun = scripted();
+        drop(connect(&xcrun));
+        assert!(
+            !xcrun
+                .commands()
+                .iter()
+                .any(|command| matches!(command, XcrunCommand::Terminate { .. })),
+            "{:?}",
+            xcrun.log()
+        );
+        let mut lane = connect(&xcrun);
+        let other = SimulatorApp::try_new("dev.flui.other").expect("a bundle");
+        assert!(matches!(
+            lane.start(&other),
+            Err(flui_driver::Error::InvalidArgument { .. })
+        ));
+    }
+}
