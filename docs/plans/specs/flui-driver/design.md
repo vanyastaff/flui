@@ -395,7 +395,7 @@ follows ADR-0215 §5: text is redacted unless `keep_text` is set.
 | macOS, Linux | Unix socket in a `0700` directory (existing) | env |
 | iOS Simulator | Unix socket on the host filesystem (the simulator shares it) | `SIMCTL_CHILD_FLUI_AGENT_*` env on `simctl launch` |
 | Android | abstract Unix socket `@flui-agent-<random>` (`interprocess` namespaced name); host side `adb forward tcp:0 localabstract:…` bound to 127.0.0.1 | intent extras `flui.agent.endpoint`, `flui.agent.token` on `am start`, read by the Android runner through the Java view (ADR-0237) |
-| Chrome | BiDi: the driver adds a preload script that installs the token and a `channel` argument before the wasm starts. The web runner exports `__flui_agent.call(line) → Promise<string>`, and events go through the channel (`script.message`) | the preload script; no URL parameter carries the token |
+| Chrome | BiDi: the driver adds a preload script that installs the launch object (the export's name as the endpoint, and the token) before the wasm starts. The web runner exports `__flui_agent` as `{ version, connect(onLine) }`; the driver connects with a BiDi channel as `onLine`, so each line comes back as a `script.message`, and sends each line with `send` on the connection `connect` answered (`script.callFunction`) | the preload script; no URL parameter carries the token |
 | Headless | none: `flui-driver` calls the runtime's agent in-process | — |
 
 `FLUI_AGENT_EXIT_ON_DISCONNECT=1` (env or extra) makes a launched app exit when its driver's
@@ -563,7 +563,7 @@ event is sent.
 | wayland | libei (`reis`) from a compositor's EIS socket or the RemoteDesktop portal (asked over zbus); keys and text through EI's text interface; portal refusal is cannot-verify | AT-SPI | none: the ScreenCast portal's PipeWire stream needs a C library no Linux build links (`docs/gaps.md`) | same as x11 |
 | android | `adb shell input` (tap, swipe, keyevent, text, stylus, mouse) and `uinput` JSON-line scripts for stylus and touchpad, ported from `android_input.rs`. `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers and removes a test device once per session, and stylus and touchpad answer `not_supported` where it fails; system UI such as the soft keyboard located by `uiautomator dump` | `uiautomator dump` for system UI only: FLUI publishes no Android accessibility tree, so FLUI nodes are `not_supported` until an adapter lands (recorded in `docs/gaps.md`) | `screencap -p` via `exec-out` | `adb install`, `am start` with extras, `am force-stop` |
 | ios_sim | Simulator HID: `SimDeviceLegacyHIDClient` from `SimulatorKit.framework` through `objc2` dynamic loading, the channel `idb` uses. A runtime probe checks the selectors on first use and answers `not_supported` with the Xcode version when they are missing | none (FLUI's iOS backend publishes no AX tree; recorded in gaps) | `simctl io <udid> screenshot` | `simctl install/launch/terminate` |
-| chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys); IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, ported from `bidi.rs` | none: the canvas exposes no DOM accessibility tree for FLUI nodes today (recorded in gaps); `browsingContext.locateNodes` with `accessibility` reads it once a DOM mirror exists | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from Chrome for Testing (`chrome.rs`), page served by `tiny_http` |
+| chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys), one command of one instant action an event; IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, the one lane that composes | none yet: the canvas mirrors its tree as an ARIA DOM, which the lane does not read; Chrome's accessibility tree over it (`Accessibility.getFullAXTree` through `goog:cdp`) is where it would | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from `CHROMEDRIVER`, the cache, or Chrome for Testing; Chrome always headless; the page served by a loopback server of the lane's own |
 
 ### Determinism of OS lanes
 
@@ -901,9 +901,10 @@ Everything a user needs ships in `flui-driver`, `flui-cli` and the inspector. Th
 enforced, not just intended.
 
 - **No network beyond the target.** The driver's dependencies carry no HTTP client except
-  `ureq`, which the `chrome` lane uses for the one ChromeDriver archive fetch (as `chrome.rs` does
-  today). That fetch is skipped when `CHROMEDRIVER` or a cache hit supplies the binary, and refused
-  under `--offline` with the install hint. A test in `flui-driver` lists the crate's resolved
+  `ureq`, which the `chrome` lane uses for the one ChromeDriver archive fetch and for the WebDriver
+  session a ChromeDriver on the loopback opens. That fetch is skipped when `CHROMEDRIVER` or a
+  cache hit supplies the binary, and refused under `--offline` with the install hint (a switch of
+  the `flui drive` front end, which launches no web build yet). A test in `flui-driver` lists the crate's resolved
   dependencies and fails on any other network client (`reqwest`, `hyper` clients, telemetry SDKs).
   Sockets are opened only to loopback, to the `adb`-forwarded port and to the BiDi WebSocket of a
   local ChromeDriver.

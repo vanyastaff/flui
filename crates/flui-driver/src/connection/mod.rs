@@ -3,10 +3,12 @@
 //! answers kept aside.
 //!
 //! A [`Connection`] is a transport for that conversation: a local socket to a launched or attached
-//! app ([`socket`]), or the headless target's agent served in process (`in_process`, feature
-//! `headless`). It is
-//! private: front ends see the `Driver`.
+//! app ([`socket`]), a web app's page export reached through the Chrome lane's BiDi session
+//! (`bidi`, feature `chrome`), or the headless target's agent served in process (`in_process`,
+//! feature `headless`). It is private: front ends see the `Driver`.
 
+#[cfg(feature = "chrome")]
+pub(crate) mod bidi;
 #[cfg(feature = "headless")]
 pub(crate) mod in_process;
 #[cfg(any(unix, windows))]

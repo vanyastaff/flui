@@ -15,10 +15,14 @@
 //! tree assistive technology reads, projected onto the wire's nodes, and the OS's own capture of
 //! the window ([`Lane::capture_window`]).
 //!
-//! The lanes: [`windows`], [`macos`], [`x11`] and [`wayland`] (its OS half with the `wayland`
-//! feature); both Linux lanes read the app through [`atspi`].
+//! The lanes: [`windows`], [`macos`], [`x11`], [`wayland`] (its OS half with the `wayland`
+//! feature) and `chrome` (feature `chrome`); both Linux lanes read the app through [`atspi`].
+//! An input-method composition goes only to a lane that says it composes
+//! ([`LaneCapabilities::compositions`]), a rule [`send_guarded`] holds.
 
 pub mod atspi;
+#[cfg(feature = "chrome")]
+pub mod chrome;
 pub mod macos;
 pub mod wayland;
 pub mod windows;
@@ -76,6 +80,10 @@ pub struct LaneCapabilities {
     pub fidelity: PositionFidelity,
     /// The accessibility API it reads the app through; `None` for a lane that reads none.
     pub accessibility: Option<AccessibilityApi>,
+    /// Whether it sends an input method's composition ([`OsEvent::Composition`]) through the
+    /// platform's own input-method path; every other lane leaves a composition to the app's own
+    /// input path (`input.inject`).
+    pub compositions: bool,
 }
 
 impl LaneCapabilities {
@@ -94,6 +102,7 @@ impl LaneCapabilities {
             isolation,
             fidelity,
             accessibility: None,
+            compositions: false,
         }
     }
 
@@ -101,6 +110,13 @@ impl LaneCapabilities {
     #[must_use]
     pub fn accessibility(mut self, api: AccessibilityApi) -> Self {
         self.accessibility = Some(api);
+        self
+    }
+
+    /// The lane sends input-method compositions.
+    #[must_use]
+    pub fn compositions(mut self) -> Self {
+        self.compositions = true;
         self
     }
 }
@@ -355,14 +371,30 @@ pub fn release_outcome(keys: Result<()>, pointer: Result<()>) -> Result<()> {
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
-/// pressed is released on every exit, a failed send included.
+/// pressed is released on every exit, a failed send included; a release that leaves input held
+/// fails with [`Error::ReleaseFailed`] naming it, the send's own failure kept in its message.
 ///
 /// # Errors
 ///
-/// As [`admit`] and [`Lane::check`], before any event; [`Error::InterruptedByUser`]; the lane's
-/// own failure.
+/// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
+/// `os_ime_composition` for a composition a lane that does not compose was handed;
+/// [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
+    let composes = lane.capabilities().compositions;
+    if !composes
+        && events
+            .iter()
+            .any(|event| matches!(event, OsEvent::Composition(_)))
+    {
+        return Err(Error::not_supported(
+            "os_ime_composition",
+            format!(
+                "the {} lane sends no input-method composition; use the synthetic path",
+                lane.name()
+            ),
+        ));
+    }
     lane.check(events)?;
     let name = lane.name().to_owned();
     if let Some(guard) = lane.guard() {
@@ -373,7 +405,22 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
         guard.disarm();
     }
     let released = lane.release_all();
-    sent.and(released)
+    match (sent, released) {
+        // What stays held outranks why the send stopped, which its message keeps.
+        (
+            Err(first),
+            Err(Error::ReleaseFailed {
+                lane,
+                held,
+                message,
+            }),
+        ) => Err(Error::ReleaseFailed {
+            lane,
+            held,
+            message: format!("{first}; then the release failed: {message}"),
+        }),
+        (sent, released) => sent.and(released),
+    }
 }
 
 fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {

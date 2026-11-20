@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -842,6 +842,72 @@ graph LR
   channel, and serving the bundle. The scenario `web-input` replaces the probe and its JS API.
 - **Done when:** the scenario runs on B headless, in CI as well. The goldens `web_bidi_*` are
   re-recorded through the driver and held by the existing test.
+- **Status (2026-11-20):** built; the pull request is under review. Open until the runs below are
+  made: no real browser has run the lane (this Windows host has Chrome 157 and no ChromeDriver,
+  WSL Ubuntu 24.04 neither, and none was fetched), so the scenario has not run on B, CI has no job
+  that builds the scenario app for the web and runs it, and the `web_bidi_*` goldens wait for the
+  driver's recording (`--record`), which the driver does not have yet.
+- **Evidence (2026-11-20):**
+  - On every host (`driver_it`, Windows 11 and WSL Ubuntu 24.04), the tables:
+    `chrome_lane::a_key_name_is_its_webdriver_value_and_text_its_grapheme_clusters`,
+    `chrome_lane::each_event_is_one_command_of_one_instant_action`,
+    `chrome_lane::a_composition_step_is_its_devtools_command`,
+    `chrome_lane::a_screenshot_is_decoded_to_rgba_within_its_bounds`,
+    `chrome_lane::the_page_server_serves_its_root_and_nothing_outside_it`,
+    `chrome_lane::chromedriver_versions_ports_archives_and_arguments`,
+    `chrome_lane::a_chromedriver_is_fetched_whole_and_its_unpublished_patch_falls_back_to_its_build`,
+    `chrome_lane::a_kept_chromedriver_is_taken_without_a_fetch`.
+  - Against a BiDi session the test plays (`testing::ScriptedBrowser`):
+    `chrome_lane::a_page_is_reached_through_its_export_and_driven_one_step_a_move`,
+    `chrome_lane::a_composition_goes_through_the_devtools_input_method`,
+    `chrome_lane::held_input_is_released_and_a_refused_release_names_what_stays_held`,
+    `chrome_lane::a_press_the_browser_does_not_answer_is_released_as_possibly_held`,
+    `chrome_lane::an_answer_is_matched_by_its_id_and_a_message_past_the_bound_ends_the_session`,
+    `chrome_lane::a_page_that_sends_more_lines_than_the_driver_reads_breaks_its_connection`,
+    `chrome_lane::the_app_closing_its_connection_ends_the_conversation`,
+    `chrome_lane::a_wrong_token_is_refused_at_the_hello`,
+    `chrome_lane::the_canvas_is_captured_clipped_to_itself`,
+    `chrome_lane::a_canvas_of_another_size_or_ratio_is_refused_before_any_input`;
+    `steps::a_composition_reaches_only_a_lane_that_composes`.
+  - The scenario: `scenarios::the_web_input_scenario_passes_on_the_headless_target`;
+    `chrome_browser::the_web_input_scenario_runs_in_headless_chrome` reports `cannot_verify`
+    without `FLUI_WEB_INPUT_BUNDLE` and `CHROMEDRIVER` (and fails under `FLUI_REQUIRE_CHROME`).
+  - Owed on B, by a run with a web build of the scenario app's `Controls` and a ChromeDriver
+    matching the installed Chrome: `chrome_browser::the_web_input_scenario_runs_in_headless_chrome`
+    passing, on a desktop and in a CI job that builds the bundle (no job does yet); the
+    `web_bidi_*` goldens recorded through the driver once it records native input.
+- **As built:**
+  - The lane is `lane::chrome` (feature `chrome`): `keys`, `actions`, `ime` and `screenshot` are
+    pure; `bidi` owns the WebSocket on a thread of its own and matches each answer to its command
+    by id; `chromedriver` finds Chrome, takes `CHROMEDRIVER`, a cached driver or fetches the one
+    for Chrome's version from Chrome for Testing, and opens the WebDriver session; `page` serves the
+    build. The page's connection is `connection::bidi`. `Driver::launch` of an
+    `Artifact::WasmBundle` and `Driver::attach_page` put the lane on the page's tab.
+  - Every event is one `input.performActions` command of one action of zero duration, so a move
+    is a single step and a pause the lane's own wait; text is typed a grapheme cluster at a time,
+    the unit WebDriver's key action takes.
+  - An input method's composition becomes `OsEvent::Composition` steps, which only a lane whose
+    capabilities say it composes takes (`LaneCapabilities::compositions`), refused at
+    `lane::send_guarded` for every other; before, `steps::os_events` refused every composition.
+  - A key, button, contact or composition is held once the browser answered the command that made
+    it, an unanswered one possibly held; `send_guarded` answers `ReleaseFailed` over the send's own
+    failure when the release leaves input held, for every lane.
+  - The page is served by a loopback server of the lane's own on `std` rather than `tiny_http`,
+    which the lockfile does not have: it answers `GET` and `HEAD` of plain names under the root,
+    one connection at a time, within a head bound and one deadline.
+  - Chrome starts `--headless=new` always, `--force-device-scale-factor=1`, at the launch's
+    viewport (800 by 600 by default, `Launch::viewport`), with `--enable-unsafe-swiftshader` so WebGL
+    runs on a host without a GPU, and `--no-sandbox` only as root.
+  - The window is the canvas `#flui-canvas`; a canvas of another size or a device pixel ratio
+    other than the window's scale is refused before any input.
+  - A headless browser takes no desktop OS-input lock: its input lands on no desktop.
+  - The lane reads no accessibility tree: the canvas's ARIA mirror is there, and reading it through
+    Chrome's accessibility tree (`Accessibility.getFullAXTree` over `goog:cdp`) is not built.
+    `--offline` is not built either: no `flui drive` front end launches a web build yet.
+  - The probe's checks a page script made and no agent sees (vibration before and after user
+    activation, HTML drag and drop into and out of the canvas, the process nonce between pages,
+    the text-area fallback without `EditContext`) are not in `web-input`: they belong to the web
+    backend's own browser tests.
 
 ### FD13. Android lane (IC)
 

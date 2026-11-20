@@ -64,6 +64,7 @@ pub struct Launch {
     args: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
     connect_wait: Duration,
+    viewport: (u32, u32),
 }
 
 pub(crate) enum Target {
@@ -84,6 +85,7 @@ impl Launch {
             args: Vec::new(),
             env: Vec::new(),
             connect_wait: CONNECT_WAIT,
+            viewport: (800, 600),
         }
     }
 
@@ -172,44 +174,25 @@ impl Launch {
             .env(TOKEN_ENV, &token)
             .env(EXIT_ON_DISCONNECT_ENV, "1")
             .stdin(Stdio::null());
-        let started = |error: io::Error| {
-            Error::Io(io::Error::new(
-                error.kind(),
-                format!("could not start {}: {error}", executable.display()),
-            ))
-        };
-        // The job comes first, and the app joins it before its first instruction: nothing it
-        // starts escapes the job.
-        #[cfg(windows)]
-        let job = crate::lane::windows::job::KillOnCloseJob::try_new()?;
-        #[cfg(windows)]
-        let child = job
-            .spawn_suspended(&mut command)
-            .map_err(|error| match error {
-                Error::Io(error) => started(error),
-                other => other,
-            })?
-            .resume()?;
-        // On Unix the app leads a process group of its own, which the session ends whole
-        // (`AppProcess::end`); on Linux it also dies with the session's starter thread.
-        #[cfg(target_os = "linux")]
-        let (child, starter) = linux::spawn(command).map_err(started)?;
-        #[cfg(all(unix, not(target_os = "linux")))]
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        #[cfg(not(any(windows, target_os = "linux")))]
-        let child = command.spawn().map_err(started)?;
+        let endpoint = place.address.clone();
         Ok(Launched {
-            endpoint: place.address.clone(),
+            endpoint,
             token,
-            process: AppProcess {
-                child,
-                #[cfg(windows)]
-                _job: job,
-                #[cfg(target_os = "linux")]
-                _starter: starter,
-                _place: place,
-            },
+            process: AppProcess::spawn(command, Some(place))?,
         })
+    }
+
+    /// The browser's viewport a web build is launched into, in CSS pixels.
+    #[cfg(feature = "chrome")]
+    pub(crate) fn viewport_size(&self) -> (u32, u32) {
+        self.viewport
+    }
+
+    /// Launch a web build into a `width` by `height` CSS-pixel viewport at a device pixel ratio of
+    /// one; 800 by 600, the scenarios' window, when not named. Only a web build has a viewport.
+    pub fn viewport(mut self, width: u32, height: u32) -> Self {
+        self.viewport = (width, height);
+        self
     }
 }
 
@@ -250,11 +233,60 @@ pub(crate) struct AppProcess {
     #[cfg(target_os = "linux")]
     _starter: linux::Starter,
     /// Where its agent listens: the private directory its socket lives in (Unix), removed with the
-    /// session, after the process ended.
-    _place: EndpointPlace,
+    /// session, after the process ended; none for a process that serves no agent (ChromeDriver).
+    _place: Option<EndpointPlace>,
 }
 
 impl AppProcess {
+    /// Start `command` as a process the session owns (see [`AppProcess`]), keeping `place` until
+    /// it ended.
+    pub(crate) fn spawn(command: Command, place: Option<EndpointPlace>) -> Result<Self> {
+        // Linux's starter takes the command whole; the other hosts configure it in place.
+        #[cfg(not(target_os = "linux"))]
+        let mut command = command;
+        let program = command.get_program().to_owned();
+        let started = |error: io::Error| {
+            Error::Io(io::Error::new(
+                error.kind(),
+                format!("could not start {}: {error}", Path::new(&program).display()),
+            ))
+        };
+        // The job comes first, and the app joins it before its first instruction: nothing it
+        // starts escapes the job.
+        #[cfg(windows)]
+        let job = crate::lane::windows::job::KillOnCloseJob::try_new()?;
+        #[cfg(windows)]
+        let child = job
+            .spawn_suspended(&mut command)
+            .map_err(|error| match error {
+                Error::Io(error) => started(error),
+                other => other,
+            })?
+            .resume()?;
+        // On Unix the app leads a process group of its own, which the session ends whole
+        // (`AppProcess::end`); on Linux it also dies with the session's starter thread.
+        #[cfg(target_os = "linux")]
+        let (child, starter) = linux::spawn(command).map_err(started)?;
+        #[cfg(all(unix, not(target_os = "linux")))]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        #[cfg(not(any(windows, target_os = "linux")))]
+        let child = command.spawn().map_err(started)?;
+        Ok(Self {
+            child,
+            #[cfg(windows)]
+            _job: job,
+            #[cfg(target_os = "linux")]
+            _starter: starter,
+            _place: place,
+        })
+    }
+
+    /// The process's standard output, when it was piped and not taken yet.
+    #[cfg(feature = "chrome")]
+    pub(crate) fn take_stdout(&mut self) -> Option<std::process::ChildStdout> {
+        self.child.stdout.take()
+    }
+
     /// The process id.
     pub(crate) fn id(&self) -> u32 {
         self.child.id()
@@ -381,7 +413,7 @@ pub(crate) fn launch_token() -> Result<String> {
 }
 
 /// `bytes` random bytes from the OS, as lowercase hex.
-fn random_hex(bytes: usize) -> Result<String> {
+pub(crate) fn random_hex(bytes: usize) -> Result<String> {
     let mut buffer = vec![0_u8; bytes];
     getrandom::fill(&mut buffer).map_err(|error| {
         Error::Io(io::Error::other(format!(

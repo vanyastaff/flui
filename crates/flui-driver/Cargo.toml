@@ -28,6 +28,18 @@ testing = []
 # compositor of its own (ADR-0238 §5); off by default, since no Wayland session runs OS input
 # without one.
 wayland = ["dep:reis"]
+# The Chrome lane: a web build of the app served on the loopback, driven in headless Chrome through
+# ChromeDriver's WebDriver BiDi session (trusted input, the Chrome DevTools input method, the
+# canvas's screenshot), with the agent reached through the page's export (ADR-0238 §5, ADR-0239).
+chrome = [
+    "dep:base64",
+    "dep:png",
+    "dep:rustls",
+    "dep:tungstenite",
+    "dep:unicode-segmentation",
+    "dep:ureq",
+    "dep:zip",
+]
 
 [dependencies]
 # The wire: the method table, its parameters and outputs, the envelope and the launch contract.
@@ -46,6 +58,21 @@ flui-view = { workspace = true, optional = true }
 flui-foundation = { workspace = true }
 # The instants the in-process agent's conversation is polled at (std's on native targets).
 web-time = { workspace = true, optional = true }
+# The Chrome lane (`chrome`): the BiDi WebSocket to a ChromeDriver on the loopback, so the client
+# handshake alone and no TLS (the version `flui-cli`'s browser relay speaks); a screenshot's base64
+# and PNG; text typed a grapheme cluster at a time, the unit a WebDriver key action takes.
+tungstenite = { version = "0.30", default-features = false, features = [
+    "handshake",
+], optional = true }
+base64 = { version = "0.23", optional = true }
+png = { version = "0.18", optional = true }
+unicode-segmentation = { version = "1.13", optional = true }
+# The one ChromeDriver archive fetched from Chrome for Testing when neither `CHROMEDRIVER` nor the
+# cache names one (rustls with the platform's verifier, as `flui-cli` fetches), and the WebDriver
+# session ChromeDriver opens over HTTP on the loopback; the archive's deflated entry.
+ureq = { workspace = true, optional = true }
+rustls = { workspace = true, features = ["std", "aws_lc_rs"], optional = true }
+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"], optional = true }
 
 # Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.
 [target.'cfg(any(unix, windows))'.dependencies]
@@ -158,13 +185,18 @@ objc2-core-graphics = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-flui-driver = { path = ".", features = ["headless", "testing", "wayland"] }
+flui-driver = { path = ".", features = ["chrome", "headless", "testing", "wayland"] }
 flui-foundation = { workspace = true }
 # The platform a headless scenario follows the conventions of (`PlatformConvention`).
 flui-platform = { workspace = true }
 flui-view = { workspace = true }
 flui-widgets = { workspace = true }
 tempfile = { workspace = true }
+# The Chrome lane's tests: the screenshots its stand-in browser answers with, and the ChromeDriver
+# archive its stand-in Chrome for Testing serves.
+base64 = "0.23"
+png = "0.18"
+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
 
 # The scenario apps in a window (`examples/scenario_app.rs`): the Windows, macOS and X11 lanes'
 # runs only. A dev-dependency, never linked into the library, which reaches no host

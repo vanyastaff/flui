@@ -1,6 +1,8 @@
 //! `flui-driver`'s integration tests, through its public API.
 
 mod apps;
+mod chrome_browser;
+mod chrome_lane;
 mod coordinates;
 mod failure_matrix;
 mod fixtures;

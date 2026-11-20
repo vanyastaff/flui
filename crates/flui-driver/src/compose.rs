@@ -32,7 +32,7 @@ use flui_protocol::input::{
 };
 use flui_protocol::locator::{LocateParams, Locator, Matches, Pick, Target};
 use flui_protocol::method::{self, Method};
-use flui_protocol::session::{Empty, Placement, WindowParams};
+use flui_protocol::session::{Empty, Isolation, Placement, WindowParams};
 use flui_protocol::snapshot::Snapshot;
 use flui_protocol::tree::{ElementRef, WindowId};
 use flui_protocol::wait::{Condition, WaitOutcome, WaitParams};
@@ -422,7 +422,11 @@ fn perform_os(
         .lane()
         .map(|lane| lane.capabilities().isolation)
         .ok_or_else(no_lane)?;
-    driver.lock_os_input()?;
+    // A headless browser is the session's own: its input lands on no desktop another session's
+    // could interleave with.
+    if isolation != Isolation::HeadlessBrowser {
+        driver.lock_os_input()?;
+    }
     let placement: Placement =
         driver.agent::<method::WindowPlacement>(WindowParams::new(window), Duration::ZERO)?;
     let geometry = lane_run(driver, move |lane| lane.locate_window(&placement))??;
@@ -479,6 +483,7 @@ fn observed(events: &[OsEvent], journal: &Journal) -> ActOutcome {
         OsEvent::KeyUp(_) => Some(InputKind::KeyUp),
         OsEvent::Text(_) => Some(InputKind::Text),
         OsEvent::Scroll { .. } => Some(InputKind::Scroll),
+        OsEvent::Composition(_) => Some(InputKind::Composition),
         _ => None,
     });
     let seen = |kind: InputKind| journal.entries.iter().any(|entry| entry.kind == kind);
@@ -510,7 +515,10 @@ fn devices_of(events: &[OsEvent]) -> Vec<OsDevice> {
                 _ => OsDevice::Mouse,
             },
             OsEvent::Scroll { .. } => OsDevice::Mouse,
-            OsEvent::KeyDown(_) | OsEvent::KeyUp(_) | OsEvent::Text(_) => OsDevice::Keyboard,
+            OsEvent::KeyDown(_)
+            | OsEvent::KeyUp(_)
+            | OsEvent::Text(_)
+            | OsEvent::Composition(_) => OsDevice::Keyboard,
             _ => continue,
         };
         if !devices.contains(&device) {

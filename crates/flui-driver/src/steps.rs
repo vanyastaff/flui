@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use flui_protocol::geometry::LogicalPoint;
 use flui_protocol::input::{
-    ActionSequence, InputSource, KeyAction, PointerAction, PointerButton, PointerDevice,
+    ActionSequence, ImeAction, InputSource, KeyAction, PointerAction, PointerButton, PointerDevice,
     WheelAction,
 };
 
@@ -80,6 +80,10 @@ pub enum OsEvent {
     KeyUp(String),
     /// Commit text.
     Text(String),
+    /// One step of an input-method composition: only a lane whose capabilities say it composes
+    /// (`LaneCapabilities::compositions`) sends it, and `lane::send_guarded` refuses a sequence
+    /// holding one before any event for every other lane.
+    Composition(ImeAction),
     /// Wait this long before the next event.
     Pause(Duration),
 }
@@ -107,8 +111,9 @@ struct Tick<'a> {
 /// # Errors
 ///
 /// As [`coordinates::to_device`] for a point outside the window; [`Error::NotSupported`] for a
-/// source no OS lane sends (an input-method composition, a trackpad gesture), naming it. Either
-/// is answered before any event is handed over.
+/// source no OS lane sends (a trackpad gesture, a pointer's cancel), naming it. Either is answered
+/// before any event is handed over. An input-method composition becomes its steps
+/// ([`OsEvent::Composition`]), one per tick, which only a lane that composes takes.
 pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result<Vec<OsEvent>> {
     let mut states: Vec<SourceState> = sequence
         .sources
@@ -262,7 +267,11 @@ fn source_tick<'a>(
                 tick.instant.push(OsEvent::Text(text.clone()));
             }
         }
-        InputSource::Ime { .. } => return Err(unsent("ime_composition")),
+        InputSource::Ime { actions } => {
+            if let Some(action) = actions.get(index) {
+                tick.instant.push(OsEvent::Composition(action.clone()));
+            }
+        }
         InputSource::Trackpad { .. } => return Err(unsent("trackpad_gesture")),
         _ => return Err(unsent("input_source")),
     }

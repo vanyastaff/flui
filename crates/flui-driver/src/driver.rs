@@ -89,8 +89,51 @@ impl Driver {
                     budget,
                 ))
             }
+            #[cfg(feature = "chrome")]
+            crate::launch::Target::Artifact(crate::launch::Artifact::WasmBundle(ref bundle)) => {
+                let token = crate::launch::launch_token()?;
+                let (session, lines) =
+                    crate::lane::chrome::launch(bundle, launch.viewport_size(), &token)?;
+                Self::page(session, lines, &token, launch.connect_timeout())
+            }
             _ => Self::launch_process(&launch),
         }
+    }
+
+    /// Connect to a web app's agent through the WebDriver BiDi session at `websocket_url` (a
+    /// ChromeDriver session's `webSocketUrl`, on the loopback), whose first tab shows the app with
+    /// `token` in its launch object, and drive it through the Chrome lane on that tab
+    /// ([`crate::lane::chrome`]). The page's export may take until `wait` to appear. The browser
+    /// is never ended by the session.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a URL off the loopback; the session's failure; the page
+    /// defining no export within `wait`, or refusing the hello.
+    #[cfg(feature = "chrome")]
+    pub fn attach_page(websocket_url: &str, token: &str, wait: Duration) -> Result<Self> {
+        let (session, lines) = crate::lane::chrome::bidi::Session::connect(websocket_url, None)?;
+        Self::page(session, lines, token, wait)
+    }
+
+    /// The session of a page's agent over `session`, with the Chrome lane on its tab.
+    #[cfg(feature = "chrome")]
+    fn page(
+        session: crate::lane::chrome::bidi::Session,
+        lines: crate::lane::chrome::bidi::PageLines,
+        token: &str,
+        wait: Duration,
+    ) -> Result<Self> {
+        let lane = crate::lane::chrome::ChromeLane::new(session.clone());
+        let connection =
+            crate::connection::bidi::BidiConnection::connect(session, lines, token, wait)?;
+        Self::new(
+            Box::new(connection),
+            None,
+            Isolation::HeadlessBrowser,
+            AGENT_REPLY + SOCKET_MARGIN,
+        )
+        .with_lane(lane)
     }
 
     #[cfg(any(unix, windows))]

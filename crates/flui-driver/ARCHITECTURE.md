@@ -8,10 +8,13 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **A client, never linked into an app.** The crate reaches neither `flui-native` nor `flui-app`
   (`reach-forbid`), and only `flui-cli` takes a normal edge to it. Its OS code (the lanes) is a
   client's, which is why ADR-0082's rule for framework crates does not bind it.
-- **One conversation, two transports.** `connection::socket` and `connection::in_process` carry the
-  same lines (`flui_protocol::envelope`): the headless target runs the agent's own
-  `flui_runtime::agent::Session` through `flui_testing::HeadlessAgentService`, so the in-process
-  answers are the ones a socket carries. The `Connection` trait is private.
+- **One conversation, three transports.** `connection::socket`, `connection::bidi` (feature
+  `chrome`) and `connection::in_process` carry the same lines (`flui_protocol::envelope`): a web
+  app's page export is reached through the Chrome lane's BiDi session (`connect` with a channel as
+  `onLine`, each line a `script.message`, each request a `send` through `script.callFunction`),
+  and the headless target runs the agent's own `flui_runtime::agent::Session` through
+  `flui_testing::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
+  The `Connection` trait is private.
 - **Virtual time on the headless target.** The headless app's host runs on a thread of its own and
   pumps no frame by itself: a call that waits asks for one frame at a time, each 16 ms of the
   host's clock, and the call's budget is counted in that time. A run is the same on every host.
@@ -35,8 +38,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process and on the shared desktop without a guard, before the
   run is announced and again at every `lane::send_guarded`, which asks the guard before every
-  event and releases everything on every exit; `OsInputLock` holds one session per user's
-  desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
+  event and releases everything on every exit, a release that leaves input held answering
+  `ReleaseFailed` over the send's own failure; an input-method composition reaches only a lane
+  whose capabilities say it composes (`LaneCapabilities::compositions`, the Chrome lane alone),
+  refused at `send_guarded` before any event for every other; `OsInputLock` holds one session per
+  user's desktop (a headless browser, the session's own, takes none), its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
   existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
   of mode 0700 in the temporary directory on Unix), `busy` only while another
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
@@ -55,7 +61,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   pure, and `quartz`, `ax`, `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
   `lane::x11` keeps its keysyms, keymap and held input, safety rules, echo count and image layout
   pure, `lane::atspi::roles` and `lane::wayland::mapping` are pure, and the parts that reach an X
-  server, AT-SPI or libei are Linux only (libei with the `wayland` feature).
+  server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::chrome`
+  (feature `chrome`) is host code on every desktop: its keys, actions, input-method steps and
+  screenshot decoding are pure tables, and what reaches a browser goes through its session.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and
@@ -160,6 +168,23 @@ app's trees, frames and input, and this crate composes that with what only the O
   job before its first instruction, and the job's handle closes with the session or with the
   driver's process, however that ends. On Unix a launched app leads a process group of its own,
   which the session ends whole while its leader runs unreaped.
+- **The Chrome lane's browser is one session's, headless, behind one socket owner.**
+  `lane::chrome::bidi::Session` is the only owner of the BiDi WebSocket: a thread of its own writes
+  each command with a fresh id and hands each answer to the caller whose id it carries, so a late
+  answer is dropped and an error with no id answers nobody; a message past `MAX_MESSAGE` is
+  refused from its frame header, at most `MAX_PENDING` commands wait, every command has a deadline
+  and one past it is answered `timeout`, and the page's lines wait for its connection within
+  `PAGE_ROOM` lines and `PAGE_BYTES`, past which the page's connection breaks with why rather than
+  the socket going unread, which would starve the lane. The first break is recorded once and
+  answers every later command. The session owns the browser it runs in (the page's loopback
+  server, the ChromeDriver), ended after the socket once its last handle went; Chrome always starts
+  `--headless=new`, so its input lands on no desktop and the lane needs no guard. The lane records
+  a key, button, contact or composition as held once the browser answered the command that made
+  it, an unanswered one as possibly held, and its release (`input.releaseActions`, after cancelling
+  a composition) names what stays held when the browser refuses it. What the browser sends is
+  untrusted: a screenshot's base64 length and PNG header are checked before either is decoded
+  (`lane::chrome::screenshot`), ChromeDriver's and the archives' answers are read within bounds,
+  and the page's server answers only `GET` and `HEAD` of plain names under its root.
 - **The OS tree is read against the app's through one projection.** A lane projects its OS tree
   onto the wire's nodes, and `projection::Projection` compares the two through
   `flui_protocol::tree::normalized_outline` (ADR-0095 §4), the one definition of what only one

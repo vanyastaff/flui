@@ -7,6 +7,15 @@
 //! - [`ScriptedAgent`]: a stand-in for an app's agent on a real local socket, answering each
 //!   request by a script, so the socket transport's cases (an app that closes mid-call or answers
 //!   slowly, a driver that leaves) run without a FLUI app.
+//! - [`ScriptedBrowser`] (with `chrome`): a stand-in for a ChromeDriver's WebDriver BiDi session on
+//!   a loopback WebSocket, playing a page whose agent a [`Script`] answers, so the Chrome lane and
+//!   the page's connection run without a browser.
+
+#[cfg(feature = "chrome")]
+mod browser;
+
+#[cfg(feature = "chrome")]
+pub use browser::{BrowserLog, BrowserReply, BrowserScript, ScriptedBrowser};
 
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -483,13 +492,7 @@ fn serve_one(
                 return Ok(());
             }
             greeted = true;
-            let mut capabilities = Capabilities::default();
-            capabilities.methods = methods.to_vec();
-            ServerLine::hello(
-                HelloReply::new(PROTOCOL_VERSION)
-                    .app(AppDescription::new("scripted", "scripted").with_pid(std::process::id()))
-                    .capabilities(capabilities),
-            )
+            scripted_hello(methods)
         };
         let answer = serde_json::to_value(&answer).map_err(io::Error::other)?;
         // Handed to the OS, never flushed: flushing a Windows pipe waits until the driver has read
@@ -510,4 +513,15 @@ fn serve_one(
             }
         }
     }
+}
+
+/// The hello a stand-in agent answers with, serving `methods`.
+fn scripted_hello(methods: &[String]) -> ServerLine<Value> {
+    let mut capabilities = Capabilities::default();
+    capabilities.methods = methods.to_vec();
+    ServerLine::hello(
+        HelloReply::new(PROTOCOL_VERSION)
+            .app(AppDescription::new("scripted", "scripted").with_pid(std::process::id()))
+            .capabilities(capabilities),
+    )
 }

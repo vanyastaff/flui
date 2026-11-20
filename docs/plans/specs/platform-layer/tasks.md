@@ -8,7 +8,8 @@
   - LY96 и LY99 — Windows- и macOS-lane драйвера есть; ждут прогонов на рабочем столе,
     принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane), и lane
     остальных ОС спеки flui-driver;
-  - LY97 — ждёт `--record` `os`-lane драйвера на каждой ОС (записи в драйвере пока нет);
+  - LY97 — ждёт `--record` `os`-lane драйвера на каждой ОС (записи в драйвере пока нет; lane Web,
+    Chrome-lane FD12, есть);
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
@@ -5029,8 +5030,10 @@ GPU-память простаивающего или невидимого окн
   `captured_streams_replay_to_what_the_session_delivered`,
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Эти потоки пишет `flui record --native`
   (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Linux, Android и Web. Крейт
-  `flui-driver`, его Windows-lane и Linux-lane (X11, Wayland) есть, но записи в драйвере пока нет (её строят задачи спеки
-  [flui-driver](../flui-driver/tasks.md)), а `os`-lane других ОС ещё не написаны. Захват
+  `flui-driver`, его Windows-, macOS-, Linux- (X11, Wayland) и Chrome-lane (FD12: web-сборка в
+  headless Chrome через WebDriver BiDi ChromeDriver; реальным браузером ещё не прогонялся) есть,
+  но записи в драйвере пока нет (её строят задачи спеки
+  [flui-driver](../flui-driver/tasks.md)), а `os`-lane Android и iOS ещё не написаны. Захват
   настоящего метода ввода на устройствах — строка качества parity «Recorded native input replays
   deterministically on the headless host».
 
@@ -5047,6 +5050,8 @@ GPU-память простаивающего или невидимого окн
   роль таблицы ролей AT-SPI читается своей ролью, элемент нажимается через действие AT-SPI
   (`x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does`,
   `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
+  Chrome-lane (FD12) вводит в web-сборку через WebDriver BiDi, но дерева доступности не читает:
+  ARIA-зеркало канваса есть, его чтение через дерево доступности Chrome не построено.
   Долг: сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
   строка качества parity «Conformance executed with assistive technology on each OS».
 
