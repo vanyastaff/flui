@@ -54,6 +54,16 @@ impl Tone for Density {
     }
 }
 
+/// A value published only so that its element is one more provider layer.
+#[derive(Clone, Debug, PartialEq)]
+struct Filler(u32);
+
+impl ProvidedValue for Filler {
+    fn update_should_notify(&self, old: &Self) -> bool {
+        self != old
+    }
+}
+
 /// A published value whose `Drop` is authored to fail once.
 struct Fragile(u32, Rc<Cell<bool>>);
 
@@ -90,6 +100,8 @@ struct Published {
     fragile: Option<(u32, Rc<Cell<bool>>)>,
     /// A palette whose tone is read from a signal inside `provide`.
     signal: Option<Signal<u32>>,
+    /// A [`Filler`], which nobody reads.
+    filler: Option<u32>,
 }
 
 impl Published {
@@ -115,6 +127,9 @@ impl Published {
         }
         if let Some(density) = self.density {
             values.value(Density(density));
+        }
+        if let Some(filler) = self.filler {
+            values.value(Filler(filler));
         }
     }
 }
@@ -646,6 +661,98 @@ pub(crate) fn provided_set_change_rescopes_the_subtree() {
             1,
             "{name}: the palette reader did not"
         );
+    }
+}
+
+/// How many providers [`provider_chain`] nests: enough that a lookup at the
+/// bottom resolves through several tables folded above it.
+const CHAIN_DEPTH: u32 = 40;
+
+/// The depth whose provider publishes the nearer `Palette`, two below the
+/// first, so both sit in the first stretch of the chain.
+const NEAR_PALETTE: u32 = 3;
+
+/// The depth whose provider publishes the nearer `Density`.
+const NEAR_DENSITY: u32 = 13;
+
+/// One provider at each depth from `depth` to [`CHAIN_DEPTH`], each over a
+/// reader of each type beside the next depth: the first publishes `Palette(1)`
+/// and `Density(7)`, the one at [`NEAR_PALETTE`] `Palette(near)` if any, the
+/// one at [`NEAR_DENSITY`] `Density(8)`, and every one below the first a
+/// `Filler`.
+fn provider_chain(
+    publisher: Publisher,
+    probes: &[(Seen, Seen)],
+    depth: u32,
+    near: Option<u32>,
+) -> BoxedView {
+    let (palette, density) = &probes[usize::try_from(depth - 1).expect("a small depth")];
+    let mut children = vec![reader::<Palette>(palette), reader::<Density>(density)];
+    if depth < CHAIN_DEPTH {
+        children.push(provider_chain(publisher, probes, depth + 1, near));
+    }
+    let published = match depth {
+        1 => Published {
+            palette: Some(1),
+            density: Some(7),
+            ..Published::default()
+        },
+        NEAR_PALETTE => Published {
+            palette: near,
+            filler: Some(depth),
+            ..Published::default()
+        },
+        NEAR_DENSITY => Published {
+            density: Some(8),
+            filler: Some(depth),
+            ..Published::default()
+        },
+        _ => Published {
+            filler: Some(depth),
+            ..Published::default()
+        },
+    };
+    publisher(published, Group(children).boxed())
+}
+
+pub(crate) fn a_provider_any_number_of_providers_up_is_found_and_the_nearest_shadows_it() {
+    for (name, publisher) in PUBLISHERS {
+        let probes: Vec<(Seen, Seen)> = (0..CHAIN_DEPTH)
+            .map(|_| (Seen::default(), Seen::default()))
+            .collect();
+        let view = |near: Option<u32>| provider_chain(publisher, &probes, 1, near);
+        let expect = |near: Option<u32>, phase: &str| {
+            for depth in 1..=CHAIN_DEPTH {
+                let (palette, density) =
+                    &probes[usize::try_from(depth - 1).expect("a small depth")];
+                let palette_wanted = match near {
+                    Some(near) if depth >= NEAR_PALETTE => near,
+                    _ => 1,
+                };
+                let density_wanted = if depth >= NEAR_DENSITY { 8 } else { 7 };
+                assert_eq!(
+                    palette.seen.get(),
+                    Some(palette_wanted),
+                    "{name}, {phase}: the palette under {depth} providers"
+                );
+                assert_eq!(
+                    density.seen.get(),
+                    Some(density_wanted),
+                    "{name}, {phase}: the density under {depth} providers"
+                );
+            }
+        };
+
+        let frames = Frames::mount(&view(Some(2)));
+        expect(Some(2), "mounted");
+
+        // The nearer palette goes, and every reader below it falls through
+        // to the first provider again.
+        frames.update(&view(None));
+        expect(None, "the nearer palette removed");
+
+        frames.update(&view(Some(5)));
+        expect(Some(5), "the nearer palette back");
     }
 }
 
