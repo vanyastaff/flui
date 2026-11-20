@@ -427,12 +427,6 @@ pub enum EngineError {
     // ========================================================================
     // State errors
     // ========================================================================
-    /// Renderer was not properly initialized
-    ///
-    /// An operation was attempted before the renderer was fully initialized.
-    #[error("Renderer not initialized")]
-    NotInitialized,
-
     /// A capture or render target was requested at a zero-sized extent.
     ///
     /// wgpu rejects a zero-byte buffer and a zero-sized texture, and its own
@@ -537,7 +531,6 @@ impl EngineError {
             | Self::DeviceCreation(_)
             | Self::InvalidTargetSize { .. }
             | Self::ReadbackTimedOut { .. }
-            | Self::NotInitialized
             | Self::SlotIdentityExhausted => Recoverability::Fatal,
             Self::UnsupportedMaskShader
             | Self::UnsupportedBackdropFilter { .. }

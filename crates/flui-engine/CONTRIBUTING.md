@@ -132,7 +132,7 @@ For a change confined to this crate, the parts that matter most:
   one adapter over that crate, so a lyon type never leaks into the Command
   IR or a pipeline layout — the same reason `etagere` stays behind `glyph_atlas.rs`.
 - **No `async fn` on the hot path.** Async is for the acquisition edges
-  (`Renderer::new`, `recover`, `HeadlessRenderer::new`) only. The layer walk,
+  (`GpuContext::bootstrap`, a device rebuild, `HeadlessRenderer::new`) only. The layer walk,
   the dispatch, and the replay path are sync.
 - **`DrawSegment` stays `Clone`, and holds no `PooledTexture`.** Textures
   are acquired at replay, never stored at record; the derive is what bars a

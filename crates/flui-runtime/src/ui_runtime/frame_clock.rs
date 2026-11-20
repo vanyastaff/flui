@@ -1,4 +1,4 @@
-//! Renderer, vsync and frame clock; frame wake; first-frame deferral and frame accounting.
+//! Rendering binding, vsync and frame clock; frame wake; first-frame deferral and frame accounting.
 
 use super::UiRuntime;
 use crate::presentation::PresentationState;
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 impl UiRuntime {
     // ========================================================================
-    // Renderer, vsync, frame clock (moved from the retired `AppBinding`)
+    // Rendering binding, vsync, frame clock
     // ========================================================================
 
     /// The render tree, layout/paint pipeline coordination, and semantics

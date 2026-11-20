@@ -41,7 +41,8 @@ fn the_engine_does_not_shape() {
         ("dispatch.rs", include_str!("dispatch.rs")),
         ("painter/draw.rs", include_str!("painter/draw.rs")),
         ("painter/mod.rs", include_str!("painter/mod.rs")),
-        ("renderer.rs", include_str!("renderer.rs")),
+        ("window_slot.rs", include_str!("window_slot.rs")),
+        ("frame_protocol.rs", include_str!("frame_protocol.rs")),
         ("headless.rs", include_str!("headless.rs")),
     ];
     for (name, source) in sources {
@@ -666,9 +667,7 @@ fn check_font_transition(renderer: &crate::headless::HeadlessRenderer, transitio
             capture.render_scene(&before).expect("ordinary frame");
         }
         FontTransition::ReloadedPlugin | FontTransition::PluginToOrdinary => {
-            capture
-                .render_plugin_scene(&before, true)
-                .expect("plugin frame");
+            capture.render_lent(&before, true).expect("plugin frame");
             // Consume unmanaged-frame damage promotion without changing source.
             capture
                 .render_plugin_frame(&before, false)

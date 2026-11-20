@@ -16,8 +16,8 @@
   extended-range headroom, because the current one stays at white until a layer asks for
   extended range, so reading it would never grant the surface that asks. (3) §6: hosts now
   report profile changes as display snapshot revisions, and a window's `WindowDisplay` carries
-  its display's colour; the renderer takes the new colour before the next frame
-  (`Renderer::set_display_color`), configures its held surface again when it was set up for
+  its display's colour; the window's slot takes the new colour before the next frame
+  (`RasterBackend::set_display_color`), configures its held surface again when it was set up for
   another, and resolves every later recreation and recovery against the newest report, so a
   window dragged from an HDR monitor to an SDR one leaves HDR.
 - **Date:** 2026-10-26
@@ -66,9 +66,9 @@ Chosen option: 2, with the working space of option 1's wide path and without opt
 
 `flui_engine::SurfaceColor` is `#[non_exhaustive]` with `Srgb8` (the default), `WideGamut` (an SDR
 surface wider than sRGB) and `Hdr` (an extended-range surface). `AppConfig::surface_color` carries
-it for the window the config opens; `Renderer::with_surface_color` takes it and `Renderer::new` is
-`Srgb8`. It is a request: the renderer falls back `Hdr` → `WideGamut` → `Srgb8`, and
-`Renderer::surface_color()` returns a `ResolvedSurfaceColor` with the granted `SurfaceColor`, the
+it for the window the config opens, and the window's slot takes it at `RasterCommand::Attach`
+(`SlotConfig::color`, `Srgb8` by default). It is a request: the slot falls back `Hdr` →
+`WideGamut` → `Srgb8`, and holds a `ResolvedSurfaceColor` with the granted `SurfaceColor`, the
 swapchain format and colour space, the working format and the headroom. A downgrade is logged once
 at `warn` on target `flui.gpu` (`event = "surface_color_downgraded"`) and `is_downgraded()` answers it.
 
@@ -175,7 +175,6 @@ peak is not reported uses `h = 4.0`. The headroom is read when the surface is co
 - The amendment: `the_platform_colour_decides_the_display_state_over_the_surface_report`,
   `a_high_range_display_without_headroom_over_white_gets_no_hdr`,
   `wide_gamut_follows_the_display_gamut`,
-  `a_recreation_after_the_display_changes_resolves_its_new_range`,
   `a_windows_colour_and_latency_reach_the_backend_once_a_turn` (`flui-engine`; the raster slot
   hands the backend the display colour before the frame of the same turn) and
   `a_surface_is_set_up_for_the_colour_of_its_window_s_display` (`flui-app`).

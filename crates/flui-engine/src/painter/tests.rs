@@ -3283,8 +3283,9 @@ fn extreme_glyph_bearings_do_not_overflow_before_clipping(
     }
 }
 
-/// Surface replacement needs a native window. This seam exercises its actual
-/// format-consumer factory and real atlas, including opaque source retirement.
+/// A painter rebuilt for a new device domain or working format, with the
+/// font source the frame protocol last selected, keeps that source's policy
+/// without a reset: its real atlas, including opaque source retirement.
 fn replacement_fonts_keep_source_policy(
     source: crate::frame_protocol::FontSource,
     fresh_domain: bool,
@@ -3313,11 +3314,11 @@ fn replacement_fonts_keep_source_policy(
     let (device, queue) = test_device_and_queue();
     let domain = crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
     let mut frame = crate::frame_protocol::FrameProtocol::new();
-    let (mut painter, _) = crate::Renderer::build_format_consumers(
-        &frame,
+    let mut painter = WgpuPainter::with_domain_and_font_source(
         Arc::clone(&domain),
         READBACK_FORMAT,
         (32, 32),
+        crate::frame_protocol::FontSource::Ordinary,
     );
     frame.select_font_source(&mut painter, source, false);
     let face = FaceKey {
@@ -3343,9 +3344,8 @@ fn replacement_fonts_keep_source_policy(
     };
     // These are the two replacement inputs: a new domain on recovery, or a
     // changed format on the existing domain. Both discard the old font namespace.
-    let (replacement, _) =
-        crate::Renderer::build_format_consumers(&frame, replacement_domain, format, (32, 32));
-    painter = replacement;
+    painter =
+        WgpuPainter::with_domain_and_font_source(replacement_domain, format, (32, 32), source);
     // A warm plugin frame supplies no image reset. Its factory must already
     // have installed the owning policy; this call must not mask that defect.
     frame.select_font_source(&mut painter, source, false);

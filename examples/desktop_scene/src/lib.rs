@@ -1,8 +1,8 @@
 //! Hot-reloadable scene plugin for desktop.
 //!
 //! Compiles to `flui_scene.dll` (Windows), `libflui_scene.so` (Linux),
-//! or `libflui_scene.dylib` (macOS). Loaded at runtime by the host
-//! via `HotReloadDriver`.
+//! or `libflui_scene.dylib` (macOS). Loaded at runtime by a host that
+//! installs `flui_hot_reload::ScenePluginHook`.
 //!
 //! # Usage
 //!
@@ -10,12 +10,10 @@
 //! # Build the plugin:
 //! cargo build -p flui-desktop-scene
 //!
-//! # Run the host example with plugin path:
-//! # Linux/macOS:
-//! FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
-//! # Windows:
-//! set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
-//! cargo run -p flui-hot-reload --example scene_render
+//! # Run the host example; it loads target/debug/libflui_scene.so
+//! # (.dylib on macOS, flui_scene.dll on Windows) unless
+//! # FLUI_SCENE_PLUGIN names another path:
+//! cargo run -p flui-hot-reload --features host-hook --example scene_render
 //! ```
 //!
 //! Edit the colors below, rebuild the plugin, and the host will

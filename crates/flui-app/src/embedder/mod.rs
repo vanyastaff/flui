@@ -8,7 +8,7 @@
 //!   ├── UiRuntime::FocusManager (keyboard events)
 //!   ├── UiRuntime::WidgetsBinding (build phase)
 //!   ├── PresentationState::PipelineOwner (layout/paint)
-//!   └── Renderer (GPU rendering, owned by runner callback)
+//!   └── RasterHost (GPU rendering: a slot of the process's GpuContext)
 //! ```
 //!
 //! # Platform Support

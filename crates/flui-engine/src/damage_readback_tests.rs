@@ -732,7 +732,7 @@ fn an_invalid_target_promotes_to_full() {
 }
 
 /// A frame rendered outside the damage protocol (a hot-reload plugin's
-/// scene through `Renderer::render_scene`) is followed by a full frame, on
+/// scene lent to its window slot) is followed by a full frame, on
 /// a surface that renders every frame through the retained target: the
 /// producer diffs against the last scene IT submitted, which is no longer
 /// what the target and the screen hold.

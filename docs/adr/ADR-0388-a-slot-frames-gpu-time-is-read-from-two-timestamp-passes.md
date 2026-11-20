@@ -94,8 +94,7 @@ impl FrameClock {
    frame's time is `None`.
 2. **One timer per slot.** `GpuContext` builds a slot's `FrameGpuTimer` at its first timed
    frame, drops it with the slot, and drops every timer when the device is rebuilt, since the
-   query sets were the old device's. The single-surface `Renderer` and frames lent outside the
-   slot's frames are not timed.
+   query sets were the old device's. Frames lent outside the slot's frames are not timed.
 3. **The frame is bracketed in its own encoder.** The first timestamp pass comes after the
    encoder is created and before the frame's clear. The second comes after the frame's last
    pass, before submission. Resolve, copy and `map_buffer_on_submit` are recorded in the same

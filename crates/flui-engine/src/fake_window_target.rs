@@ -1,14 +1,14 @@
-//! A GPU-free [`WindowTarget`] test double, shared by `surface_lease.rs`'s
-//! and `renderer.rs`'s own unit tests so both exercise the identical fake
-//! rather than two copies that could silently diverge (issue #1043).
+//! A GPU-free [`WindowTarget`] test double for `surface_lease.rs`'s unit
+//! tests, kept in one place so a later suite uses this fake rather than a
+//! copy that could silently diverge (issue #1043).
 //!
 //! Hands out plain Xlib IDs (no pointer, so `WindowHandle::borrow_raw`/
 //! `DisplayHandle::borrow_raw` have no pointee whose validity to argue
-//! about), records every probe call in order, and can be switched to answer
-//! `Unavailable` at construction or mid-test.
+//! about).
+//!
+//! [`WindowTarget`]: crate::window_target::WindowTarget
 
 use std::ffi::c_ulong;
-use std::sync::Mutex;
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -16,62 +16,18 @@ use raw_window_handle::{
 };
 
 pub(crate) struct FakeTarget {
-    window_id: Mutex<c_ulong>,
-    available: Mutex<bool>,
-    calls: Mutex<Vec<&'static str>>,
+    window_id: c_ulong,
 }
 
 impl FakeTarget {
     pub(crate) fn new(window_id: c_ulong) -> Self {
-        Self {
-            window_id: Mutex::new(window_id),
-            available: Mutex::new(true),
-            calls: Mutex::new(Vec::new()),
-        }
-    }
-
-    /// A target that reports `Unavailable` from its very first probe call —
-    /// for pinning the "fails before any GPU work starts" contract without
-    /// caring what window ID it would otherwise have handed out.
-    pub(crate) fn unavailable() -> Self {
-        let target = Self::new(1);
-        target.set_available(false);
-        target
-    }
-
-    pub(crate) fn set_available(&self, available: bool) {
-        *self
-            .available
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned") = available;
-    }
-
-    pub(crate) fn call_log(&self) -> Vec<&'static str> {
-        self.calls
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned")
-            .clone()
+        Self { window_id }
     }
 }
 
 impl HasWindowHandle for FakeTarget {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        self.calls
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned")
-            .push("window_handle");
-        if !*self
-            .available
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned")
-        {
-            return Err(HandleError::Unavailable);
-        }
-        let window_id = *self
-            .window_id
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned");
-        let raw = RawWindowHandle::Xlib(XlibWindowHandle::new(window_id));
+        let raw = RawWindowHandle::Xlib(XlibWindowHandle::new(self.window_id));
         #[expect(unsafe_code, reason = "test double, no FFI island")]
         // SAFETY: an Xlib window handle is a plain integer ID (`c_ulong`),
         // not a pointer — `borrow_raw`'s safety contract is entirely about
@@ -84,17 +40,6 @@ impl HasWindowHandle for FakeTarget {
 
 impl HasDisplayHandle for FakeTarget {
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        self.calls
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned")
-            .push("display_handle");
-        if !*self
-            .available
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned")
-        {
-            return Err(HandleError::Unavailable);
-        }
         let raw = RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0));
         #[expect(unsafe_code, reason = "test double, no FFI island")]
         // SAFETY: `display: None` carries no pointer at all, so there is no
@@ -102,18 +47,4 @@ impl HasDisplayHandle for FakeTarget {
         let handle = unsafe { DisplayHandle::borrow_raw(raw) };
         Ok(handle)
     }
-}
-
-/// A window's surface target with no frame callback: the renderer's
-/// constructors take one, as a window hands it out.
-impl flui_platform::SurfaceTarget for FakeTarget {
-    fn pre_present_notify(
-        &self,
-        _: Option<flui_foundation::FrameStamp>,
-        _: flui_platform::SwapChainStatistics,
-    ) {
-    }
-
-    /// The double names no native window, so there is nothing to keep.
-    fn keep_past_close(&self) {}
 }

@@ -43,10 +43,11 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-// Proving `flui_engine::Renderer: Send` (for the `Send` frame
-// callbacks that capture it) descends through wgpu-core past the default
-// recursion limit under the next-generation trait solver; see the matching
-// attribute and rationale at the top of flui-engine's `lib.rs`.
+// Proving `flui_engine::GpuContext: Send`, where the raster host boxes the
+// context as a `dyn RasterBackend + Send`, descends through the context's
+// wgpu handles past the default recursion limit under the next-generation
+// trait solver; see the matching attribute and rationale at the top of
+// flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]

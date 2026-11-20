@@ -178,8 +178,8 @@ impl RebuildRefusals {
 /// on the same instance (ADR-0305 §8).
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum DeviceRecipe {
-    /// The backend ADR-0244's probe chose, with the capabilities the renderer
-    /// negotiates.
+    /// The backend ADR-0244's probe chose, with the device
+    /// `adapter::device_on` negotiates from the adapter's capabilities.
     Probed(Attempt),
     /// wgpu's default device plus whichever of these features the adapter
     /// offers: offscreen contexts.
@@ -208,7 +208,7 @@ impl DeviceRecipe {
         surface: Option<&wgpu::Surface<'static>>,
     ) -> EngineResult<wgpu::Adapter> {
         match self {
-            Self::Probed(attempt) => crate::Renderer::adapter_for(instance, attempt, surface).await,
+            Self::Probed(attempt) => crate::adapter::adapter_for(instance, attempt, surface).await,
             Self::Offscreen(_) => instance
                 .request_adapter(&crate::adapter::trusted_adapter_options(
                     wgpu::PowerPreference::HighPerformance,
@@ -223,7 +223,7 @@ impl DeviceRecipe {
     /// since the driver may take hundreds of milliseconds to answer it.
     async fn device(self, adapter: &wgpu::Adapter) -> EngineResult<(wgpu::Device, wgpu::Queue)> {
         match self {
-            Self::Probed(_) => crate::Renderer::device_on(adapter)
+            Self::Probed(_) => crate::adapter::device_on(adapter)
                 .await
                 .map(|(_, device, queue)| (device, queue)),
             Self::Offscreen(wanted_features) => offscreen_device(adapter, wanted_features).await,
@@ -238,7 +238,7 @@ async fn offscreen_device(
 ) -> EngineResult<(wgpu::Device, wgpu::Queue)> {
     // Deliberately NOT `adapter::request_flui_device`: an offscreen context
     // wants wgpu's default (downlevel-friendly) device rather than the
-    // renderer's capability-negotiated one, plus the features asked for,
+    // probed attempt's capability-negotiated one, plus the features asked for,
     // which change what the rendered pixels look like, and the pipeline
     // cache and timestamp queries (ADR-0388), which change none, wherever the
     // adapter offers them.

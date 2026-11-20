@@ -1,8 +1,8 @@
 //! Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 //! read the pixels back to the CPU.
 //!
-//! The on-screen [`crate::Renderer`] hard-requires a `wgpu::Surface`
-//! (its `render_scene` acquires a swapchain texture). Golden-image and
+//! A window slot presents to a `wgpu::Surface` (its frame acquires a
+//! swapchain texture). Golden-image and
 //! screenshot tooling needs the same raster path against a texture instead,
 //! so the headless renderer is a GPU context with one offscreen slot
 //! (ADR-0305 §3): the context records and replays the tree with the painter
@@ -64,12 +64,12 @@ impl HeadlessRenderer {
     /// Acquire a surface-less GPU device for offscreen capture.
     ///
     /// Requests [`wgpu::Features::DUAL_SOURCE_BLENDING`] where the adapter
-    /// exposes it, so a capture shows the same clip fringe the windowed
-    /// renderer does — `Renderer::required_features` makes the same request for
-    /// the same reason. Nothing else about the device is negotiated.
+    /// exposes it, so a capture shows the same clip fringe a window does —
+    /// `adapter::required_features` makes the same request for the same
+    /// reason. Nothing else about the device is negotiated.
     ///
     /// Async because wgpu's adapter and device requests are async. Calling
-    /// `Renderer::new` and this from the same async context is the point: a
+    /// `GpuContext::bootstrap` and this from the same async context is the point: a
     /// blocking constructor would stall whichever executor thread it ran on,
     /// and the sync wrapper belongs to the caller (an example, a test) that
     /// owns its runtime, not to the library.
@@ -441,19 +441,19 @@ pub(crate) fn readback_rgba(
     Ok(pixels)
 }
 
-/// A windowless stand-in for the windowed [`Renderer`]'s frame path, for
+/// A windowless stand-in for a window slot's frame path, for
 /// tests of partial frames: it keeps a [`FrameProtocol`] and a "surface"
 /// texture across frames and runs each frame through the same
-/// [`FrameProtocol::plan`] and [`FrameProtocol::run`] the windowed renderer
-/// does, recording content through the same `Renderer::record_frame_content`
+/// [`FrameProtocol::plan`] and [`FrameProtocol::run`] a window slot
+/// does, recording content through the same `frame_protocol::record_frame_content`
 /// (the partial-frame scissor and clear included). Only the clear, the
-/// content encoding and presentation target are its own ([`FrameSteps`]).
+/// content encoding and presentation target are its own ([`FrameSteps`]),
+/// and it owns its painter where a slot draws with the context's.
 ///
 /// Crate-private and test-only: the public golden-image API is settled with
 /// the CPU backend (ADR-0087 §2), and this exists to pin the GPU partial
 /// path's pixels, which a swapchain cannot be read back to show.
 ///
-/// [`Renderer`]: crate::Renderer
 /// [`FrameProtocol`]: crate::frame_protocol::FrameProtocol
 /// [`FrameProtocol::plan`]: crate::frame_protocol::FrameProtocol::plan
 /// [`FrameProtocol::run`]: crate::frame_protocol::FrameProtocol::run
@@ -487,8 +487,8 @@ pub(crate) struct RetainedCapture {
     last_ir: Option<Vec<u8>>,
     /// Whether a frame keeps its IR in `last_ir`.
     keep_ir: bool,
-    /// The lineage of the version the capture last drew, as a `Renderer`
-    /// keeps it.
+    /// The lineage of the version the capture last drew, as the context
+    /// keeps each slot's.
     lineage: crate::recording_cache::DrawnLineages<()>,
     /// Times each frame on the GPU, as a window slot's timer does, where the
     /// device writes timestamps; each frame takes the next epoch.
@@ -701,7 +701,7 @@ impl RetainedCapture {
         self.painter.set_recording_cache_budget(budget);
     }
 
-    /// Renders `scene` the way `Renderer::render_scene` does: a frame no
+    /// Renders `scene` as a window slot renders a lent scene: a frame no
     /// damage producer accounted for.
     ///
     /// # Errors
@@ -716,8 +716,9 @@ impl RetainedCapture {
         result
     }
 
-    /// The headless twin of Renderer::render_plugin_scene.
-    pub(crate) fn render_plugin_scene(
+    /// The headless twin of `WindowSlot::render_lent`: a plugin's scene, with
+    /// the fonts it carries, rendered outside the damage protocol.
+    pub(crate) fn render_lent(
         &mut self,
         scene: &flui_layer::Scene,
         reset_fonts: bool,
@@ -792,7 +793,7 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
             return Err(EngineError::Timeout);
         }
         let recorded =
-            crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
+            crate::frame_protocol::record_frame_content(self.painter, self.scene, partial, reads)?;
         if let Some(ir) = self.ir.as_deref_mut() {
             *ir = Some(self.painter.recorded_ir());
         }

@@ -9,10 +9,11 @@ it to wgpu draw calls (Vulkan / Metal / DX12 / WebGPU).
 Scene (flui-layer)                    built by the widget tree's Canvas
     |
     v
-Renderer (flui-engine)                owns one window's GPU stack (instance,
-    |                                 adapter, device, queue, surface)
+RasterExecutor (flui-engine)          renders every slot of one GpuContext
+    |                                 (instance, adapter, device, queue); a
+    |                                 window's slot holds its surface
     v
-LayerTree walk -> LayerDispatcher -> WgpuPainter
+Scene walk -> LayerDispatcher -> WgpuPainter
     |                                 record: batched Command IR (command_ir.rs)
     v
 GpuReplay                             replay: Command IR -> wgpu draw calls
@@ -20,22 +21,19 @@ GpuReplay                             replay: Command IR -> wgpu draw calls
 GPU (wgpu)
 ```
 
-All three constructors are `async` — wgpu's adapter and device requests are,
-so the library does not choose a blocking strategy on the caller's behalf:
-
-- `Renderer::new(window)` — windowed; owns its surface, recovers from device loss.
-- `HeadlessRenderer::new()` — rasterizes a `LayerTree` to RGBA8 without a
-  window.
-
-- `RasterExecutor` — presents every window of an application over one
-  `GpuContext`; its `RasterBackend` parameter lets a GPU-free test double
-  stand in for the context.
+- `RasterExecutor` over one `GpuContext` — presents every window of an
+  application, each window a slot of one device (ADR-0305).
+  `GpuContext::bootstrap` makes the context and the `SurfaceFactory` the owner
+  makes each window's surface with; the `RasterBackend` parameter lets a
+  GPU-free test double stand in for the context. `flui-app`'s runners drive
+  it; an application does not.
+- `HeadlessRenderer::new()` — rasterizes a scene to RGBA8 without a window.
 - `WgpuPainter` — the per-frame painter, for embedders driving draw calls
   directly (see `examples/painting_demo`).
 
-A single GPU stack per renderer is the current model. ADR-0045 decision 2's
-shared-per-owner-thread stack arrives with its `ReplaceServices` recovery
-mechanism; see `docs/adr/ADR-0045-raster-lane.md`.
+The context and headless constructors are `async` — wgpu's adapter and device
+requests are, so the library does not choose a blocking strategy on the
+caller's behalf.
 
 ## Documentation
 

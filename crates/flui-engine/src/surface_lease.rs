@@ -1,10 +1,10 @@
-//! The owned-target/surface protocol, factored out of `renderer.rs` so it
+//! The owned-target/surface protocol, kept apart from the window slot so it
 //! can be exercised without a GPU (issue #1043).
 //!
 //! `SurfaceLease<S>` is generic over the surface type `S` precisely so the
-//! ownership and probe-before-build protocol can run under plain `#[test]`
-//! (and later, Miri) with a fake `S` — the real `wgpu::Surface<'static>` is
-//! only ever plugged in by `renderer.rs`.
+//! ownership and drop-order protocol can run under plain `#[test]` (and
+//! later, Miri) with a fake `S` — the real `wgpu::Surface<'static>` is only
+//! ever plugged in by the `SurfaceFactory` and the window slot it feeds.
 
 use std::sync::Arc;
 
@@ -22,12 +22,9 @@ use crate::window_target::WindowTarget;
 /// handle behind it is about to die, and a presentation that keeps a surface
 /// built from a dead handle is the use-after-free class this lease's field
 /// order exists to prevent. [`SurfaceLease::release`] takes the surface out
-/// and drops it there and then; [`SurfaceLease::replace_surface`] puts a
-/// newly built one back. The [`Arc`] of the target is retained across the
-/// released span, which is what makes a re-acquire need no new ownership:
-/// [`WindowTarget`]'s `HasWindowHandle`/`HasDisplayHandle` methods both take
-/// `&self`, so the retained `Arc` answers with whatever handle is current
-/// when it is asked again.
+/// and drops it there and then. A released lease never gets a surface back:
+/// the window's owner makes a replacement surface, in a lease of its own,
+/// with its `SurfaceFactory`, and the slot takes that lease in a restore.
 ///
 /// # Field order is load-bearing
 ///
@@ -45,75 +42,27 @@ use crate::window_target::WindowTarget;
 /// the target is dropped.
 pub(crate) struct SurfaceLease<S> {
     surface: Option<S>,
+    #[expect(
+        dead_code,
+        reason = "held, never read: it outlives the surface built from it (see the field order above)"
+    )]
     target: Arc<dyn WindowTarget>,
     /// Who paces the target's surfaces: the target's word, read when the
     /// lease was made, and the same for every surface it holds.
     pacing: FramePacing,
 }
 
-/// Proof that a lease's surface has been released: the only source of the
-/// target a replacement may be built from, and the only key that
-/// [`SurfaceLease::replace_surface`] accepts.
-#[must_use = "build the replacement from `target()` and commit it with `replace_surface`, or bind the token to acknowledge a bare release"]
-pub(crate) struct Released {
-    target: Arc<dyn WindowTarget>,
-}
-
-impl Released {
-    /// The owner the replacement surface is built from.
-    pub(crate) fn target(&self) -> &Arc<dyn WindowTarget> {
-        &self.target
-    }
-}
-
 impl<S> SurfaceLease<S> {
-    /// Re-probe the retained owner without rebuilding `S`.
-    ///
-    /// The rebuild protocol is probe → [`release`](Self::release) → build the
-    /// replacement from the [`Released`] token's target → commit it with
-    /// [`replace_surface`](Self::replace_surface). Release comes BEFORE the
-    /// build because a window allows one surface at a time: creating a second
-    /// one over a still-held surface is a process abort on Android
-    /// (`VK_ERROR_NATIVE_WINDOW_IN_USE_KHR`), the platform that emits the
-    /// recreate signal in the first place. The token is what makes the order
-    /// a type fact rather than a convention — `replace_surface` cannot be
-    /// called without it, and its target is the only one to build from. A
-    /// build that fails after the release leaves the lease released, which is
-    /// the documented post-state the next recovery re-asks.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::SurfaceTargetUnavailable`] when the owner
-    /// reports the native target is gone or suspended.
-    pub(crate) fn probe(&self) -> EngineResult<()> {
-        probe_target(&self.target)
-    }
-
-    /// Commit a surface built from `released`'s target, closing the released
-    /// span that [`release`](Self::release) opened.
-    pub(crate) fn replace_surface(&mut self, released: Released, surface: S) {
-        debug_assert!(
-            Arc::ptr_eq(&released.target, &self.target),
-            "BUG: a Released token commits into the lease that issued it"
-        );
-        self.surface = Some(surface);
-    }
-
     /// Drop the held surface and hold none.
     ///
     /// Call this at the last moment the native handle behind the surface is
     /// still valid — dropping a configured [`wgpu::Surface`] releases its
     /// swapchain, so it must not outlive the handle it was built from.
     /// Idempotent: a lease that already holds no surface stays that way. The
-    /// target is deliberately **not** released; the returned [`Released`]
-    /// token carries it so a replacement is built from the same owner, and is
-    /// the only way to [`replace_surface`](Self::replace_surface). A caller
-    /// that releases without replacing binds the token to say so.
-    pub(crate) fn release(&mut self) -> Released {
+    /// target is deliberately **not** released: it stays until the lease is
+    /// dropped, after the surface.
+    pub(crate) fn release(&mut self) {
         self.surface = None;
-        Released {
-            target: Arc::clone(&self.target),
-        }
     }
 
     /// Who paces the surfaces the retained target makes, which picks their
@@ -140,10 +89,11 @@ impl<S> SurfaceLease<S> {
     /// Wrap an already-probed target and its freshly built surface into a
     /// lease, without probing.
     ///
-    /// The caller (`Renderer::new`) is required to have already called
-    /// [`probe_target`] before doing the async work that produced `surface`
-    /// — re-probing here would only duplicate that check. `pacing` is the
-    /// target's [`SurfaceTarget::frame_pacing`](flui_platform::SurfaceTarget::frame_pacing).
+    /// The caller (`SurfaceFactory::create`, or the GPU probe for the first
+    /// window) is required to have already called [`probe_target`] before
+    /// it made `surface` — re-probing here would only duplicate that check.
+    /// `pacing` is the target's
+    /// [`SurfaceTarget::frame_pacing`](flui_platform::SurfaceTarget::frame_pacing).
     pub(crate) fn from_parts(
         target: Arc<dyn WindowTarget>,
         surface: S,
@@ -153,14 +103,6 @@ impl<S> SurfaceLease<S> {
             surface: Some(surface),
             target,
             pacing,
-        }
-    }
-    #[cfg(all(test, feature = "testing", not(target_arch = "wasm32")))]
-    pub(crate) fn released_for_test(target: Arc<dyn WindowTarget>) -> Self {
-        Self {
-            surface: None,
-            target,
-            pacing: FramePacing::Display,
         }
     }
 }
@@ -180,16 +122,13 @@ impl<S> SurfaceLease<S> {
 /// survives. Without probing here first, "the window owner says the native
 /// target is gone/suspended" and "the GPU driver refused for some unrelated
 /// reason" would collapse into one undifferentiated
-/// [`EngineError::SurfaceCreation`], and callers like `flui-app`'s
-/// device-recovery loop could not tell a transient, wait-and-retry
-/// condition (a suspended Android surface) from one that needs the whole
-/// renderer torn down. Do not delete this without restoring that
-/// distinction some other way.
+/// [`EngineError::SurfaceCreation`], and an owner could not tell a
+/// transient, wait-and-retry condition (a suspended Android surface) from
+/// one that needs the window's presentation torn down. Do not delete this
+/// without restoring that distinction some other way.
 ///
-/// `pub(crate)` (not just used internally) because
-/// [`Renderer::new`](crate::Renderer::new) must probe strictly before
-/// it starts any GPU work — before a lease exists to call
-/// [`SurfaceLease::probe`] on.
+/// `pub(crate)` because the surface factory's `checked_target` probes a
+/// target strictly before wgpu sees it, before a lease exists.
 pub(crate) fn probe_target(target: &Arc<dyn WindowTarget>) -> EngineResult<()> {
     target
         .window_handle()

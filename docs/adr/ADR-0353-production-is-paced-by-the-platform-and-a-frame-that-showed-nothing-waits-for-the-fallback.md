@@ -240,7 +240,7 @@ Tests in `crates/flui-app/src/app/runner/frame_pacing.rs`, rows of `desktop_paci
   `a_deadline_first_read_late_is_still_reported_due` (decision 3).
 - `a_held_frame_arms_no_fallback` (decision 2).
 - `a_background_pump_defers_the_next_by_one_pace` (decision 5, Android).
-- `a_frame_latency_setting_reaches_the_configuration_and_survives_release` (`flui-engine`,
+- `a_windows_colour_and_latency_reach_the_backend_once_a_turn` (`flui-engine`,
   decision 0).
 
 The live-smoke harness's one `pre_present_notified` per `present_submitted` confirms decision 1.

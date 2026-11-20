@@ -6,6 +6,9 @@
   only for the `DevSceneHook` column of its table and the sentence that a desktop scene plugin runs
   through the package's own driver in `packages/flui-hot-reload/examples/scene_render.rs`: every
   native host asks the scene hook for each presentation's frame.
+- **Supersedes:** [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) for every clause
+  that names the per-window `Renderer` (its header lists them): the type is gone, and its
+  owned-`'static`-target rule stands for the window slot's surface.
 - **Related:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   §10 (every window draws through a slot of one executor; a lent scene is drawn inline);
   [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md) (the scene callback's lifetime
@@ -94,8 +97,10 @@ runs (ADR-0311 §5). The render callback shows the window and lends the scene to
 ### Consequences
 
 - Good, because a desktop or iOS app with `ScenePluginHook` installed shows the plugin's scene
-  in its own windows, and the package needs no host of its own: the hand-written desktop host and
-  its use of `flui_engine::Renderer` can go.
+  in its own windows, and the package needs no host of its own: the hand-written desktop host is
+  gone, and with it the public `flui_engine::Renderer` it alone used. The package's
+  `scene_render` example is a facade application that installs the hook, and draws the engine's
+  effects gallery only headless (`--capture-effects`, through `HeadlessRenderer`).
 - Good, because the work a plugin-owned frame owes is decided in `hot_reload.rs` once; Android's
   frame now serves its background work as the desktop's and iOS's do.
 - Bad, because on the Wayland desktop host, whose executor turns on a raster thread, a scene

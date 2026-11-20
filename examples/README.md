@@ -25,7 +25,7 @@ or WASM targets with their own build step.
 
 | Example | Run |
 |---|---|
-| **scene_render** — end-to-end GPU compositor proof | `cargo run -p flui-hot-reload --example scene_render` |
+| **scene_render** — the desktop host of a scene plugin; `-- --capture-effects <png>` draws the engine's effects gallery headless into a PNG | `cargo run -p flui-hot-reload --features host-hook --example scene_render` |
 
 ## Hot reload
 
@@ -41,9 +41,9 @@ or WASM targets with their own build step.
 # Terminal 1 — rebuild the plugin on change (needs cargo-watch)
 cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
 
-# Terminal 2 — run the host with in-process reload (Linux/macOS; see
-# docs/hot-reload.md for the Windows .dll path)
-FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
+# Terminal 2 — run the host with in-process reload; it loads
+# target/debug/libflui_scene.so (.dylib, flui_scene.dll) unless FLUI_SCENE_PLUGIN names another path
+cargo run -p flui-hot-reload --features host-hook --example scene_render
 ```
 
 ## Web / WASM

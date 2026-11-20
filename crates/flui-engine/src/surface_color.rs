@@ -24,8 +24,7 @@ const PQ_REFERENCE_WHITE_NITS: f32 = 203.0;
 ///
 /// A request, not a promise: the surface's capabilities decide, a request the
 /// surface cannot meet falls back down the chain `Hdr` → `WideGamut` →
-/// `Srgb8`, and [`Renderer::surface_color`](crate::Renderer::surface_color)
-/// reports what was granted.
+/// `Srgb8`, and the slot's [`ResolvedSurfaceColor`] holds what was granted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SurfaceColor {
