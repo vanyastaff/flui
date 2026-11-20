@@ -5,7 +5,6 @@ use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
 use flui_foundation::{PresentationAddress, PresentationId};
-use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;

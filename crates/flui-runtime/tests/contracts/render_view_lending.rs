@@ -1,10 +1,9 @@
-//! `RendererBinding` lends render views through a closure and hands out no
+//! `RenderingBinding` lends render views through a closure and hands out no
 //! lock: a view survives a panicking visitor, and a nested call cannot
 //! deadlock on it.
 
 use flui_rendering::{
     TextContextHandle,
-    binding::RendererBinding,
     constraints::BoxConstraints,
     view::{RenderView, ViewConfiguration},
 };

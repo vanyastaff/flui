@@ -19,6 +19,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
+use crate::renderer_binding::ViewHitTest;
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
@@ -29,7 +30,6 @@ use flui_protocol::{
     tree::ElementRef, tree::ReadQuery, tree::Tree, tree::WindowId, wait::WaitOutcome,
     wire::ActionName,
 };
-use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
 };
