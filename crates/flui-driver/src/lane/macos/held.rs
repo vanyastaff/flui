@@ -231,8 +231,8 @@ impl HeldKeys {
     ///
     /// # Errors
     ///
-    /// After every key was tried: [`Error::ReleaseFailed`] naming the keys still held and the
-    /// first stroke that failed or was refused, or that stroke's error when nothing stayed held.
+    /// After every key was tried: [`Error::ReleaseFailed`] naming the keys still held, every one
+    /// whose release failed or was refused, and the first such stroke's error.
     pub fn release_all(
         &mut self,
         mut post: impl FnMut(Keystroke, u64) -> Result<()>,
@@ -254,7 +254,6 @@ impl HeldKeys {
         }
         match first {
             None => Ok(()),
-            Some(first) if self.held.is_empty() => Err(first),
             Some(first) => Err(Error::ReleaseFailed {
                 lane: LANE.to_owned(),
                 held: self

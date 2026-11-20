@@ -157,19 +157,19 @@ fn mouse_type(kind: MouseKind) -> (CGEventType, CGMouseButton) {
     match kind {
         MouseKind::Moved => (CGEventType::MouseMoved, CGMouseButton::Left),
         MouseKind::Dragged(button) => by_button(
-            button.0,
+            button.number(),
             CGEventType::LeftMouseDragged,
             CGEventType::RightMouseDragged,
             CGEventType::OtherMouseDragged,
         ),
         MouseKind::Down(button) => by_button(
-            button.0,
+            button.number(),
             CGEventType::LeftMouseDown,
             CGEventType::RightMouseDown,
             CGEventType::OtherMouseDown,
         ),
         MouseKind::Up(button) => by_button(
-            button.0,
+            button.number(),
             CGEventType::LeftMouseUp,
             CGEventType::RightMouseUp,
             CGEventType::OtherMouseUp,

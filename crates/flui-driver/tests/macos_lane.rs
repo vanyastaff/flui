@@ -14,14 +14,14 @@ use flui_driver::lane::macos::pointer::{
 };
 use flui_driver::lane::macos::roles::{self, ROLES};
 use flui_driver::lane::macos::safety::{
-    self, Desk, Landing, Permission, Refusal, check_event, press_takes,
+    self, Desk, KeyEdge, Landing, Permission, Refusal, check_event, press_takes,
 };
 use flui_driver::lane::macos::screen::{self, PointRect, WindowInfo};
 use flui_driver::lane::macos::version::MacosVersion;
-use flui_driver::lane::macos::{callback, frame};
+use flui_driver::lane::macos::{callback, frame, release_outcome};
 use flui_driver::lane::windows;
 use flui_driver::projection::Projection;
-use flui_driver::protocol::error::ErrorCode;
+use flui_driver::protocol::error::{ErrorCode, HandleKind};
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::input::{PointerButton, PointerDevice};
 use flui_driver::protocol::semantics::SemanticsRole;
@@ -100,10 +100,17 @@ fn text_is_typed_in_runs_of_at_most_twenty_units_and_line_breaks_as_keys() {
         runs(&keys::text_strokes("ab\r\ncd\te\nf\r")),
         ["ab", "<0x24>", "cd", "<0x30>", "e", "<0x24>", "f", "<0x24>"]
     );
+    // A carriage return alone is one line break, and the character after it is typed.
+    assert_eq!(runs(&keys::text_strokes("a\rb")), ["a", "<0x24>", "b"]);
     let long = "x".repeat(25);
     assert_eq!(
         runs(&keys::text_strokes(&long)),
         ["x".repeat(20), "x".repeat(5)]
+    );
+    // A chunk is its units: what an earlier run left in the buffer past them does not count.
+    assert_eq!(
+        keys::text_strokes(&format!("{}b", "a".repeat(20)))[1],
+        keys::text_strokes("b")[0]
     );
     // A pair of surrogates is never split between two events.
     let edge = format!("{}😀", "x".repeat(19));
@@ -175,6 +182,10 @@ fn an_ax_role_folds_to_its_wire_role_with_its_subrole() {
         ("AXWindow", None, Role::Window),
         ("AXWindow", Some("AXDialog"), Role::Dialog),
         ("AXUnknown", Some("AXApplicationGroup"), Role::Group),
+        ("AXLevelIndicator", Some("AXMeter"), Role::ProgressIndicator),
+        ("AXGroup", Some("AXMeter"), Role::ProgressIndicator),
+        ("AXSheet", None, Role::Dialog),
+        ("AXScrollArea", None, Role::Pane),
         ("AXUnknown", None, Role::Unknown),
         ("AXSomethingNew", None, Role::Unknown),
     ];
@@ -494,7 +505,11 @@ fn system_shortcuts_are_refused_and_app_chords_are_not() {
         (&["Meta", "Alt", "d"], "the Dock"),
         (&["Meta", "F5"], "VoiceOver"),
         (&["Meta", "Alt", "8"], "Zoom and the colour filters"),
+        (&["Meta", "Alt", "="], "Zoom"),
+        (&["Meta", "Alt", "-"], "Zoom"),
         (&["Control", "ArrowUp"], "Mission Control"),
+        // Command with a key it takes nothing for leaves the Control shortcuts in force.
+        (&["Control", "Meta", "ArrowUp"], "Mission Control"),
         (&["Control", "ArrowDown"], "Mission Control"),
         (&["Control", "ArrowLeft"], "the switch between Spaces"),
         (&["Control", "2"], "the switch between Spaces"),
@@ -531,6 +546,11 @@ fn system_shortcuts_are_refused_and_app_chords_are_not() {
         &["Shift", "3"],
         &["Shift", "F11"],
         &["Meta", "3"],
+        // Without the Option the system's shortcut needs, the app has these.
+        &["Meta", "Escape"],
+        &["Meta", "d"],
+        &["Meta", "8"],
+        &["Meta", "="],
         &["Escape"],
         &["Enter"],
         // One Command tap is a key the app reads; Siri takes two in a row.
@@ -599,6 +619,34 @@ fn lone_modifier_taps_that_toggle_a_system_feature_are_refused() {
     let mut pending = taps("Shift", 4);
     pending.push(input_down("Shift"));
     assert_eq!(quiet.system_shortcut(&pending), Some(safety::STICKY_KEYS));
+    // One down after fewer taps is not the fifth.
+    for count in [0, 3] {
+        let mut early = taps("Shift", count);
+        early.push(input_down("Shift"));
+        assert_eq!(quiet.system_shortcut(&early), None, "{count} taps");
+    }
+    // A Shift pressed while another key is held is no tap.
+    let mut under_a = vec![input_down("a")];
+    under_a.extend(taps("Shift", 5));
+    under_a.push(input_up("a"));
+    assert_eq!(quiet.system_shortcut(&under_a), None);
+    // A Shift released after another key went down under it is no tap either, that key still
+    // down or not.
+    let mut chorded = vec![
+        input_down("Shift"),
+        input_down("a"),
+        input_up("Shift"),
+        input_up("a"),
+    ];
+    chorded.extend(taps("Shift", 4));
+    assert_eq!(quiet.system_shortcut(&chorded), None);
+    // Another modifier's taps count for that modifier alone, released or held at the end.
+    let mut after_option = taps("Alt", 4);
+    after_option.extend(taps("Shift", 1));
+    assert_eq!(quiet.system_shortcut(&after_option), None);
+    let mut held_after_option = taps("Alt", 4);
+    held_after_option.push(input_down("Shift"));
+    assert_eq!(quiet.system_shortcut(&held_after_option), None);
 }
 
 #[test]
@@ -870,7 +918,7 @@ fn a_move_with_a_button_down_is_a_drag_and_a_press_lands_where_the_pointer_went(
                 to: at(2.5, 2.5)
             }
         )),
-        [(MouseKind::Dragged(MouseButton(2)), at(2.5, 2.5))]
+        [(MouseKind::Dragged(MouseButton::MIDDLE), at(2.5, 2.5))]
     );
     assert_eq!(pointer.buttons(), 0b100);
 }
@@ -1007,7 +1055,9 @@ fn a_scroll_turns_the_wheels_by_points_the_other_way() {
         (0, i32::MIN, 1.0),
         (0, i32::MAX, 0.5),
         (0, 1, 0.0),
+        (0, 1, -1.0),
         (0, 1, f64::NAN),
+        (0, 1, f64::INFINITY),
     ] {
         let refused = wide.turn(x, y, scale);
         assert!(
@@ -1016,6 +1066,15 @@ fn a_scroll_turns_the_wheels_by_points_the_other_way() {
         );
     }
     assert_eq!(wide, Wheel::new(), "a refused turn carries nothing");
+    // The widest turns whose negation an i32 still holds go out.
+    assert_eq!(
+        Wheel::new().turn(i32::MIN + 1, 0, 1.0).ok(),
+        Some((0, i32::MAX))
+    );
+    assert_eq!(
+        Wheel::new().turn(i32::MAX, 0, 1.0).ok(),
+        Some((0, i32::MIN + 1))
+    );
 }
 
 /// The person can take a permission back mid-run: every post asks first, and a release the
@@ -1195,8 +1254,30 @@ fn a_surface_point_lands_in_the_backing_pixel_it_was_aimed_at_on_every_display()
         matches!(outside, Err(Error::OutsideTarget { .. })),
         "{outside:?}"
     );
-    assert!(screen::points_of(DevicePoint::new(11, 11), 0.0, content).is_err());
-    assert!(screen::points_of(DevicePoint::new(11, 11), f64::NAN, content).is_err());
+    // A pixel that only touches the content's edge has no part inside it.
+    let touching = screen::points_of(
+        DevicePoint::new(100, 5),
+        1.0,
+        PointRect::new(0.0, 0.0, 100.0, 100.0),
+    );
+    assert!(
+        matches!(touching, Err(Error::OutsideTarget { .. })),
+        "{touching:?}"
+    );
+    for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let refused = screen::points_of(DevicePoint::new(11, 11), scale, content);
+        assert!(
+            matches!(refused, Err(Error::InvalidArgument { .. })),
+            "{scale}: {refused:?}"
+        );
+    }
+    // A pixel an i32 addresses maps, to its last one each way; one past it does not.
+    let edge = |value: f64| screen::device_of(at(value, 0.0), 1.0).map(|device| device.x);
+    assert_eq!(edge(f64::from(i32::MIN)), Some(i32::MIN));
+    assert_eq!(edge(f64::from(i32::MAX)), Some(i32::MAX));
+    assert_eq!(edge(f64::from(i32::MIN) - 1.0), None);
+    assert_eq!(edge(f64::from(i32::MAX) + 1.0), None);
+    assert_eq!(edge(f64::NEG_INFINITY), None);
     assert_eq!(screen::device_of(at(f64::NAN, 0.0), 2.0), None);
     assert_eq!(screen::device_of(at(f64::MAX, 0.0), 2.0), None);
 }
@@ -1218,6 +1299,8 @@ fn the_content_sits_at_the_bottom_left_of_its_window_frame() {
         (PointRect::new(0.0, 0.0, 800.0, 628.0), true),
         (PointRect::new(0.0, 0.0, 800.0, 600.0), true),
         (PointRect::new(0.0, 0.0, 800.5, 628.0), true),
+        (PointRect::new(0.0, 0.0, 801.0, 628.0), true),
+        (PointRect::new(0.0, 0.0, 801.5, 628.0), false),
         (PointRect::new(0.0, 0.0, 820.0, 628.0), false),
         (PointRect::new(0.0, 0.0, 800.0, 590.0), false),
         (PointRect::new(0.0, 0.0, 800.0, 800.0), false),
@@ -1315,8 +1398,17 @@ fn a_window_capture_is_cut_to_its_content() {
     let half = screen::crop_content(&frame, LogicalSize::new(1.0, 1.0), 2.0).expect("fits");
     assert_eq!((half.width, half.height), (2, 2));
     assert_eq!(half.pixel(1, 0), Some([1, 3, 0, 255]));
+    // A frame with no title bar is all content.
+    let whole = screen::crop_content(&frame, LogicalSize::new(3.0, 5.0), 1.0).expect("fits");
+    assert_eq!((whole.width, whole.height), (3, 5));
+    assert_eq!(whole.pixel(2, 4), Some([2, 4, 0, 255]));
     assert!(screen::crop_content(&frame, LogicalSize::new(3.0, 6.0), 1.0).is_err());
     assert!(screen::crop_content(&frame, LogicalSize::new(4.0, 1.0), 1.0).is_err());
+    let negative = screen::crop_content(&frame, LogicalSize::new(-1.0, 1.0), 1.0);
+    assert!(
+        matches!(&negative, Err(Error::InvalidArgument { message, .. }) if message.contains("no size")),
+        "{negative:?}"
+    );
 }
 
 fn node(id: u64, role: Role, native: &str, name: Option<&str>) -> Node {
@@ -1359,9 +1451,14 @@ fn the_frame_controls_are_left_out_and_the_content_root_gives_the_window_its_chi
             None,
         ),
     ];
-    let projected = frame::project(os_window);
+    let projected = frame::project(os_window.clone());
     assert_eq!(projected.children.len(), 1, "{projected:#?}");
     assert_eq!(projected.children[0].name.as_deref(), Some("Like"));
+    assert!(!projected.children_unread);
+    // Children the walk left unread under the lifted group are the window's now.
+    let mut cut = os_window;
+    cut.children[1].children_unread = true;
+    assert!(frame::project(cut).children_unread);
 
     let mut app_like = node(7, Role::Button, "Button", Some("Like"));
     app_like.identifier = Some("like".to_owned());
@@ -1406,4 +1503,209 @@ fn a_release_is_read_by_its_version_and_gates_its_calls() {
     assert!(MacosVersion::new(10, 15).has_privacy_preflight());
     assert!(!MacosVersion::new(13, 6).has_window_screenshot());
     assert!(MacosVersion::new(14, 0).has_window_screenshot());
+}
+
+fn no_event() -> Error {
+    Error::Lane {
+        lane: "macos".into(),
+        unavailable: false,
+        message: "no event".into(),
+    }
+}
+
+/// The Shift the lane adds for a key goes with that key: released after it, never for another
+/// key, and owed no more once the key or the Shift is up; typed text holds nothing.
+#[test]
+fn the_shift_the_lane_adds_for_a_key_goes_with_it() {
+    let a = KeyCode(0x00);
+    let mut keys = HeldKeys::new();
+    post_all(&mut keys, &[input_down("a")]);
+    assert_eq!(
+        keys.plan(&input_up("a")),
+        [Keystroke::Release(a, Some('a'))],
+        "a key pressed without an added Shift is released alone"
+    );
+
+    let mut keys = HeldKeys::new();
+    post_all(
+        &mut keys,
+        &[input_down("A"), input_down("b"), input_up("b")],
+    );
+    assert_eq!(
+        keys.plan(&input_up("A")),
+        [Keystroke::Release(a, Some('A')), Keystroke::UnshiftFor(a.0)],
+        "another key's release leaves the Shift owed to its own key"
+    );
+
+    let mut keys = HeldKeys::new();
+    post_all(&mut keys, &[input_down("A")]);
+    let _ = keys.apply(Keystroke::Release(a, Some('A')));
+    assert_eq!(keys.held(), [keys::SHIFT.0]);
+    assert_eq!(
+        keys.plan(&input_up("A")),
+        [Keystroke::Release(a, Some('A'))],
+        "a released key is owed no Shift"
+    );
+
+    let mut keys = HeldKeys::new();
+    post_all(&mut keys, &[input_down("A")]);
+    let _ = keys.apply(Keystroke::Release(keys::SHIFT, None));
+    assert_eq!(
+        keys.plan(&input_up("A")),
+        [Keystroke::Release(a, Some('A'))],
+        "a Shift already up is owed to nothing"
+    );
+
+    let mut keys = HeldKeys::new();
+    post_all(&mut keys, &[KeyInput::Text("x".into())]);
+    assert!(keys.held().is_empty(), "{:?}", keys.held());
+    let text = keys.plan(&KeyInput::Text("x".into()));
+    assert_eq!(
+        text[0].edges(),
+        [KeyEdge::Down(TEXT_KEY), KeyEdge::Up(TEXT_KEY)]
+    );
+}
+
+/// The release of everything records each key it released, and names only the ones it could not.
+#[test]
+fn the_release_of_everything_keeps_what_it_released_apart_from_what_failed() {
+    let mut keys = HeldKeys::new();
+    post_all(&mut keys, &[input_down("Control"), input_down("a")]);
+    let failed = keys.release_all(|stroke, _| match stroke {
+        Keystroke::Release(key, _) if key == keys::CONTROL => Err(no_event()),
+        _ => Ok(()),
+    });
+    assert!(
+        matches!(&failed, Err(Error::ReleaseFailed { held, .. }) if held == &["Control"]),
+        "{failed:?}"
+    );
+    assert_eq!(keys.held(), [keys::CONTROL.0]);
+
+    // The lane's outcome names what the keys and the mouse both still hold, the keys' failure
+    // first.
+    let stuck = |held: &str, message: &str| -> Result<()> {
+        Err(Error::ReleaseFailed {
+            lane: "macos".into(),
+            held: vec![held.to_owned()],
+            message: message.to_owned(),
+        })
+    };
+    let both = release_outcome(
+        stuck("Control", "keys"),
+        stuck("the left mouse button", "mouse"),
+    );
+    assert!(
+        matches!(&both, Err(Error::ReleaseFailed { held, message, .. })
+            if held == &["Control", "the left mouse button"] && message == "keys"),
+        "{both:?}"
+    );
+    let mouse = release_outcome(Ok(()), stuck("the left mouse button", "mouse"));
+    assert!(
+        matches!(&mouse, Err(Error::ReleaseFailed { message, .. }) if message == "mouse"),
+        "{mouse:?}"
+    );
+    assert!(release_outcome(Ok(()), Ok(())).is_ok());
+}
+
+/// A press needs a place and a button that is up, a release a button that is down; each button a
+/// pointer names is its Quartz number; the release of everything posts one release per button
+/// held, and names what it could not release.
+#[test]
+fn each_mouse_button_is_pressed_once_and_released_where_the_pointer_is() {
+    let device = PointerDevice::Mouse;
+    let down = |button| Step::Down { device, button };
+    let up = |button| Step::Up { device, button };
+    let mut pointer = Pointer::new();
+    assert_eq!(pointer.position(), None);
+    for step in [down(PointerButton::Primary), up(PointerButton::Primary)] {
+        assert_eq!(
+            capability(pointer.plan(step)),
+            Some("os_input_device".to_owned()),
+            "{step:?} before the pointer moved"
+        );
+    }
+    let to = at(5.5, 6.5);
+    let moved = pointer.plan(Step::Move { device, to }).expect("a move");
+    pointer.deliver(&moved, |_| Ok(())).expect("posted");
+    assert_eq!(pointer.position(), Some(to));
+    for (button, quartz) in [
+        (PointerButton::Middle, MouseButton::MIDDLE),
+        (PointerButton::Back, MouseButton::BACK),
+        (PointerButton::Forward, MouseButton::FORWARD),
+    ] {
+        let pressed = pointer.plan(down(button)).expect("a press");
+        assert_eq!(
+            pressed.iter().map(|event| event.kind).collect::<Vec<_>>(),
+            [MouseKind::Down(quartz)]
+        );
+        pointer.deliver(&pressed, |_| Ok(())).expect("posted");
+        assert_eq!(
+            capability(pointer.plan(down(button))),
+            Some("os_input_device".to_owned()),
+            "a second press of {button:?}"
+        );
+    }
+    assert_eq!(MouseButton::FORWARD.number(), 4);
+    let mut released = Vec::new();
+    pointer
+        .release_all(|event| {
+            released.push((event.kind, event.at));
+            Ok(())
+        })
+        .expect("released");
+    assert_eq!(
+        released,
+        [
+            (MouseKind::Up(MouseButton::MIDDLE), to),
+            (MouseKind::Up(MouseButton::BACK), to),
+            (MouseKind::Up(MouseButton::FORWARD), to),
+        ]
+    );
+    assert_eq!(pointer.buttons(), 0);
+
+    for button in [PointerButton::Primary, PointerButton::Secondary] {
+        let pressed = pointer.plan(down(button)).expect("a press");
+        pointer.deliver(&pressed, |_| Ok(())).expect("posted");
+    }
+    let failed = pointer.release_all(|event| match event.kind {
+        MouseKind::Up(MouseButton::RIGHT) => Err(no_event()),
+        _ => Ok(()),
+    });
+    assert!(
+        matches!(&failed, Err(Error::ReleaseFailed { held, .. })
+            if held == &["the right mouse button"]),
+        "{failed:?}"
+    );
+    assert_eq!(pointer.buttons(), 0b10);
+
+    // A button recorded down on a pointer that never moved has nowhere to be released: it stays
+    // held and is named.
+    let mut lost = Pointer::new();
+    lost.apply(&pointer.plan(down(PointerButton::Middle)).expect("a press")[0]);
+    let mut posted = 0;
+    let stranded = lost.release_all(|_| {
+        posted += 1;
+        Ok(())
+    });
+    assert!(
+        matches!(&stranded, Err(Error::ReleaseFailed { held, .. })
+            if held == &["the middle mouse button"]),
+        "{stranded:?}"
+    );
+    assert_eq!(posted, 0);
+}
+
+#[test]
+fn a_window_that_is_gone_is_named_as_the_window_handle() {
+    let gone = Refusal::WindowGone.into_error();
+    assert!(
+        matches!(&gone, Error::Gone {
+            kind: Some(HandleKind::Window),
+            handle: None,
+            exit: None,
+            message,
+            ..
+        } if message.contains("window is gone")),
+        "{gone:?}"
+    );
 }

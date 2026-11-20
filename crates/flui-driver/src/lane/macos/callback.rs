@@ -8,8 +8,5 @@ use flui_foundation::panic::FirstPanic;
 
 /// `run`'s value, or `failed` when it panics; the panic's payload is discarded under containment.
 pub fn contained_or<T>(failed: T, run: impl FnOnce() -> T) -> T {
-    let mut first = FirstPanic::new();
-    let value = first.contain(run);
-    drop(first);
-    value.unwrap_or(failed)
+    FirstPanic::new().contain(run).unwrap_or(failed)
 }

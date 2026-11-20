@@ -37,15 +37,37 @@ impl Point {
     }
 }
 
-/// A Quartz mouse button: `kCGMouseButtonLeft` 0, right 1, then the others by number.
+/// A Quartz mouse button: `kCGMouseButtonLeft` 0, right 1, then the others by number. Only the
+/// five buttons a [`PointerButton`] names exist, so a button's bit fits the lane's mask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MouseButton(pub u32);
+pub struct MouseButton(u32);
 
 impl MouseButton {
     /// The left button.
     pub const LEFT: Self = Self(0);
     /// The right button.
     pub const RIGHT: Self = Self(1);
+    /// The middle button.
+    pub const MIDDLE: Self = Self(2);
+    /// The back button.
+    pub const BACK: Self = Self(3);
+    /// The forward button.
+    pub const FORWARD: Self = Self(4);
+
+    /// Every button, by number.
+    const ALL: [Self; 5] = [
+        Self::LEFT,
+        Self::RIGHT,
+        Self::MIDDLE,
+        Self::BACK,
+        Self::FORWARD,
+    ];
+
+    /// Its number, as `kCGMouseEventButtonNumber` carries it.
+    #[must_use]
+    pub const fn number(self) -> u32 {
+        self.0
+    }
 
     /// The button `button` is on a mouse whose primary button is its left one: macOS swaps the
     /// buttons before an app sees them, so the event names the primary one as left.
@@ -57,9 +79,9 @@ impl MouseButton {
         match button {
             PointerButton::Primary => Ok(Self::LEFT),
             PointerButton::Secondary => Ok(Self::RIGHT),
-            PointerButton::Middle => Ok(Self(2)),
-            PointerButton::Back => Ok(Self(3)),
-            PointerButton::Forward => Ok(Self(4)),
+            PointerButton::Middle => Ok(Self::MIDDLE),
+            PointerButton::Back => Ok(Self::BACK),
+            PointerButton::Forward => Ok(Self::FORWARD),
             _ => Err(Refusal::UnsentInput {
                 what: format!("the mouse button {button:?}"),
             }
@@ -67,8 +89,8 @@ impl MouseButton {
         }
     }
 
-    fn bit(self) -> u32 {
-        1 << self.0.min(31)
+    const fn bit(self) -> u32 {
+        1 << self.0
     }
 }
 
@@ -248,33 +270,34 @@ impl Pointer {
     ///
     /// # Errors
     ///
-    /// After every button was tried: [`Error::ReleaseFailed`] naming the buttons still held and
-    /// the first release that could not be posted, or that release's error when nothing stayed
-    /// held.
+    /// After every button was tried: [`Error::ReleaseFailed`] naming the buttons still held, every
+    /// one whose release could not be posted (or had nowhere to land, the pointer never having
+    /// moved), and the first such failure.
     pub fn release_all(&mut self, mut post: impl FnMut(&MouseEvent) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
-        if let Some(at) = self.at {
-            for number in 0..32_u32 {
-                let button = MouseButton(number);
-                if self.buttons & button.bit() == 0 {
-                    continue;
-                }
-                let event = MouseEvent::new(MouseKind::Up(button), at);
-                match post(&event) {
-                    Ok(()) => self.apply(&event),
-                    Err(error) => {
-                        first.get_or_insert(error);
-                    }
+        for button in MouseButton::ALL {
+            if self.buttons & button.bit() == 0 {
+                continue;
+            }
+            let Some(at) = self.at else {
+                first.get_or_insert_with(|| {
+                    unsent("a mouse release before the pointer moved anywhere")
+                });
+                continue;
+            };
+            let event = MouseEvent::new(MouseKind::Up(button), at);
+            match post(&event) {
+                Ok(()) => self.apply(&event),
+                Err(error) => {
+                    first.get_or_insert(error);
                 }
             }
         }
-        let held = self.held();
         match first {
             None => Ok(()),
-            Some(first) if held.is_empty() => Err(first),
             Some(first) => Err(Error::ReleaseFailed {
                 lane: LANE.to_owned(),
-                held,
+                held: self.held(),
                 message: first.to_string(),
             }),
         }
@@ -282,12 +305,18 @@ impl Pointer {
 
     /// The buttons the lane still holds, by name, for people.
     fn held(&self) -> Vec<String> {
-        (0..32_u32)
-            .filter(|&number| self.buttons & MouseButton(number).bit() != 0)
-            .map(|number| match number {
-                0 => "the left mouse button".to_owned(),
-                1 => "the right mouse button".to_owned(),
-                number => format!("mouse button {number}"),
+        MouseButton::ALL
+            .into_iter()
+            .filter(|button| self.buttons & button.bit() != 0)
+            .map(|button| {
+                match button {
+                    MouseButton::LEFT => "the left mouse button",
+                    MouseButton::RIGHT => "the right mouse button",
+                    MouseButton::MIDDLE => "the middle mouse button",
+                    MouseButton::BACK => "the back mouse button",
+                    _ => "the forward mouse button",
+                }
+                .to_owned()
             })
             .collect()
     }

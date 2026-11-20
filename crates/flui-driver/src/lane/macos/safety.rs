@@ -452,11 +452,10 @@ impl ModifierTaps {
     pub(crate) fn press(&mut self, key: KeyCode, held: &[u16]) -> Option<&'static str> {
         let taken = press_takes(key, held);
         match Modifier::of(key) {
+            // A run of another modifier stays: the release and `pending` count only a run of the
+            // modifier they read, so the next tap of this one starts at one either way.
             Some(modifier) if held.iter().all(|&code| code == key.0) => {
                 self.lone = Some(modifier);
-                if self.run.is_some_and(|(tapped, _)| tapped != modifier) {
-                    self.run = None;
-                }
             }
             _ => {
                 self.lone = None;

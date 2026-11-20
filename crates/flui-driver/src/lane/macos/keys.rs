@@ -347,11 +347,32 @@ pub fn name_of(code: u16) -> String {
 /// (`CGEventKeyboardSetUnicodeString`), and a longer string is cut.
 pub const TEXT_CHUNK_UNITS: usize = 20;
 
-/// Up to [`TEXT_CHUNK_UNITS`] UTF-16 units one key event carries as its text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Up to [`TEXT_CHUNK_UNITS`] UTF-16 units one key event carries as its text. Two chunks are
+/// equal when their units are: the buffer past them holds whatever an earlier run left there.
+#[derive(Clone, Copy)]
 pub struct TextChunk {
     units: [u16; TEXT_CHUNK_UNITS],
     len: usize,
+}
+
+impl std::fmt::Debug for TextChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("TextChunk").field(&self.text()).finish()
+    }
+}
+
+impl PartialEq for TextChunk {
+    fn eq(&self, other: &Self) -> bool {
+        self.units() == other.units()
+    }
+}
+
+impl Eq for TextChunk {}
+
+impl std::hash::Hash for TextChunk {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.units().hash(state);
+    }
 }
 
 impl TextChunk {
