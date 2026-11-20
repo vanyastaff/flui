@@ -1,10 +1,14 @@
-//! The recording rows (ADR-0215 §4, ADR-0390): what a backend's native journal records beside
-//! input replays on the headless host to what the application heard, one row per kind.
+//! The recording rows (ADR-0215 §4, ADR-0390): what a backend delivers beside input, its native
+//! journal records, and the recording replays on the headless host to what the application
+//! heard, one row per kind.
 //!
-//! Each row hands the backend sessions of its kind as the OS reported them. The backend writes
-//! each as its journal does, reads the recording back and replays it on the headless host
-//! ([`BackendUnderTest::replay_recording`]). The row holds when the application there heard
-//! each session entry for entry and in order: an entry lost, changed, moved or added breaks it.
+//! Each row hands the backend sessions of its kind as the OS reported them. The backend drives
+//! each through its own delivery with a journal capture installed, reads back what the journal
+//! recorded and replays it on the headless host ([`BackendUnderTest::replay_recording`]). The row
+//! holds when the application heard each session entry for entry and in order, both from the
+//! backend and from the replay: an entry the backend lost, changed or added, or one its journal
+//! lost, changed or could not replay, breaks it. A backend whose delivery cannot be driven fails
+//! it as [`FailureKind::NotDriven`](super::FailureKind::NotDriven).
 
 use flui_foundation::geometry::{DevicePixelRatio, Point, Rect, Size, WindowMetrics};
 use flui_platform::{
@@ -85,8 +89,16 @@ fn preference_reads() -> Vec<Recorded> {
     ]
 }
 
-/// A display of `width` by `height` logical pixels at `x` on the desktop, at a scale of `scale`.
-fn display(name: &str, x: i32, width: f64, height: f64, scale: f64, primary: bool) -> DisplayParts {
+/// A display named `name` whose persistent key is `key`, `width` by `height` logical pixels at
+/// `x` on the desktop, at a scale of `scale`.
+fn display(
+    name: &str,
+    key: &str,
+    x: i32,
+    (width, height): (f64, f64),
+    scale: f64,
+    primary: bool,
+) -> DisplayParts {
     let extent = Size::new(width, height);
     DisplayParts {
         name: name.to_owned(),
@@ -99,23 +111,51 @@ fn display(name: &str, x: i32, width: f64, height: f64, scale: f64, primary: boo
         scale_factor: DevicePixelRatio::try_new(scale).expect("BUG: a positive ratio"),
         refresh_period: Some(RefreshPeriod::from_hz(60.0).expect("BUG: 60 Hz is a refresh rate")),
         is_primary: primary,
-        persistent_key: Some(format!("{name}-key")),
+        persistent_key: Some(key.to_owned()),
         color: Ok(DisplayColor::Standard(ColorGamut::Srgb)),
     }
 }
 
-/// Two reads of the displays: the built-in one alone, then with an external one beside it.
+/// Three reads of the displays: the built-in one alone, then with an external one beside it,
+/// then with a second external one of the same model, which only its id, key and place tell
+/// apart.
 fn display_reads() -> Vec<Recorded> {
-    let built_in = display("Built-in", 0, 1440.0, 900.0, 2.0, true);
-    let external = display("External", 1440, 2560.0, 1440.0, 1.0, false);
+    let built_in = (
+        0,
+        display("Built-in", "EDID-0610-A050", 0, (1440.0, 900.0), 2.0, true),
+    );
+    let left = (
+        1,
+        display(
+            "DELL U2720Q",
+            "EDID-10AC-D0A1-1",
+            1440,
+            (2560.0, 1440.0),
+            1.0,
+            false,
+        ),
+    );
+    let right = (
+        2,
+        display(
+            "DELL U2720Q",
+            "EDID-10AC-D0A1-2",
+            4000,
+            (2560.0, 1440.0),
+            1.0,
+            false,
+        ),
+    );
     vec![
         Recorded::Displays(vec![built_in.clone()]),
-        Recorded::Displays(vec![built_in, external]),
+        Recorded::Displays(vec![built_in.clone(), left.clone()]),
+        Recorded::Displays(vec![built_in, left, right]),
     ]
 }
 
-/// Replay each of `sessions`, recordings of `kind`, on `backend`: held when the application
-/// heard every session as it was reported.
+/// Drive each of `sessions`, of `kind`, through `backend` and replay what it journaled: held
+/// when the application heard every session as it was reported, from the backend and from the
+/// replay.
 fn replays<B: BackendUnderTest>(
     backend: &mut B,
     kind: &str,
@@ -123,13 +163,28 @@ fn replays<B: BackendUnderTest>(
 ) -> Outcome {
     for session in sessions {
         match backend.replay_recording(session) {
-            RecordingReplay::None(why) => return Ok(RowOutcome::NotApplicable(why)),
-            RecordingReplay::Replayed(heard) if heard == *session => {}
-            RecordingReplay::Replayed(heard) => {
-                return Err(RowFailure::output(format!(
-                    "a recording of {kind} replayed as {heard:?}, not {session:?}"
+            RecordingReplay::NotDriven(why) => {
+                return Err(RowFailure::not_driven(format!(
+                    "the backend's delivery of {kind} is not driven: {why}"
                 )));
             }
+            RecordingReplay::Refused { live, why } => {
+                return Err(RowFailure::output(format!(
+                    "the backend delivered {kind} as {live:?}, and its recording did not \
+                     replay: {why}"
+                )));
+            }
+            RecordingReplay::Replayed { live, .. } if live != *session => {
+                return Err(RowFailure::output(format!(
+                    "the backend delivered {kind} as {live:?}, not {session:?}"
+                )));
+            }
+            RecordingReplay::Replayed { replayed, .. } if replayed != *session => {
+                return Err(RowFailure::output(format!(
+                    "the recording of {kind} replayed as {replayed:?}, not {session:?}"
+                )));
+            }
+            RecordingReplay::Replayed { .. } => {}
         }
     }
     Ok(RowOutcome::Held)

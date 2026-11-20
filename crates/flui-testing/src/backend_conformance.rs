@@ -49,15 +49,17 @@
 //!   field. A backend whose path FLUI has not driven yet reports the rows as
 //!   its `docs/gaps.md` entry ([`RowOutcome::Gap`]).
 //!
-//! - **recordings** (ADR-0215 §4, ADR-0390): what the backend's native journal
-//!   records beside input replays on the headless host to what the
-//!   application heard, one row per kind: the input method's composition, the
-//!   lifecycle the host reports (its notices, a session's end, a reopen, the
-//!   window's snapshots), and the application's reads of the system
-//!   preferences and of the displays. The backend writes each session as its
-//!   journal does and reads it back ([`BackendUnderTest::replay_recording`]),
-//!   so a recording a backend writes that the headless host does not replay
-//!   as delivered fails its row.
+//! - **recordings** (ADR-0215 §4, ADR-0390): what the backend delivers beside
+//!   input, its native journal records, and that recording replays on the
+//!   headless host to what the application heard, one row per kind: the input
+//!   method's composition, the lifecycle the host reports (its notices, a
+//!   session's end, a reopen, the window's snapshots), and the application's
+//!   reads of the system preferences and of the displays. The backend drives
+//!   each session through its own delivery with a journal capture installed
+//!   ([`BackendUnderTest::replay_recording`]), so a backend that delivers the
+//!   session otherwise, journals the wrong thing or nothing fails its row; a
+//!   backend whose delivery cannot be driven where the table runs fails it as
+//!   [`FailureKind::NotDriven`], which its suite names.
 //!
 //! A row the backend cannot take part in (the clock rows of a backend with no
 //! performance counter, the trackpad rows of a backend without trackpad
@@ -139,12 +141,14 @@ pub trait BackendUnderTest {
     /// loudly as its gap instead of passing as not applicable.
     fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath;
 
-    /// Write `session`, what the OS reported of one kind, in order, as the
-    /// backend's native journal records it (ADR-0215 §4), read the recording
-    /// back and replay it on the headless host, for the recording rows: what
-    /// the application there heard. No default: a backend says whether its
-    /// journal records the kind, so a missing replay fails loudly instead of
-    /// passing as not applicable.
+    /// Deliver `session`, what the OS reported of one kind, in order, through
+    /// the backend's own delivery with a native journal capture installed
+    /// (ADR-0215 §4), read back what the journal recorded and replay it on the
+    /// headless host, for the recording rows: what the application heard live
+    /// and what it heard from the replay. No default: a backend whose delivery
+    /// cannot be driven where the table runs answers
+    /// [`RecordingReplay::NotDriven`], which fails the row, so a missing
+    /// replay fails loudly instead of passing as not applicable.
     fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay;
 }
 
@@ -167,18 +171,37 @@ pub enum Recorded {
     /// A read of the system preferences answered these.
     Preferences(Box<SystemPreferences>),
     /// A read of the displays answered these displays, in the snapshot's
-    /// order; each display's id is the reading registry's own.
-    Displays(Vec<DisplayParts>),
+    /// order, each beside the order in which the session first saw its id:
+    /// one display keeps its number across reads, and two displays never share
+    /// one, whatever their names. The ids themselves are each registry's own.
+    Displays(Vec<(usize, DisplayParts)>),
 }
 
-/// How a backend's recording of one kind replayed on the headless host.
+/// What a backend delivered of one session, and what its recording replayed.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum RecordingReplay {
-    /// The recording replayed, and the application heard this, in order.
-    Replayed(Vec<Recorded>),
-    /// The backend's journal records nothing of the kind, and why.
-    None(&'static str),
+    /// The backend delivered `live`, in order, while its journal recorded;
+    /// the recording, read back and replayed on the headless host, delivered
+    /// `replayed`.
+    Replayed {
+        /// What the application heard from the backend.
+        live: Vec<Recorded>,
+        /// What the application heard from the replay.
+        replayed: Vec<Recorded>,
+    },
+    /// The backend delivered `live`, but its recording could not be read
+    /// back or replayed, and why: a redacted or cut row, a gap.
+    Refused {
+        /// What the application heard from the backend.
+        live: Vec<Recorded>,
+        /// Why the recording did not replay.
+        why: String,
+    },
+    /// The backend's delivery of the kind cannot be driven where the table
+    /// runs, and why. The row fails as [`FailureKind::NotDriven`]: a
+    /// backend's suite names each row it expects so.
+    NotDriven(&'static str),
 }
 
 /// The clocks a backend stamps its readings on (ADR-0207 §2).
@@ -509,6 +532,9 @@ pub enum FailureKind {
     Output,
     /// The row panicked, in the backend or in the table.
     Panicked,
+    /// The backend's path for the row cannot be driven where the table runs
+    /// ([`RecordingReplay::NotDriven`]).
+    NotDriven,
 }
 
 impl RowFailure {
@@ -540,6 +566,14 @@ impl RowFailure {
     pub(crate) const fn output(message: String) -> Self {
         Self {
             kind: FailureKind::Output,
+            message,
+        }
+    }
+
+    /// [`FailureKind::NotDriven`].
+    pub(crate) const fn not_driven(message: String) -> Self {
+        Self {
+            kind: FailureKind::NotDriven,
             message,
         }
     }

@@ -13,10 +13,15 @@
 //! Each row of the table also fails against a deliberately broken backend
 //! ([`Fault`]), so a row that cannot fail is caught.
 //!
-//! The recording rows replay each backend's session, as its journal writes
-//! it, on the headless host (`recordings`); their faults break the headless
-//! host's handling of the kind.
+//! The recording rows deliver each backend's session through the delivery
+//! code that journals it, with a capture of that backend installed, and replay
+//! what it journaled on the headless host (`recordings`); their faults break
+//! what the backend does with its journal or its delivery. The real Win32 and
+//! X11 windows fail those rows as not driven: what they would deliver is what
+//! their OS reports, which a test cannot script.
 
+// The journal's capture is compiled with debug assertions only.
+#[cfg(debug_assertions)]
 #[path = "backend_conformance/recordings.rs"]
 mod recordings;
 
@@ -669,16 +674,14 @@ enum Fault {
     ImeStepInTwoEdits,
     /// `compositionend` never reaches the field, so the composition stays.
     ImeEndLost,
-    /// The headless window drops the commit a replayed composition delivers.
-    ReplayedCommitLost,
-    /// The headless host's application never hears a replayed reopen.
-    ReplayedReopenLost,
-    /// The headless window publishes no second snapshot of a replayed lifecycle.
-    ReplayedSnapshotUnpublished,
-    /// The headless preference source keeps what the first replayed read set.
-    ReplayedPreferencesStale,
-    /// The headless display source lists a replayed read's displays backwards.
-    ReplayedDisplaysReversed,
+    /// The backend installs its journal's capture after its platform and
+    /// window are made, so their streams report to no capture.
+    JournalInstalledLate,
+    /// The backend's journal redacts text and display names, which a replay
+    /// cannot give back.
+    RedactingJournal,
+    /// The backend never delivers the reopen its OS reports.
+    ReopenUntranslated,
 }
 
 /// The degradation table a backend's window actuator plays by.
@@ -1283,7 +1286,7 @@ impl BackendUnderTest for SharedAssembly {
     }
 
     fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay {
-        recordings::replay_on_headless(self.profile.journal, self.fault, session)
+        journal_and_replay(self.profile.journal, self.fault, session)
     }
 }
 
@@ -1505,8 +1508,41 @@ impl BackendUnderTest for Win32Window {
         self.assembly.focus_text_store(store)
     }
 
-    fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay {
-        self.assembly.replay_recording(session)
+    fn replay_recording(&mut self, _session: &[Recorded]) -> RecordingReplay {
+        RecordingReplay::NotDriven(REAL_WINDOW_NOT_DRIVEN)
+    }
+}
+
+/// Why the recording rows are not driven through a real window: the input method events,
+/// notices, preferences and displays it would deliver are what its OS reports, which a test
+/// cannot script; the decoders' rows drive the same delivery code with each backend's journal.
+#[cfg(target_os = "windows")]
+const REAL_WINDOW_NOT_DRIVEN: &str = "a real window delivers what its OS reports, which a test \
+     cannot script; the backend's decoder rows drive the same journaled delivery code";
+
+/// The recording rows, each of which a real window fails as not driven.
+const RECORDING_ROWS: [&str; 4] = [
+    "a_recorded_composition_replays_as_it_was_delivered",
+    "a_recorded_lifecycle_replays_as_it_was_reported",
+    "recorded_preference_reads_replay_as_they_were_answered",
+    "recorded_display_reads_replay_as_they_were_answered",
+];
+
+/// Deliver `session` through the journaled delivery code as `backend` does, broken by `fault`,
+/// and replay what it journaled on the headless host.
+fn journal_and_replay(
+    backend: Backend,
+    fault: Option<Fault>,
+    session: &[Recorded],
+) -> RecordingReplay {
+    #[cfg(debug_assertions)]
+    {
+        recordings::journal_and_replay(backend, fault, session)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (backend, fault, session);
+        RecordingReplay::NotDriven("a build without debug assertions compiles no native journal")
     }
 }
 
@@ -1745,7 +1781,7 @@ impl BackendUnderTest for X11Decoder {
     }
 
     fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay {
-        recordings::replay_on_headless(Backend::X11, None, session)
+        journal_and_replay(Backend::X11, None, session)
     }
 
     fn clock(&self) -> ClockProfile {
@@ -1835,9 +1871,31 @@ fn headless_conforms() {
     assert_backend_conforms(&mut Headless::new());
 }
 
+/// The real Win32 window holds every row but the recording rows, which it fails as not
+/// driven (`REAL_WINDOW_NOT_DRIVEN`).
 #[cfg(target_os = "windows")]
 fn win32_window_conforms() {
-    assert_backend_conforms(&mut Win32Window::new());
+    use flui_testing::backend_conformance::FailureKind;
+
+    let report = run_backend_conformance(&mut Win32Window::new());
+    let mut wrong = Vec::new();
+    for (row, _, outcome) in &report.rows {
+        let expected_not_driven = RECORDING_ROWS.contains(row);
+        let ok = match outcome {
+            RowOutcome::Failed(failure) => {
+                expected_not_driven && failure.kind == FailureKind::NotDriven
+            }
+            _ => !expected_not_driven,
+        };
+        if !ok {
+            wrong.push(format!("{row}: {outcome:?}"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "the Win32 window's rows:\n{}",
+        wrong.join("\n")
+    );
 }
 
 fn win32_decoders_conform() {
@@ -2011,16 +2069,11 @@ fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Every backend's recordings of each kind replay on the headless host: the recording rows
-/// hold for each, never pass as not applicable, the headless backend's own included.
+/// Every decoder's session of each kind goes through the journaled delivery code with a capture
+/// of its backend, and what it journaled replays on the headless host: the recording rows hold
+/// for each, the headless backend's own included, and none passes as not applicable.
 #[test]
 fn each_backend_s_recordings_replay_on_the_headless_host() {
-    const ROWS: [&str; 4] = [
-        "a_recorded_composition_replays_as_it_was_delivered",
-        "a_recorded_lifecycle_replays_as_it_was_reported",
-        "recorded_preference_reads_replay_as_they_were_answered",
-        "recorded_display_reads_replay_as_they_were_answered",
-    ];
     let reports = [
         ("headless", run_backend_conformance(&mut Headless::new())),
         (
@@ -2047,7 +2100,7 @@ fn each_backend_s_recordings_replay_on_the_headless_host() {
     );
     let mut wrong = Vec::new();
     for (name, report) in reports {
-        for row in ROWS {
+        for row in RECORDING_ROWS {
             let outcome = report.outcome(row);
             if outcome != Some(&RowOutcome::Held) {
                 wrong.push(format!("{name}: {row} is {outcome:?}"));
@@ -2257,29 +2310,35 @@ const BROKEN: &[BrokenRow] = &[
     ),
     (
         "a_recorded_composition_replays_as_it_was_delivered",
-        Fault::ReplayedCommitLost,
+        Fault::RedactingJournal,
         web,
     ),
     (
         "a_recorded_lifecycle_replays_as_it_was_reported",
-        Fault::ReplayedReopenLost,
+        Fault::ReopenUntranslated,
         appkit,
     ),
-    // The window's snapshots are the same row's second session.
+    // The notices carry no text, so a redacting journal breaks the row's second session: the
+    // window's snapshots, whose title it replaces.
     (
         "a_recorded_lifecycle_replays_as_it_was_reported",
-        Fault::ReplayedSnapshotUnpublished,
+        Fault::RedactingJournal,
         win32,
     ),
     (
         "recorded_preference_reads_replay_as_they_were_answered",
-        Fault::ReplayedPreferencesStale,
+        Fault::JournalInstalledLate,
         android,
     ),
     (
         "recorded_display_reads_replay_as_they_were_answered",
-        Fault::ReplayedDisplaysReversed,
+        Fault::RedactingJournal,
         wayland,
+    ),
+    (
+        "recorded_display_reads_replay_as_they_were_answered",
+        Fault::JournalInstalledLate,
+        uikit,
     ),
 ];
 

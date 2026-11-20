@@ -734,10 +734,12 @@ cfg_aliases = { workspace = true }
 flui-testing = { path = "../flui-testing" }
 # `fonts::android`'s parse, which runs on every host over recorded files.
 roxmltree.workspace = true
-# The host's own test support, the `testing` module, and the `http` client its
-# tests run against a loopback server. Checkout-only test edge:
-# versionless, so Cargo drops it from the published manifest.
-flui-native = { path = ".", features = ["testing", "http", "single-instance"] }
+# The host's own test support, the `testing` module, the `http` client its
+# tests run against a loopback server, and the native journal's capture, which
+# the conformance table's recording rows drive through each backend's delivery
+# (a debug test build compiles it). Checkout-only test edge: versionless, so
+# Cargo drops it from the published manifest.
+flui-native = { path = ".", features = ["testing", "http", "single-instance", "native-capture"] }
 # `panicking_waker` for a request whose waker fails as it is answered.
 flui-foundation = { path = "../flui-foundation", features = ["testing"] }
 # `WindowId::try_from_raw`, by which a test of a backend's pure part names a

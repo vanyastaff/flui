@@ -5052,8 +5052,12 @@ GPU-память простаивающего или невидимого окн
   заменяет предложение ADR-0288 §11 «A page records the input layer only»): отладочная
   web-сборка ведёт журнал как нативный хост — `cfg(native_journal)` ставится и странице
   (`crates/flui-app/build.rs`), `compile_error!` в `app::agent` держит его равным
-  `debug_assertions` на `unix`, `windows` и wasm32, web-раннер ставит захват `Backend::Web` до
-  платформы и заканчивает его без агента; hello страницы перечисляет `native`, строки
+  `debug_assertions` на `unix`, `windows` и wasm32, web-раннер стартует через
+  `start_journaled(Backend::Web, …)`: захват до платформы, конец без агента и при неудачном старте
+  (`a_loop_keeps_its_journal_only_when_its_platform_starts_and_the_agent_is_served`, на каждом
+  хосте); каждый раннер держит журнал в `JournalStart`, который заканчивает его при drop до
+  чтения запуска (`a_journal_whose_start_goes_unsettled_ends_and_one_handed_to_its_loop_stays`);
+  hello страницы перечисляет `native`, строки
   `record_native` идут через экспорт страницы
   (`a_page_conversation_carries_the_native_layer_of_a_recording`), трасса Chrome-lane держит
   потоки `app`, `window`, `platform` и `window_state` страницы
@@ -5064,16 +5068,23 @@ GPU-память простаивающего или невидимого окн
   `a_recorded_composition_replays_as_it_was_delivered`,
   `a_recorded_lifecycle_replays_as_it_was_reported` (notices, фазы конца сеанса, reopen и
   снимки окна), `recorded_preference_reads_replay_as_they_were_answered`,
-  `recorded_display_reads_replay_as_they_were_answered`; `BackendUnderTest::replay_recording`
-  без тела по умолчанию пишет сеанс как журнал бэкенда, читает обратно и проигрывает на
-  headless. Строки держатся для headless, `native x11` и профилей Win32, AppKit, UIKit, Android,
-  web и Wayland (`each_backend_s_recordings_replay_on_the_headless_host`), каждая падает на
-  headless-хосте, сломанном для её вида (`each_conformance_row_fails_against_a_broken_backend`:
-  `ReplayedCommitLost`, `ReplayedReopenLost`, `ReplayedSnapshotUnpublished`,
-  `ReplayedPreferencesStale`, `ReplayedDisplaysReversed`); поломка вручную —
-  `HeadlessPreferences::set`, не записывающий значения, — роняет
-  `recorded_preference_reads_replay_as_they_were_answered` на каждом бэкенде таблицы (Windows 11,
-  2026-11-20). **Долг устройств:** запись драйвером на Windows, macOS, Linux, Android и в Chrome с
+  `recorded_display_reads_replay_as_they_were_answered` (два дисплея одного имени различает их
+  id); `BackendUnderTest::replay_recording` без тела по умолчанию проводит сеанс через доставку
+  бэкенда с установленным захватом его журнала, читает записанное и проигрывает на headless,
+  строка сверяет и доставленное, и проигранное с сеансом. Для декодеров доставка — общий код,
+  через который журналирует каждый нативный хост (`owner/app_delivery.rs`,
+  `owner/window_delivery.rs`, чтения платформы, состояние окна), на headless с захватом этого
+  бэкенда; строки держатся для headless, `native x11` и профилей Win32, AppKit, UIKit, Android,
+  web и Wayland (`each_backend_s_recordings_replay_on_the_headless_host`) и падают на бэкенде,
+  который ставит захват после платформы, журналирует с редакцией или не доставляет reopen
+  (`each_conformance_row_fails_against_a_broken_backend`: `JournalInstalledLate`,
+  `RedactingJournal`, `ReopenUntranslated`). Настоящие окна Win32 и X11 не проводят сеанс —
+  они доставляют то, что сообщает ОС, — и отвечают `NotDriven`, который роняет строку
+  (`FailureKind::NotDriven`); их наборы называют эти строки (`win32_window_conforms`,
+  `UNEXERCISED` в `x11_backend_conformance`). Поломка вручную: `AppDelivery::reopen` без записи
+  в журнал роняет `a_recorded_lifecycle_replays_as_it_was_reported` на каждом бэкенде таблицы,
+  `RecordedDisplay::of` с меткой по имени — `recorded_display_reads_replay_as_they_were_answered`
+  (Windows 11, 2026-11-20). **Долг устройств:** запись драйвером на Windows, macOS, Linux, Android и в Chrome с
   отладочной сборкой приложения и захват настоящего метода ввода — строка parity «Recorded native
   input replays deterministically on the headless host».
 

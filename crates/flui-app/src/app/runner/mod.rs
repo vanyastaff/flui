@@ -44,6 +44,7 @@ mod host;
 mod installed_host;
 #[cfg(target_os = "ios")]
 pub(super) mod ios;
+mod journal_start;
 mod native_bindings;
 #[cfg(native_journal)]
 pub(super) mod native_journal;

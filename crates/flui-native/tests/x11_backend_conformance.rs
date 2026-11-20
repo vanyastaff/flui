@@ -52,10 +52,12 @@ const NO_INPUT_METHOD: &str = "no input method runs on the harness's X server (n
      daemon, no XIM server); the X11 host's contexts run against stand-ins in \
      `text::linux::x11`, and the text-input events they become run through the table as `native x11`";
 
-/// Why the recording rows replay nothing for the window: a recording replays on the headless
-/// host whichever window journaled it.
-const REPLAYED_ON_HEADLESS: &str = "a recording replays on the headless host whichever window \
-     journaled it; the X11 host's recordings run through the table there as `native x11`";
+/// Why the window does not drive the recording rows: the input method events, notices,
+/// preferences and displays it would deliver are what the server and the session report, which
+/// a test cannot script; `native x11` drives the same journaled delivery code with the X11
+/// backend's journal.
+const RECORDINGS_NOT_DRIVEN: &str = "a real window delivers what its OS reports, which a test \
+     cannot script; `native x11` drives the same journaled delivery code with the X11 journal";
 
 /// What a row the real window does not exercise reports.
 #[derive(Debug, Clone, Copy)]
@@ -230,23 +232,23 @@ const UNEXERCISED: &[(&str, Unexercised, &str)] = &[
     ),
     (
         "a_recorded_composition_replays_as_it_was_delivered",
-        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
-        REPLAYED_ON_HEADLESS,
+        Unexercised::Fails(FailureKind::NotDriven),
+        RECORDINGS_NOT_DRIVEN,
     ),
     (
         "a_recorded_lifecycle_replays_as_it_was_reported",
-        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
-        REPLAYED_ON_HEADLESS,
+        Unexercised::Fails(FailureKind::NotDriven),
+        RECORDINGS_NOT_DRIVEN,
     ),
     (
         "recorded_preference_reads_replay_as_they_were_answered",
-        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
-        REPLAYED_ON_HEADLESS,
+        Unexercised::Fails(FailureKind::NotDriven),
+        RECORDINGS_NOT_DRIVEN,
     ),
     (
         "recorded_display_reads_replay_as_they_were_answered",
-        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
-        REPLAYED_ON_HEADLESS,
+        Unexercised::Fails(FailureKind::NotDriven),
+        RECORDINGS_NOT_DRIVEN,
     ),
 ];
 
@@ -676,7 +678,7 @@ impl BackendUnderTest for X11Window {
     }
 
     fn replay_recording(&mut self, _session: &[Recorded]) -> RecordingReplay {
-        RecordingReplay::None(REPLAYED_ON_HEADLESS)
+        RecordingReplay::NotDriven(RECORDINGS_NOT_DRIVEN)
     }
 }
 

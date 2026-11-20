@@ -23,7 +23,7 @@ so the page's hello listed `input` alone.
 
 | Fact | Where it shows |
 |---|---|
-| The journal is not bound to a target: every host's platform, window delivery, application delivery and pointer registry opens its stream through the same `Journal`, the web's included | `flui-native`'s `platform.rs` (`HostPlatform::try_from_parts`, built for wasm32), `owner/web.rs`, `window/web.rs`, `input/web.rs` |
+| The journal is not bound to a target: every host's streams open in shared code through the same `Journal`, the web's included | `flui-native`'s `owner/app_delivery.rs` (notices, session ends, reopens), `owner/window_delivery.rs` (input method events, store locks, close requests), `platform.rs` (`HostPlatform::try_from_parts`, built for wasm32: preference and display reads), `window/state.rs` (window snapshots), `input/assembly/registry.rs` (pointer registries) |
 | A trace of a page through the Chrome lane held the input method events and the preference revisions of the input layer, and no lifecycle notice, display read, window snapshot or composition stream | `flui-app`'s `runner/web.rs`, which passed `false` for the native layer |
 | A page's input method runs paths no other host has (`EditContext`, a hidden `<textarea>`), and their recordings could not be taken by a driver | `flui-native`'s `text::conformance::{WebEditContext, WebTextarea}` |
 
@@ -62,13 +62,16 @@ beside the agent's own (`app::agent`) fails a build where `cfg(native_journal)` 
 `debug_assertions` disagree on a system with a transport (`unix`, `windows`, wasm32), so a
 release build cannot journal and a debug page cannot lose its native layer to a misread profile.
 
-§2. **The web runner.** Before it makes the platform, the runner installs the journal of the web
-backend on the owner thread (`native_journal::begin(Backend::Web)`), as the desktop, Android and
-iOS runners install theirs. It hands the agent `journals_native()` and ends the journal right after
-the launch is read when no agent is served (`keep_native_journal(served)`), and when the platform
-fails to start. A served page attaches the journal's `NativeLines` to the UI runtime it hands the
-agent, so the hello lists `native` and a recording of `[input, native]` holds every stream the
-page opens: its pointer registries (`web`), its application delivery (notices), its window
+§2. **The runners.** Every runner begins its journal through one guard, `flui-app`'s
+`JournalStart`: begun on the owner thread before the platform is made, ended when the guard is
+dropped unsettled (the platform failed to start, another instance took the launch, the runner
+unwound), kept or ended by the read of the launch (`settle(served)`), or handed to a loop that
+reads the launch later (`release_to_loop`, the desktop and iOS). The web runner starts its loop
+through `start_journaled(Backend::Web, start, install)`: the journal of the web backend, then the
+platform, then the agent installed from the page's launch and told the loop journals, the journal
+kept only when the agent is served. A served page attaches the journal's `NativeLines` to the UI
+runtime it hands the agent, so the hello lists `native` and a recording of `[input, native]`
+holds every stream the page opens: its pointer registries (`web`), its application delivery (notices), its window
 delivery (input method events, the text store's focus and locks under `EditContext` or the
 textarea), its platform's reads (preferences, displays) and its windows' snapshots.
 
@@ -94,6 +97,11 @@ redaction and the share of a recording's queue are ADR-0288 §11's.
 - The `compile_error!` in `flui-app`'s `app::agent` (§1). Main's `wasm-check` job compiles
   `flui-app` for `wasm32-unknown-unknown` in a debug build: there the web runner's journal is
   built under `cfg(native_journal)`, and a build script that left the page out fails there.
+- `flui-app`'s `a_loop_keeps_its_journal_only_when_its_platform_starts_and_the_agent_is_served`
+  drives `start_journaled`, the web runner's start, on every host: a failed start leaves no
+  journal, the agent hears that the loop journals, and the journal stays exactly when the agent
+  is served. `a_journal_whose_start_goes_unsettled_ends_and_one_handed_to_its_loop_stays` holds
+  the guard every runner uses (§2).
 - `flui-app`'s `a_page_conversation_carries_the_native_layer_of_a_recording` runs a page
   conversation on the Linux host over a service that records the native layer, with the journal
   installed as the web runner installs it: the hello lists `native`, and the stream's header
@@ -103,10 +111,14 @@ redaction and the share of a recording's queue are ADR-0288 §11's.
 - `flui-driver`'s `a_trace_of_a_page_session_holds_the_pages_native_layer` asks a page through the
   Chrome lane for both layers and reads its application, window, platform and window state
   streams back through the protocol's schema.
-- The conformance table's recording rows replay the web profile's recordings, with every other
-  backend's, on the headless host (`each_backend_s_recordings_replay_on_the_headless_host`), and
-  each row fails against a headless host broken for its kind
-  (`each_conformance_row_fails_against_a_broken_backend`).
+- The conformance table's recording rows (ADR-0215 §7) drive a session of each kind through the
+  journaled delivery code with a capture of the web backend, as of every other decoder's
+  backend, and replay what the capture recorded on the headless host
+  (`each_backend_s_recordings_replay_on_the_headless_host`); each row fails against a backend
+  that installs its capture after its platform, journals redacted, or leaves a reopen
+  undelivered (`each_conformance_row_fails_against_a_broken_backend`). What those rows check is
+  the shared delivery code under each backend's journal: the browser's own translation in front
+  of it, like each native host's OS translation, runs only in a browser.
 - A FLUI web build driven in headless Chrome with a trace is a run owed on that environment: the
   row "Recorded native input replays deterministically on the headless host" of
   `docs/platform-parity.md`.

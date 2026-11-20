@@ -147,8 +147,8 @@ pub(crate) enum Read {
 
 /// The headless platform's system sources, taken before `run` consumes it.
 pub(crate) struct Sources {
-    preferences: HeadlessPreferences,
-    displays: HeadlessDisplayControls,
+    pub(crate) preferences: HeadlessPreferences,
+    pub(crate) displays: HeadlessDisplayControls,
 }
 
 impl Sources {
@@ -309,13 +309,13 @@ impl ReplayTarget for WindowStateTarget<'_> {
 }
 
 /// What the application reads of the system preferences through `owner`.
-pub(super) fn read_preferences(owner: &OwnerPlatform) -> Result<SystemPreferences, ReadFailure> {
+pub(crate) fn read_preferences(owner: &OwnerPlatform) -> Result<SystemPreferences, ReadFailure> {
     owner.preferences().map_err(|error| ReadFailure::of(&error))
 }
 
 /// What the application reads of the displays through `owner`, each display
 /// under the label `label` gives its id.
-pub(super) fn read_displays(
+pub(crate) fn read_displays(
     owner: &OwnerPlatform,
     label: impl Fn(DisplayId) -> u64,
 ) -> Result<Vec<(u64, DisplayParts)>, ReadFailure> {

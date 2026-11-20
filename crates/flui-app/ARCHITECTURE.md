@@ -180,8 +180,13 @@ the dispatch layer moves there too.
   the loop's thread before it starts the platform (`current_host()` names a
   native backend first, a page's is `web`), since a registry reports only to
   the capture present when it was made, and ends it right after the launch is
-  read when no agent is served, or when the platform fails to start
-  (`a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`). A
+  read when no agent is served
+  (`a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`). Every
+  runner holds it in a `JournalStart` until then, which ends it when dropped
+  unsettled: the platform failed to start, another instance took the launch,
+  the runner unwound; a page starts through `start_journaled`
+  (`a_loop_keeps_its_journal_only_when_its_platform_starts_and_the_agent_is_served`,
+  `a_journal_whose_start_goes_unsettled_ends_and_one_handed_to_its_loop_stays`). A
   served loop keeps it, attaches its `NativeLines` to each UI runtime it hands
   the agent, and the hello lists `native`
   (`the_hello_lists_the_native_layer_only_when_the_loop_journals`); a page's
