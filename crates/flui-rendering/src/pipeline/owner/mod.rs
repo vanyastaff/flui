@@ -25,6 +25,8 @@ mod poison;
 #[cfg(any(test, feature = "testing"))]
 mod presented;
 mod query;
+#[cfg(any(test, feature = "testing"))]
+mod queues_for_testing;
 mod reassemble;
 mod relocation;
 mod semantics;
@@ -158,7 +160,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
 
-    /// The visual-update and semantics-owner-lifecycle callbacks
+    /// The visual-update callback
     /// ([`crate::pipeline::VisualUpdateNotifier`]), shared through
     /// [`SharedNotifier`]: callers take owned snapshots and deliver them with
     /// no guard held.
@@ -200,9 +202,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     semantics_enabled: bool,
 
     /// The semantics tree owner (flui-semantics ARCHITECTURE.md, semantics assembly). `None` until semantics is enabled via
-    /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
-    /// then delivers the semantics-owner-created callback; disposed on the
-    /// next `false` transition, which then delivers the disposed callback.
+    /// [`Self::set_semantics_enabled`]`(true)`, which
+    /// lazily creates it; disposed on the next `false` transition.
     /// `Semantics::run_semantics` (`pipeline/owner/semantics.rs`) is the
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,

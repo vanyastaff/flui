@@ -23,9 +23,9 @@ pub(crate) fn pure_reorder_marks_layout_only() {
 
     owner.note_render_children_reordered(parent);
 
-    assert_eq!(owner.nodes_needing_layout().len(), 1);
-    assert_eq!(owner.nodes_needing_layout()[0].id, parent);
-    assert_eq!(owner.nodes_needing_compositing_bits_update(), []);
-    assert_eq!(owner.nodes_needing_semantics(), []);
-    assert_eq!(owner.nodes_needing_paint(), []);
+    assert_eq!(owner.queued_for_layout().len(), 1);
+    assert_eq!(owner.queued_for_layout()[0], parent);
+    assert_eq!(owner.queued_for_compositing_bits(), []);
+    assert_eq!(owner.queued_for_semantics(), []);
+    assert_eq!(owner.queued_for_paint(), []);
 }

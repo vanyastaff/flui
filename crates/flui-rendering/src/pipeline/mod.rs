@@ -16,10 +16,10 @@ pub mod phase;
 pub(super) mod scheduler;
 mod text_context;
 
-pub use dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind, PaintQueue};
+pub(crate) use dirty::PaintKind;
 pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
 pub use local_invalidation::LocalRenderInvalidationHandle;
-pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};
+pub use notifier::DeferredVisualUpdate;
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, LayoutPremise, LeaderGeometry, LeaderWatch, ParentDataSlot,

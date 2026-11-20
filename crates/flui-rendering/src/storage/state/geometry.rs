@@ -213,7 +213,7 @@ impl RenderState<BoxProtocol> {
     /// ```rust,ignore
     /// if !state.has_size(new_size) {
     ///     state.clear_geometry();
-    ///     pipeline_owner.add_node_needing_layout(element_id);
+    ///     pipeline_owner.mark_needs_layout(element_id);
     /// }
     /// ```
     #[inline]
