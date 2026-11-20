@@ -63,18 +63,17 @@ impl CustomPainter for PainterWithState {
     fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
         false
     }
-
 }
 
 #[derive(Debug)]
 struct FlowWithState(Shared);
 
 impl FlowDelegate for FlowWithState {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.smallest()
     }
 
-    fn get_constraints_for_child(
+    fn constraints_for_child(
         &self,
         _index: usize,
         constraints: BoxConstraints,
@@ -93,14 +92,13 @@ impl FlowDelegate for FlowWithState {
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         false
     }
-
 }
 
 #[derive(Debug)]
 struct SingleWithState(Shared);
 
 impl SingleChildLayoutDelegate for SingleWithState {
-    fn get_position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
+    fn position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
         self.0.set(self.0.get() + 1);
         Offset::ZERO
     }
@@ -108,7 +106,6 @@ impl SingleChildLayoutDelegate for SingleWithState {
     fn should_relayout(&self, _old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
         false
     }
-
 }
 
 #[derive(Debug)]
@@ -127,7 +124,6 @@ impl MultiChildLayoutDelegate for MultiWithState {
     fn should_relayout(&self, _old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
         false
     }
-
 }
 
 #[test]
