@@ -13,8 +13,10 @@
   - LY96 — сценариев TalkBack и VoiceOver на iOS нет в коде: Android-lane не читает дерево
     доступности, пока `accesskit_android` не ставит `viewIdResourceName` (правка AccessKit
     написана, upstream не отправлена: владелец отправляет её, затем lane читает дерево), а
-    iOS-lane нет (FD15 спеки flui-driver, и агент пока не достигает приложения в Simulator);
-    сеансы Narrator, VoiceOver, Orca и TalkBack — долг строки parity;
+    iOS-Simulator-lane (FD15 спеки flui-driver) запускает приложение и снимает экран, но ввода
+    не шлёт и дерева доступности не читает: спайк HID ответил no-go, и канал ввода — решение
+    владельца, а дерево `accesskit_ios` хосту недоступно; сеансы Narrator, VoiceOver, Orca и
+    TalkBack — долг строки parity;
   - LY97 — Web: ADR-0288 §11 решил, что страница пишет только слой `input`, поэтому запись
     драйвером через Chrome-lane не держит lifecycle, дисплеи и снимки окна web-сборки, а строка
     задачи требует их и на Web. Нужно решение владельца: ADR, который заменяет это предложение
@@ -5090,9 +5092,15 @@ GPU-память простаивающего или невидимого окн
   `viewIdResourceName`, и идентификатор узла до UI Automator не доходит; правка AccessKit
   написана и upstream не отправлена (`docs/gaps.md`, «No accessibility on mobile and the Web» и
   «The driver's Android lane reads no accessibility tree…»), снимает это владелец отправкой
-  правки и выпуском AccessKit, затем lane читает дерево. iOS-lane нет (FD15 спеки flui-driver), и
-  агент не достигает приложения в Simulator (`docs/gaps.md`, «The driver agent cannot reach an
-  app in the iOS Simulator»): сценария VoiceOver на iOS нет. Chrome-lane (FD12, #2953) дерева
+  правки и выпуском AccessKit, затем lane читает дерево. iOS-Simulator-lane (FD15,
+  `flui-driver::lane::ios_simulator`) запускает приложение через `simctl` с сокетом агента и
+  токеном в переменных `SIMCTL_CHILD_` и снимает экран через `simctl io screenshot`, но ввода не
+  шлёт (каждое событие — `not_supported` с именем `ios_simulator_hid`: спайк HID ответил no-go,
+  канал Indigo из Xcode 27 теряет кнопки и клавиши, а DTUHID — приватный XPC без подтверждения
+  доставки) и дерева доступности не читает: дерево `accesskit_ios` живёт внутри Simulator, и
+  публичного API хоста к нему нет (`docs/gaps.md`, «The driver's iOS Simulator lane sends no
+  input and reads no accessibility tree»). Прогон на Simulator в долгу, сценария VoiceOver на iOS
+  нет; канал ввода — решение владельца. Chrome-lane (FD12, #2953) дерева
   доступности страницы не читает (в строке задачи Web нет). `uiautomator dump`, которым
   Android-lane находит окно, на время дампа приостанавливает службы accessibility, и TalkBack
   тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает `uiautomator`.
