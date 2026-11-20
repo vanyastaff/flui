@@ -58,7 +58,9 @@ use self::page::PageServer;
 use crate::coordinates::WindowGeometry;
 
 use crate::error::{Error, Result};
-use crate::lane::{ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity};
+use crate::lane::{
+    ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity, release_outcome,
+};
 use crate::steps::OsEvent;
 
 /// The lane's name.
@@ -108,31 +110,31 @@ struct Held {
     unconfirmed: Vec<String>,
 }
 
-impl Held {
-    fn is_empty(&self) -> bool {
-        self.keys.is_empty()
-            && self.buttons.is_empty()
-            && !self.composing
-            && self.unconfirmed.is_empty()
-    }
+/// How a release that failed names an open composition.
+const COMPOSITION: &str = "an input-method composition";
 
-    /// Everything held, by name, for a release that failed.
-    fn names(&self) -> Vec<String> {
+impl Held {
+    /// The keys, buttons and contacts held, by name, those an unanswered command may have pressed
+    /// included: what `input.releaseActions` lets go of.
+    fn pressed(&self) -> Vec<String> {
         let mut names: Vec<String> = self.keys.clone();
         names.extend(
             self.buttons
                 .iter()
                 .map(|(pointer, button)| format!("{pointer} {}", button.name())),
         );
-        if self.composing {
-            names.push("an input-method composition".to_owned());
-        }
         names.extend(
             self.unconfirmed
                 .iter()
                 .map(|what| format!("possibly {what}")),
         );
         names
+    }
+
+    fn clear_pressed(&mut self) {
+        self.keys.clear();
+        self.buttons.clear();
+        self.unconfirmed.clear();
     }
 
     /// Record what `event`, answered by the browser, pressed or released.
@@ -165,17 +167,19 @@ impl Held {
         }
     }
 
-    /// What `event` may have pressed when the browser did not answer it.
-    fn unconfirmed(event: &OsEvent) -> Option<String> {
+    /// Record what `event`, which the browser did not answer in time, may have pressed or opened:
+    /// a key or button as possibly held, a composition as open, which a release cancels either
+    /// way.
+    fn record_unanswered(&mut self, event: &OsEvent) {
         match event {
-            OsEvent::KeyDown(key) => Some(key.clone()),
+            OsEvent::KeyDown(key) => self.unconfirmed.push(key.clone()),
             OsEvent::PointerDown {
                 pointer, button, ..
-            } => Some(format!("{pointer} {}", button.name())),
-            OsEvent::Composition(ImeAction::SetComposition { .. }) => {
-                Some("an input-method composition".to_owned())
-            }
-            _ => None,
+            } => self
+                .unconfirmed
+                .push(format!("{pointer} {}", button.name())),
+            OsEvent::Composition(ImeAction::SetComposition { .. }) => self.composing = true,
+            _ => {}
         }
     }
 }
@@ -406,11 +410,7 @@ impl Lane for ChromeLane {
         };
         match &sent {
             Ok(()) => self.held.record(event),
-            Err(Error::Timeout { .. }) => {
-                if let Some(what) = Held::unconfirmed(event) {
-                    self.held.unconfirmed.push(what);
-                }
-            }
+            Err(Error::Timeout { .. }) => self.held.record_unanswered(event),
             Err(_) => {}
         }
         sent
@@ -450,38 +450,44 @@ impl Lane for ChromeLane {
     }
 
     fn release_all(&mut self) -> Result<()> {
-        if self.held.is_empty() {
-            return Ok(());
-        }
-        let mut first: Option<String> = None;
-        if self.held.composing {
+        // Two parts, each run whatever the other came to: the composition, then the keys,
+        // buttons and contacts.
+        let composition = if self.held.composing {
             match self.compose(&ImeAction::Cancel) {
-                Ok(()) => self.held.composing = false,
-                Err(error) => first = Some(error.to_string()),
+                Ok(()) => {
+                    self.held.composing = false;
+                    Ok(())
+                }
+                Err(error) => Err(Error::ReleaseFailed {
+                    lane: NAME.to_owned(),
+                    held: vec![COMPOSITION.to_owned()],
+                    message: error.to_string(),
+                }),
             }
-        }
-        match self.session.command(
-            "input.releaseActions",
-            json!({ "context": self.session.context() }),
-            COMMAND_TIMEOUT,
-        ) {
-            Ok(_) => {
-                self.held.keys.clear();
-                self.held.buttons.clear();
-                self.held.unconfirmed.clear();
+        } else {
+            Ok(())
+        };
+        let pressed = self.held.pressed();
+        let actions = if pressed.is_empty() {
+            Ok(())
+        } else {
+            match self.session.command(
+                "input.releaseActions",
+                json!({ "context": self.session.context() }),
+                COMMAND_TIMEOUT,
+            ) {
+                Ok(_) => {
+                    self.held.clear_pressed();
+                    Ok(())
+                }
+                Err(failure) => Err(Error::ReleaseFailed {
+                    lane: NAME.to_owned(),
+                    held: pressed,
+                    message: failure.into_error("input.releaseActions").to_string(),
+                }),
             }
-            Err(failure) => {
-                first.get_or_insert_with(|| failure.into_error("input.releaseActions").to_string());
-            }
-        }
-        match first {
-            None => Ok(()),
-            Some(message) => Err(Error::ReleaseFailed {
-                lane: NAME.to_owned(),
-                held: self.held.names(),
-                message,
-            }),
-        }
+        };
+        release_outcome([composition, actions])
     }
 }
 

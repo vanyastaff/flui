@@ -789,6 +789,64 @@ fn held_input_is_released_and_a_refused_release_names_what_stays_held() {
     );
 }
 
+/// A composition left open is cancelled by the release, and a cancel the browser refuses names it
+/// as held beside whatever else stays down, the keys still let go of.
+#[test]
+fn an_open_composition_is_cancelled_by_the_release() {
+    let open = || {
+        ActionSequence::new(vec![InputSource::Ime {
+            actions: vec![ImeAction::SetComposition {
+                text: "に".into(),
+                cursor: None,
+                caret_hidden: false,
+            }],
+        }])
+    };
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|_, _| BrowserReply::Played),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    driver
+        .window(window())
+        .perform(open())
+        .expect("the composition opens and is cancelled");
+    let sent: Vec<Value> = browser
+        .log()
+        .of("goog:cdp.sendCommand")
+        .into_iter()
+        .map(|params| params["params"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            json!({ "text": "に", "selectionStart": 1, "selectionEnd": 1 }),
+            json!({ "text": "", "selectionStart": 0, "selectionEnd": 0 }),
+        ]
+    );
+
+    let refusing = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, params| match method {
+            "goog:cdp.sendCommand" if params["params"]["text"] == "" => BrowserReply::Error {
+                error: "unknown error".into(),
+                message: "no composition to cancel".into(),
+            },
+            _ => BrowserReply::Played,
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&refusing);
+    let refused = driver.window(window()).perform(open());
+    assert!(
+        matches!(&refused, Err(Error::ReleaseFailed { held, .. }) if held == &["an input-method composition".to_owned()]),
+        "{refused:?}"
+    );
+}
+
 /// A press the browser never answers may have gone down: it is named as possibly held, and the
 /// release still runs.
 #[test]
