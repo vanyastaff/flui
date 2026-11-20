@@ -27,7 +27,7 @@ use flui_foundation::panic::payload_text;
 
 use super::{links::NodeLinks, state::RenderState};
 use crate::pipeline::handle::AttachmentEpoch;
-use crate::protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, RenderObject};
+use crate::protocol::{Protocol, RenderObject};
 
 /// Where a node stands in its attachment to a pipeline owner. The handle
 /// that lets the node's own object mark it dirty lives in the attached
@@ -176,8 +176,8 @@ impl<P: Protocol> Drop for RenderEntry<P> {
 
 impl<P: Protocol> Debug for RenderEntry<P>
 where
-    ProtocolGeometry<P>: Debug,
-    ProtocolConstraints<P>: Debug,
+    P::Geometry: Debug,
+    P::Constraints: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderEntry")
@@ -454,13 +454,13 @@ impl<P: Protocol> RenderEntry<P> {
     /// Returns the computed geometry on success.
     pub fn layout_leaf_only(
         &mut self,
-        constraints: ProtocolConstraints<P>,
+        constraints: P::Constraints,
         text: crate::pipeline::TextSource<'_>,
         has_parent: bool,
-    ) -> crate::error::RenderResult<ProtocolGeometry<P>>
+    ) -> crate::error::RenderResult<P::Geometry>
     where
-        ProtocolGeometry<P>: Clone,
-        ProtocolConstraints<P>: Clone,
+        P::Geometry: Clone,
+        P::Constraints: Clone,
     {
         // Capture the kind BEFORE the &mut reborrow -- a shared
         // borrow against `&*self.render_object` cannot coexist with the
@@ -489,7 +489,7 @@ impl<P: Protocol> RenderEntry<P> {
         //
         // # Error-handling shape
         //
-        // `perform_layout_raw` returns `RenderResult<ProtocolGeometry<P>>`
+        // `perform_layout_raw` returns `RenderResult<P::Geometry>`
         // — contract violations flow through the `Err(...)` channel of
         // the inner Result; the `catch_unwind` boundary remains, but
         // ONLY for genuine third-party panics (user widget calling

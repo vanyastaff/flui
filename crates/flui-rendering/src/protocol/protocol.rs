@@ -1,12 +1,10 @@
-//! Core Protocol trait.
-//!
-//! This module defines the main [`Protocol`] trait that composes capabilities.
-//! The protocol is the top-level abstraction that defines how a render object
-//! performs layout and hit testing.
+//! The [`Protocol`] trait: the types and rules of one layout protocol.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, hash::Hash};
 
-use super::capabilities::{HitTestCapability, LayoutCapability};
+use flui_foundation::Arity;
+
+use super::context_api::{HitTestContextApi, LayoutContextApi};
 use crate::parent_data::ParentData;
 
 // ============================================================================
@@ -23,47 +21,82 @@ pub(crate) mod sealed {
 // PROTOCOL TRAIT
 // ============================================================================
 
-/// Protocol trait that composes capabilities.
+/// A layout protocol: what a parent passes down, what a child answers, and
+/// how a position is tested against it.
 ///
-/// This trait composes two capability traits, each grouping related types:
+/// Sealed: [`BoxProtocol`](super::BoxProtocol) (2D constraints and sizes) and
+/// [`SliverProtocol`](super::SliverProtocol) (scroll-axis constraints and
+/// sliver geometry) are the only implementors. Generic code names a
+/// protocol's types as `P::Constraints`, `P::Geometry`, `P::Position`, ….
 ///
-/// - **Layout**: Constraints, Geometry, LayoutContext
-/// - **HitTest**: Position, Result, Entry, HitTestContext
+/// Paint is not part of the protocol: every render object paints through the
+/// same canvas API whatever its protocol.
 ///
-/// Paint is not part of the protocol - all render objects use the same
-/// Canvas API for painting regardless of their protocol.
+/// # Cache key
 ///
-/// # Type Parameters
+/// Constraints hold floats, which have no reliable `Hash + Eq`. Rather than
+/// hash floats, the protocol separates the two roles:
+/// - [`Constraints`](Self::Constraints): the semantic layout input (no
+///   `Hash`/`Eq` required);
+/// - [`CacheKey`](Self::CacheKey): the hashable fingerprint
+///   [`cache_key`](Self::cache_key) derives from it.
 ///
-/// Each capability is a separate associated type, allowing different protocols
-/// to have different layout and hit test behaviors.
+/// # Thread confinement
 ///
-/// # Example
-///
-/// ```ignore
-/// pub struct BoxProtocol;
-///
-/// impl Protocol for BoxProtocol {
-///     type Layout = BoxLayout;
-///     type HitTest = BoxHitTest;
-///     type DefaultParentData = BoxParentData;
-///
-///     fn name() -> &'static str { "Box" }
-/// }
-/// ```
-pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'static {
-    /// Layout capability defining constraints, geometry, and layout context.
-    type Layout: LayoutCapability;
+/// No bound asks for `Send` or `Sync`: every value of a protocol lives in a
+/// render tree that one pipeline owner drives on its own thread (ADR-0323 §1).
+pub trait Protocol: Debug + Clone + Copy + sealed::Sealed + 'static {
+    /// Layout constraints from the parent.
+    ///
+    /// No `Hash + Eq` required: caching goes through [`Self::CacheKey`].
+    type Constraints: Clone + Debug + 'static;
 
-    /// Hit test capability defining position, result, and hit test context.
-    type HitTest: HitTestCapability;
+    /// Layout geometry output, returned to the parent after layout.
+    type Geometry: Clone + Debug + Default + 'static;
+
+    /// Hashable cache key derived from constraints.
+    ///
+    /// Implementations compare floats by their bits, never by value.
+    type CacheKey: Clone + Debug + Hash + Eq + 'static;
+
+    /// The typed layout context a render object of this protocol lays out
+    /// through, for its arity `A` and its children's parent data `PD`.
+    type LayoutContext<'ctx, A: Arity, PD: ParentData + Default>: LayoutContextApi<'ctx, Self, A, PD>
+    where
+        Self: 'ctx;
+
+    /// Hit test position (an [`Offset`](flui_foundation::geometry::Offset)
+    /// for the box protocol, a main-axis position for slivers).
+    type Position: Clone + Debug + Default + 'static;
+
+    /// Hit test result accumulator.
+    ///
+    /// **Vocabulary only, with no accumulator behind it today.** Nothing
+    /// outside the protocol modules reads a protocol-level result: the driver
+    /// builds the real path from `register_self_hit_entry`, which needs no id
+    /// because the driver already has one.
+    ///
+    /// A sliver assembling its own hit path is the consumer this shape is
+    /// kept for. Wiring it means the driver bridge reads the result and a test
+    /// fails when it stops; anything less is an `add_self` that compiles,
+    /// runs and does nothing.
+    type HitResult: Default + 'static;
+
+    /// Individual hit test entry. See [`Self::HitResult`] for its status.
+    type HitEntry: Clone + Debug + 'static;
+
+    /// The typed hit-test context a render object of this protocol tests a
+    /// position through, for its arity `A` and its children's parent data `PD`.
+    type HitTestContext<'ctx, A: Arity, PD: ParentData>: HitTestContextApi<'ctx, Self, A, PD>
+    where
+        Self: 'ctx;
 
     /// Default parent data for child render objects.
     type DefaultParentData: ParentData + Default;
 
-    /// Protocol-specific erased layout context — the trait-object form
-    /// of the typed `<Self::Layout as LayoutCapability>::Context<'_, A, P>`
-    /// without exposing the arity / parent-data type parameters.
+    /// Protocol-specific erased layout context — the trait-object form of
+    /// [`Self::LayoutContext`] without the arity / parent-data type
+    /// parameters.
     ///
     /// Used at the
     /// [`RenderObject<P>::perform_layout_raw`](crate::traits::RenderObject::perform_layout_raw)
@@ -95,22 +128,29 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// layout and the geometry it produced: inline for the box protocol,
     /// behind one allocation made on first write for the sliver protocol,
     /// whose record would otherwise size every slot of the render slab.
-    type LayoutRecord: crate::storage::LayoutRecord<
-            <Self::Layout as LayoutCapability>::Geometry,
-            <Self::Layout as LayoutCapability>::Constraints,
-        >;
+    type LayoutRecord: crate::storage::LayoutRecord<Self::Geometry, Self::Constraints>;
 
     /// Protocol name for debugging and diagnostics.
     fn name() -> &'static str;
 
     /// Default geometry for uninitialized state.
-    fn default_geometry() -> <Self::Layout as LayoutCapability>::Geometry {
-        <Self::Layout as LayoutCapability>::default_geometry()
+    fn default_geometry() -> Self::Geometry {
+        Self::Geometry::default()
     }
 
     /// Validate constraints before layout (returns true if valid).
-    fn validate_constraints(constraints: &<Self::Layout as LayoutCapability>::Constraints) -> bool {
-        <Self::Layout as LayoutCapability>::validate_constraints(constraints)
+    fn validate_constraints(_constraints: &Self::Constraints) -> bool {
+        true
+    }
+
+    /// Derives a cache key from constraints.
+    ///
+    /// Returns `None` if constraints are not cacheable (e.g., contain NaN).
+    fn cache_key(constraints: &Self::Constraints) -> Option<Self::CacheKey>;
+
+    /// Normalizes constraints for layout (e.g., clamping negative values).
+    fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
+        constraints
     }
 
     /// Bootstrap the per-instance `IS_RELAYOUT_BOUNDARY` storage flag after
@@ -149,10 +189,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// `BoxProtocol` overrides it: a node's own size must be finite and
     /// within its constraints. The `debug_assert!` bodies compile out in release builds,
     /// leaving the override an empty call the optimizer can drop.
-    fn debug_assert_layout_output(
-        constraints: &<Self::Layout as LayoutCapability>::Constraints,
-        geometry: &<Self::Layout as LayoutCapability>::Geometry,
-    ) where
+    fn debug_assert_layout_output(constraints: &Self::Constraints, geometry: &Self::Geometry)
+    where
         Self: Sized,
     {
         let _ = (constraints, geometry);
@@ -167,8 +205,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// while leaving the previous committed geometry intact.
     fn validate_layout_output(
         render_object: &'static str,
-        constraints: &<Self::Layout as LayoutCapability>::Constraints,
-        geometry: &<Self::Layout as LayoutCapability>::Geometry,
+        constraints: &Self::Constraints,
+        geometry: &Self::Geometry,
     ) -> crate::error::RenderResult<()>
     where
         Self: Sized,
@@ -195,7 +233,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// `text` is the pipeline's text context the leaf measures with (box
     /// protocol only; slivers do not measure text).
     fn with_leaf_erased_ctx<R>(
-        constraints: <Self::Layout as LayoutCapability>::Constraints,
+        constraints: Self::Constraints,
         text: crate::pipeline::TextSource<'_>,
         f: impl FnOnce(&mut Self::ErasedLayoutContext<'_>) -> R,
     ) -> R
@@ -247,11 +285,3 @@ pub enum UsageByParent {
     /// child's geometry — only the child's position within the parent.
     InPlacement,
 }
-
-// 2B / honest-foundation cleanup: the `ProtocolRenderObject<P, A, PD>` trait
-// was deleted. It had ZERO implementors and zero callers (cross-crate
-// verified) — a pre-blanket-impl design that `RenderObject<P>` (with its
-// `RenderBox`/`RenderSliver` blanket impls) superseded. Not part of the
-// `hidden-river` plan (its §5.2 `ProtocolParent` is a different
-// compile-time-safety trait). Its exclusive ctx aliases
-// `ProtocolLayoutCtx` / `ProtocolHitTestCtx` were removed with it.

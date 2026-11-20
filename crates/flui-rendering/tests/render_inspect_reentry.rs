@@ -4,12 +4,12 @@
 
 use std::cell::RefCell;
 
-use flui_foundation::geometry::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_foundation::inspect::{INSPECT_FAILED, SnapshotError, SnapshotQuery};
 use flui_rendering::{
     TextContextHandle,
     pipeline::{PipelineCell, PipelineOwner, WeakPipelineCell},
-    protocol::{BoxProtocol, ProtocolGeometry},
+    protocol::BoxProtocol,
     testing::{RenderTester, box_node},
     traits::{HitTestOutcome, RenderObject},
 };
@@ -59,7 +59,7 @@ impl RenderObject<BoxProtocol> for Reaching {
     fn perform_layout_raw(
         &mut self,
         _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+    ) -> flui_rendering::error::RenderResult<Size> {
         Ok(Size::new(10.0, 10.0))
     }
 
@@ -73,14 +73,10 @@ impl RenderObject<BoxProtocol> for Reaching {
 
     fn hit_test_raw(
         &self,
-        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut dyn FnMut(
-            usize,
-            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
-            Option<Matrix4>,
-        ) -> bool,
+        _hit_child: &mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }
