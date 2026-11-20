@@ -352,14 +352,7 @@ pub(crate) fn sibling_layout_marks_share_one_ancestor_walk() {
             (walk + SIBLINGS - 1) as u64,
             "round {round}: sibling marks walk the shared ancestors once"
         );
-        assert_eq!(
-            owner
-                .nodes_needing_layout()
-                .iter()
-                .map(|dirty| dirty.id)
-                .collect::<Vec<_>>(),
-            [root]
-        );
+        assert_eq!(owner.queued_for_layout(), [root]);
         owner.run_layout().expect("relayout");
         assert_eq!(
             leaf_layouts.load(Ordering::Relaxed),

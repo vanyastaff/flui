@@ -795,12 +795,7 @@ mod tests {
 
     /// Whether `render_id` is queued for the next layout pass.
     fn needs_layout(pipeline: &PipelineCell, render_id: RenderId) -> bool {
-        pipeline.with(|pipeline_owner| {
-            pipeline_owner
-                .nodes_needing_layout()
-                .iter()
-                .any(|node| node.id == render_id)
-        })
+        pipeline.with(|pipeline_owner| pipeline_owner.queued_for_layout().contains(&render_id))
     }
 
     /// Mount an element and insert a render node, returning ids that both pass
