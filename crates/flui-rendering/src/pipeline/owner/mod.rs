@@ -28,6 +28,7 @@ mod query;
 mod reassemble;
 mod relocation;
 mod semantics;
+mod tree_edit;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
@@ -41,6 +42,7 @@ pub use relocation::{
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
     ReleaseDetachedRenderSubtreesFailure,
 };
+pub use tree_edit::{ParentDataSlot, RenderChildrenEdit};
 
 use std::{marker::PhantomData, rc::Rc};
 

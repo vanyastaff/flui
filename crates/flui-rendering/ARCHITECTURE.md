@@ -1181,6 +1181,27 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **A stand-in is never a measured extent** ([ADR-0054](../../docs/adr/ADR-0054-the-viewport-commits-one-result.md), implementation notes). `SliverLayoutContext::measure_box_child` answers `BoxChildSize::Measured` when the child's own layout ran and `BoxChildSize::StandIn` when the walk substituted the value (a failed layout, a poisoned node's stand-in, an empty slot); the poison registry decides which (`LayoutPoison::serves_stand_in`), before the call, because a poisoned node's stand-in is served with no failure recorded. A consumer that records extents (`RenderSliverList`'s band walk) records only `Measured`, so a broken item keeps its previous extent or its estimate and the anchor correction never sees the stand-in. Classifying by the degradation count instead would also reject a healthy resident laid out over a failed descendant.
 
+### An edit of the render tree marks its own work
+
+**Rule:** an edit and the dirty marks it owes are one operation, so no caller can make the
+first and forget the second.
+
+**Choice:** `PipelineOwner` never lends `&mut RenderTree` outside the crate, and every
+`RenderTree` and `RenderNode` mutator is crate-private. Code above it edits through the owner
+([`src/pipeline/owner/tree_edit.rs`](src/pipeline/owner/tree_edit.rs)):
+`set_render_children` and the batch `edit_render_children` mark each parent whose list changed
+(membership for layout, compositing bits and semantics; a pure reorder in a batch for layout),
+`update_render_object` applies the `RenderUpdateImpact` its closure returns to the node, and
+`update_parent_data` applies it to the node's render parent, the reader of parent data;
+`render_object` reads a typed render object. A test that needs a state no owner operation
+builds (a one-sided child edge, a stale child id, flags cleared behind the queues, a bare
+`RenderTree`) uses the `testing::raw_tree` kit, whose functions say so in their names.
+
+**Alternatives:** a public `render_tree_mut` with a documented "then call
+`apply_render_update_impact`" convention, the form this replaces: each caller in `flui-view`
+re-derived which nodes to mark, and the batch child sync and the single-parent sync marked
+differently by hand.
+
 ### Render-tree storage uses a `NodeSlab` with generational `RenderId` keys
 
 **Amended by [ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md):** the tree stores nodes in its own `NodeSlab` (`storage/node_slab.rs`), a `Vec` of slots with a free list. Each slot carries its generation, an in-flight bit and the parent link, its only copy, outside the `UnsafeCell` that holds the node, and a layout walk takes one `TreeLease` and acquires nodes on demand. The slab mints every `RenderId`: emptying a slot advances its generation, and a slot that runs out of generations retires instead of issuing one again. Removal takes the nodes out before any destructor runs, so a destructor that panics finds the tree and the owner already committed. The paragraphs below describe the original `Slab<RenderNode>` choice; the reasons for an arena with generational ids still stand.
@@ -1197,7 +1218,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **Rule:** strategy clause "sync hot path, async на краях" (lock contention on the hot path is functionally async-flavoured); no lock on per-node render storage touched during `perform_layout` / `paint` (no `RwLock<Box<dyn RenderObject<P>>>`).
 
-**Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which the pipeline obtains via `PipelineOwner::render_tree_mut() -> &mut RenderTree` at phase boundaries. Re-entrant access from a parent to a child during layout goes through the `SubtreeArena` disjoint-borrow substrate (the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). Debug-build re-entrancy checks live in `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
+**Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which only the owner obtains, from the `RenderTree` it holds; code outside the crate edits a node through the owner's operations (`PipelineOwner::update_render_object`, `update_parent_data`), which apply the impact the edit reports. Re-entrant access from a parent to a child during layout goes through the `SubtreeArena` disjoint-borrow substrate (the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). Debug-build re-entrancy checks live in `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
 
 **Alternatives considered:**
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
@@ -1211,7 +1232,7 @@ they were removed rather than adapted: they could not fail for a reason a user w
 
 **Rule:** no lock on per-node render storage touched during paint (the previous shape required a write lock on the trait object during paint to flip a single bool); strategy clause "Compile-time over runtime" (state bits belong on the bookkeeping layer, not the user-implementable trait surface).
 
-**Choice:** added `RenderFlags::WAS_REPAINT_BOUNDARY` (bit 10 — see [`src/storage/flags.rs`](src/storage/flags.rs)) with `RenderState<P>::set_was_repaint_boundary` / `was_repaint_boundary` accessors. The paint phase at [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) (`paint_subtree`) writes the bit through an atomic store on `state().flags()` rather than locking the trait object. The trait method `RenderObject::set_was_repaint_boundary` is deleted (see [`src/traits/render_object.rs`](src/traits/render_object.rs)).
+**Choice:** added `RenderFlags::WAS_REPAINT_BOUNDARY` (bit 10 — see [`src/storage/flags.rs`](src/storage/flags.rs)) with the crate-private `RenderNode::set_was_repaint_boundary` writer and the `RenderState<P>::was_repaint_boundary` reader. The paint phase at [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) (`paint_subtree`) writes the bit through `state().flags()`, a `RenderFlagsCell`, rather than locking the trait object. The trait method `RenderObject::set_was_repaint_boundary` is deleted (see [`src/traits/render_object.rs`](src/traits/render_object.rs)).
 
 **Alternatives:** keep the trait method and live with the per-paint write lock — rejected, this is the canonical refusal-trigger violation. Move the bit to a per-tree side table — rejected, would add a second source-of-truth for state already structured around `RenderState<P>`.
 

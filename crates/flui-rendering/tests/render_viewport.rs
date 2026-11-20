@@ -132,15 +132,13 @@ pub(crate) fn viewport_lays_out_forward_slivers_and_applies_content_dimensions()
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(viewport));
     let first_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             root_id,
             Box::new(FixedSliver::new(70.0)) as BoxedSliverObject,
         )
         .expect("first sliver");
     let second_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             root_id,
             Box::new(FixedSliver::new(90.0)) as BoxedSliverObject,
         )
@@ -190,8 +188,7 @@ pub(crate) fn a_sliver_reports_its_painted_area_as_an_input_region() {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(viewport));
     owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             root_id,
             Box::new(FixedSliver::new(70.0)) as BoxedSliverObject,
         )
@@ -199,8 +196,7 @@ pub(crate) fn a_sliver_reports_its_painted_area_as_an_input_region() {
     let mut reporting = FixedSliver::new(90.0);
     reporting.excludes_system_gestures = true;
     owner
-        .render_tree_mut()
-        .insert_sliver_child(root_id, Box::new(reporting) as BoxedSliverObject)
+        .insert_sliver_child_render_object(root_id, Box::new(reporting) as BoxedSliverObject)
         .expect("second sliver");
 
     let owner = laid_out(owner, root_id);
@@ -294,16 +290,14 @@ pub(crate) fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let root_id = owner.insert(Box::new(viewport));
         let sliver_id = owner
-            .render_tree_mut()
-            .insert_sliver_child(
+            .insert_sliver_child_render_object(
                 root_id,
                 Box::new(FixedSliver::new(40.0)) as BoxedSliverObject,
             )
             .expect("sliver");
         if growth == GrowthDirection::Reverse {
             owner
-                .render_tree_mut()
-                .insert_sliver_child(
+                .insert_sliver_child_render_object(
                     root_id,
                     Box::new(FixedSliver::new(20.0)) as BoxedSliverObject,
                 )

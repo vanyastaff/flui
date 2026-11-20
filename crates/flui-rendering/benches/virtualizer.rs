@@ -432,8 +432,7 @@ fn build_settled_list(
     let root_id = owner
         .insert(Box::new(BenchSliverHost { constraints }) as Box<dyn RenderObject<BoxProtocol>>);
     let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             root_id,
             Box::new(list) as Box<dyn RenderObject<SliverProtocol>>,
         )
@@ -441,19 +440,19 @@ fn build_settled_list(
 
     for logical_index in 0..BENCH_RESIDENT_COUNT {
         let child_id = owner
-            .render_tree_mut()
-            .insert_box_child(
+            .insert_child_render_object(
                 sliver_id,
                 Box::new(BenchBox {
                     height: BENCH_ITEM_HEIGHT,
                 }) as Box<dyn RenderObject<BoxProtocol>>,
             )
             .expect("sliver node must accept a resident Box child");
-        if let Some(node) = owner.render_tree_mut().get_mut(child_id) {
-            node.set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
+        let _ = owner.update_parent_data(child_id, |parent_data| {
+            parent_data.set(Box::new(SliverMultiBoxAdaptorParentData::new(
                 logical_index,
             )));
-        }
+            flui_rendering::RenderUpdateImpact::NONE
+        });
     }
 
     owner.set_root_id(Some(root_id));

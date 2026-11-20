@@ -149,10 +149,8 @@ pub(crate) fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_p
     let box_child: Box<dyn RenderObject<BoxProtocol>> = Box::new(RenderColoredBox::red(40.0, 40.0));
 
     let mut pipeline = fresh_layout_pipeline();
-    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
-    pipeline
-        .render_tree_mut()
-        .insert_box_child(parent_id, box_child)
+    let parent_id = flui_rendering::testing::raw_tree::insert_box(&mut pipeline, parent_obj);
+    flui_rendering::testing::raw_tree::insert_box_child(&mut pipeline, parent_id, box_child)
         .expect("tree must accept a Box child");
 
     let box_constraints = BoxConstraints::new(0.0, 800.0, 0.0, 600.0);

@@ -25,17 +25,17 @@ use crate::protocol::{BoxProtocol, RenderObject, SliverProtocol};
 /// out through exactly one
 /// [`PipelineCell`](crate::pipeline::PipelineCell) on exactly one thread.
 ///
-/// # Example
+/// # Editing
 ///
-/// ```ignore
-/// // Concrete render objects (RenderColoredBox, RenderSizedBox, …) now live
-/// // in the `flui_objects` crate. See `flui_objects::RenderColoredBox` for a
-/// // ready-made leaf box to use in examples and tests.
-/// use flui_rendering::storage::RenderTree;
-///
-/// let mut tree = RenderTree::new();
-/// // tree.insert_box(Box::new(flui_objects::RenderColoredBox::red(40.0, 40.0)) as Box<_>);
-/// ```
+/// Outside this crate a tree is read through
+/// [`PipelineOwner::render_tree`](crate::pipeline::PipelineOwner::render_tree)
+/// and edited only through the owner's operations
+/// ([`PipelineOwner::set_render_children`](crate::pipeline::PipelineOwner::set_render_children),
+/// [`PipelineOwner::update_render_object`](crate::pipeline::PipelineOwner::update_render_object),
+/// [`PipelineOwner::update_parent_data`](crate::pipeline::PipelineOwner::update_parent_data),
+/// the `insert*` and `remove_render_object` family), each of which marks what
+/// its edit invalidates. The structural methods here are crate-private; a
+/// test that needs a state no owner operation builds uses `testing::raw_tree`.
 #[derive(Debug)]
 pub struct RenderTree {
     /// Slot storage for nodes. It mints every [`RenderId`] and empties every
@@ -122,7 +122,8 @@ impl RenderTree {
 
     /// Sets the root node ID.
     #[inline]
-    pub fn set_root(&mut self, root: Option<RenderId>) {
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn set_root(&mut self, root: Option<RenderId>) {
         self.root = root;
     }
 
@@ -159,13 +160,13 @@ impl RenderTree {
 
     /// Returns a mutable reference to a node (generation-checked).
     #[inline]
-    pub fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode> {
+    pub(crate) fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode> {
         self.nodes.get_mut(id)
     }
 
     /// Inserts `node` without a parent and returns its id; the caller links it and
     /// sets the root.
-    pub fn insert(&mut self, node: RenderNode) -> RenderId {
+    pub(crate) fn insert(&mut self, node: RenderNode) -> RenderId {
         self.insert_node(node)
     }
 
@@ -190,12 +191,17 @@ impl RenderTree {
     ///
     /// Returns the RenderId of the inserted node.
     ///
-    pub fn insert_box(&mut self, render_object: Box<dyn RenderObject<BoxProtocol>>) -> RenderId {
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn insert_box(
+        &mut self,
+        render_object: Box<dyn RenderObject<BoxProtocol>>,
+    ) -> RenderId {
         self.insert(RenderNode::new_box(render_object))
     }
 
     /// Inserts a Sliver protocol render object into the tree (no parent).
-    pub fn insert_sliver(
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn insert_sliver(
         &mut self,
         render_object: Box<dyn RenderObject<SliverProtocol>>,
     ) -> RenderId {
@@ -205,7 +211,7 @@ impl RenderTree {
     /// Inserts a Box protocol render object as a child of the given parent.
     ///
     /// Returns the RenderId of the inserted child.
-    pub fn insert_box_child(
+    pub(crate) fn insert_box_child(
         &mut self,
         parent_id: RenderId,
         render_object: Box<dyn RenderObject<BoxProtocol>>,
@@ -232,7 +238,7 @@ impl RenderTree {
     ///
     /// Sliver children under Box parents are the Viewport pattern — the
     /// box parent drives sliver layout through the cross-protocol bridge.
-    pub fn insert_sliver_child(
+    pub(crate) fn insert_sliver_child(
         &mut self,
         parent_id: RenderId,
         render_object: Box<dyn RenderObject<SliverProtocol>>,
@@ -291,7 +297,7 @@ impl RenderTree {
     ///   first.
     /// - if `parent_id` is a descendant of `child_id` — adopting would
     ///   close a cycle (`child_id` would become its own indirect ancestor).
-    pub fn adopt_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+    pub(crate) fn adopt_child(&mut self, parent_id: RenderId, child_id: RenderId) {
         // Both must resolve BEFORE either link is written — a stale id on
         // either side must leave both directions untouched.
         if self.get(parent_id).is_none() || self.get(child_id).is_none() {
@@ -332,7 +338,7 @@ impl RenderTree {
     /// closing a cycle) that the layout walk must survive and that the
     /// edge primitives refuse to build. Never use it to build a real tree.
     #[cfg(feature = "testing")]
-    pub fn append_unlinked_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+    pub(crate) fn append_unlinked_child(&mut self, parent_id: RenderId, child_id: RenderId) {
         if let Some(parent) = self.get_mut(parent_id) {
             parent.add_child(child_id);
         }
@@ -355,7 +361,7 @@ impl RenderTree {
     ///
     /// If `child_id`'s current parent is not `parent_id` — the caller's
     /// belief about the tree shape is wrong.
-    pub fn drop_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+    pub(crate) fn drop_child(&mut self, parent_id: RenderId, child_id: RenderId) {
         if self.get(parent_id).is_none() || self.get(child_id).is_none() {
             return;
         }
@@ -390,7 +396,11 @@ impl RenderTree {
     ///
     /// If `children` repeats an id, or names `parent_id` or one of its
     /// ancestors — either would close a cycle.
-    pub fn set_children(&mut self, parent_id: RenderId, children: &[RenderId]) -> ChildrenUpdate {
+    pub(crate) fn set_children(
+        &mut self,
+        parent_id: RenderId,
+        children: &[RenderId],
+    ) -> ChildrenUpdate {
         let mut update = ChildrenUpdate::default();
         let Some(parent) = self.get(parent_id) else {
             return update;
@@ -503,7 +513,7 @@ impl RenderTree {
     /// Returns the removed node, or None if it didn't exist. Descendants
     /// are orphaned in the slab; use [`Self::remove_recursive`] for full
     /// cascade.
-    pub fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
+    pub(crate) fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
             self.root = None;
@@ -550,7 +560,8 @@ impl RenderTree {
     /// tree before the first destructor runs, children's destructors before
     /// their parent's; a destructor that panics leaves the rest to drop
     /// during the unwind, as std drops a `Vec`.
-    pub fn remove_recursive(&mut self, id: RenderId) -> usize {
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn remove_recursive(&mut self, id: RenderId) -> usize {
         let nodes = self.take_subtree(self.collect_subtree(id));
         let count = nodes.len();
         drop(nodes);
@@ -560,9 +571,8 @@ impl RenderTree {
     /// Ages the slot the next insert takes to the last generation an id can
     /// carry, so a test reaches generation exhaustion without `u32::MAX`
     /// removals. `false` when no slot is free.
-    #[doc(hidden)]
     #[cfg(any(test, feature = "testing"))]
-    pub fn age_next_free_slot_for_test(&mut self) -> bool {
+    pub(crate) fn age_next_free_slot_for_test(&mut self) -> bool {
         self.nodes.age_free_head()
     }
 
@@ -572,16 +582,12 @@ impl RenderTree {
     /// generation, or retires when none is left, so no id aliases a node
     /// inserted after the clear. The tree is empty before the first
     /// destructor runs.
-    pub fn clear(&mut self) {
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn clear(&mut self) {
         self.root = None;
         self.input_region_sources.clear();
         let nodes = self.nodes.take_all();
         drop(nodes);
-    }
-
-    /// Reserves capacity for additional nodes.
-    pub fn reserve(&mut self, additional: usize) {
-        self.nodes.reserve(additional);
     }
 
     // ========================================================================
@@ -727,11 +733,6 @@ impl RenderTree {
     /// Returns an iterator over (RenderId, &RenderNode) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (RenderId, &RenderNode)> + '_ {
         self.nodes.iter()
-    }
-
-    /// Returns a mutable iterator over (RenderId, &mut RenderNode) pairs.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (RenderId, &mut RenderNode)> + '_ {
-        self.nodes.iter_mut()
     }
 
     // ========================================================================

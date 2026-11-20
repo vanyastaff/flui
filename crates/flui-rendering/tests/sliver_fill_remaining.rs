@@ -147,15 +147,13 @@ pub(crate) fn sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_pai
         constraints: vertical_constraints(0.0, 30.0, 70.0, 0.0),
     }) as BoxedRenderObject);
     let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             root_id,
             Box::new(RenderSliverFillRemainingWithScrollable::new()) as BoxedSliverObject,
         )
         .expect("fill remaining sliver");
     let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
+        .insert_child_render_object(
             sliver_id,
             Box::new(FixedHitBox::new(50.0, 10.0)) as BoxedRenderObject,
         )

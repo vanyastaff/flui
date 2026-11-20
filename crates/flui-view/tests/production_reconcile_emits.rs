@@ -276,13 +276,11 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
             moved_render,
             moved_child_render,
         ] {
-            let node = pipeline
-                .render_tree()
-                .get(render_id)
-                .expect("mounted render ID must resolve before the move");
-            node.clear_needs_layout();
-            node.clear_needs_paint();
-            node.clear_needs_compositing_bits_update();
+            assert!(
+                pipeline.render_tree().contains(render_id),
+                "mounted render ID must resolve before the move"
+            );
+            flui_rendering::testing::raw_tree::clear_dirty_flags(pipeline, render_id);
         }
     });
 
