@@ -18,7 +18,7 @@
 use flui_protocol::input::{PointerButton, PointerDevice};
 
 use crate::error::{Error, Result};
-use crate::lane::macos::safety::Refusal;
+use crate::lane::macos::safety::{LANE, Refusal};
 
 /// A point in global display points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -381,7 +381,8 @@ impl Pointer {
     ///
     /// # Errors
     ///
-    /// The first event that could not be posted, after every one was tried.
+    /// After every event was tried: [`Error::ReleaseFailed`] naming what is still held and the
+    /// first event that could not be posted, or that event's error when nothing stayed held.
     pub fn release_all(&mut self, mut post: impl FnMut(&MouseEvent) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
         if let Some(at) = self.mouse_at {
@@ -419,7 +420,34 @@ impl Pointer {
                 }
             }
         }
-        first.map_or(Ok(()), Err)
+        let held = self.held();
+        match first {
+            None => Ok(()),
+            Some(first) if held.is_empty() => Err(first),
+            Some(first) => Err(Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held,
+                message: first.to_string(),
+            }),
+        }
+    }
+
+    /// What the lane still holds, by name, for people.
+    fn held(&self) -> Vec<String> {
+        let mut held: Vec<String> = (0..32_u32)
+            .filter(|&number| self.buttons & MouseButton(number).bit() != 0)
+            .map(|number| match number {
+                0 => "the left mouse button".to_owned(),
+                1 => "the right mouse button".to_owned(),
+                number => format!("mouse button {number}"),
+            })
+            .collect();
+        match self.pen {
+            Some(Pen { down: true, .. }) => held.push("the pen, down".to_owned()),
+            Some(Pen { down: false, .. }) => held.push("the pen, in range".to_owned()),
+            None => {}
+        }
+        held
     }
 }
 

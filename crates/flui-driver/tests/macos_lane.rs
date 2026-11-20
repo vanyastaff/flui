@@ -67,6 +67,18 @@ fn a_key_name_maps_to_its_key_code_and_the_character_it_types() {
     }
     assert_eq!(Modifier::of(keys::RIGHT_COMMAND), Some(Modifier::Command));
     assert_eq!(Modifier::of(keys::RETURN), None);
+    // What a release that failed names.
+    for (code, name) in [
+        (0x38, "Shift"),
+        (0x37, "Meta"),
+        (0x3C, "Shift"),
+        (0x00, "a"),
+        (0x31, "Space"),
+        (0x24, "Enter"),
+        (0x6C, "key code 0x6c"),
+    ] {
+        assert_eq!(keys::name_of(code), name, "{code:#04x}");
+    }
 }
 
 fn runs(strokes: &[TextStroke]) -> Vec<String> {
@@ -690,7 +702,10 @@ fn a_key_is_held_only_once_its_event_was_posted() {
             message: "no event".into(),
         })
     });
-    assert!(failed.is_err());
+    assert!(
+        matches!(&failed, Err(Error::ReleaseFailed { held, .. }) if held == &["Control"]),
+        "the lane names what it could not release: {failed:?}"
+    );
     assert_eq!(
         keys.held(),
         [keys::CONTROL.0],
@@ -707,7 +722,7 @@ fn a_key_is_held_only_once_its_event_was_posted() {
 }
 
 /// The release of everything never completes a tap shortcut: a release that would is not posted,
-/// and its key stays held.
+/// its key stays held, and the lane says which and why.
 #[test]
 fn a_release_that_would_complete_a_tap_shortcut_is_not_posted() {
     let mut keys = HeldKeys::new();
@@ -723,8 +738,8 @@ fn a_release_that_would_complete_a_tap_shortcut_is_not_posted() {
     assert!(
         matches!(
             &refused,
-            Err(Error::NotSupported { capability: Some(capability), .. })
-                if capability == "os_shell_hotkey"
+            Err(Error::ReleaseFailed { held, message, .. })
+                if held == &["Shift"] && message.contains(safety::STICKY_KEYS)
         ),
         "{refused:?}"
     );
@@ -994,7 +1009,12 @@ fn a_pointer_change_is_held_only_once_its_event_was_posted() {
     assert_eq!(pointer.buttons(), 0, "a press never posted is not held");
     pointer.deliver(&down, |_| Ok(())).expect("posted");
     assert_eq!(pointer.buttons(), 0b1);
-    assert!(pointer.release_all(failing).is_err());
+    let failed = pointer.release_all(failing);
+    assert!(
+        matches!(&failed, Err(Error::ReleaseFailed { held, .. })
+            if held == &["the left mouse button"]),
+        "the lane names what it could not release: {failed:?}"
+    );
     assert_eq!(pointer.buttons(), 0b1, "a release never posted stays held");
     pointer.release_all(|_| Ok(())).expect("released");
     assert_eq!(pointer.buttons(), 0);

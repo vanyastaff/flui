@@ -13,7 +13,7 @@
 
 use crate::error::{Error, Result};
 use crate::lane::macos::keys::{self, KeyCode, Modifier, SHIFT, TextChunk, TextStroke};
-use crate::lane::macos::safety::{KeyEdge, ModifierTaps, Refusal};
+use crate::lane::macos::safety::{KeyEdge, LANE, ModifierTaps, Refusal};
 
 /// A key event, its key resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,11 +225,14 @@ impl HeldKeys {
 
     /// Release every key held, last pressed first, through `post`. A release that would complete
     /// a tap shortcut of the system's is not posted, and that key stays held; so does a key whose
-    /// release could not be posted.
+    /// release could not be posted. The Windows lane masks such a release with an unassigned
+    /// virtual key instead; no key code is unassigned on every Mac keyboard, so this lane refuses
+    /// it.
     ///
     /// # Errors
     ///
-    /// The first stroke that failed or was refused, after every key was tried.
+    /// After every key was tried: [`Error::ReleaseFailed`] naming the keys still held and the
+    /// first stroke that failed or was refused, or that stroke's error when nothing stayed held.
     pub fn release_all(
         &mut self,
         mut post: impl FnMut(Keystroke, u64) -> Result<()>,
@@ -249,7 +252,19 @@ impl HeldKeys {
                 }
             }
         }
-        first.map_or(Ok(()), Err)
+        match first {
+            None => Ok(()),
+            Some(first) if self.held.is_empty() => Err(first),
+            Some(first) => Err(Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held: self
+                    .held
+                    .iter()
+                    .map(|&code| keys::name_of(code))
+                    .collect::<Vec<String>>(),
+                message: first.to_string(),
+            }),
+        }
     }
 }
 

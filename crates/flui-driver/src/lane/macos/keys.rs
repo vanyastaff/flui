@@ -313,6 +313,26 @@ pub fn resolve(name: &str) -> Option<KeyName> {
     })
 }
 
+/// The key `code` by name, for people: its W3C name, the character an ANSI keyboard prints on it,
+/// or its code.
+#[must_use]
+pub fn name_of(code: u16) -> String {
+    if let Some(&(name, _)) = NAMED.iter().find(|(_, key)| key.0 == code) {
+        return name.to_owned();
+    }
+    if let Some(&(_, plain, _)) = ANSI.iter().find(|(key, _, _)| key.0 == code) {
+        return if plain == ' ' {
+            "Space".to_owned()
+        } else {
+            plain.to_string()
+        };
+    }
+    match Modifier::of(KeyCode(code)) {
+        Some(modifier) => format!("{modifier:?}"),
+        None => format!("key code {code:#04x}"),
+    }
+}
+
 /// The most UTF-16 units one key event carries as its text: Quartz takes no more than twenty
 /// (`CGEventKeyboardSetUnicodeString`), and a longer string is cut.
 pub const TEXT_CHUNK_UNITS: usize = 20;
