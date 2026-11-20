@@ -841,10 +841,8 @@ impl RenderNode {
 
     /// Sets the `NEEDS_COMPOSITING` flag.
     ///
-    /// Distinct from [`Self::mark_compositing_flag`] only in that this
-    /// method documents its role in the per-frame compositing-bits walk
-    /// (`_updateCompositingBits`); `mark_compositing_flag` was added
-    /// separately as an additive helper.
+    /// The per-frame compositing-bits walk (`_updateCompositingBits`) marks a
+    /// node through it.
     #[inline]
     pub(crate) fn mark_needs_compositing(&self) {
         with_entry!(self, entry => entry.state().flags().mark_needs_compositing());

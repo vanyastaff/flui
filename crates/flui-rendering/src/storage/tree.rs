@@ -60,7 +60,8 @@ fn child_depth(parent_depth: u16) -> u16 {
         .expect("BUG: render tree depth exceeds u16::MAX (or a parent cycle)")
 }
 
-/// What [`RenderTree::set_children`] changed.
+/// What a child-list edit of the render tree (`RenderTree::set_children`)
+/// changed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[must_use]
 pub struct ChildrenUpdate {
