@@ -191,11 +191,12 @@ fn the_snapshot_sink_is_where_allocation_happens() {
 }
 
 /// A channel is one shared allocation, and a listener that takes no argument is registered
-/// as it was given: the only allocation a subscription adds is the envelope the channel
-/// holds it in. The channel holds one registration inline, so its list reaches the heap with
-/// the second.
+/// as it was given: the channel holds the caller's closure itself, with no envelope around
+/// it, so a subscription allocates nothing of its own. The channel holds one registration
+/// inline, so its list reaches the heap with the second. A delivery to a few listeners
+/// shares their closures and allocates nothing.
 #[test]
-fn a_notifier_is_one_allocation_and_a_plain_listener_one_more() {
+fn a_notifier_is_one_allocation_and_a_plain_listener_none() {
     use flui_foundation::ListenerCallback;
     use flui_foundation::Notifier;
     use std::rc::Rc;
@@ -210,15 +211,22 @@ fn a_notifier_is_one_allocation_and_a_plain_listener_one_more() {
     let first = black_box(notifier.listen(first));
     assert_eq!(
         allocations() - before,
-        1,
-        "the first listener allocates its envelope alone: the channel holds it inline"
+        0,
+        "the first listener is held inline, as it was given"
     );
     let before = allocations();
     let second = black_box(notifier.listen(second));
     assert_eq!(
         allocations() - before,
-        2,
-        "the second listener allocates its envelope and moves the list to the heap"
+        1,
+        "the second listener moves the list to the heap and allocates nothing else"
+    );
+    let before = allocations();
+    notifier.notify(&());
+    assert_eq!(
+        allocations() - before,
+        0,
+        "a delivery's snapshot shares the closures"
     );
     drop((first, second));
 }

@@ -2,8 +2,8 @@
 # One scenario of crates/flui-widgets/tests/perf.rs.
 
 [raw_button_over_text]
-allocations = 29
-bytes = 3735
+allocations = 28
+bytes = 3711
 elements = 2
 reallocations = 1
 render_nodes = 1

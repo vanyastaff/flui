@@ -215,18 +215,18 @@ impl ChangeNotifier {
     }
 
     /// Withdraw a subscription without destroying its callback: the caller
-    /// retires the returned envelope through its recovery scope, after
+    /// retires the returned callback, handed over by value, through its recovery scope, after
     /// [`inherit_failure`](Self::inherit_failure). A [`Subscription`]'s detach
     /// drops it instead, deferred to the end of an active delivery.
     #[must_use]
-    pub fn take_listener(&self, id: ListenerId) -> Option<Rc<NotificationCallback<()>>> {
+    pub fn take_listener(&self, id: ListenerId) -> Option<NotificationCallback<()>> {
         self.inner.take_callback(id)
     }
 
     /// Withdraw every subscription, with the custody of
     /// [`take_listener`](Self::take_listener).
     #[must_use]
-    pub fn take_listeners(&self) -> Vec<Rc<NotificationCallback<()>>> {
+    pub fn take_listeners(&self) -> Vec<NotificationCallback<()>> {
         self.inner.take_all_callbacks()
     }
 
@@ -240,7 +240,7 @@ impl ChangeNotifier {
     /// Dispose and withdraw subscriptions before their captures retire.
     #[doc(hidden)]
     #[must_use]
-    pub fn dispose_and_take_listeners(&self) -> Vec<Rc<NotificationCallback<()>>> {
+    pub fn dispose_and_take_listeners(&self) -> Vec<NotificationCallback<()>> {
         self.inner.dispose_and_take_callbacks()
     }
 

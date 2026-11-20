@@ -10,8 +10,8 @@ use flui_foundation::{ChangeNotifier, ListenerCallback, ListenerId, Notifier, Su
 use crate::animation::{StatusObserver, Terminal};
 use crate::status::AnimationStatus;
 
-/// A withdrawn callback envelope, retired by its owner (ADR-0178).
-pub(crate) type Withdrawn<Arg> = Rc<NotificationCallback<Arg>>;
+/// A withdrawn callback, handed over by value and retired by its owner (ADR-0178).
+pub(crate) type Withdrawn<Arg> = NotificationCallback<Arg>;
 
 /// The value listeners and status observers registered on one combinator.
 ///

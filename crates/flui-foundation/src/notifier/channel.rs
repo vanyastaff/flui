@@ -32,8 +32,17 @@ pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut RecoveryScope<'_>)>;
 
 /// A registered callback withdrawn from its channel, for the withdrawing owner
 /// to retire through a [`RecoveryScope`] (see [`Notifier::take_callback`]).
+///
+/// The channel stores this value itself, with no envelope around it: every
+/// kind is already one shared closure, so the registration costs the
+/// caller's own allocation and nothing more.
 pub struct NotificationCallback<Arg>(CallbackKind<Arg>);
 
+/// Every kind holds its closure behind an `Rc`. A delivery's snapshot is a
+/// [`share`](NotificationCallback::share) of each registration, so a listener
+/// withdrawn while it runs (its own detach, a dispose, an earlier listener's
+/// removal) is still owned by the snapshot until the round's tail retires it
+/// under containment: its captures are never destroyed during its own call.
 enum CallbackKind<Arg> {
     User(NotifierCallback<Arg>),
     Relay(RecoveryCallback<Arg>),
@@ -42,18 +51,26 @@ enum CallbackKind<Arg> {
     Plain(crate::notifier::ListenerCallback),
 }
 
-type OwnedCallback<Arg> = Rc<NotificationCallback<Arg>>;
-
 impl<Arg> NotificationCallback<Arg> {
     /// Package a withdrawn user callback for enclosing-owner retirement.
     #[doc(hidden)]
-    pub fn user(callback: NotifierCallback<Arg>) -> Rc<Self> {
-        Rc::new(Self(CallbackKind::User(callback)))
+    pub fn user(callback: NotifierCallback<Arg>) -> Self {
+        Self(CallbackKind::User(callback))
     }
     /// Package a refused framework relay for enclosing-owner retirement.
     #[doc(hidden)]
-    pub fn relay(callback: RecoveryCallback<Arg>) -> Rc<Self> {
-        Rc::new(Self(CallbackKind::Relay(callback)))
+    pub fn relay(callback: RecoveryCallback<Arg>) -> Self {
+        Self(CallbackKind::Relay(callback))
+    }
+    /// A second owner of the same closure, for a delivery's snapshot: a
+    /// reference count, never an allocation. Not `Clone`, so a withdrawn
+    /// callback handed to its owner has exactly the owners the channel made.
+    fn share(&self) -> Self {
+        Self(match &self.0 {
+            CallbackKind::User(callback) => CallbackKind::User(Rc::clone(callback)),
+            CallbackKind::Relay(callback) => CallbackKind::Relay(Rc::clone(callback)),
+            CallbackKind::Plain(callback) => CallbackKind::Plain(Rc::clone(callback)),
+        })
     }
     fn invoke(&self, arg: &Arg, recovery: &mut RecoveryScope<'_>) {
         match &self.0 {
@@ -80,7 +97,7 @@ impl<Arg> fmt::Debug for NotificationCallback<Arg> {
 /// the empty slots outnumber the live ones, so withdrawing every listener of
 /// a large channel one at a time is linear in all, not quadratic.
 struct Listeners<Arg> {
-    slots: SmallVec<[(ListenerId, Option<OwnedCallback<Arg>>); 1]>,
+    slots: SmallVec<[(ListenerId, Option<NotificationCallback<Arg>>); 1]>,
     live: usize,
 }
 
@@ -104,7 +121,7 @@ impl<Arg> Listeners<Arg> {
 
     /// Registers `callback` under `id`, which is newer than every identity
     /// this channel holds.
-    fn admit(&mut self, id: ListenerId, callback: OwnedCallback<Arg>) {
+    fn admit(&mut self, id: ListenerId, callback: NotificationCallback<Arg>) {
         debug_assert!(
             self.slots.last().is_none_or(|(last, _)| *last < id),
             "listener ids are monotonic (see mint_id) — a fresh id is never \
@@ -125,7 +142,7 @@ impl<Arg> Listeners<Arg> {
 
     /// Withdraws the registration `id` names and hands its callback out, for
     /// the caller to destroy outside the channel's borrow.
-    fn withdraw(&mut self, id: ListenerId) -> Option<OwnedCallback<Arg>> {
+    fn withdraw(&mut self, id: ListenerId) -> Option<NotificationCallback<Arg>> {
         let index = self.slot(id)?;
         let callback = self.slots[index].1.take()?;
         self.live -= 1;
@@ -138,14 +155,14 @@ impl<Arg> Listeners<Arg> {
     }
 
     /// The live registrations, oldest first.
-    fn iter(&self) -> impl Iterator<Item = (ListenerId, &OwnedCallback<Arg>)> {
+    fn iter(&self) -> impl Iterator<Item = (ListenerId, &NotificationCallback<Arg>)> {
         self.slots
             .iter()
             .filter_map(|(id, callback)| Some((*id, callback.as_ref()?)))
     }
 
     /// Every live registration, oldest first, leaving the channel empty.
-    fn into_callbacks(self) -> impl Iterator<Item = (ListenerId, OwnedCallback<Arg>)> {
+    fn into_callbacks(self) -> impl Iterator<Item = (ListenerId, NotificationCallback<Arg>)> {
         self.slots
             .into_iter()
             .filter_map(|(id, callback)| Some((id, callback?)))
@@ -192,7 +209,7 @@ impl<Arg> Drop for ListenerStorage<Arg> {
 /// What a delivery in progress holds until its outermost round ends.
 struct Retiring<Arg> {
     /// Listeners removed during the delivery.
-    removed: Vec<(ListenerId, OwnedCallback<Arg>)>,
+    removed: Vec<(ListenerId, NotificationCallback<Arg>)>,
     /// Captures handed over by [`Notifier::retire_after_delivery`], retired
     /// after the round's own removed listeners.
     deferred: Vec<Box<dyn Any>>,
@@ -222,7 +239,12 @@ impl<Arg> ListenerStorage<Arg> {
         clippy::type_complexity,
         reason = "the two lists of one delivery, taken together and used once"
     )]
-    fn take_retiring(&self) -> Option<(Vec<(ListenerId, OwnedCallback<Arg>)>, Vec<Box<dyn Any>>)> {
+    fn take_retiring(
+        &self,
+    ) -> Option<(
+        Vec<(ListenerId, NotificationCallback<Arg>)>,
+        Vec<Box<dyn Any>>,
+    )> {
         let mut slot = self.retiring.borrow_mut();
         let retiring = slot.as_mut()?;
         if retiring.removed.is_empty() && retiring.deferred.is_empty() {
@@ -242,7 +264,7 @@ fn retire_listeners<Arg>(listeners: Listeners<Arg>) {
 /// Drop callbacks in registration order. If one destructor panics, the rest
 /// are still destroyed and the first panic propagates; one that panics during
 /// that unwind aborts, as in std (ADR-0281).
-fn retire_callbacks<Arg>(mut callbacks: Vec<(ListenerId, OwnedCallback<Arg>)>) {
+fn retire_callbacks<Arg>(mut callbacks: Vec<(ListenerId, NotificationCallback<Arg>)>) {
     callbacks.sort_unstable_by_key(|(id, _)| *id);
     drop(callbacks);
 }
@@ -437,7 +459,7 @@ impl<Arg> Notifier<Arg> {
         &self,
         listener: crate::notifier::ListenerCallback,
     ) -> ListenerId {
-        self.admit_callback(Rc::new(NotificationCallback(CallbackKind::Plain(listener))))
+        self.admit_callback(NotificationCallback(CallbackKind::Plain(listener)))
     }
 
     /// Register a [`RecoveryCallback`] in the same ordered notification channel
@@ -451,7 +473,7 @@ impl<Arg> Notifier<Arg> {
         self.admit_callback(NotificationCallback::relay(listener))
     }
 
-    fn admit_callback(&self, listener: OwnedCallback<Arg>) -> ListenerId {
+    fn admit_callback(&self, listener: NotificationCallback<Arg>) -> ListenerId {
         let id = self.mint_id();
         self.listeners.entries.borrow_mut().admit(id, listener);
         id
@@ -474,27 +496,27 @@ impl<Arg> Notifier<Arg> {
     }
 
     /// Withdraw a registration without destroying its callback: the caller
-    /// retires the returned envelope through its recovery scope, after
+    /// retires the returned callback, handed over by value, through its recovery scope, after
     /// [`inherit_failure`](Self::inherit_failure). This is the removal half of a
     /// custom source's recovery-aware subscription; a
     /// [`Subscription`](crate::notifier::Subscription)'s detach drops the
     /// callback under the channel's own scope instead.
     #[must_use]
-    pub fn take_callback(&self, id: ListenerId) -> Option<OwnedCallback<Arg>> {
+    pub fn take_callback(&self, id: ListenerId) -> Option<NotificationCallback<Arg>> {
         self.extract_locked(|listeners| listeners.withdraw(id))
     }
 
     #[doc(hidden)]
-    pub fn take_all_callbacks(&self) -> Vec<OwnedCallback<Arg>> {
+    pub fn take_all_callbacks(&self) -> Vec<NotificationCallback<Arg>> {
         self.extract_locked(std::mem::take)
             .into_callbacks()
             .map(|(_, callback)| callback)
-            .collect::<Vec<OwnedCallback<Arg>>>()
+            .collect::<Vec<NotificationCallback<Arg>>>()
     }
 
     #[doc(hidden)]
     #[must_use]
-    pub fn dispose_and_take_callbacks(&self) -> Vec<OwnedCallback<Arg>> {
+    pub fn dispose_and_take_callbacks(&self) -> Vec<NotificationCallback<Arg>> {
         self.listeners.is_disposed.set(true);
         self.take_all_callbacks()
     }
@@ -679,14 +701,14 @@ impl<Arg> Notifier<Arg> {
             // ≥5 spills to the heap. `SmallVec` over `tinyvec::ArrayVec`
             // deliberately: the callbacks are `Rc<dyn Fn(..)>`, which does not
             // implement `Default`, and `tinyvec` requires `T: Default`.
-            let mut snapshot: smallvec::SmallVec<[(ListenerId, OwnedCallback<Arg>); 4]> = self
-                .listeners
-                .entries
-                .borrow()
-                .iter()
-                .filter(|(id, _)| ids.is_none_or(|ids| ids.binary_search(id).is_ok()))
-                .map(|(id, cb)| (id, Rc::clone(cb)))
-                .collect();
+            let mut snapshot: smallvec::SmallVec<[(ListenerId, NotificationCallback<Arg>); 4]> =
+                self.listeners
+                    .entries
+                    .borrow()
+                    .iter()
+                    .filter(|(id, _)| ids.is_none_or(|ids| ids.binary_search(id).is_ok()))
+                    .map(|(id, cb)| (id, cb.share()))
+                    .collect();
             // Membership and capture custody precede optional observer reentry.
             // An observer failure joins the same round, preserving the tail.
             recovery.run(before);
@@ -720,7 +742,7 @@ impl<Arg> Notifier<Arg> {
                     });
                 }
             }
-            // Retire separate envelopes one at a time, each under the round's
+            // Retire the snapshot's shares one at a time, each under the round's
             // containment: a destructor panic is a competing failure (ADR-0281).
             snapshot.reverse();
             while let Some((_, callback)) = snapshot.pop() {

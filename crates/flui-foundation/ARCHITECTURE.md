@@ -57,7 +57,8 @@ registration (`a_subscription_detaches_only_its_own_channel`,
 No id-based registration or withdrawal is a `Listenable` method
 ([ADR-0109](../../docs/adr/ADR-0109-notification-channel-surface.md) decision
 5): the id machinery is the channel level's own
-(`add_with_recovery` with `take_callback`/`take_listener`, `take_listeners`),
+(`add_with_recovery` with `take_callback`/`take_listener`, `take_listeners`, each handing the
+`NotificationCallback` over by value),
 reached through concrete types, not through the trait.
 
 ## Slot generations (ADR-0313, ADR-0320)
@@ -344,7 +345,7 @@ typed protocol tree rather than this diagnostics representation (ADR-0095).
 | Site | Primitive | Where | Why |
 |------|-----------|-------|-----|
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
-| `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<Listeners>`: registrations sorted by `ListenerId`, the first inline, a withdrawn one an empty slot until the empty outnumber the live | `notifier/channel.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
+| `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<Listeners>`: registrations sorted by `ListenerId`, each a `NotificationCallback` held by value (the caller's own closure `Rc`, no envelope around it), the first inline, a withdrawn one an empty slot until the empty outnumber the live | `notifier/channel.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
 | `Notifier::next_id` | `IdMint<ListenerId>` | `notifier/channel.rs` | Monotonic owner-local identities. Exhaustion refuses permanently before an identity can be reissued. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.
@@ -450,7 +451,10 @@ operation owns recovery; this map does not join independent runtime or platform
 operations into one global failure boundary.
 
 The notifier's owned snapshot prevents a removed callback from disappearing
-while it runs. After a caught listener failure, the recovery owns the original
+while it runs: it shares each registration's closure `Rc` (a count, no allocation),
+so a withdrawal during the round hands its owner a callback the snapshot still
+holds until the tail retires it.
+After a caught listener failure, the recovery owns the original
 payload until completing delivery, and outgoing callback envelopes retire one
 at a time under its containment (ADR-0281 §3). Healthy live listeners and later
 notification rounds still progress. Reporting borrows the original payload behind a separate
