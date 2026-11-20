@@ -1,8 +1,9 @@
 name: Fuzz
 
-# The fuzz targets under libFuzzer, every night against main: `cargo xtask
-# fuzz` builds a target with coverage counters and AddressSanitizer and lets
-# libFuzzer mutate its inputs toward code none has reached yet.
+# The fuzz targets under libFuzzer, every night against main: each target is
+# an example of the crate it tests, built by `cargo +nightly --config
+# .cargo/fuzz.toml run` with coverage counters and AddressSanitizer, and
+# libFuzzer mutates its inputs toward code none has reached yet.
 #
 #   image_decode — encoded image bytes into `Image::decode`.
 #   agent_wire   — what a client writes to a development agent's session.
@@ -20,14 +21,14 @@ name: Fuzz
 # night to the next through the cache, saved from main only and after a red
 # run too, so a run starts where the last one stopped. An input that panics,
 # aborts, trips the sanitizer, hangs, leaks or allocates past its target's
-# limit fails the run and is uploaded as `fuzz-findings-<target>`:
-# `cargo xtask fuzz <target> --replay <file>` runs it again in the build that
-# found it, and its fix adds the input's case to the owning crate's tests
-# (docs/testing.md, "Fuzzing").
+# limit fails the run and is uploaded as `fuzz-findings-<target>`: the same
+# command with the file in place of the corpus and seeds, and the target's
+# limits, runs it again in the build that found it, and its fix adds the
+# input's case to the owning crate's tests (docs/testing.md, "Fuzzing").
 #
 # No pull request runs it (ADR-0376): a change to a target, its seeds or what it
-# is built from runs `cargo xtask fuzz <target>` locally, and the night's run
-# sees every other change.
+# is built from runs the workflow on its branch (`gh workflow run Fuzz --ref
+# <branch>`), and the night's run sees every other change.
 # A red run on main keeps the
 # "Fuzzing failed on main" issue open, and a green one closes it.
 
@@ -59,8 +60,27 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      # Each target: the package whose example (`fuzz_<target>`) it is, the
+      # directory of inputs its run starts from (read, never written), the
+      # longest input libFuzzer writes, and the limits an input runs under in a
+      # run and in its replay: 20 seconds before it counts as a hang, and for a
+      # target whose entry promises no bound of its own, a cap on one
+      # allocation. `image_decode` keeps libFuzzer's RSS limit: its property
+      # bounds every block a decode asks for by `MAX_DECODED_IMAGE_BYTES`,
+      # which a decode may reach exactly. A conversation of 2 KiB asks an
+      # agent session for nothing near 64 MiB.
       matrix:
-        target: [image_decode, agent_wire]
+        include:
+          - target: image_decode
+            package: flui-painting
+            seeds: crates/flui-painting/tests/fixtures
+            max_len: 4096
+            limits: -timeout=20
+          - target: agent_wire
+            package: flui-runtime
+            seeds: crates/flui-runtime/fuzz/seeds/agent_wire
+            max_len: 2048
+            limits: -timeout=20 -malloc_limit_mb=64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,9 +90,8 @@ jobs:
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
 
-      # The sanitizer and the coverage passes are nightly-only; the task
-      # builds the targets with `cargo +nightly`, so the pin stays the
-      # toolchain of the task itself.
+      # The sanitizer is nightly-only, so the target builds with
+      # `cargo +nightly`; the pin stays the toolchain cargo resolves with.
       - name: Install Rust nightly (sanitizer coverage)
         uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
 
@@ -91,11 +110,30 @@ jobs:
       # of time fails, and the steps after it still save the corpus and
       # upload what was found. The build of `agent_wire` is the long part
       # (its crate's whole test graph under the sanitizer).
-      - name: cargo xtask fuzz
+      # libFuzzer keeps the inputs that reached new code in the corpus
+      # directory, its first argument, and writes the input that ended the run
+      # to `findings/`, named by what it did (`crash-`, `timeout-`, `oom-`,
+      # `leak-<hash>`). Nightly adds lints ahead of stable; this run is for
+      # findings, so warnings stay warnings.
+      - name: cargo +nightly run the fuzz target
         timeout-minutes: 75
         env:
           FUZZ_TARGET: ${{ matrix.target }}
-        run: cargo xtask fuzz "$FUZZ_TARGET" --seconds "$FUZZ_SECONDS"
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_SEEDS: ${{ matrix.seeds }}
+          FUZZ_MAX_LEN: ${{ matrix.max_len }}
+          FUZZ_LIMITS: ${{ matrix.limits }}
+          CARGO_BUILD_WARNINGS: warn
+        run: |
+          set -euo pipefail
+          dir=target/fuzz/$FUZZ_TARGET
+          mkdir -p "$dir/corpus" "$dir/findings"
+          read -ra limits <<< "$FUZZ_LIMITS"
+          cargo +nightly --config .cargo/fuzz.toml run --locked \
+            --target x86_64-unknown-linux-gnu -p "$FUZZ_PACKAGE" --example "fuzz_$FUZZ_TARGET" -- \
+            "$dir/corpus" "$FUZZ_SEEDS" \
+            -artifact_prefix="$dir/findings/" -max_total_time="$FUZZ_SECONDS" \
+            -max_len="$FUZZ_MAX_LEN" "${limits[@]}" -print_final_stats=1
 
       - name: Save the corpus
         if: always() && github.ref == 'refs/heads/main'
@@ -138,6 +176,6 @@ jobs:
           body: >-
             A fuzz job failed on main. Its log says which it was: a target
             that found an input (uploaded as `fuzz-findings-<target>`, and
-            replayed with `cargo xtask fuzz <target> --replay <file>`), a
-            build that broke, or a run out of time:
+            replayed as docs/testing.md "Fuzzing" shows), a build that broke,
+            or a run out of time:
             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

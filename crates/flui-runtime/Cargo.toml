@@ -150,12 +150,12 @@ proptest = { workspace = true }
 wasm-bindgen-test = "=0.3.77"
 
 # libFuzzer's runtime, for the fuzz target below. Named under `cfg(fuzzing)`,
-# which only `cargo xtask fuzz` sets, so no other build compiles it.
+# which only `.cargo/fuzz.toml` sets, so no other build compiles it.
 [target.'cfg(fuzzing)'.dev-dependencies]
 libfuzzer-sys = { workspace = true }
 
-# The fuzz target of the development agent's wire (`cargo xtask fuzz
-# agent_wire`): an example, so it shares this manifest's lock and
+# The fuzz target of the development agent's wire (fuzz.yml's
+# `agent_wire`): an example, so it shares this manifest's lock and
 # dev-dependencies and builds on stable as a replayer of crash inputs.
 [[example]]
 name = "fuzz_agent_wire"

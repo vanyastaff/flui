@@ -8,7 +8,7 @@
   and for those of the same
   kind it does not list (`deps`, `doc-strict`, `gpu-test`, `platform-test`, `wayland-optional`,
   `native-features`, `build-all-targets`, `facade-combos`, `wasm-imports`, `wasm-test-crates`,
-  `locked-version`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a workflow step calls
+  `locked-version`, `fuzz`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a workflow step calls
   the tool. The same §1 for `perf`, which it lists among the tools for working in the repository:
   the scenarios hold their own baseline, and the other comparisons are steps (§7).
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
@@ -18,7 +18,8 @@
   runs wasm-bindgen over them and reads their import modules with node, and runs the wasm32 tests
   itself; §6 and `cross-typecheck` in Supersedes: each native leg lints the whole workspace; §7 and
   `perf` in Supersedes: the perf scenarios hold their baseline, and `perf-gates`, `size` and `deps`
-  compare the rest in steps.
+  compare the rest in steps. 2026-11-20 — §8 and `fuzz` in Supersedes: the fuzz workflow builds
+  each target with `cargo +nightly --config .cargo/fuzz.toml run`.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -71,7 +72,7 @@ and macOS) is a shell loop that runs every iteration before it fails.
 `lint`, `gate`, `test`, `platform-test`, `cli-test`, `wayland-optional`, `build-all-targets`, `ci`,
 `ci-full`, `deps`, `native-features`, `gpu-test`, `miri`, `doc-strict`, `feature-matrix`,
 `facade-combos`, `wasm-check`, `docs-links`, `wasm-link`, `wasm-test`, `wasm-imports`,
-`wasm-test-crates`, `locked-version`, `cross-typecheck` and `perf` leave `tools/xtask`.
+`wasm-test-crates`, `locked-version`, `cross-typecheck`, `perf` and `fuzz` leave `tools/xtask`.
 There is no local command that mirrors CI: `docs/testing.md` names, for each job, the commands a
 contributor runs, and the job holds them.
 
@@ -218,6 +219,23 @@ brought it. The options for that driver:
   under it, so the line follows a fall and no slack builds up below it. Growth inside the 2%
   still passes until the merge that crosses it.
 
+### §8. The fuzz workflow builds each target with cargo and a config file
+
+`cargo xtask fuzz` held the flags a fuzz build adds, the table of targets and the libFuzzer
+arguments, so the nightly run and a developer replaying its finding built the same binary. The
+options:
+
+- *Keep the task*: one command for both, but a reader opens Rust to learn what the job runs.
+- *`cargo fuzz`*: the tool every Rust project uses, but it builds a separate `fuzz/` package with
+  its own lockfile, which loses what an example gives: the versions an application ships and
+  the crate's dev-dependencies.
+- *The flags in a config file, the targets in the matrix* (chosen): `.cargo/fuzz.toml` holds the
+  flags under the x86_64 Linux target table, read only when a command names it (`cargo +nightly
+  --config .cargo/fuzz.toml run`), so the workflow and a replay share one source for them.
+  `fuzz.yml`'s matrix holds each target's package, seeds, longest input and limits, and its step
+  is the run's command line; docs/testing.md shows the run and the replay against a row. A
+  `RUSTFLAGS` in the environment replaces the file's flags, so the docs say to leave it unset.
+
 ### Consequences
 
 - Good, because what a job runs is in the job, and `tools/xtask` loses the subcommands and their
@@ -263,12 +281,16 @@ brought it. The options for that driver:
   the records step, for the reader to catch.
 - Bad, because there is no local command for a size check: `perf/size.toml` is edited by hand from
   the job's log, and its counts are Linux x86_64's.
+- Bad, because the fuzz task's tests go with it (`every_target_is_a_declared_example_with_seeds`,
+  the selection of targets by name, the refusal of a zero-second run and of a directory to
+  replay): a target renamed in one place fails the night's build, and a replay is a command a
+  developer copies from docs/testing.md with the row's limits (§8).
 
 ### Confirmation
 
 - `actionlint` (in `checks`) parses the workflows and runs shellcheck over their steps.
 - Each job runs its commands on every run of its lane;
-  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck|perf)\b'`
+  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck|perf|fuzz)\b'`
   finds none in `.github/`.
 - flui-widgets' perf target tests the counts' rules on every pull request
   (`the_comparison_passes_only_an_equal_counter_or_a_cost_that_fell`,

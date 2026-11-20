@@ -1,0 +1,26 @@
+# What a fuzz build adds, read only when a command names this file:
+#
+#   cargo +nightly --config .cargo/fuzz.toml run --locked \
+#     --target x86_64-unknown-linux-gnu -p <package> --example fuzz_<target> -- <libFuzzer arguments>
+#
+# The nightly fuzz workflow (.github/workflows/fuzz.yml) and a developer who
+# replays its finding build the same binary from it (docs/testing.md,
+# "Fuzzing"). The flags are the ones `cargo fuzz` passes: the `fuzzing` name
+# the targets, their manifests and some decoders test (`png` and `fdeflate`
+# skip their checksums under it, so a mutated image gets past the CRC), the
+# edge counters and comparison hooks libFuzzer steers by, and AddressSanitizer,
+# so a read or write out of bounds in `unsafe` code ends the run where it
+# happens. Under a target table with `--target` named they reach the target's
+# crates only, never a build script or a procedural macro, and only on the one
+# host the sanitizer runtime is written for. `-Zsanitizer` needs nightly.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "--cfg", "fuzzing",
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+    "-Zsanitizer=address",
+]
