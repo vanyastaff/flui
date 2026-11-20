@@ -658,22 +658,26 @@ behind it. Each target's package, seeds, longest input and limits are its row
 in `fuzz.yml`'s matrix; the run and the replay below take them from there:
 
 ```bash
-# a run: the corpus directory, the seeds, then the row's max_len and limits
-mkdir -p target/fuzz/agent_wire/corpus target/fuzz/agent_wire/findings
+# a run: <package>, <seeds>, <max_len> and <limits> are the target's row
+mkdir -p target/fuzz/<target>/corpus target/fuzz/<target>/findings
 cargo +nightly --config .cargo/fuzz.toml run --locked --target x86_64-unknown-linux-gnu \
-  -p flui-runtime --example fuzz_agent_wire -- \
-  target/fuzz/agent_wire/corpus crates/flui-runtime/fuzz/seeds/agent_wire \
-  -artifact_prefix=target/fuzz/agent_wire/findings/ -max_total_time=60 \
-  -max_len=2048 -timeout=20 -malloc_limit_mb=64
-# a replay: the finding's file in place of the corpus and seeds, with the same limits
+  -p <package> --example fuzz_<target> -- \
+  target/fuzz/<target>/corpus <seeds> \
+  -artifact_prefix=target/fuzz/<target>/findings/ -max_total_time=60 \
+  -max_len=<max_len> <limits>
+# a replay: the finding's file in place of the corpus and seeds, with the row's limits
 cargo +nightly --config .cargo/fuzz.toml run --locked --target x86_64-unknown-linux-gnu \
-  -p flui-runtime --example fuzz_agent_wire -- \
-  target/fuzz/agent_wire/findings/crash-<hash> -timeout=20 -malloc_limit_mb=64
+  -p <package> --example fuzz_<target> -- target/fuzz/<target>/findings/crash-<hash> <limits>
 ```
 
-It needs the nightly toolchain on x86_64 Linux, and no `RUSTFLAGS` or
-`CARGO_ENCODED_RUSTFLAGS` in the environment, which would replace the file's
-flags. libFuzzer keeps the inputs that reached new code in the corpus
+It needs the nightly toolchain on x86_64 Linux; on another host cargo fails
+to build the sanitizer target. A `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` in
+the environment replaces the file's flags, and a
+`target.x86_64-unknown-linux-gnu.rustflags` in another config file (your
+`~/.cargo/config.toml`, a linker flag) is joined to them, so a replay leaves
+both out. The night's nightly is in its log (the toolchain step prints
+`rustc +nightly --version --verbose`); a finding that depends on codegen
+replays with that one, `cargo +nightly-<date>`. libFuzzer keeps the inputs that reached new code in the corpus
 directory and writes the input that ended a run to `findings/`, named by what
 it did (`crash-`, `timeout-`, `oom-`, `leak-`). It reads a directory as a
 corpus and fuzzes it without end, so a replay names a file. The example built
@@ -683,12 +687,14 @@ and it refuses a PNG whose checksum the fuzzer never repaired, so it does not
 stand in for the replay.
 
 `fuzz.yml` runs each target as a job of its own for ten minutes every night
-against main, carries the corpus from one night to the next, uploads what a
-failing run found as `fuzz-findings-<target>` and keeps the "Fuzzing failed
-on main" issue open while a run is red. No pull request runs it (ADR-0376): a
-change to a target, its seeds or what it is built from runs the workflow on
-its branch (`gh workflow run Fuzz --ref <branch>`), and the night's run sees
-every other change.
+against main, carries the corpus and the inputs earlier nights found from one
+night to the next, and reads those findings back first, so a night stays red
+until the fix of each lands. It uploads what a failing run found as
+`fuzz-findings-<target>` and keeps the "Fuzzing failed on main" issue open
+while a run is red. No pull request runs it (ADR-0376): a change to a target,
+its seeds or what it is built from runs the workflow on its branch (`gh
+workflow run Fuzz --ref <branch>`) at the head that merges, and the night's
+run sees every other change.
 
 A finding is fixed with a named case in the owning crate's tests that holds
 the input (as `a_header_past_the_limit_is_refused_before_decoding` holds its

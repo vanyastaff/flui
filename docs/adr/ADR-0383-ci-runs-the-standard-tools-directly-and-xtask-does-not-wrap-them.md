@@ -222,19 +222,30 @@ brought it. The options for that driver:
 ### §8. The fuzz workflow builds each target with cargo and a config file
 
 `cargo xtask fuzz` held the flags a fuzz build adds, the table of targets and the libFuzzer
-arguments, so the nightly run and a developer replaying its finding built the same binary. The
-options:
+arguments, so the nightly run and a developer replaying its finding built with the same flags.
+The options:
 
 - *Keep the task*: one command for both, but a reader opens Rust to learn what the job runs.
-- *`cargo fuzz`*: the tool every Rust project uses, but it builds a separate `fuzz/` package with
-  its own lockfile, which loses what an example gives: the versions an application ships and
-  the crate's dev-dependencies.
+- *`cargo fuzz`*: the tool every Rust project uses, with `cmin`, `tmin` and coverage beside the
+  run, and a fuzz package can share the workspace's lockfile. It moves each target out of the
+  example of its crate into a package of its own, with its own dependencies, and builds release
+  with more flags than these (the stack-depth counter, no branch folding, one codegen unit): a
+  change of the build and of the targets' layout, which is a change of its own, not this move.
+- *`RUSTFLAGS` in the step*, as the task set them: they replace every config file's rustflags, so
+  a developer's own flags cannot reach a replay, but the replay then copies the flags into the
+  docs, a second source that drifts from the step's.
 - *The flags in a config file, the targets in the matrix* (chosen): `.cargo/fuzz.toml` holds the
   flags under the x86_64 Linux target table, read only when a command names it (`cargo +nightly
   --config .cargo/fuzz.toml run`), so the workflow and a replay share one source for them.
   `fuzz.yml`'s matrix holds each target's package, seeds, longest input and limits, and its step
-  is the run's command line; docs/testing.md shows the run and the replay against a row. A
-  `RUSTFLAGS` in the environment replaces the file's flags, so the docs say to leave it unset.
+  is the run's command line; docs/testing.md shows the run and the replay with a row's fields as
+  placeholders. Cargo joins the file's flags with a developer's own target rustflags, and a
+  `RUSTFLAGS` replaces them, so the docs say to leave both out of a replay, and to replay a
+  finding that depends on codegen with the nightly the run's log names.
+
+The workflow also carries each target's findings in a cache entry of their own and reads them
+back as inputs, so a night stays red until the fix of each lands rather than turning green when
+a run of 600 seconds does not reach the same path again.
 
 ### Consequences
 
@@ -281,10 +292,14 @@ options:
   the records step, for the reader to catch.
 - Bad, because there is no local command for a size check: `perf/size.toml` is edited by hand from
   the job's log, and its counts are Linux x86_64's.
-- Bad, because the fuzz task's tests go with it (`every_target_is_a_declared_example_with_seeds`,
-  the selection of targets by name, the refusal of a zero-second run and of a directory to
-  replay): a target renamed in one place fails the night's build, and a replay is a command a
-  developer copies from docs/testing.md with the row's limits (§8).
+- Bad, because the fuzz task's tests go with it (`a_run_builds_the_example_under_the_fuzzing_flags`,
+  `a_replay_runs_the_target_on_the_one_input`, `every_target_is_a_declared_example_with_seeds`,
+  `only_x86_64_linux_runs_the_fuzzers`, the selection of targets by name, the refusal of a
+  zero-second run), and so does its untested refusal of a directory to replay. The reader of a
+  change to `.cargo/fuzz.toml` or `fuzz.yml`'s matrix holds the flags, the libFuzzer arguments
+  and each row's package and seeds: a target renamed in one place fails the night's build, but a
+  dropped coverage flag or an emptied seed directory leaves a green run. A replay is a command a
+  developer writes from docs/testing.md with the row's fields, on x86_64 Linux (§8).
 
 ### Confirmation
 
@@ -308,7 +323,8 @@ options:
   that job on its branch at the head that merges: `gh workflow run CI --ref <branch>` takes the
   full lane, and the pull request's body links the run. AGENTS.md "Before each push" item 14 asks
   the author for it; the readers of "Before a merge" read git, not the body, so the author holds
-  it.
+  it. A pull request that changes `fuzz.yml`, `.cargo/fuzz.toml`, a target or its seeds runs
+  `gh workflow run Fuzz --ref <branch>` at the head that merges the same way (§8).
 - `cargo test -p xtask` holds doctor's wasm-bindgen row to one locked version
   (`the_wasm_bindgen_row_needs_one_locked_version_installed`, `this_lock_pins_one_wasm_bindgen`).
 

@@ -4,15 +4,20 @@
 #     --target x86_64-unknown-linux-gnu -p <package> --example fuzz_<target> -- <libFuzzer arguments>
 #
 # The nightly fuzz workflow (.github/workflows/fuzz.yml) and a developer who
-# replays its finding build the same binary from it (docs/testing.md,
-# "Fuzzing"). The flags are the ones `cargo fuzz` passes: the `fuzzing` name
-# the targets, their manifests and some decoders test (`png` and `fdeflate`
-# skip their checksums under it, so a mutated image gets past the CRC), the
-# edge counters and comparison hooks libFuzzer steers by, and AddressSanitizer,
-# so a read or write out of bounds in `unsafe` code ends the run where it
-# happens. Under a target table with `--target` named they reach the target's
-# crates only, never a build script or a procedural macro, and only on the one
-# host the sanitizer runtime is written for. `-Zsanitizer` needs nightly.
+# replays its finding build with the same flags from it (docs/testing.md,
+# "Fuzzing"). They are the core of what `cargo fuzz` passes: the `fuzzing`
+# name the targets, their manifests and some decoders test (`png` and
+# `fdeflate` skip their checksums under it, so a mutated image gets past the
+# CRC), the edge counters and comparison hooks libFuzzer steers by, and
+# AddressSanitizer, so a read or write out of bounds in `unsafe` code ends the
+# run where it happens. `cargo fuzz` also passes the stack-depth counter and
+# turns off branch folding, and builds release with one codegen unit; this
+# build is the dev profile without them. Under a target table with `--target`
+# named the flags reach the target's crates only, never a build script or a
+# procedural macro, and only on the one host the sanitizer runtime is written
+# for. Cargo joins them with any `target.x86_64-unknown-linux-gnu.rustflags` of
+# another config file, and a `RUSTFLAGS` in the environment replaces them.
+# `-Zsanitizer` needs nightly.
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = [
