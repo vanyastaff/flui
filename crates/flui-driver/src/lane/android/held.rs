@@ -189,6 +189,17 @@ impl Command {
     }
 }
 
+/// A part of what the lane holds that is released on its own, so one part's failure never hides
+/// what another left held (`crate::lane::release_outcome`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Part {
+    /// The one contact `input motionevent` holds.
+    Contact,
+    /// The pen's range and touch, on its `uinput` device.
+    Pen,
+}
+
 /// What the device takes, as the plan reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Abilities {
@@ -574,31 +585,45 @@ impl HeldInput {
         }
     }
 
-    /// The commands that release what the device holds of the lane's, in order.
+    /// The commands that release what the device holds of the lane's, in order: the contact's,
+    /// then the pen's.
     #[must_use]
     pub fn release_plan(&self) -> Vec<Command> {
-        let mut commands = Vec::new();
-        if let Some(contact) = &self.contact {
-            commands.push(Command::Motion {
-                pointer: contact.pointer.clone(),
-                source: contact.source,
-                action: MotionAction::Cancel,
-                at: contact.at,
-            });
-        }
-        if let Some(pen) = self.pen {
-            if pen.touching {
-                commands.push(Command::Pen {
+        let mut commands = self.release_plan_of(Part::Contact);
+        commands.extend(self.release_plan_of(Part::Pen));
+        commands
+    }
+
+    /// The commands that release what `part` holds, in order.
+    #[must_use]
+    pub fn release_plan_of(&self, part: Part) -> Vec<Command> {
+        match part {
+            Part::Contact => self
+                .contact
+                .iter()
+                .map(|contact| Command::Motion {
+                    pointer: contact.pointer.clone(),
+                    source: contact.source,
+                    action: MotionAction::Cancel,
+                    at: contact.at,
+                })
+                .collect(),
+            Part::Pen => {
+                let Some(pen) = self.pen else {
+                    return Vec::new();
+                };
+                let lift = pen.touching.then_some(Command::Pen {
                     change: PenChange::Lift,
                     at: pen.at,
                 });
+                lift.into_iter()
+                    .chain(std::iter::once(Command::Pen {
+                        change: PenChange::Leave,
+                        at: pen.at,
+                    }))
+                    .collect()
             }
-            commands.push(Command::Pen {
-                change: PenChange::Leave,
-                at: pen.at,
-            });
         }
-        commands
     }
 
     /// Forget what is held here alone, the keys and where each pointer is, as the end of a
@@ -610,12 +635,6 @@ impl HeldInput {
         self.modifier_used = false;
     }
 
-    /// Forget the keys a timed-out command may have left down, once they were named: `input` has
-    /// no release for them.
-    pub fn forget_unsure(&mut self) {
-        self.unsure.clear();
-    }
-
     /// The pen's device is gone, and with it everything it held: the kernel removes a device's
     /// contacts with it.
     pub fn pen_device_gone(&mut self) {
@@ -625,22 +644,42 @@ impl HeldInput {
     /// What the device still holds of the lane's, by name.
     #[must_use]
     pub fn held_names(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        if let Some(contact) = &self.contact {
-            names.push(match contact.source {
-                MotionSource::Touchscreen => format!("the touch contact {}", contact.pointer),
-                MotionSource::Mouse => format!("the mouse button of {}", contact.pointer),
-            });
-        }
-        if let Some(pen) = self.pen {
-            names.push(if pen.touching {
-                "the pen, touching".to_owned()
-            } else {
-                "the pen, in range".to_owned()
-            });
-        }
+        let mut names = self.held_by(Part::Contact);
+        names.extend(self.held_by(Part::Pen));
         names.extend(self.unsure.iter().cloned());
         names
+    }
+
+    /// What `part` still holds on the device, by name.
+    #[must_use]
+    pub fn held_by(&self, part: Part) -> Vec<String> {
+        match part {
+            Part::Contact => self
+                .contact
+                .iter()
+                .map(|contact| match contact.source {
+                    MotionSource::Touchscreen => format!("the touch contact {}", contact.pointer),
+                    MotionSource::Mouse => format!("the mouse button of {}", contact.pointer),
+                })
+                .collect(),
+            Part::Pen => self
+                .pen
+                .iter()
+                .map(|pen| {
+                    if pen.touching {
+                        "the pen, touching".to_owned()
+                    } else {
+                        "the pen, in range".to_owned()
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// The keys a timed-out command may have left down, by name, forgotten once taken: `input`
+    /// has no release for them, so they are named once.
+    pub fn take_unsure(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.unsure)
     }
 
     /// Whether the device holds anything of the lane's.

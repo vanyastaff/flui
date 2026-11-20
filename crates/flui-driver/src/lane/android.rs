@@ -42,7 +42,6 @@ pub mod uinput;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use flui_protocol::geometry::LogicalPoint;
 use flui_protocol::input::PointerDevice;
 use flui_protocol::launch::{ENDPOINT_EXTRA, EXIT_ON_DISCONNECT_EXTRA, TOKEN_EXTRA};
 use flui_protocol::session::{Isolation, Placement};
@@ -52,7 +51,7 @@ use self::adb::{
 };
 use self::device::DeviceFacts;
 use self::guard::GeteventGuard;
-use self::held::{Abilities, Command, HeldInput, PenChange};
+use self::held::{Abilities, Command, HeldInput, Part, PenChange};
 use self::safety::{Display, Refusal};
 use self::uiautomator::{Bounds, UiDump};
 use crate::coordinates::{DevicePoint, WindowGeometry};
@@ -82,9 +81,6 @@ const SYNC_WITHIN: Duration = Duration::from_secs(5);
 /// How far the app's surface may be from its logical size times its scale, in pixels on each
 /// side: a view is laid out in whole pixels.
 const SIZE_TOLERANCE: f64 = 2.0;
-
-/// How long a pause waits between two looks at the guard.
-const WATCH_SLICE: Duration = Duration::from_millis(50);
 
 /// An app to start on the device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -453,22 +449,43 @@ impl AndroidLane {
         sent
     }
 
+    /// Release what `part` holds: every command of its release tried, and what it still holds
+    /// named with its first failure.
+    fn release_part(&mut self, part: Part) -> Result<()> {
+        let mut first = None;
+        for command in self.held.release_plan_of(part) {
+            if let Err(error) = self.deliver(&command) {
+                first.get_or_insert(error);
+            }
+        }
+        let held = self.held.held_by(part);
+        if held.is_empty() {
+            // A failure that left nothing held (the pen's device gone, and its contacts with it)
+            // is no failure of the release.
+            return Ok(());
+        }
+        Err(Error::ReleaseFailed {
+            lane: LANE.to_owned(),
+            held,
+            message: first.map_or_else(
+                || "the release left it held".to_owned(),
+                |error| error.to_string(),
+            ),
+        })
+    }
+
     /// Wait out `pause` whole, looking at the guard between slices.
     fn pause(&mut self, pause: Duration) -> Result<()> {
-        let deadline = Instant::now() + pause;
-        loop {
+        for slice in crate::lane::pacing::slices(pause) {
             if let Some(foreign) = self.guard.as_mut().and_then(ActivityGuard::foreign_input) {
                 return Err(Error::InterruptedByUser {
                     lane: LANE.to_owned(),
                     event: foreign.description,
                 });
             }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Ok(());
-            }
-            std::thread::sleep(left.min(WATCH_SLICE));
+            std::thread::sleep(slice);
         }
+        Ok(())
     }
 }
 
@@ -594,7 +611,11 @@ impl Lane for AndroidLane {
     fn locate_window(&mut self, placement: &Placement) -> Result<WindowGeometry> {
         let screen = self.find(placement)?;
         let origin = DevicePoint::new(screen.surface.left, screen.surface.top);
-        Ok(window_geometry(origin, placement))
+        Ok(crate::lane::screen::window_geometry(
+            origin,
+            placement.size,
+            placement.scale,
+        ))
     }
 
     fn check(&mut self, events: &[OsEvent]) -> Result<()> {
@@ -627,28 +648,22 @@ impl Lane for AndroidLane {
     }
 
     fn release_all(&mut self) -> Result<()> {
-        let mut first = None;
-        for command in self.held.release_plan() {
-            if let Err(error) = self.deliver(&command) {
-                first.get_or_insert(error);
-            }
-        }
-        self.held.forget_plans();
-        if !self.held.holds_anything() {
-            return Ok(());
-        }
-        let held = self.held.held_names();
+        let contact = self.release_part(Part::Contact);
+        let pen = self.release_part(Part::Pen);
         // A key a timed-out command may have left down has no release through `input`: it is
         // named once, here, and the next release does not fail on it again.
-        self.held.forget_unsure();
-        Err(Error::ReleaseFailed {
-            lane: LANE.to_owned(),
-            held,
-            message: first.map_or_else(
-                || "`input` cannot release a key without pressing it".to_owned(),
-                |error| error.to_string(),
-            ),
-        })
+        let unsure = self.held.take_unsure();
+        let keys = if unsure.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held: unsure,
+                message: "`input` cannot release a key without pressing it".to_owned(),
+            })
+        };
+        self.held.forget_plans();
+        crate::lane::release_outcome([contact, pen, keys])
     }
 
     fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
@@ -682,17 +697,6 @@ impl Lane for AndroidLane {
         };
         screencap::crop(width, height, &rgba, screen.surface).map_err(lane_error)
     }
-}
-
-/// The geometry the driver maps the app's points with: its surface's top-left pixel at `origin`.
-fn window_geometry(origin: DevicePoint, placement: &Placement) -> WindowGeometry {
-    // Lifted a millionth of a pixel so `floor((origin + x) * scale)` maps back to its column.
-    let logical = |device: i32| (f64::from(device) + 1e-6) / placement.scale;
-    WindowGeometry::new(
-        LogicalPoint::new(logical(origin.x), logical(origin.y)),
-        placement.size,
-        placement.scale,
-    )
 }
 
 impl Drop for AndroidLane {
