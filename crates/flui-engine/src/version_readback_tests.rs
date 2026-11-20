@@ -3231,8 +3231,8 @@ fn a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings() 
     drop(first);
 }
 
-/// The capture that stands in for a `Renderer` plans its frames as the
-/// `Renderer` does: a frame of another scene owner's version drops the
+/// The capture, which owns its painter, plans its frames as a target that
+/// owns one must: a frame of another scene owner's version drops the
 /// recordings of the owner drawn before.
 #[test]
 fn a_renderer_frame_of_another_owners_version_drops_the_first_owners_recordings() {

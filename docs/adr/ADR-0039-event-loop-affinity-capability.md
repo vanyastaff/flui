@@ -255,7 +255,7 @@ stays the default). `AppHandle` sends only show and quit intents; a
 resource ownership, so dropping the receiver does not cancel an accepted show.
 Show requests admitted during disposal reserve the next generation; quit
 cancels active and queued generations. A successful reply proves installation
-and a redraw request, not GPU presentation. Renderer, UI runtime, root and input
+and a redraw request, not GPU presentation. A raster slot, UI runtime, root and input
 belong to each window; clipboard, execution services, exit hooks and the asset
 watcher belong to the loop. The shape follows Iced's daemon and GPUI's
 owner-context window creation, with a closed command vocabulary instead of

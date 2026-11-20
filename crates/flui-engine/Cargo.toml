@@ -87,8 +87,8 @@ web-time = { workspace = true }
 # Raster executor lifecycle channel — bounded, typed
 # backpressure, following the render invalidation channel's precedent.
 crossbeam-channel = { workspace = true }
-# Compile-time Send/Sync pins (ADR-0045 decision 1's `Renderer: Send`
-# derivation and `!Sync` posture) — same convention as flui-app/flui-view/
+# Compile-time Send/Sync pins (`GpuContext: Send`, `HeadlessRenderer: !Sync`,
+# `SurfaceFactory: !Send`) — same convention as flui-app/flui-view/
 # flui-rendering etc.
 static_assertions = { workspace = true }
 
@@ -149,8 +149,8 @@ criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test
 # support) — the only remaining `image` consumer, and it is a dev/test one.
 image = { workspace = true }
-# Compile-fail fixtures pinning ADR-0045 decision 1: an unwrapped raw
-# platform handle breaks `Renderer`'s derived `Send`. Same
+# Compile-fail fixtures pinning ADR-0305 §2: a `SurfaceFactory` stays on its
+# owner thread and takes only owned, `'static` targets. Same
 # crate/version flui-painting uses for its compile-fail suite
 # (`crates/flui-painting/tests/compile_fail.rs`).
 trybuild = { workspace = true }

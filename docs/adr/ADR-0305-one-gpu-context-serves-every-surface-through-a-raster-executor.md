@@ -731,12 +731,12 @@ the facade. Every production use of `with_backend` becomes:
 
 ### Confirmation
 
-- Compiler: `SurfaceFactory` is `!Send` (compile-fail fixture `surface_factory_is_owner_local`, to
-  be added); `GpuContext` is `Send` and not `Sync` (`static_assertions` beside the type, to be
-  added, as `Renderer` has them at `renderer.rs:914-915`); every enum of §3 and §4 is exhaustive,
-  so a new command or verdict breaks every match. The fixture `raster_backend_requires_send` is
-  deleted with the supertrait, and `renderer_new_rejects_borrowed_window` becomes
-  `surface_factory_rejects_borrowed_window`.
+- Compiler: `SurfaceFactory` is `!Send` (compile-fail fixture `surface_factory_is_owner_local`);
+  `GpuContext` is `Send` and not `Sync` (`static_assertions` beside the type); every enum of §3
+  and §4 is exhaustive, so a new command or verdict breaks every match. The fixture
+  `raster_backend_requires_send` is deleted with the supertrait, and
+  `surface_factory_rejects_borrowed_window` pins the owned `'static` target of the window's
+  surface.
 - Gates: `cargo xtask globals` admits no new `static` or `thread_local!`, so none holds a
   context, a device or an atlas; the `cargo xtask send-impls` and `cargo xtask send-positions`
   lists do not grow.

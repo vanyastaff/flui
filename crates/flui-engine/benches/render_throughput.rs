@@ -354,11 +354,11 @@ fn warm_path_recording(c: &mut Criterion) {
 /// The same scene rasterised full-screen versus clipped to a small damage
 /// rect, at a realistic surface size.
 ///
-/// `DamageTracker` and the scissor that consumes it both exist and are wired
-/// in `render_scene`; what is missing is a PRODUCER — `Renderer::mark_dirty`
-/// has no production caller, so every frame calls `mark_full_repaint` and the
-/// scissor never narrows. This measures what that costs, so the producer, when
-/// it lands, has a baseline to be checked against rather than an assertion.
+/// A partial frame's damage reaches the `DamageTracker` from the retained
+/// scene through the window's slot, and the scissor that consumes it narrows
+/// the frame's work. This measures what that saves against a full repaint, so
+/// a change to either side has a baseline to be checked against rather than
+/// an assertion.
 ///
 /// The layer counts are the axis that matters: with the damage rect fixed at
 /// 0.8% of the surface, the scissored cost stays roughly flat while the full

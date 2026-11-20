@@ -617,7 +617,7 @@ impl MacOSWindow {
         // set up — on a cold launch, up to several seconds (2.81 s
         // measured). The user-facing glitch this default produces is a
         // blank white window: the window is
-        // ordered front *before* `Renderer::render_scene` ever reaches
+        // ordered front *before* its slot's first frame ever reaches
         // `queue.present`, so the viewer sees the bare background, not
         // the application. Setting the background to
         // `underPageBackgroundColor` — the dark neutral AppKit uses for

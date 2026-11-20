@@ -214,7 +214,7 @@ impl WgpuPainter {
     /// Create a WgpuPainter with shared device and queue.
     ///
     /// Use this when the device/queue are already wrapped in Arc
-    /// (e.g., shared with Renderer).
+    /// (e.g., shared with another painter on the same device).
     pub fn with_shared_device(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -545,10 +545,10 @@ impl WgpuPainter {
 
         // NOTE: texture-cache maintenance is intentionally NOT done here.
         // `render` runs multiple times per frame — each backdrop-filter flush
-        // (backend.rs / renderer.rs) plus the final flush — on the SAME cache.
+        // plus the final flush — on the SAME cache.
         // Resetting use-counters here would mis-classify textures used in an
-        // earlier pass as unused and evict / atlas-reset them mid-frame.  The
-        // Renderer calls `end_frame_maintenance` exactly once per frame instead.
+        // earlier pass as unused and evict / atlas-reset them mid-frame.
+        // `finish_frame` calls `end_frame_maintenance` exactly once per frame instead.
 
         Ok(())
     }

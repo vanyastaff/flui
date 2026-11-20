@@ -448,7 +448,7 @@ impl GpuReplay {
                 // `blend(transparent_fg, stale_backdrop)` there, potentially
                 // preserving prior-frame stale pixels in the out-of-damage slice.
                 //
-                // Self-healing: `renderer.rs` detects straddling advanced shapes
+                // Self-healing: the frame protocol detects straddling advanced shapes
                 // after `render_layer_recursive` and sets
                 // `FrameProtocol::force_full_next_frame`, so the NEXT frame repaints the
                 // full `device_bounds` without scissor restriction. A partial

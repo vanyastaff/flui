@@ -1,8 +1,8 @@
 //! What a frame became once a backend drew it.
 //!
 //! [`PresentDisposition`] is the answer a window slot of the raster executor
-//! ([`crate::RasterExecutor`]) and the renderer of a scene
-//! drawn outside one (`Renderer::render_scene`) give for each frame.
+//! ([`crate::RasterExecutor`]) gives for each frame, a scene lent outside the
+//! slot's frames included.
 
 /// What a backend did with the frame it was handed.
 ///

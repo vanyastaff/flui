@@ -96,7 +96,7 @@ pub(crate) struct BackdropSample {
 ///
 /// ## Clamp and round policy
 ///
-/// Mirrors `renderer.rs:1384-1396` exactly:
+/// Every edge follows one rule:
 /// - Round each edge with `.round()` before truncation to avoid 1-pixel undersize
 ///   on sub-pixel boundaries (DPR ≠ 1 or fractional-offset CTMs).
 /// - Clamp both edges to `[0, surface_extent]`.

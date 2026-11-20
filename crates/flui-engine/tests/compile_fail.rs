@@ -1,7 +1,5 @@
-//! Compile-fail tests pinning ADR-0305 §2 (a `SurfaceFactory` stays on its
-//! owner thread and makes surfaces only of owned targets), ADR-0045 decision 1
-//! (`Renderer: Send` is a compiler derivation, not a blanket `unsafe impl`) and
-//! that `Renderer::new` accepts only an owned, `'static` surface target: a
+//! Compile-fail tests pinning ADR-0305 §2: a `SurfaceFactory` stays on its
+//! owner thread, and it makes surfaces only of owned, `'static` targets, so a
 //! borrowed window does not type-check.
 //!
 //! Uses trybuild, the same harness as `flui-painting`'s compile-fail suite

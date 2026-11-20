@@ -12,10 +12,11 @@
 - **Supersedes:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §4 only, the pacer of its Wayland
   row ("the blocking Fifo present"): the compositor's frame callback alone paces a Wayland surface.
 - **Supersedes:** [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) decision 1's
-  public bound only: `Renderer::new` takes the window's `Arc<dyn SurfaceTarget>`, and
+  public bound only: the window's surface is built from its `Arc<dyn SurfaceTarget>`, and
   `WindowTarget` is the lease's crate-private bound.
-- **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) §5's clause that `Renderer::new` keeps
-  ADR-0063's `WindowTarget` bound: it takes the surface target, which says who paces the surface.
+- **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) §5's clause that the window's surface
+  keeps ADR-0063's `WindowTarget` bound: it takes the surface target, which says who paces the
+  surface.
 - **Related:** [ADR-0254](ADR-0254-window-contract.md) §5 (`SurfaceTarget::pre_present_notify`
   arms the frame callback), [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   §5 (the window's slot configures its surface), [ADR-0243](ADR-0243-one-testing-kit-per-layer.md)
@@ -100,10 +101,10 @@ pub(crate) fn present_mode(pacing: FramePacing, offered: &[wgpu::PresentMode]) -
 
 - The Wayland host's surface target answers `Compositor`, whether its window is open or retired;
   every other host keeps the default.
-- `Renderer::new` and `SurfaceFactory::create` take the window's `Arc<dyn SurfaceTarget>`; the
-  surface lease records `frame_pacing()` when it is made and every configuration after (the
-  renderer's build, recovery, recreation and colour change, the raster executor's window slot)
-  reads it from the lease, so a reconfiguration after the window retired its target presents as
+- `GpuContext::bootstrap` and `SurfaceFactory::create` take the window's `Arc<dyn SurfaceTarget>`;
+  the surface lease records `frame_pacing()` when it is made and every configuration of the
+  window's slot after (its size, latency and colour changes, its recreation) reads it from the
+  lease, so a reconfiguration after the window retired its target presents as
   before. `WindowTarget` stays the lease's crate-private handle bound (ADR-0063).
 - A surface the display paces presents in `Fifo`, as ADR-0353 states. A compositor-paced surface
   presents in `Mailbox` where the surface offers it, else `Immediate`, else `Fifo`: Mesa offers both
@@ -144,8 +145,8 @@ pub(crate) fn present_mode(pacing: FramePacing, offered: &[wgpu::PresentMode]) -
 - Good, because the host that arms the frame callback is the one that states the pacing, read
   once into the lease, so every configuration path agrees and no guess from a handle's kind is
   made.
-- Bad, because `Renderer::new` no longer takes a bare raw-handle owner: a caller hands it a
-  `SurfaceTarget`.
+- Bad, because the surface constructors no longer take a bare raw-handle owner: a caller hands
+  them a `SurfaceTarget`.
 
 ### 2. `Fifo` everywhere, no grace
 

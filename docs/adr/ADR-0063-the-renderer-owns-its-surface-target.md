@@ -25,6 +25,19 @@
 - **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
   for decision 1's public bound only: `Renderer::new` takes the window's `Arc<dyn SurfaceTarget>`,
   which also says who paces the surface, and `WindowTarget` is the lease's crate-private bound.
+- **Superseded-by:** [ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md) for every
+  clause that names the per-window `Renderer`, which is gone: decision 1's constructor and its
+  `#[doc(hidden)]` status, decision 2's `Renderer: Send`/`!Sync` fields and `recover()`, decision
+  4's cancellation of a half-built constructor and its `Released` token, decision 6's renderer
+  methods and its device-loss `recover()`, the Negative consequence of the changed signature and
+  the amendment to ADR-0045 decision 1. The owned-`'static`-target rule stands in the code's terms:
+  a window's surface is built by `SurfaceFactory::create(Arc<dyn SurfaceTarget>)` (and the first
+  one by `GpuContext::bootstrap`), which hands wgpu's safe `create_surface` an owned target; the
+  window slot holds it in `SurfaceLease<wgpu::Surface<'static>>`, surface declared before target,
+  and `WindowTarget` is that lease's crate-private blanket bound. A borrowed window does not
+  compile (`surface_factory_rejects_borrowed_window`), probing before creating answers
+  `SurfaceTargetUnavailable`, and a returned window is always rebuilt through the raster
+  executor's `Release` and `Restore` commands (ADR-0305).
 
 *A `wgpu::Surface<'static>` is sound only while the window behind it exists. The engine used to
 prove that with another crate's convention; now it proves it with ownership, and recovery asks

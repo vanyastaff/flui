@@ -248,8 +248,9 @@ pub struct AppConfig {
     /// Pointer interpolation for this window's presentation; disabled by default.
     pub pointer_resampling: PointerResampling,
     /// The colour capability requested of this window's surface; `Srgb8` by default.
-    /// The renderer grants as much as the surface and display allow and reports
-    /// the rest through `Renderer::surface_color`.
+    /// The window's slot grants as much as the surface and display allow, falls
+    /// back toward `Srgb8` for the rest and logs a `surface_color_downgraded`
+    /// warning on the `flui.gpu` target when it does.
     pub surface_color: flui_engine::SurfaceColor,
 
     /// Optional per-window close-request veto: asked, for
@@ -414,8 +415,8 @@ impl AppConfig {
     }
 
     /// Ask for a wider or brighter surface than 8-bit sRGB. The request is met
-    /// as far as the surface and the display allow; read what was granted from
-    /// `Renderer::surface_color`.
+    /// as far as the surface and the display allow; a request it cannot meet is
+    /// logged as a `surface_color_downgraded` warning on the `flui.gpu` target.
     #[must_use]
     pub fn surface_color(mut self, color: flui_engine::SurfaceColor) -> Self {
         self.surface_color = color;

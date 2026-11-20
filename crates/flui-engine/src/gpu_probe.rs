@@ -189,10 +189,11 @@ async fn answer(
             .transpose()
     };
     // A canvas keeps the first context kind it hands out, so WebGPU gets its
-    // device before it claims the canvas (as `Renderer::new` does).
+    // device before it claims the canvas: a browser that exposes WebGPU but
+    // refuses the adapter or device leaves the canvas free for WebGL2.
     if attempt.backend == GpuBackend::WebGpu {
         let (adapter, _, device, queue) =
-            crate::Renderer::adapter_and_device(&instance, attempt, None).await?;
+            crate::adapter::adapter_and_device(&instance, attempt, None).await?;
         let first = surface(&instance)?;
         return Ok(Answered {
             instance,
@@ -205,7 +206,7 @@ async fn answer(
     }
     let first = surface(&instance)?;
     let (adapter, _, device, queue) =
-        crate::Renderer::adapter_and_device(&instance, attempt, first.as_ref()).await?;
+        crate::adapter::adapter_and_device(&instance, attempt, first.as_ref()).await?;
     Ok(Answered {
         instance,
         adapter,

@@ -1,4 +1,4 @@
-//! The frame protocol the windowed renderer and the headless retained
+//! The frame protocol a window slot and the headless retained
 //! capture share (ADR-0087 §4): the damage owed, the retained target that
 //! holds the last frame, and the sequence that turns a [`crate::damage::FramePlan`] into
 //! GPU work — pick the target, clear it unless the frame is partial, record
@@ -9,6 +9,7 @@
 //! pins about partial frames runs through this one implementation.
 
 use crate::device_domain::DeviceDomain;
+#[cfg(test)]
 use flui_foundation::geometry::Rect;
 use std::sync::Arc;
 
@@ -80,6 +81,80 @@ pub(crate) const BACKGROUND: flui_painting::styling::Color = flui_painting::styl
 pub(crate) fn background_clear_value() -> wgpu::Color {
     let [r, g, b, a] = BACKGROUND.to_rgba_f32_array().map(f64::from);
     wgpu::Color { r, g, b, a }
+}
+
+/// Records one frame's content into `painter`: resets the per-frame
+/// state and walks the scene, once for a full frame and once per rect of
+/// the region `partial` redraws. Each pass opens
+/// with `damage::begin_partial` (its rect's scissor and the clear inside
+/// it) and walks the scene culled by its own rect. Answers what its walk
+/// and recording did.
+///
+/// A window slot's swapchain frame and the crate's headless retained
+/// capture both record through this, so the partial-frame protocol a
+/// readback test pins is the one the swapchain path runs. Submitting the
+/// painter's batches stays with the caller. `reads` says whether the walk
+/// may replay kept recordings; the cache settles under its budget once the
+/// walk is done.
+pub(crate) fn record_frame_content(
+    painter: &mut crate::painter::WgpuPainter,
+    scene: &flui_layer::Scene,
+    partial: Option<&flui_layer::Region>,
+    reads: crate::recording_cache::CacheReads,
+) -> EngineResult<RasterCounters> {
+    let recorded = record_passes(painter, scene, partial, reads)?;
+    painter.settle_recording_cache();
+    Ok(recorded)
+}
+
+/// [`record_frame_content`]'s walks.
+fn record_passes(
+    painter: &mut crate::painter::WgpuPainter,
+    scene: &flui_layer::Scene,
+    partial: Option<&flui_layer::Region>,
+    reads: crate::recording_cache::CacheReads,
+) -> EngineResult<RasterCounters> {
+    use crate::layer_dispatcher::LayerDispatcher;
+
+    let Some(region) = partial else {
+        let mut backend = LayerDispatcher::new(painter);
+        // Reset per-frame clip/transform/opacity/layer state so that
+        // partial-damage scissors from frame N cannot leak into frame N+1.
+        backend.painter_mut().begin_frame_in_scope();
+        return crate::layer_walk::record_scene(scene.version(), None, reads, &mut backend);
+    };
+    let mut recorded = RasterCounters::default();
+    for (pass, &rect) in (0_u32..).zip(region.rects()) {
+        // A dispatcher per pass: its Drop calls flush_active_transform(),
+        // which balances any deferred lazy-coalescing save left by
+        // `with_transform`, so the reset below finds the stacks balanced
+        // and the next pass starts from no scissor but its own.
+        let mut backend = LayerDispatcher::new(painter);
+        backend.painter_mut().begin_frame_in_scope();
+        backend.painter_mut().begin_region_pass(pass);
+        // The walk culls by the whole pixels the scissor admits: a
+        // boundary that reaches only the edge pixel still draws its share
+        // of that pixel, which the clear wiped.
+        let redrawn = crate::damage::begin_partial(backend.painter_mut(), rect);
+        tracing::trace!(
+            left = rect.left(),
+            top = rect.top(),
+            right = rect.right(),
+            bottom = rect.bottom(),
+            "Damage scissor applied"
+        );
+        // Depth-first traversal of the scene. Backdrop-filter and
+        // advanced-blend passes read from `render_texture`, which always
+        // has COPY_SRC here: the swapchain image when the surface offers
+        // it, the retained target (created with it) otherwise. A
+        // version's walk skips the boundaries and chunks this rect cannot
+        // reach.
+        recorded +=
+            crate::layer_walk::record_scene(scene.version(), Some(redrawn), reads, &mut backend)?;
+
+        recorded.region_passes = recorded.region_passes.saturating_add(1);
+    }
+    Ok(recorded)
 }
 
 /// The parts of a frame that depend on where it is presented.
@@ -175,7 +250,7 @@ pub(crate) struct FrameTarget<'a> {
     pub(crate) format: wgpu::TextureFormat,
 }
 
-/// A renderer's damage, its retained target and the one-frame promotion to a
+/// A presentation's damage, its retained target and the one-frame promotion to a
 /// full repaint.
 #[derive(Debug)]
 pub(crate) struct FrameProtocol {
@@ -239,27 +314,17 @@ impl FrameProtocol {
         }
     }
 
-    /// Constructs an empty painter with this scene source's font ownership.
-    /// Recovery and surface-format changes replace GPU resources, not the
-    /// source namespace selected by the last scene.
-    pub(crate) fn new_painter(
-        &self,
-        domain: Arc<DeviceDomain>,
-        format: wgpu::TextureFormat,
-        size: (u32, u32),
-    ) -> crate::painter::WgpuPainter {
-        crate::painter::WgpuPainter::with_domain_and_font_source(
-            domain,
-            format,
-            size,
-            self.font_source,
-        )
-    }
-
     /// Adds the whole pixels `rect` touches on a surface of `surface` to the
     /// damage owed; a rect that is not finite owes a full repaint.
+    #[cfg(test)]
     pub(crate) fn mark_dirty(&mut self, rect: Rect<f64>, surface: (u32, u32)) {
         self.damage.mark_dirty(rect, surface);
+    }
+
+    /// Owes a full repaint.
+    #[cfg(test)]
+    pub(crate) fn mark_full_repaint(&mut self) {
+        self.damage.mark_full_repaint();
     }
 
     /// Owes a publication's `damage`: a region rect by rect, a full repaint
@@ -277,17 +342,6 @@ impl FrameProtocol {
         }
     }
 
-    /// Owes a full repaint.
-    pub(crate) fn mark_full_repaint(&mut self) {
-        self.damage.mark_full_repaint();
-    }
-
-    /// Whether any damage is owed.
-    #[must_use]
-    pub(crate) fn has_damage(&self) -> bool {
-        self.damage.has_damage()
-    }
-
     /// The surface was resized, reconfigured or rebuilt: every pixel is
     /// owed, and the retained target no longer matches what it shows.
     pub(crate) fn surface_changed(&mut self) {
@@ -301,12 +355,13 @@ impl FrameProtocol {
         self.retained.release();
     }
 
-    /// The plan for a frame of `scene` on a target that owns `painter` (a
-    /// `Renderer`, or the capture that stands in for one): `lineage` notes
-    /// the scene owner it draws, and the painter's recordings of the one it
-    /// drew before are dropped; the damage is closed over the backdrop
-    /// readers at `size`. A slot of the context's shared painter notes its
-    /// lineage in the context instead, which knows every slot.
+    /// The plan for a frame of `scene` on a target that owns `painter` (the
+    /// headless retained capture): `lineage` notes the scene owner it draws,
+    /// and the painter's recordings of the one it drew before are dropped;
+    /// the damage is closed over the backdrop readers at `size`. A slot of
+    /// the context's shared painter notes its lineage in the context
+    /// instead, which knows every slot.
+    #[cfg(test)]
     pub(crate) fn plan_scene(
         &mut self,
         painter: &mut crate::painter::WgpuPainter,
@@ -563,8 +618,8 @@ impl FrameProtocol {
         self.damage.reset();
     }
 
-    /// Opens a frame that no damage producer accounted for (a scene rendered
-    /// straight through `Renderer::render_scene` instead of an executor slot):
+    /// Opens a frame that no damage producer accounted for (a scene
+    /// lent to a window slot outside its frames, `WindowSlot::render_lent`):
     /// it renders in full.
     pub(crate) fn begin_unmanaged(&mut self) {
         self.damage.mark_full_repaint();

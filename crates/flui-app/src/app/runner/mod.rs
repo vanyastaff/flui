@@ -667,7 +667,7 @@ mod tests {
     /// `bootstrap_desktop`/`run_android`/`run_web` themselves cannot run in a
     /// unit test: each opens its window from inside a live platform event loop
     /// (`ActiveEventLoop` is unreachable outside `Platform::run`) and creates a
-    /// real GPU `Renderer`, gated behind the separate `testing` CI job
+    /// real GPU context, gated behind the separate `testing` CI job
     /// (WARP), not this one. This instead drives the exact ordering invariant
     /// headlessly: `HeadlessWindow::request_redraw` (flui-native's headless
     /// backend, used elsewhere in this crate's tests) dispatches its

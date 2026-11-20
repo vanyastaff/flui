@@ -277,7 +277,7 @@ Still to do:
 - The `flui-layer` conformance suite passes on both backends, including `BackdropFilter`,
   `ShaderMask` and `Follower`, or lists each as a named gap.
 - A per-app `AppConfig` off switch in place of `FLUI_DAMAGE`. A hot-reload plugin frame needs
-  no `forget()`: `Renderer::render_scene`, the path it renders through, makes the next frame
+  no `forget()`: `WindowSlot::render_lent`, the path it renders through, makes the next frame
   full.
 - A partial frame observed in a real window (`RUST_LOG=flui.gpu=trace` shows
   `Damage scissor applied`), and a readback run on a second adapter and backend.

@@ -1,9 +1,9 @@
 //! Damage accumulation for incremental rendering, and the plan a frame is
 //! rendered by.
 //!
-//! [`crate::damage::DamageTracker`] is the renderer's per-frame accumulator of dirty area:
-//! the consuming half of ADR-0061 (the scissor + self-heal in
-//! `Renderer::render_scene`). The producer is the retained scene: each
+//! [`crate::damage::DamageTracker`] is a frame protocol's per-frame accumulator of dirty
+//! area: the consuming half of ADR-0061 (the partial frame's scissor and the
+//! self-heal of `FrameProtocol`). The producer is the retained scene: each
 //! publication carries the footprint of its patches since the version on screen,
 //! held to that base by `flui_layer::RasterBase` (ADR-0304 §5, §7), and reaches the tracker through
 //! the raster executor's slot when the frame renders. A frame that is hidden or
@@ -63,6 +63,7 @@ impl DamageTracker {
     /// Adds the whole pixels `rect` touches on a `surface` of
     /// `(width, height)`. An empty rect, or one off the surface, is a no-op;
     /// a rect that is not finite owes a full repaint.
+    #[cfg(test)]
     pub(crate) fn mark_dirty(&mut self, rect: Rect<f64>, surface: (u32, u32)) {
         match DamageRect::try_enclosing(rect, surface) {
             Ok(Some(rect)) => self.mark_rect(rect),

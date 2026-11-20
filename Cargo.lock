@@ -2037,12 +2037,11 @@ name = "flui-hot-reload"
 version = "0.2.0-dev"
 dependencies = [
  "android_log-sys",
+ "flui",
  "flui-engine",
  "flui-foundation",
  "flui-layer",
- "flui-native",
  "flui-painting",
- "flui-platform",
  "flui-rendering",
  "flui-sdk",
  "image",

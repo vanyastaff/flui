@@ -134,13 +134,14 @@ pub(crate) enum SurfaceAcquireOutcome<T> {
     Outdated,
     Lost,
     Validation,
-    /// A windowed renderer whose surface is deliberately released right now
-    /// ([`crate::Renderer::release_surface`]), so there is nothing to present into
-    /// and nothing wrong.
+    /// A window whose surface is deliberately released right now (the
+    /// slot's `release`, on its owner's `RasterCommand::Release` or a
+    /// dropped lost surface), so there is nothing to present into and
+    /// nothing wrong.
     ///
-    /// This is a legitimate state, not a failure: a windowed renderer that
-    /// owns no frame at this instant is exactly what a suspend looks like
-    /// from here, and the next [`crate::Renderer::recreate_surface`] restores it.
+    /// This is a legitimate state, not a failure: a window that owns no
+    /// frame at this instant is exactly what a suspend looks like from here,
+    /// and the owner's next `RasterCommand::Restore` gives it a surface.
     ///
     /// Deliberately **not** unified with [`SurfaceAcquireOutcome::Lost`],
     /// which is the surface itself reporting loss and needs the reconfigure
@@ -165,7 +166,8 @@ impl From<wgpu::CurrentSurfaceTexture> for SurfaceAcquireOutcome<wgpu::SurfaceTe
 /// What the acquire path owes the surface between frames.
 ///
 /// Two obligations outlive the acquisition that raised them, so they live on
-/// the renderer rather than in a local of [`acquire_surface_texture_with`]:
+/// the surface's owner (a window slot) rather than in a local of
+/// [`acquire_surface_texture_with`]:
 ///
 /// - a frame acquired `Suboptimal` leaves the surface presentable but
 ///   mismatched (a rotation or scale change with the same extent), and only a
@@ -177,15 +179,16 @@ impl From<wgpu::CurrentSurfaceTexture> for SurfaceAcquireOutcome<wgpu::SurfaceTe
 ///   frames present as they are until a `Success` ends the episode, so a
 ///   surface the configuration cannot satisfy never costs a configure per
 ///   frame.
-/// - a recreation after `Lost` drops the old surface before building the new
-///   one ([`crate::Renderer::recreate_surface`]), so a failed one leaves the renderer
-///   holding no surface. Its owner never released it, so the acquire that
-///   finds it released must not read that as a deliberate release and skip
-///   frames forever: it recreates again first.
+/// - a recreation after `Lost` that fails ([`SurfaceAcquireBackend::recreate`])
+///   may leave its backend holding no surface. Its owner never released it,
+///   so the acquire that finds it released must not read that as a deliberate
+///   release and skip frames forever: it recreates again first. A window
+///   slot's recreation only drops the lost surface for its owner to restore,
+///   which cannot fail, so the obligation is the seam's, held for every
+///   backend.
 ///
-/// The owner's own [`crate::Renderer::release_surface`] and a successful
-/// [`crate::Renderer::recreate_surface`] supersede both, and a resize or reconfigure
-/// discharges the configure.
+/// A release by the surface's owner and a successful recreation supersede
+/// both, and a resize or reconfigure discharges the configure.
 #[derive(Debug, Default)]
 pub(crate) struct SurfaceRecovery {
     reconfigure_after_present: bool,
@@ -205,6 +208,9 @@ impl SurfaceRecovery {
     }
 }
 
+/// The surface the acquire path escalates over: a window slot's
+/// (`window_slot::Acquire`) and, in this module's tests, a scripted double,
+/// which is how the retry policy is pinned without a GPU surface.
 pub(crate) trait SurfaceAcquireBackend {
     type Frame;
 
@@ -212,8 +218,8 @@ pub(crate) trait SurfaceAcquireBackend {
 
     fn reconfigure(&mut self) -> Result<(), EngineError>;
 
-    /// Build a new surface against the same device; see
-    /// [`crate::Renderer::recreate_surface`].
+    /// Replace a surface still lost after a reconfigure: a window slot drops
+    /// it, and its owner restores a new one (ADR-0305 §2, §8).
     fn recreate(&mut self) -> Result<(), EngineError>;
 
     fn recovery(&mut self) -> &mut SurfaceRecovery;
@@ -228,7 +234,7 @@ pub(crate) trait SurfaceAcquireBackend {
 /// supports) is returned as it is, so the caller stops retrying instead of
 /// arming a retry loop. The obligation is kept either way: the surface may
 /// already be dropped, and without it the next frame the caller does ask for
-/// would read the renderer as released on purpose and skip in silence rather
+/// would read the surface as released on purpose and skip in silence rather
 /// than report the failure again.
 fn recreate_lost_surface<B>(backend: &mut B) -> Result<(), EngineError>
 where
@@ -302,7 +308,7 @@ where
                 return Ok(None);
             }
             SurfaceAcquireOutcome::Released => {
-                // Not an error and not a retry: the windowed renderer holds
+                // Not an error and not a retry: the window holds
                 // no surface right now because its owner released it, and
                 // there is nothing to present into until the owner recreates
                 // one. Reconfiguring would be meaningless (there is no
@@ -388,9 +394,9 @@ pub(crate) fn dx12_options() -> wgpu::Dx12BackendOptions {
     }
 }
 
-/// The windowed renderer's side of [`FrameProtocol::run`]: the swapchain
-/// frame's clear, content and blit, over the renderer's fields borrowed apart
-/// from its frame protocol.
+/// A window slot's side of [`FrameProtocol::run`]: the swapchain
+/// frame's clear, content and blit, over the context's painter and offscreen
+/// blit, borrowed apart from the slot's frame protocol.
 ///
 /// [`FrameProtocol::run`]: crate::frame_protocol::FrameProtocol::run
 pub(crate) struct SwapchainFrame<'a> {
@@ -444,7 +450,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RasterCounters> {
         let recorded =
-            crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
+            crate::frame_protocol::record_frame_content(self.painter, self.scene, partial, reads)?;
         let painter = &mut *self.painter;
 
         // The render target is always sampleable in this frame:
@@ -497,7 +503,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
 }
 
 #[cfg(test)]
-pub(crate) mod surface_acquisition_tests {
+mod surface_acquisition_tests {
     use super::{
         SurfaceAcquireBackend, SurfaceAcquireOutcome, SurfaceRecovery,
         acquire_surface_texture_with, reconfigure_after_suboptimal_present,
@@ -674,7 +680,8 @@ pub(crate) mod surface_acquisition_tests {
         ]
     }
 
-    pub(crate) fn acquisition_escalates_from_reconfigure_to_recreate() {
+    #[test]
+    fn acquisition_escalates_from_reconfigure_to_recreate() {
         for case in cases() {
             let mut surface = FakeSurface {
                 outcomes: case.outcomes.into_iter(),
@@ -686,8 +693,8 @@ pub(crate) mod surface_acquisition_tests {
                 surface.calls.clear();
                 let acquired = match acquire_surface_texture_with(&mut surface) {
                     Ok(Some(frame)) => {
-                        // The frame presents; the renderer then settles a
-                        // suboptimal acquisition, as `render_frame_inner` does.
+                        // The frame presents; the slot then settles a
+                        // suboptimal acquisition, as `WindowSlot::present` does.
                         if reconfigure_after_suboptimal_present(&mut surface)
                             .expect("the fake reconfigure succeeds")
                         {

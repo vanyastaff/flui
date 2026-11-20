@@ -222,18 +222,15 @@ Terminal 1 — build plugin on change:
 cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
 ```
 
-Terminal 2 — run host with in-process reload:
+Terminal 2 — run the host, a FLUI application that installs `ScenePluginHook` through `AppConfig::dev_reload`:
 
 ```bash
-# Linux/macOS
-FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
-
-# Windows
-set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
-cargo run -p flui-hot-reload --example scene_render
+# Loads target/debug/libflui_scene.so (.dylib on macOS, flui_scene.dll on
+# Windows); FLUI_SCENE_PLUGIN names another path.
+cargo run -p flui-hot-reload --features host-hook --example scene_render
 ```
 
-The host calls `HotReloadDriver::poll()` in its frame loop; when the `.so` mtime changes, it reloads without restarting.
+The hook checks the library for an update each frame; when it changes, the host reloads it without restarting and draws the new plugin's scene in place of the widget tree. Until a plugin is loaded, the window shows a view that says what to build.
 
 > **Windows note:** stop the host before rebuilding if the linker cannot overwrite a locked DLL. On Unix, `RTLD_LOCAL` avoids symbol collisions across reloads.
 

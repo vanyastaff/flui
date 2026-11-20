@@ -18,7 +18,7 @@
 // No hand-written production `unsafe` in this crate but two: surfaces come from wgpu's safe
 // `create_surface` over an owned `WindowTarget` (ADR-0063), and every GPU
 // handle is a wgpu value type. The exceptions are the read of DXGI frame
-// statistics (`renderer::dxgi_frame_statistics`), whose swap chain wgpu hands
+// statistics (`surface_present::dxgi_frame_statistics`), whose swap chain wgpu hands
 // out only through its hal escape, and the creation of the pipeline cache
 // from stored data (`pipeline_store::create_cache`), which wgpu offers only as
 // an `unsafe fn`; each carries its own `expect`. `deny` rather than `forbid` because
@@ -37,17 +37,19 @@
 // not a discovery.
 #![warn(unreachable_pub)]
 // The next-generation trait solver counts auto-trait proof depth honestly,
-// and proving `wgpu::Renderer: Send` descends through wgpu-core
-// (`Global -> Hub -> Registry -> RwLock<Storage<..>>`) past the default
-// limit of 128. On stable that is invisible; on nightly it is the
-// future-incompat lint `recursion_depth_exceeding_limit`
-// (rust-lang/rust#159228), which becomes a hard error once the solver
-// stabilises. Auto-trait proofs are structural and re-run in every crate
-// that needs `Renderer: Send`, so flui-app and the root examples carry the
-// same attribute. A manual `impl Send` on an intermediate type would
-// short-circuit the proof, but reopening a hand-written `Send` assertion
-// is exactly what ADR-0045 decision 1 removed; the limit is the honest fix
-// until wgpu adds the impls upstream (same class as rust-lang/rust#160036).
+// and proving that the raster thread's closure is `Send` (its lifecycle
+// channel carries a `ProbedDevice`, a wgpu device and queue) descends
+// through wgpu-core (`wgpu::Queue -> Global -> Hub -> Registry ->
+// RwLock<Storage<..>>`) past the default limit of 128. On stable that is
+// invisible; on nightly it is the future-incompat lint
+// `recursion_depth_exceeding_limit` (rust-lang/rust#159228), which becomes a
+// hard error once the solver stabilises. Auto-trait proofs are structural and
+// re-run in every crate that needs a wgpu handle to be `Send`, so flui-app
+// carries the same attribute. A manual `impl Send` on an intermediate type
+// would short-circuit the proof, but reopening a hand-written `Send`
+// assertion is exactly what ADR-0045 decision 1 removed; the limit is the
+// honest fix until wgpu adds the impls upstream (same class as
+// rust-lang/rust#160036).
 #![recursion_limit = "256"]
 
 //! GPU compositor for FLUI: it turns a [`flui_layer::Scene`] into wgpu draw
@@ -62,38 +64,18 @@
 //!
 //! | You are | Use |
 //! |---|---|
-//! | rendering into a window | [`Renderer::new`] — owns one window's device, queue, and surface, and recovers from device loss |
+//! | presenting every window of an application | [`RasterExecutor`] over one [`GpuContext`] ([`GpuContext::bootstrap`]) — each window a slot of one device, its surface made by the [`SurfaceFactory`] (ADR-0305) |
 //! | rendering without a window (tests, screenshots, thumbnails, CI) | [`HeadlessRenderer::new`] — rasterizes a layer tree to RGBA8 bytes |
 //! | driving draw calls yourself | [`WgpuPainter`] — the per-frame painter; `examples/painting_demo` is the worked example |
-//! | presenting every window of an application | [`RasterExecutor`] over one [`GpuContext`] — each window a slot of one device (ADR-0305) |
 //!
-//! All three constructors are `async`, because wgpu's adapter and device
-//! requests are. The library does not choose a blocking strategy for you: an
-//! embedder with an async runtime awaits, and one without wraps the call in
-//! its own `block_on`.
+//! An application does not drive these itself: `flui-app`'s runners bootstrap
+//! the context, attach each window's surface as a slot and send the executor
+//! its frames.
 //!
-//! # One frame
-//!
-//! ```rust,no_run
-//! # async fn frame(
-//! #     window: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
-//! #     scene: &flui_layer::Scene,
-//! # ) -> Result<(), flui_engine::EngineError> {
-//! use flui_engine::Renderer;
-//!
-//! // `window` is the window's surface target (`PlatformWindow::surface_target`):
-//! // the renderer keeps it for as long as its surface lives, so it outlives
-//! // this stack frame, and reads from it who paces the surface.
-//! let mut renderer = Renderer::new(window).await?;
-//!
-//! // Render on every frame your event loop asks for; `render_scene` is sync
-//! // and does not block on vsync unless the surface does.
-//! // `Ok(false)` means the frame was skipped (no damage, or an occluded
-//! // surface) rather than drawn.
-//! renderer.render_scene(scene)?;
-//! # Ok(())
-//! # }
-//! ```
+//! The context and headless constructors are `async`, because wgpu's adapter
+//! and device requests are. The library does not choose a blocking strategy
+//! for you: an embedder with an async runtime awaits, and one without wraps
+//! the call in its own `block_on`.
 //!
 //! # Architecture
 //!
@@ -104,8 +86,8 @@
 //! Scene (flui-layer)          built by the widget tree's Canvas
 //!     │
 //!     ▼
-//! Renderer                    owns one window's GPU stack
-//!     │ walks the LayerTree
+//! RasterExecutor              renders each slot of one GpuContext
+//!     │ walks the scene's version
 //!     ▼
 //! LayerDispatcher             routes each DrawCommand to the painter
 //!     │
@@ -200,11 +182,6 @@ pub mod raster_executor;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-/// Portable monotonic timestamps for GPU-path diagnostic spans.
-/// Acquire/present timers must not panic on wasm32 before the wgpu backend is
-/// even asked for a surface texture (issue #1045).
-pub(crate) mod frame_timing;
-
 // ============================================================================
 // THE wgpu RASTER PIPELINE
 // ============================================================================
@@ -216,9 +193,9 @@ pub use ::wgpu;
 /// Advanced dst-read blend composite driver: backdrop copy, pipeline, and
 /// `flush_advanced_layer`; the synthetic-op GPU gate in this module is the
 /// authoritative WGSL gate.
-/// Shared adapter/device acquisition policy: the one `RequestAdapterOptions`
-/// used everywhere, the capability-negotiated `DeviceDescriptor`, and the
-/// composed offscreen acquisition the offscreen stacks share.
+/// Shared adapter/device acquisition policy: the adapter's `GpuCapabilities`,
+/// the one `RequestAdapterOptions` used everywhere and the capability-negotiated
+/// device.
 mod adapter;
 pub(crate) mod advanced_blend;
 mod atlas;
@@ -248,7 +225,7 @@ pub(crate) mod color_matrix;
 /// (`ScissorRect`, `ScissorRegion`, `TessellatedBatch`). Moved here from
 /// `painter` so the future batcher/compositor modules share one type home.
 pub(crate) mod command_ir;
-/// Per-frame dirty-rect accumulator behind the `render_scene` scissor.
+/// Per-frame dirty-rect accumulator behind a partial frame's scissor.
 mod damage;
 mod device_domain;
 #[cfg(not(target_arch = "wasm32"))]
@@ -258,7 +235,7 @@ mod device_worker;
 mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
-/// The frame protocol the windowed renderer and the headless retained
+/// The frame protocol a window slot and the headless retained
 /// capture share: damage, retained target, and the plan-to-GPU sequence.
 mod frame_latency;
 mod frame_protocol;
@@ -341,7 +318,6 @@ mod region_cost;
 /// Frame render-target descriptor: `view` + optional back-reference `texture`
 /// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
 pub(crate) mod render_target;
-mod renderer;
 /// Replay/submit component: owns GPU plumbing fields, the per-frame
 /// `texture_batch` scratch, all six segment-flush phases, the top-level
 /// `submit` dispatch loop, and `flush_opacity_layer` recursion.
@@ -378,8 +354,8 @@ mod texture_pool;
 mod uniform_pool;
 mod vertex;
 mod window_slot;
-// What a windowed `Renderer` draws into: an owned, `'static`, `Send + Sync`
-// handle source (issue #1043). Exported here beside `Renderer`. See the
+// What a window slot's surface is made over: an owned, `'static`, `Send + Sync`
+// handle source (issue #1043). See the
 // module's own `//!` doc for details; no outer doc here for the same reason
 // as `surface_lease` above.
 mod window_target;
@@ -411,9 +387,9 @@ mod readback_dump;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-// A GPU-free `WindowTarget` test double shared by `surface_lease.rs`'s and
-// `renderer.rs`'s own unit tests, so both exercise the identical fake
-// instead of two copies that could silently diverge (issue #1043).
+// A GPU-free `WindowTarget` test double for `surface_lease.rs`'s unit tests,
+// kept beside the module so a later suite reuses this fake rather than a copy
+// that could silently diverge (issue #1043).
 #[cfg(test)]
 pub(crate) mod fake_window_target;
 
@@ -430,6 +406,11 @@ mod damage_readback_tests;
 // A retained version drawn by the engine walk, against its flattened tree.
 #[cfg(test)]
 mod version_readback_tests;
+
+// Surface colour selection and layer compositing (followers, shader masks),
+// read back from real textures.
+#[cfg(all(test, feature = "testing"))]
+mod compositing_readback_tests;
 
 #[cfg(test)]
 #[path = "layer_effect_tests.rs"]
@@ -503,10 +484,10 @@ pub use gpu_context::{GpuBootstrap, GpuContext};
 pub use gpu_probe::{GpuProbe, ProbedDevice};
 pub use painter::WgpuPainter;
 pub use surface_factory::{SurfaceFactory, UnconfiguredSurface};
-// Renderer (the one externally-consumed wgpu/* type)
+// The adapter a context draws with, and its swapchain latency.
+pub use adapter::GpuCapabilities;
 pub use frame_latency::FrameLatency;
 pub use gpu_backend::{BackendFailure, GpuBackend};
-pub use renderer::{GpuCapabilities, Renderer};
 pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
 
 // Presentation blit helper — re-exported ONLY under the

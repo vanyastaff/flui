@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use flui_foundation::FrameStamp;
 use flui_layer::{DamageRegion, Scene};
-use flui_platform::{DisplayColor, SurfaceTarget};
+use flui_platform::{DisplayColor, FramePacing, SurfaceTarget};
 
 #[cfg(all(test, feature = "testing"))]
 use crate::testing::ScriptedAcquire;
@@ -210,7 +210,7 @@ impl WindowSlot {
     pub(crate) fn release(&mut self) {
         self.recovery.reset();
         if self.lease.has_surface() {
-            let _released = self.lease.release();
+            self.lease.release();
         }
         self.configured = None;
         self.frame.release_target();
@@ -243,7 +243,7 @@ impl WindowSlot {
             return Ok(());
         }
         if let Err(error) = presentable(gpu, &self.lease) {
-            let _released = self.lease.release();
+            self.lease.release();
             return Err(error);
         }
         self.configure(gpu)
@@ -468,7 +468,7 @@ impl WindowSlot {
     /// The format the slot's frames will draw in once it is configured, read
     /// from the surface's capabilities before any size is known; `None` while
     /// it holds no surface or its colour cannot be resolved. It resolves the
-    /// colour as `Renderer::derive_surface_config` does, without that
+    /// colour as [`derive_surface_config`] does, without that
     /// function's warnings, which the first configure logs once (ADR-0256 §1).
     pub(crate) fn expected_format(&self, gpu: &Gpu<'_>) -> Option<wgpu::TextureFormat> {
         let surface = self.lease.surface()?;
@@ -500,7 +500,7 @@ impl WindowSlot {
         if width > max || height > max {
             return Err(EngineError::InvalidTargetSize { width, height });
         }
-        let (config, supports_copy_src, color) = crate::Renderer::derive_surface_config(
+        let (config, supports_copy_src, color) = derive_surface_config(
             surface,
             gpu.adapter,
             self.lease.pacing(),
@@ -521,6 +521,120 @@ impl WindowSlot {
     }
 }
 
+/// Derive a [`wgpu::SurfaceConfiguration`] for `surface` from its own
+/// capabilities on `adapter`.
+///
+/// Returns the config — with `width`/`height` threaded in from the caller,
+/// since only the caller knows which size is authoritative — whether the
+/// surface supports `COPY_SRC` (which both picks `usage` here and decides
+/// whether a frame renders directly into the swapchain image), and the
+/// colour the request was granted.
+///
+/// Every configuration of a slot's surface goes through here: a first
+/// configure, a resize past a released span, a restored surface, a rebuilt
+/// device and a display whose colour changed. A surface made for another
+/// window or adapter can report different capabilities, and
+/// `Surface::configure` panics on a stale `format`/`color_space`/
+/// `present_mode`/`alpha_mode` (see its own `# Panics` list), so every one of
+/// those is re-derived here rather than carried over.
+fn derive_surface_config(
+    surface: &wgpu::Surface<'_>,
+    adapter: &wgpu::Adapter,
+    pacing: FramePacing,
+    width: u32,
+    height: u32,
+    latency: FrameLatency,
+    color: ColorRequest,
+) -> EngineResult<(wgpu::SurfaceConfiguration, bool, ResolvedSurfaceColor)> {
+    let surface_caps = surface.get_capabilities(adapter);
+    let surface_color = ResolvedSurfaceColor::resolve(
+        color.requested,
+        &surface_caps,
+        color.display,
+        &surface.display_hdr_info(adapter),
+        crate::surface_color::working_format_renderable(adapter),
+    )?;
+    if surface_color.is_downgraded() {
+        tracing::warn!(
+            target: "flui.gpu",
+            event = "surface_color_downgraded",
+            requested = ?surface_color.requested(),
+            granted = ?surface_color.granted(),
+            "the surface cannot meet the requested colour capability"
+        );
+    }
+    tracing::debug!(
+        target: "flui.gpu",
+        format = ?surface_color.format(),
+        color_space = ?surface_color.color_space(),
+        working_format = ?surface_color.working_format(),
+        display = ?color.display,
+        "Selected surface color configuration"
+    );
+
+    let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
+    if !supports_copy_src && surface_color.output() == OutputEncoding::Identity {
+        tracing::warn!("Surface does not support COPY_SRC; backdrop blur will use fallback path");
+    }
+
+    let surface_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+        | (surface_caps.usages & (wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST));
+
+    let config = wgpu::SurfaceConfiguration {
+        usage: surface_usage,
+        format: surface_color.format(),
+        color_space: surface_color.color_space(),
+        width,
+        height,
+        present_mode: select_present_mode(&surface_caps, pacing),
+        alpha_mode: wgpu::CompositeAlphaMode::Auto,
+        view_formats: vec![],
+        // The window's `FrameLatency` (ADR-0347), `Balanced` unless the window asked for
+        // `Low`. The value only takes effect at `Surface::configure`: a configuration is
+        // derived here from the slot's stored setting, and `WindowSlot::set_latency`
+        // configures the held surface again with only this field changed. It is the only
+        // in-flight bound FLUI sets: the frame clock throttles by interval, never by frames in
+        // flight, and wgpu ignores it on GL, where the driver queue is the only bound.
+        desired_maximum_frame_latency: latency.frames(),
+    };
+
+    Ok((config, supports_copy_src, surface_color))
+}
+
+/// The present mode of a surface offering `surface_caps` and paced by
+/// `pacing` (`surface_pacing::present_mode`, ADR-0356).
+///
+/// A surface the display paces presents in `Fifo`, and on X11 and Win32 the
+/// blocking `get_current_texture()`/`present()` pair of a slot's frame is the
+/// steady-state pacer: a presented frame blocks at the display's cadence, so
+/// `flui-app`'s runner needs no frame-budget sleep (ADR-0353). That is a
+/// per-backend fact, not a property of `Fifo`: measured 2026-09-17 on the
+/// native AppKit backend, `queue.present()` returns in ~42 µs and the cadence
+/// comes from AppKit's display pass instead (ADR-0353's per-backend facts;
+/// Windows' native backend is unmeasured). An uncapped mode there would spin
+/// the wake-driven loop (~30 000 fps, observed). A Wayland surface is paced
+/// by its compositor's frame callback, which the host waits for before it
+/// asks for the next frame, so it presents without waiting on the compositor
+/// itself: a `Fifo` present there waits for a callback a compositor never
+/// sends a surface it does not draw.
+///
+/// No mode cures Windows' live-resize wobble: `Fifo` blocks on vsync and
+/// ghosts a stale frame during the modal resize loop, as `Mailbox`
+/// stretches the in-flight one. The wobble is inherent to flip-model DWM
+/// compositing; the only real fix is `DXGI_SCALING_NONE`, which wgpu 30
+/// still does not expose.
+fn select_present_mode(
+    surface_caps: &wgpu::SurfaceCapabilities,
+    pacing: FramePacing,
+) -> wgpu::PresentMode {
+    debug_assert!(
+        surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Fifo),
+        "BUG: wgpu guarantees Fifo is always a supported present mode"
+    );
+    crate::surface_pacing::present_mode(pacing, &surface_caps.present_modes)
+}
 /// Whether the context's adapter presents to the surface `lease` holds.
 fn presentable(gpu: &Gpu<'_>, lease: &SurfaceLease<wgpu::Surface<'static>>) -> EngineResult<()> {
     match lease.surface() {

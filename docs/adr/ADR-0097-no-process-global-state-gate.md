@@ -198,7 +198,7 @@ runs on the pinned stable toolchain, which dylint does not.
 - Environment-variable selection: `FLUI_HEADLESS`, on when set to anything but empty or `0` (`crates/flui-native/src/lib.rs`),
   `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE` (in the winit owner,
   since deleted with that host), `FLUI_DX12_NO_DCOMP`
-  (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.
+  (`crates/flui-engine/src/surface_present.rs`) choose process-wide behavior without any static.
 - Build-script output pulled in through `include!(concat!(env!("OUT_DIR"), …))`, as the six
   `crates/flui-engine/src/*/generated.rs` files do: the scan reads the source tree, not
   `OUT_DIR`. Any other `include!`, and a `mod x;` inside a fn, impl or block body, is an error
