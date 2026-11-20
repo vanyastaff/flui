@@ -629,13 +629,12 @@ A trace is a directory `<name>.flui-trace/`:
 - `input.jsonl`: an ADR-0215 recording, verbatim;
 - `native/<n>.jsonl`: one native recording per stream the backend journals, in the protocol's
   native recording format (`flui_protocol::native_recording`), with `native/index.json`;
-- `evidence/<sha256>.png`: content-addressed captures, so a capture taken twice costs nothing;
-  a tree a command read is in its `result` row.
+- `evidence/<sha256>.<png|json>`: content-addressed, so a repeated tree snapshot costs nothing.
 
 ```text
-{"flui_trace":1,"protocol":"0.28","target":{"kind":"launched","os":"windows","app":"interaction_gallery","lane":"windows"},"window":{"width":800.0,"height":600.0,"scale":1.0},"isolation":"shared","fidelity":{"positions":"exact"},"started_unix_ms":…,"privacy":"redact","layers":["input","native"]}
+{"flui_trace":1,"protocol":"0.5","target":{"kind":"windows","backend":"win32","app":"interaction_gallery","profile":"debug"},"started_unix_ms":…,"privacy":"redact"}
 {"command":{"seq":1,"t_ms":0,"method":"element.tap","params":{"target":{"locator":{…}},"via":"os"}}}
-{"result":{"seq":1,"t_ms":41,"ok":{"via":"os","effect":"ran","observed":{…}},"evidence":["evidence/9f…png"]}}
+{"result":{"seq":1,"t_ms":41,"ok":{"via":"os","effect":"ran","observed":{…}},"evidence":["evidence/9f…json"]}}
 {"event":{"t_ms":42,"name":"frame","params":{"frame":118}}}
 {"gap":{"rows":3,"reason":"evidence_budget"}}
 {"end":{}}

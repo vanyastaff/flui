@@ -706,12 +706,15 @@ graph LR
     `trace_bounds::scripted::a_trace_that_cannot_start_leaves_the_app_recording_nothing`
     (the trace's files before `record.start`, `record.stop` after a hold that fails),
     `trace_bounds::a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction`,
-    `trace_bounds::scripted::a_replay_maps_handles_in_handle_fields_only`,
-    `trace::the_fields_a_replay_maps_are_the_wires_handle_fields`,
+    `trace_bounds::scripted::a_replay_maps_handles_where_the_schema_has_them_only` (an input
+    source's `id` of `e1` stays text, a node's `id` pairs),
+    `trace::no_field_the_trace_redacts_holds_a_handle`,
     `trace_bounds::native_recordings_are_read_from_the_index_under_their_one_name` (another
     name, `../`, a stream twice, past 256 streams, an index past its bytes, no index),
-    `trace_bounds::a_native_stream_through_a_symbolic_link_is_refused` (Unix: a linked file and a
-    linked directory),
+    `trace_bounds::native_streams_past_their_total_budget_are_refused_before_any_is_read`,
+    `trace_bounds::a_native_stream_through_a_link_is_refused` and
+    `trace_bounds::evidence_through_a_link_is_refused` (a junction on Windows, a symbolic link on
+    Unix, and a linked file on Unix), `trace_bounds::a_command_numbered_twice_is_refused`,
     `trace_bounds::a_native_recording_past_its_byte_or_row_budget_or_reading_an_undeclared_device_is_refused`,
     `pixels::an_image_too_large_to_count_is_refused`, `pixels::the_metric_matches_pixelmatch_5_worked_by_hand`
     (deltas worked out by hand from pixelmatch 5's published formula, the arithmetic in the test),
@@ -744,6 +747,10 @@ graph LR
   - The writer of a recording's native layer moved from `flui-cli` into the driver
     (`trace::native::NativeFiles`), which `flui record --native` and a trace share; its files are
     one per stream (`native/<n>.jsonl` with `index.json`), as ADR-0241 §1 now says.
+  - Three parts of ADR-0241 are not built, each a bullet of `docs/gaps.md` ("Accepted ADR
+    sections not built yet"): reading a packed trace (§1, with `flui drive trace pack`), the
+    header's `target.backend` and `target.profile` (§2, which no app's hello reports yet), and
+    tree snapshots as evidence files (§1; a tree stays in its `result` row).
   - `retain_on_failure` writes the trace in place and removes it when the report passes (a `cannot_verify` run keeps it, as a failing one does).
   - Left for later tasks: blessing `flui-native`'s native goldens through the driver in place of
     `FLUI_NATIVE_RECORDING_BLESS` (R26) comes with the scenarios that record through

@@ -25,19 +25,12 @@ versioned header (ADR-0215 §3).
    - `input.jsonl`, an ADR-0215 recording verbatim, when recorded;
    - `native/<n>.jsonl`, one native recording per stream the backend journals (ADR-0288 §11),
      in the native recording codec, with `native/index.json` naming each file's backend and
-     stream, when captured; a reader reads the streams the index names, under their one name;
-   - `evidence/<sha256>.png`, content-addressed captures. A tree a command read is in its
-     `result` row, not in a file of its own.
+     stream, when captured;
+   - `evidence/<sha256>.<ext>`, content-addressed captures and tree snapshots.
 
-   A reader reads the directory. A packed trace (a zip for transport) is unpacked before it is
-   read: packing and unpacking are the CLI's, and the reader names a file it is handed as a
-   packed trace it does not read.
+   `flui drive trace pack` zips it for transport; readers accept both.
 2. `trace.jsonl` opens with a header:
-   `{"flui_trace": 1, "protocol", "target": {kind, os, app?, lane?}, "window"?: {width, height, scale}, "isolation", "fidelity": {positions: "exact" | "order"}, "seed"?, "started_unix_ms", "privacy", "layers"?}`.
-   `target.kind` is `headless`, `launched` or `attached`, `lane` the OS lane the run's OS input
-   went through, and `layers` the app's recording layers the trace holds (`input`, `native`).
-   What backend and build profile the app runs is the app's to say: the header carries it once
-   the app's hello does, as an additive field.
+   `{"flui_trace": 1, "protocol", "target": {kind, backend, os, app, profile}, "window": {width, height, scale}, "isolation", "fidelity": {positions: "exact" | "order"}, "seed"?, "started_unix_ms", "privacy"}`.
    Rows are tagged objects:
    - `command{seq, t_ms, method, params}`, with params as the caller wrote them, locators included;
    - `result{seq, t_ms, ok | error, evidence[]}`;
