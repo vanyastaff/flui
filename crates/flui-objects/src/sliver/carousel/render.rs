@@ -412,7 +412,7 @@ impl RenderSliver for RenderSliverCarousel {
         let sliver = SliverGeometry::new(scroll_extent, paint_extent, 0.0)
             .with_max_paint_extent(scroll_extent)
             .with_cache_extent(cache_extent)
-            .with_visual_overflow();
+            .with_visual_overflow(true);
 
         let cross = constraints.cross_axis_extent;
         let horizontal = self.axis == Axis::Horizontal;

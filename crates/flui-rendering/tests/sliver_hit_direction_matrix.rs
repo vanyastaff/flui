@@ -115,16 +115,9 @@ impl RenderSliver for MainAxisBandSliver {
             let constraints = *ctx.constraints();
             self.cross_axis_extent = constraints.cross_axis_extent;
             let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
-            SliverGeometry {
-                scroll_extent: self.extent,
-                paint_extent,
-                layout_extent: paint_extent,
-                max_paint_extent: self.extent,
-                hit_test_extent: paint_extent,
-                cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
-                visible: paint_extent > 0.0,
-                ..SliverGeometry::ZERO
-            }
+            SliverGeometry::new(self.extent, paint_extent, 0.0)
+                .with_max_paint_extent(self.extent)
+                .with_cache_extent(self.calculate_cache_offset(&constraints, 0.0, self.extent))
         })
     }
 

@@ -517,18 +517,12 @@ where
     let scroll_extent = virtualizer.total_extent().value();
     let paint_extent = calc_paint_offset(constraints, 0.0, scroll_extent);
     let cache_extent = calc_cache_offset(constraints, 0.0, scroll_extent);
-    let geometry = SliverGeometry {
-        scroll_extent,
-        paint_extent,
-        layout_extent: paint_extent,
-        max_paint_extent: scroll_extent,
-        cache_extent,
-        hit_test_extent: paint_extent,
-        visible: paint_extent > 0.0,
-        has_visual_overflow: scroll_extent > constraints.remaining_paint_extent
-            || constraints.scroll_offset > 0.0,
-        ..SliverGeometry::ZERO
-    };
+    let geometry = SliverGeometry::new(scroll_extent, paint_extent, 0.0)
+        .with_max_paint_extent(scroll_extent)
+        .with_cache_extent(cache_extent)
+        .with_visual_overflow(
+            scroll_extent > constraints.remaining_paint_extent || constraints.scroll_offset > 0.0,
+        );
 
     // ── 9. Position in-band children ───────────────────────────────────────
     placed.clear();
@@ -556,11 +550,9 @@ where
     }
 
     // ── 10. Anchor correction ───────────────────────────────────────────────
-    let scroll_offset_correction = take_anchor_correction(pending_correction);
-
-    let geometry = SliverGeometry {
-        scroll_offset_correction,
-        ..geometry
+    let geometry = match take_anchor_correction(pending_correction) {
+        Some(correction) => geometry.with_scroll_offset_correction(correction),
+        None => geometry,
     };
     if geometry.validation_error().is_none() {
         *attached_child_count = dense_now;

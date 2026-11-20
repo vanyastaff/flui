@@ -74,18 +74,13 @@ impl RenderSliver for RenderSliverToBoxAdapter {
         let painted_child_size = self.calculate_paint_offset(&constraints, 0.0, child_extent);
         let cache_extent = self.calculate_cache_offset(&constraints, 0.0, child_extent);
 
-        let geometry = SliverGeometry {
-            scroll_extent: child_extent,
-            paint_extent: painted_child_size,
-            layout_extent: painted_child_size,
-            max_paint_extent: child_extent,
-            cache_extent,
-            hit_test_extent: painted_child_size,
-            visible: painted_child_size > 0.0,
-            has_visual_overflow: child_extent > constraints.remaining_paint_extent
-                || constraints.scroll_offset > 0.0,
-            ..SliverGeometry::ZERO
-        };
+        let geometry = SliverGeometry::new(child_extent, painted_child_size, 0.0)
+            .with_max_paint_extent(child_extent)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow(
+                child_extent > constraints.remaining_paint_extent
+                    || constraints.scroll_offset > 0.0,
+            );
         let child_paint_offset = child_paint_offset(&constraints, &geometry, 0.0, child_extent);
         ctx.position_child(0, child_paint_offset);
         Ok(geometry)

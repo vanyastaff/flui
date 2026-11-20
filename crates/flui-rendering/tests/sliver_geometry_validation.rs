@@ -35,16 +35,10 @@ fn sliver_constraints() -> SliverConstraints {
 /// `validate_layout_output` still rejects. The softer content-contract
 /// rules (layout > paint, paint > max_paint) commit with a warning instead.
 fn invalid_negative_paint_geometry() -> SliverGeometry {
-    SliverGeometry {
-        scroll_extent: 100.0,
-        paint_extent: -10.0,
-        layout_extent: 0.0,
-        max_paint_extent: 100.0,
-        hit_test_extent: 0.0,
-        cache_extent: 0.0,
-        visible: true,
-        ..SliverGeometry::ZERO
-    }
+    SliverGeometry::with_extents(100.0, -10.0, 0.0, 0.0)
+        .with_max_paint_extent(100.0)
+        .with_hit_test_extent(0.0)
+        .with_visible(true)
 }
 
 fn assert_invalid_geometry(err: RenderError, expected_reason: &'static str) {
