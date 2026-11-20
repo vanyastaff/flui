@@ -286,7 +286,7 @@ fn a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction() {
     let header = r#"{"flui_trace":1,"protocol":"0.28","target":{"kind":"headless","os":"any"},"isolation":"in_process","fidelity":{"positions":"exact"},"started_unix_ms":0,"privacy":"redact"}"#;
     let perform = serde_json::json!({ "command": { "seq": 1, "t_ms": 0, "method": "input.perform", "params": {
         "actions": { "sources": [
-            { "type": "pointer", "id": "p", "device": "mouse", "actions": [] },
+            { "type": "pointer", "id": "p", "device": "mouse", "actions": [{ "type": "pause", "duration_ms": 1 }] },
             { "type": "text", "text": flui_driver::protocol::input_recording::REDACTED },
         ] },
     } } });

@@ -662,6 +662,10 @@ fn codegen_marks_what_it_cannot_write_and_writes_the_main_window_as_the_tests_ow
         "nothing left out: {plain}"
     );
     assert!(!plain.contains("let window"), "no window to name: {plain}");
+    assert!(
+        plain.contains("use flui_driver::{Driver, Launch, Locator};\n"),
+        "only what the test uses is imported: {plain}"
+    );
 
     let marked = write(
         "marked",
