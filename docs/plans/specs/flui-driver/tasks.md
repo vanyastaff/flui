@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD14 is built and under review (its runs on a Mac owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -858,10 +858,95 @@ graph LR
 
 - **Changes:** `lane::macos`: `CGEventPostToPid` with tablet fields, AX through
   `objc2-application-services`, ScreenCaptureKit, process group, and a listen-only `CGEventTap`
-  user-activity guard. The `macos-*` scenarios replace
-  the Python and Swift scripts, which are deleted.
+  user-activity guard. The `macos-*` scenarios replace the Python and Swift scripts, which #1827
+  already deleted.
 - **Done when:** clippy is clean for `aarch64-apple-darwin`, and the scenarios run on M. Without a
   run, parity rows stay 🟡 and the PR says "not run on this host".
+- **Status (2026-11-19):** built; the pull request is under review. The macOS code is written
+  against the bindings' sources and type-checked first by main's `cross-typecheck`
+  (`aarch64-apple-darwin`); no Mac has run it. Open until the runs on a Mac below are made: the
+  `OS input through the driver` and `assistive technology conformance` rows of
+  `crates/flui-native/platform-parity.toml`.
+- **Evidence (2026-11-19):**
+  - On every host (`driver_it`, the tables): `macos_lane::a_key_name_maps_to_its_key_code_and_the_character_it_types`,
+    `text_is_typed_in_runs_of_at_most_twenty_units_and_line_breaks_as_keys`,
+    `the_role_table_was_read_against_the_locked_adapter`,
+    `every_role_has_a_row_in_the_order_of_the_windows_table`,
+    `an_ax_role_folds_to_its_wire_role_with_its_subrole`,
+    `the_accessibility_api_folds_each_role_as_ui_automation_does_but_these`,
+    `each_safety_rule_refuses_with_its_code` (the three permissions among them),
+    `the_lane_runs_on_the_shared_desktop_and_refuses_unproven_isolation`,
+    `system_shortcuts_are_refused_and_app_chords_are_not`,
+    `lone_modifier_taps_that_toggle_a_system_feature_are_refused`,
+    `keys_and_text_are_planned_against_what_the_lane_holds`,
+    `every_event_carries_the_modifiers_the_lane_holds`, `a_key_is_held_only_once_its_event_was_posted`,
+    `a_release_that_would_complete_a_tap_shortcut_is_not_posted`,
+    `only_events_with_all_three_marks_of_the_lanes_source_are_its_own`,
+    `a_move_with_a_button_down_is_a_drag_and_a_press_lands_where_the_pointer_went`,
+    `a_pen_comes_into_range_carries_its_pressure_and_leaves_range_when_released`,
+    `input_no_quartz_event_carries_is_refused_before_any_event`,
+    `a_pointer_change_is_held_only_once_its_event_was_posted`,
+    `a_scroll_turns_the_wheels_the_other_way_and_refuses_overflow`,
+    `a_surface_point_lands_in_the_backing_pixel_it_was_aimed_at_on_every_display` (scales 1, 2
+    and 3, displays left of and above the main one, a content edge half a point into a pixel),
+    `the_content_sits_at_the_bottom_left_of_its_window_frame`,
+    `the_window_under_a_point_is_the_frontmost_that_shows_there`,
+    `a_window_capture_is_cut_to_its_content`,
+    `the_frame_controls_are_left_out_and_the_content_root_gives_the_window_its_children`,
+    `a_release_is_read_by_its_version_and_gates_its_calls`.
+  - The scenarios on the headless target (CI): `scenarios::the_macos_input_and_roles_scenarios_pass_on_the_headless_target`,
+    `the_macos_notes_scenario_passes_with_the_macos_conventions_on_the_headless_target` (Command
+    and A select the note under macOS's conventions; Control and A fail there), and the shared
+    `gallery`, `accessibility` and `conformance` runs FD11 lists.
+  - Taken out one at a time, each fails a test above: the post point inside the content (a
+    pixel's own centre left a content edge at half a point), a modifier's own flag on its press,
+    the pending fifth tap, the refusal of a completing release in the release of everything,
+    the frame's content root lifted into the window, and the macOS select-all chord.
+  - Owed on M (`cargo heli nextest run -p flui-driver -E 'test(/macos_desktop/)'` with
+    Accessibility, Input Monitoring and Screen Recording granted to the terminal, and
+    `FLUI_REQUIRE_MACOS_PERMISSIONS=1` so a missing one fails): `macos_desktop::the_accessibility_api_reads_and_presses_the_app_as_voiceover_does`,
+    `every_role_reads_back_as_its_ax_role_through_the_accessibility_api`,
+    `the_window_server_captures_the_apps_window_alone`, `the_guard_listens_and_stops`,
+    `the_lanes_check_refuses_typed_text_that_completes_a_system_shortcut`,
+    `a_launched_app_ends_with_its_session`, `the_conformance_scenario_runs_through_the_os_lane`,
+    `the_device_check_scenarios_run_through_the_os_lane` (`macos-gallery`, `macos-a11y`,
+    `macos-input`, `macos-notes`), `a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input`;
+    a VoiceOver session over the scenario app; a second session and a virtual machine as
+    isolation modes.
+- **As built:**
+  - The lane is `lane::macos`: `keys`, `held`, `pointer`, `roles`, `safety`, `screen`, `activity`,
+    `frame` and `version` are pure; `quartz`, `ax`, `guard`, `capture` and `MacosLane` call macOS.
+    Events go out through `CGEventPostToPid` from a `kCGEventSourceStatePrivate` source tagged with
+    the lane's user data, each carrying the held modifiers as its flags; a modifier is a
+    flags-changed event. A character key is its ANSI key code with the character as the event's
+    text; a character no ANSI key types is typed as text, never pressed. Text goes out in runs of
+    at most twenty UTF-16 units.
+  - The lane posts at the centre of the part of the aimed device pixel inside the window's
+    content. Every source it reads (the window list, the accessibility API, Quartz events) is in
+    global display points from the main display's top left, so nothing is flipped; the content
+    sits at the bottom left of the window frame.
+  - The safety rules read the hardware's held state (`kCGEventSourceStateHIDSystemState`), which
+    the lane's own events never reach, so anything held there refuses the event. The foreground
+    is the frontmost ordinary window and the focused application together; the window under the
+    point is read from the window server's order.
+  - The privacy permissions are preflighted from macOS 10.15 (below it, posting needs the
+    accessibility trust and nothing guards listening or capture) and refused as `not_supported`
+    naming `macos_permission_<name>`.
+  - The AX tree is walked through the Windows lane's bounded walk (`lane::windows::walk`), the
+    frame's close, minimize, zoom and full-screen buttons left out and the adapter's untitled
+    root group lifted into the window. `native_role` reads `AXRole` or `AXRole/AXSubrole`.
+  - ScreenCaptureKit is loaded by path and its classes found by name, since FLUI runs on releases
+    without it; `SCScreenshotManager` (macOS 14) captures the window's frame without its shadow,
+    and the lane cuts it to the content. `objc2-screen-capture-kit` is not a dependency.
+  - The macOS scenarios are the FD11 set with `macos_input` (the mouse alone: Quartz has no touch,
+    and the AppKit host reads a pen's tablet events as the mouse), `macos_notes` (Command and A)
+    and `macos_roles` (the accessibility API's roles); the old `tools/device-checks` macOS scripts
+    were already deleted (#1827), and the AppKit exit, reopen and workload probes they drove are no
+    driver scenarios.
+  - Isolation: a second session and a virtual machine are refused (`macos_isolation_<mode>`)
+    until a run on a Mac shows the lane's input stays out of the host session there.
+  - A launched macOS app leads a process group of its own (`process_group(0)`), which the session
+    kills whole while its leader runs unreaped.
 
 ### FD15. iOS Simulator lane
 

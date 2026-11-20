@@ -89,18 +89,75 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# The macOS lane: Quartz events posted to the app's process, the event tap its guard listens with,
+# the window list and the bitmap a capture is drawn into (CoreGraphics), and the accessibility API
+# (`AXUIElement`). ScreenCaptureKit is loaded by name through the Objective-C runtime when a
+# capture is asked for (`objc2`, `block2` for its completion handlers), so the driver links no
+# framework a release FLUI runs on lacks. `libc` for the process id, the release sysctl and the
+# loader.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { workspace = true }
+libc = { workspace = true }
+objc2 = { workspace = true }
+objc2-application-services = { workspace = true, features = [
+    "std",
+    "libc",
+    "HIServices",
+    "AXError",
+    "AXUIElement",
+    "AXValue",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "std",
+    "CFArray",
+    "CFCGTypes",
+    "CFDate",
+    "CFDictionary",
+    "CFMachPort",
+    "CFNumber",
+    "CFRunLoop",
+    "CFString",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "std",
+    "libc",
+    "CGBitmapContext",
+    "CGColorSpace",
+    "CGContext",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGGeometry",
+    "CGImage",
+    "CGRemoteOperation",
+    "CGWindow",
+] }
+
 [dev-dependencies]
 flui-driver = { path = ".", features = ["headless", "testing"] }
 flui-foundation = { workspace = true }
+# The platform a headless scenario follows the conventions of (`PlatformConvention`).
+flui-platform = { workspace = true }
 flui-view = { workspace = true }
 flui-widgets = { workspace = true }
 tempfile = { workspace = true }
 
-# The scenario apps in a window (`examples/scenario_app.rs`) and the Windows tests' own foreign
-# input: the Windows lane's runs only. A dev-dependency, never linked into the library, which
-# reaches no host (`reach-forbid`).
-[target.'cfg(windows)'.dev-dependencies]
+# The scenario apps in a window (`examples/scenario_app.rs`): the Windows and macOS lanes' runs
+# only. A dev-dependency, never linked into the library, which reaches no host (`reach-forbid`).
+[target.'cfg(any(windows, target_os = "macos"))'.dev-dependencies]
 flui-app = { workspace = true }
+
+# The macOS tests' own foreign input.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
+objc2-core-graphics = { workspace = true, features = [
+    "CGEvent",
+    "CGEventTypes",
+    "CGRemoteOperation",
+] }
+
+# The Windows tests' own foreign input.
+[target.'cfg(windows)'.dev-dependencies]
 windows = { workspace = true, features = ["Win32_UI_Input_KeyboardAndMouse"] }
 
 [[test]]

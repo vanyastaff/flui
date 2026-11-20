@@ -185,6 +185,10 @@ impl Launch {
                 other => other,
             })?
             .resume()?;
+        // On macOS the app leads a process group of its own, which the session ends whole
+        // (`AppProcess::end`).
+        #[cfg(target_os = "macos")]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         #[cfg(not(windows))]
         let child = command.spawn().map_err(started)?;
         Ok(Launched {
@@ -263,9 +267,17 @@ impl AppProcess {
         }
     }
 
-    /// End the process if it still runs, and reap it.
+    /// End the process if it still runs, and reap it. On macOS the process group it leads ends
+    /// with it: while the leader runs unreaped, the group's id is still its own, so the signal
+    /// reaches nothing else. A leader that already exited leaves its group to
+    /// [`EXIT_ON_DISCONNECT_ENV`].
     pub(crate) fn end(&mut self) {
         if matches!(self.child.try_wait(), Ok(None)) {
+            #[cfg(target_os = "macos")]
+            {
+                let group = rustix::process::Pid::from_child(&self.child);
+                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            }
             let _ = self.child.kill();
         }
         let _ = self.child.wait();

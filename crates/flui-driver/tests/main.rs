@@ -4,6 +4,9 @@ mod apps;
 mod coordinates;
 mod failure_matrix;
 mod fixtures;
+#[cfg(target_os = "macos")]
+mod macos_desktop;
+mod macos_lane;
 mod policy;
 mod report;
 mod scenarios;

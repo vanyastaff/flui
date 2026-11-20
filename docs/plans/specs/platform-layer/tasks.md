@@ -5,8 +5,9 @@
   `main` @ `bc2f0ec33` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
   исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY96 и LY99 — Windows-lane драйвера есть; ждут прогонов на рабочем столе, принимающем ввод
-    (Narrator, сценарий conformance через `os`-lane), и lane остальных ОС спеки flui-driver;
+  - LY96 и LY99 — Windows- и macOS-lane драйвера есть; ждут прогонов на рабочем столе,
+    принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane), и lane
+    остальных ОС спеки flui-driver;
   - LY97 — ждёт `--record` `os`-lane драйвера на каждой ОС (записи в драйвере пока нет);
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
@@ -5033,15 +5034,17 @@ GPU-память простаивающего или невидимого окн
   настоящего метода ввода на устройствах — строка качества parity «Recorded native input replays
   deterministically on the headless host».
 
-- [ ] **LY96** (Windows начата, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
+- [ ] **LY96** (Windows и macOS начаты, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
   драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
   приложение через UI Automation, то дерево, что читает Narrator: нормализованная проекция дерева
   UIA равна дереву приложения, каждая роль таблицы ролей читается своим control type, элемент
   вызывается через `InvokePattern` (`windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`,
   `windows_desktop::every_role_reads_back_as_its_control_type_through_ui_automation`, прогон на
-  отдельном рабочем столе nextest, Windows 11, 2026-11-19). Долг: сеанс Narrator на Windows и
-  VoiceOver, Orca, TalkBack на остальных ОС — строка качества parity «Conformance executed with
-  assistive technology on each OS».
+  отдельном рабочем столе nextest, Windows 11, 2026-11-19). macOS-lane (`flui-driver::lane::macos`,
+  FD14) читает окно через accessibility API, то дерево, что читает VoiceOver, и нажимает элемент
+  через `AXPress`; на Mac не прогонялся (`macos_desktop::*` в долгу). Долг: сеанс Narrator на
+  Windows, VoiceOver на macOS, Orca и TalkBack на остальных ОС — строка качества parity
+  «Conformance executed with assistive technology on each OS».
 
 - [ ] **LY99** (сценарий есть; прогон на Windows через `os`-lane в долгу) — сценарий conformance
   драйвера `scenarios::conformance` (`crates/flui-driver/tests/scenarios.rs`): имя, роль и
@@ -5050,7 +5053,9 @@ GPU-память простаивающего или невидимого окн
   `os`-lane на Windows — `windows_desktop::the_conformance_scenario_runs_through_the_os_lane`,
   который на отдельном рабочем столе nextest объявляет OS-ввод и выходит `cannot_verify` (ввод
   туда не доходит) и проходит только на рабочем столе, принимающем ввод пользователя; этот прогон
-  — долг строки качества parity «Real OS input drives an app through the driver's OS lane».
+  — долг строки качества parity «Real OS input drives an app through the driver's OS lane». Через
+  `os`-lane на macOS — `macos_desktop::the_conformance_scenario_runs_through_the_os_lane`, тоже в
+  долгу до прогона на Mac.
   Headless-таблица `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs`) —
   то, что такие сценарии повторяют на headless.
 

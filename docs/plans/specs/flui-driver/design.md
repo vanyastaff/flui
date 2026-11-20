@@ -497,8 +497,9 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
      information, so another program's injected input ends a run too. Touch and pen come as raw
      input from the digitizers, which a device sends and the lane's synthetic device does not. A
      hook procedure posts what it saw to its own thread's queue, so no trampoline holds the state;
-   - macOS: a listen-only `CGEventTap` comparing `kCGEventSourceUnixProcessID` and the source state
-     with the lane's own source;
+   - macOS: a listen-only session `CGEventTap`; an event is the lane's only with the private source
+     state, the lane's tag as its user data and the driver's `kCGEventSourceUnixProcessID`, and a
+     tap the system turned off ends the run;
    - X11: XInput2 raw events from devices other than the XTEST virtual devices;
    - Wayland: none available, so OS input there requires an isolated session;
    - Android: on a physical device, `getevent` on input devices other than the lane's `uinput`
@@ -556,7 +557,7 @@ event is sent.
 | Lane | Real input | OS accessibility read | OS capture | Process |
 |---|---|---|---|---|
 | windows | `SendInput` (mouse, keys, `VK_PACKET` text); `InjectSyntheticPointerInput` (touch, pen); TSF IME through the target's text store is out of the lane's reach, so IME uses `input.inject`. The safety checks are ported from desktop-mcp (`input/{mod,device}.rs`): the input desktop, foreground, window under each point, physical state, shell hotkeys and Sticky Keys, held-input recovery | UIA through the `windows` crate, the role table from `tools/xtask/src/device/uia_role_table.rs` (`lane::windows::roles`) | Windows Graphics Capture through the `windows` crate, window-scoped | `CreateProcess` in a kill-on-close job |
-| macos | `CGEventPostToPid` (mouse, keys, scroll, tablet pen fields) via `objc2-core-graphics` | AX via `objc2-application-services` (`AXUIElement`), replacing `macos-ax-client.swift` | ScreenCaptureKit window capture (`objc2-screen-capture-kit`), replacing `screencapture -l` | `posix_spawn` in a process group |
+| macos | `CGEventPostToPid` from a private, tagged event source (mouse, keys, scroll, tablet pen fields) via `objc2-core-graphics` | AX via `objc2-application-services` (`AXUIElement`), replacing `macos-ax-client.swift` | ScreenCaptureKit window capture from macOS 14, the framework loaded by name through the Objective-C runtime since FLUI runs on releases without it, replacing `screencapture -l` | a process group of its own (`process_group(0)`), killed whole with the session |
 | x11 | XTEST (`x11rb`), ported from `tools/live-smoke` | AT-SPI (`atspi`) | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG` |
 | wayland | libei through the RemoteDesktop portal (`reis`, `ashpd`); portal refusal is cannot-verify | AT-SPI | ScreenCast portal (`ashpd`, PipeWire), window-scoped | same as x11 |
 | android | `adb shell input` (tap, swipe, keyevent, text, stylus, mouse) and `uinput` JSON-line scripts for stylus and touchpad, ported from `android_input.rs`. `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers and removes a test device once per session, and stylus and touchpad answer `not_supported` where it fails; system UI such as the soft keyboard located by `uiautomator dump` | `uiautomator dump` for system UI only: FLUI publishes no Android accessibility tree, so FLUI nodes are `not_supported` until an adapter lands (recorded in `docs/gaps.md`) | `screencap -p` via `exec-out` | `adb install`, `am start` with extras, `am force-stop` |
