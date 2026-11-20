@@ -401,9 +401,12 @@ fn the_xcode_version_is_read_from_xcodebuild() {
     }
 }
 
-/// Every input, under each Xcode the lane may meet (one before the Indigo channel lost its keys,
-/// one after, one whose version is not given), is refused before anything is sent, naming the
-/// capability, the Xcode and the runtime; a sequence of pauses alone goes through.
+/// Every input, under each Xcode the lane may meet, is refused before anything is sent, naming the
+/// capability, the Xcode and the runtime; a sequence of pauses alone goes through. Xcode 27.1 is
+/// one where the Simulator drops Indigo buttons and keys; Xcode 26.4 is one before that, where
+/// `idb` records no loss and still the lane refuses, since the rule (the spec's decision D5) is no
+/// OS input until a supported channel exists, not a split by Xcode version; the third gives no
+/// version at all.
 #[test]
 fn every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_sent() {
     let versions = [

@@ -5,26 +5,25 @@
 //! simulator's input change with the Xcode release, so the version is what a reader needs to judge
 //! a refusal.
 //!
-//! **Why no input.** No public channel puts a touch, a key or a hardware button into a simulator
-//! from the host: `simctl io` captures and records the screen and sends nothing. The channels
-//! other tools use are private, and none can be held to the driver's rules:
+//! **Why no input.** The rule is the flui-driver spec's decision D5: the lane sends no OS input
+//! until a supported channel exists, and every input event is refused as `not_supported` naming
+//! [`HID_CAPABILITY`] before anything is sent, on every Xcode; capture, the app's process and the
+//! agent's own trees and synthetic input still work. No public channel puts a touch, a key or a
+//! hardware button into a simulator from the host (`simctl io` captures and records the screen and
+//! sends nothing), and the private ones are these:
 //!
-//! - `SimulatorKit`'s Indigo HID messages (the `SimDeviceLegacyHIDClient` that `idb` used):
-//!   reverse-engineered C structures and functions, whose layout a selector probe cannot check,
-//!   so a mismatch is memory sent wrong rather than a refusal. From CoreSimulator 1155.4 (Xcode 27)
-//!   the Simulator drops Indigo button and keyboard events on every runtime and delivers its touch
-//!   only some of the time, while the send still reports success (`idb`'s `SimulatorIndigoHIDTransport`).
-//! - The per-simulator DTUHID service that replaced it there: a private XPC protocol to a daemon
-//!   inside the simulator that aborts while a boot settles and then discards every send in silence,
-//!   which `idb` meets with liveness probes, retries and timed drains (its
-//!   `SimulatorDTUHIDConnection`). A send cannot tell a delivered event from a dropped one.
-//! - Quartz events on the Simulator's own window, through the macOS lane: public calls, but they
-//!   land on the shared desktop (the simulator is no longer the isolation it is for), the window's
-//!   layout around the screen (bezels, zoom) is published by no API, and the mouse stands in for
-//!   one finger.
+//! - `SimulatorKit`'s Indigo HID messages (the `SimDeviceLegacyHIDClient` `idb` uses before Xcode
+//!   27): reverse-engineered C structures and functions, whose layout a selector probe cannot
+//!   check. From CoreSimulator 1155.4 (Xcode 27) the Simulator drops Indigo button and keyboard
+//!   events on every runtime and drops touch on some boots, while a send reports success, and
+//!   `idb` refuses those sends there; before Xcode 27 `idb` records no such loss.
+//! - The per-simulator DTUHID service, `idb`'s default from Xcode 27: a private XPC protocol to a
+//!   daemon inside the simulator that can abort while a boot settles and then discard sends in
+//!   silence (`idb`'s `SimulatorDTUHIDConnection`).
 //!
-//! So every input event is refused as `not_supported` naming [`HID_CAPABILITY`], before anything
-//! is sent; capture, the app's process and the agent's own trees and synthetic input still work.
+//! The channels still open are the owner's to choose (D5): Quartz events on the Simulator's own
+//! window through the macOS lane, on the shared desktop, and an XCUITest runner, which D5's "no
+//! Swift" forbids.
 
 use crate::error::Error;
 

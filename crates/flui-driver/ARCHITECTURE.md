@@ -108,17 +108,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   its own: a window dump at a path of the session's, and a forward from a loopback port the lane
   picked, asked for with `--no-rebind` (a port another session holds is refused and another
   picked) and removed by that port at its end once `adb` made it or may have.
-- **The iOS Simulator lane sends no input.** No public channel reaches a simulator's touch,
-  keys or buttons from the host, and the private ones (`SimulatorKit`'s Indigo HID, which
-  CoreSimulator drops from Xcode 27, and the DTUHID service after it) cannot tell a delivered
-  event from a dropped one, so `Lane::check` refuses every input event as `not_supported` naming
-  `ios_simulator_hid`, with the Xcode and runtime, before anything is sent
-  (`lane::ios_simulator::xcode` has the reasons). It reads the screen through `simctl io
-  screenshot`, whose file length and declared size are checked against the window before a pixel
-  is decoded, takes no simulator nobody named (`FLUI_IOS_SIMULATOR_UDID`), and ends the app it
-  started with `simctl terminate`, since an iOS app does not exit when its driver goes; the
-  launch values reach the app as `SIMCTL_CHILD_` variables in `simctl`'s environment and never
-  in a command's text.
+- **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
+  spec's decision D5; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every
+  input event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before
+  anything is sent. It reads the screen through `simctl io screenshot`, whose file length and
+  declared size are checked against the window before a pixel is decoded, and takes no simulator
+  nobody named (`FLUI_IOS_SIMULATOR_UDID`). A session holds its simulator (`SimulatorLock`), since
+  the launch and the terminate name the app by its bundle identifier; it ends the app it started
+  with `simctl terminate`, since an iOS app does not exit when its driver goes, once `launchctl
+  list` in the simulator shows that process still running. The launch values reach the app as
+  `SIMCTL_CHILD_` variables in `simctl`'s environment, never in a command's text or debug form,
+  and no such variable inherited from the driver's environment reaches it.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and
