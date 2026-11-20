@@ -19,7 +19,8 @@
 //!   or different from an earlier capture's, a uniform region, a window stable for N frames.
 //!
 //! Every image a check reads (a baseline file, a capture) is untrusted: its size is checked
-//! before it is decoded or copied ([`codec`]).
+//! before it is decoded or copied ([`read_png`] within [`MAX_PNG_FILE_BYTES`] and
+//! [`MAX_DECODED_BYTES`]).
 //!
 //! [`Lane::capture_window`]: crate::Lane::capture_window
 //! [`Window::capture_stable`]: crate::Window::capture_stable

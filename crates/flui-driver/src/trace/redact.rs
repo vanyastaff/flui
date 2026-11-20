@@ -1,6 +1,6 @@
 //! Redaction (ADR-0215 §5, ADR-0241 §4): unless the session keeps text, a trace replaces typed
 //! text and every text-bearing field the app reports with
-//! [`REDACTED`](flui_protocol::input_recording::REDACTED).
+//! [`REDACTED`].
 //!
 //! The rule is by field name, over the JSON a row carries: every string under one of
 //! [`TEXT_FIELDS`], however deep, is replaced. A command's [`TextMatch`] (an object with a
