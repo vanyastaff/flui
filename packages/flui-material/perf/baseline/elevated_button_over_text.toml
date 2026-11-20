@@ -6,7 +6,7 @@
 
 [elevated_button_over_text]
 allocations = 145
-bytes = 17504
+bytes = 17344
 elements = 11
 reallocations = 6
 render_nodes = 5
