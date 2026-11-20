@@ -41,9 +41,11 @@ where
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
-    // Before the platform, whose registries report only to a capture already installed.
-    #[cfg(native_journal)]
-    super::native_journal::begin(flui_native::journal::codec::Backend::Android);
+    // Before the platform, whose registries report only to a capture already installed; ended
+    // if the platform fails to start or nobody serves the agent.
+    let journal = super::journal_start::JournalStart::begin(Some(
+        flui_protocol::native_recording::Backend::Android,
+    ));
     // The APK's assets (ADR-0384 §3), installed before any widget can ask.
     let apk_assets = flui_platform::assets::AssetBundle::new(Arc::new(
         flui_native::assets::ApkAssets::new(app.asset_manager()),
@@ -68,9 +70,9 @@ where
         &mut config,
         |key| platform.launch_value(key),
         &disconnect,
-        super::journals_native(),
+        journal.journals(),
     );
-    super::keep_native_journal(served);
+    journal.settle(served);
     // The loop takes the hooks and owns them until `run` returns. The window
     // is handed over once it is installed.
     super::dev_agents::start(&config);

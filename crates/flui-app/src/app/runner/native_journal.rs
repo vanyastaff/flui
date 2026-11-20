@@ -1,10 +1,10 @@
 //! The native journal a debug build serving the driver agent records (ADR-0288 §11, ADR-0215
-//! §4): the backend's line capture, installed on the loop's thread before its platform starts,
-//! since a registry reports only to the capture installed when it was created. The launch that
-//! says whether the agent is served is read from the platform, so the capture is ended right
-//! after it when none is: until then nobody wants an ordinary row, and only each stream's
-//! bounded setup is kept. A served loop keeps it and attaches its lines to each UI runtime it
-//! hands the agent.
+//! §4, ADR-0390): the backend's line capture, installed on the loop's thread before its platform
+//! starts, since a registry reports only to the capture installed when it was created. A page
+//! journals as a native host does, its backend `web`. The launch that says whether the agent is
+//! served is read from the platform, so the capture is ended right after it when none is: until
+//! then nobody wants an ordinary row, and only each stream's bounded setup is kept. A served loop
+//! keeps it and attaches its lines to each UI runtime it hands the agent.
 
 use flui_native::journal::codec::Backend;
 use flui_native::journal::lines::{Forms, LineCapture, LineSink, StreamLine, capture_lines};
@@ -46,13 +46,19 @@ impl LineSink for Sink {
 /// journal an earlier loop on this thread left is replaced.
 pub(super) fn begin(backend: Backend) {
     let lines = NativeLines::default();
-    install(backend, Sink(lines.clone()), lines);
+    install(capture_into(backend, &lines), lines);
 }
 
-/// Install a capture of `backend` that hands its lines to `sink`, as the journal of `lines`.
-fn install(backend: Backend, sink: impl LineSink + 'static, lines: NativeLines) {
+/// A capture of `backend` installed on this thread that hands its lines to `lines`, as a loop's
+/// journal does.
+pub(crate) fn capture_into(backend: Backend, lines: &NativeLines) -> LineCapture {
+    capture_lines(backend, Sink(lines.clone()))
+}
+
+/// Keep `capture` as this loop's journal, whose lines its recordings take from `lines`.
+fn install(capture: LineCapture, lines: NativeLines) {
     let journal = NativeJournal {
-        _capture: capture_lines(backend, sink),
+        _capture: capture,
         lines,
     };
     let stale = APP_RUNTIME.with(|slot| slot.borrow_mut().native_journal.replace(journal));
@@ -129,8 +135,7 @@ mod tests {
         for served in [true, false] {
             let seen = Arc::new(AtomicUsize::new(0));
             install(
-                Backend::Headless,
-                Counted(Arc::clone(&seen)),
+                capture_lines(Backend::Headless, Counted(Arc::clone(&seen))),
                 NativeLines::default(),
             );
             assert!(is_open(), "served: {served}");

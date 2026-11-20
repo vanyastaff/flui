@@ -1,9 +1,10 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 131 закрыта и 3 открыты: LY96, LY97 и LY99 (сверено с отметками записей
-  «Хода исполнения» на `main` @ `2fa8bc6cc`, где слиты Windows-, macOS-, X11-, Wayland-,
-  Android- и Chrome-lane драйвера и его трасса, FD10–FD14 и FD16 спеки flui-driver).
+  Из 134 задач серии 132 закрыты и 2 открыты: LY96 и LY99 (сверено с отметками записей
+  «Хода исполнения» на `main` @ `d55e975c0`, где слиты Windows-, macOS-, X11-, Wayland-,
+  Android- и Chrome-lane драйвера и его трасса, FD10–FD14 и FD16 спеки flui-driver; LY97
+  закрыта с ADR-0390 и строками записей таблицы conformance).
   Прогоны на устройствах — строки `crates/flui-native/platform-parity.toml`. Что держит
   открытые задачи и кто может это снять:
   - LY99 — прогон сценария conformance через Windows `os`-lane на рабочем столе, принимающем
@@ -16,12 +17,7 @@
     iOS-Simulator-lane (FD15 спеки flui-driver) запускает приложение и снимает экран, но ввода
     не шлёт и дерева доступности не читает: спайк HID ответил no-go, и канал ввода — решение
     владельца, а дерево `accesskit_ios` хосту недоступно; сеансы Narrator, VoiceOver, Orca и
-    TalkBack — долг строки parity;
-  - LY97 — Web: ADR-0288 §11 решил, что страница пишет только слой `input`, поэтому запись
-    драйвером через Chrome-lane не держит lifecycle, дисплеи и снимки окна web-сборки, а строка
-    задачи требует их и на Web. Нужно решение владельца: ADR, который заменяет это предложение
-    ADR-0288 §11 и вводит журнал отладочной web-сборки, или Web в строке LY97 сужается до слоя
-    `input`. Записи на Windows, macOS и Android — долг строки parity.
+    TalkBack — долг строки parity.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -5030,8 +5026,7 @@ GPU-память простаивающего или невидимого окн
   9 из 9 после переноса). Захват на Windows, macOS, iOS и Android не прогонялся — строка качества
   parity «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY97** (Web противоречит ADR-0288 §11 и ждёт решения владельца; записи на устройствах в
-  долгу) — словарь и replay на headless на `main`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
+- [x] **LY97** (записи на устройствах — долг строки parity) — словарь и replay на headless на `main`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
   headless (`NativeRecording::replay_into`, отказ — типизированный `ReplayError`), строки IME,
   закрытия и блокировок хранилища pull-модели (`store_focus`, `store_lock`; защищённое хранилище —
   одна строка `protected`), чтения предпочтений и дисплеев, снимки состояния окна;
@@ -5055,18 +5050,45 @@ GPU-память простаивающего или невидимого окн
   `closed`, снимки окна `state` потока `window_state`), предпочтения (`preferences`) и дисплеи (`displays`); таблица
   `native_recording::native_recording_contracts` прошла на Windows 11 2026-11-20
   (`cargo heli nextest run -p flui-native -E 'test(/native_recording/)'`, 1 из 1).
-  **Что не выполнено.** (1) Web: ADR-0288 §11 — «A page records the input layer only»;
-  `cfg(native_journal)` (`crates/flui-app/build.rs`) ставится только целям с локальным сокетом,
-  web-сборка журнал не начинает, и трасса через Chrome-lane держит из этих видов только события
-  IME и ревизии предпочтений слоя `input`, без lifecycle, дисплеев и снимков окна. Строка задачи
-  требует записи на Web; снимает это владелец: ADR, который заменяет это предложение ADR-0288 §11
-  (захват `flui-native` на wasm32 собирается: `journal` по цели не ограничен), или сужение Web в
-  строке до слоя `input`. (2) `assert_backend_conforms` гоняет таблицу ввода по общим декодерам
-  (`backend_conformance.rs`); записи IME, lifecycle, предпочтений и дисплеев держит replay
-  (равенство доставленному на headless), а не строки этой таблицы — второе предложение приёмки
-  буквально выполнено только для ввода. **Долг устройств:** запись драйвером на Windows, macOS,
-  Linux и Android с отладочной сборкой приложения и захват настоящего метода ввода — строка
-  parity «Recorded native input replays deterministically on the headless host».
+  **Web** ([ADR-0390](../../../adr/ADR-0390-a-page-journals-its-native-layer-as-a-native-host-does.md),
+  заменяет предложение ADR-0288 §11 «A page records the input layer only»): отладочная
+  web-сборка ведёт журнал как нативный хост — `cfg(native_journal)` ставится и странице
+  (`crates/flui-app/build.rs`), `compile_error!` в `app::agent` держит его равным
+  `debug_assertions` на `unix`, `windows` и wasm32, web-раннер стартует через
+  `start_journaled(Backend::Web, …)`: захват до платформы, конец без агента и при неудачном старте
+  (`a_loop_keeps_its_journal_only_when_its_platform_starts_and_the_agent_is_served`, на каждом
+  хосте); каждый раннер держит журнал в `JournalStart`, который заканчивает его при drop до
+  чтения запуска (`a_journal_whose_start_goes_unsettled_ends_and_one_handed_to_its_loop_stays`);
+  hello страницы перечисляет `native`, строки
+  `record_native` идут через экспорт страницы
+  (`a_page_conversation_carries_the_native_layer_of_a_recording`), трасса Chrome-lane держит
+  потоки `app`, `window`, `platform` и `window_state` страницы
+  (`a_trace_of_a_page_session_holds_the_pages_native_layer`, против подставной страницы).
+  Компиляцию web-раннера под `cfg(native_journal)` доказывает job `wasm-check` на `main` (на
+  Windows-хосте нет std для wasm32). **`assert_backend_conforms` по видам записей:** группа
+  `RowGroup::Recordings` таблицы (`flui-testing`), строка на вид —
+  `a_recorded_composition_replays_as_it_was_delivered`,
+  `a_recorded_lifecycle_replays_as_it_was_reported` (notices, фазы конца сеанса, reopen и
+  снимки окна), `recorded_preference_reads_replay_as_they_were_answered`,
+  `recorded_display_reads_replay_as_they_were_answered` (два дисплея одного имени различает их
+  id); `BackendUnderTest::replay_recording` без тела по умолчанию проводит сеанс через доставку
+  бэкенда с установленным захватом его журнала, читает записанное и проигрывает на headless,
+  строка сверяет и доставленное, и проигранное с сеансом. Для декодеров доставка — общий код,
+  через который журналирует каждый нативный хост (`owner/app_delivery.rs`,
+  `owner/window_delivery.rs`, чтения платформы, состояние окна), на headless с захватом этого
+  бэкенда; строки держатся для headless, `native x11` и профилей Win32, AppKit, UIKit, Android,
+  web и Wayland (`each_backend_s_recordings_replay_on_the_headless_host`) и падают на бэкенде,
+  который ставит захват после платформы, журналирует с редакцией или не доставляет reopen
+  (`each_conformance_row_fails_against_a_broken_backend`: `JournalInstalledLate`,
+  `RedactingJournal`, `ReopenUntranslated`). Настоящие окна Win32 и X11 не проводят сеанс —
+  они доставляют то, что сообщает ОС, — и отвечают `NotDriven`, который роняет строку
+  (`FailureKind::NotDriven`); их наборы называют эти строки (`win32_window_conforms`,
+  `UNEXERCISED` в `x11_backend_conformance`). Поломка вручную: `AppDelivery::reopen` без записи
+  в журнал роняет `a_recorded_lifecycle_replays_as_it_was_reported` на каждом бэкенде таблицы,
+  `RecordedDisplay::of` с меткой по имени — `recorded_display_reads_replay_as_they_were_answered`
+  (Windows 11, 2026-11-20). **Долг устройств:** запись драйвером на Windows, macOS, Linux, Android и в Chrome с
+  отладочной сборкой приложения и захват настоящего метода ввода — строка parity «Recorded native
+  input replays deterministically on the headless host».
 
 - [ ] **LY96** (сценариев TalkBack и VoiceOver на iOS нет в коде; сеансы ассистивных технологий в
   долгу) — Windows-lane

@@ -436,12 +436,12 @@ graph LR
   The native layer is in the slices below: slices 1 (#2307), 2 (#2311) and 3 (#2313) merged;
   slice 4 is validated by `a_native_recording_writes_each_stream_with_the_devices_its_rows_read`.
 - **Native layer, decided (2026-11-04):**
-  - **Capture.** A native host's debug build installs one line capture (`flui-native`
-    `journal::lines`) on the loop's thread before the platform is created, the backend named by
-    `flui_native::current_host()`, and ends it right after the launch is read when no agent is
-    served, so only each stream's bounded setup was kept. A served app attaches it to each
-    runtime it hands the agent, and `capabilities.record` lists `native` only then. A page
-    records `input` only.
+  - **Capture.** A debug build, a native host's or a page's (ADR-0390), installs one line
+    capture (`flui-native` `journal::lines`) on the loop's thread before the platform is
+    created, the backend named by `flui_native::current_host()` (`web` for a page), and ends it
+    right after the launch is read when no agent is served, or when the platform fails to start
+    (`JournalStart`), so only each stream's bounded setup was kept. A served app attaches it to
+    each runtime it hands the agent, and `capabilities.record` lists `native` only then.
   - **Join mid-run.** Live recording or not, the runtime's fan-out keeps each stream's header
     and setup rows (devices, click settings, preferences, displays, window states), at most 64
     rows per stream; a recording started later begins each stream with them, and with a `gap`
