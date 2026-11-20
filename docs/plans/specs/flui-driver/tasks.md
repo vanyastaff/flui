@@ -558,6 +558,18 @@ graph LR
     its dependencies are read against "Rules a reader holds" (the `cargo xtask workspace`,
     `reach`, `globals` and `deps` gates are gone, ADR-0371).
 - **Status (2026-11-19):** built; the pull request is under review.
+- **Open (2026-11-20):** each a decision of its own, found by the review of the guarded send's
+  release:
+  - input a sequence left held (both releases refused) is still down when the next guarded
+    sequence on that lane is checked and sent: whether `send_guarded` releases it first, refuses
+    the sequence while it stays held (a key the OS always refuses would then wedge the lane), or
+    names it in the next step's report;
+  - a send that panics skips `disarm`, so the guard watches until the next `arm` or the lane's
+    drop, and its pending `foreign_input` survives; the worker's panicked-job path, which already
+    releases, is where it would be disarmed;
+  - `Error::ReleaseFailed` carries no effect, so after a send that went through it reads as not
+    run (`may_have_run` false), and its doc says a retry does not cure it while the next
+    sequence's release retries it.
 - **Evidence (2026-11-19):**
   - `flui-driver`'s `driver_it`:
     - `failure_matrix::every_failure_row_holds_on_every_fixture`: every failure scenario on the

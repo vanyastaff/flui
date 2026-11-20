@@ -160,8 +160,6 @@ objc2-core-graphics = { workspace = true, features = [
 [dev-dependencies]
 flui-driver = { path = ".", features = ["headless", "testing", "wayland"] }
 flui-foundation = { workspace = true }
-# `testing::capture`: the error-level line a release that stays held is logged as.
-flui-log = { workspace = true, features = ["testing"] }
 # The platform a headless scenario follows the conventions of (`PlatformConvention`).
 flui-platform = { workspace = true }
 flui-view = { workspace = true }

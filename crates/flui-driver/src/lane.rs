@@ -383,52 +383,35 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 }
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
-/// next event, release everything and fail with [`Error::InterruptedByUser`].
+/// next event, release everything and fail with [`Error::InterruptedByUser`]. What the lane
+/// pressed is released after the send, whether it went through or failed; a send that panics
+/// leaves the release to the lane's worker, which releases after a panicked job.
 ///
-/// A sequence starts with nothing held: what an earlier one left held is released first, and the
-/// sequence is refused, nothing sent, while it stays held. Everything the lane pressed is released
-/// on every exit, a failed or panicking send included, and a release that fails is tried once
-/// more. After a send that went through, the release's failure is the answer; after a failed
-/// send, whose error stays the caller's, what the release leaves held is logged at error level.
+/// After a send that went through, the release's failure is the answer. After a failed send, the
+/// send's error is the answer, so a release that fails then is no caller's to retry: it is tried
+/// once more, and what stays held is logged at error level, as the worker does when it ends.
 ///
 /// # Errors
 ///
-/// As [`admit`] and [`Lane::check`], before any event; the release's failure, before any event,
-/// when what an earlier sequence left held stays held; [`Error::InterruptedByUser`]; the lane's
-/// own failure; after a send that went through, the release's failure:
-/// [`Error::ReleaseFailed`] naming what stays held, or a failure that left nothing held.
-///
-/// # Panics
-///
-/// A panic of the lane's send, resumed once its guard is disarmed and the lane released.
+/// As [`admit`] and [`Lane::check`], before any event; [`Error::InterruptedByUser`]; the lane's
+/// own failure; after a send that went through, the release's failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
     lane.check(events)?;
-    if let Some(held) = release_twice(lane) {
-        return Err(held.last);
-    }
     let name = lane.name().to_owned();
     if let Some(guard) = lane.guard() {
         guard.arm()?;
     }
-    let mut panicked = FirstPanic::new();
-    let sent = panicked.contain(|| send_each(lane, &name, events));
+    let sent = send_each(lane, &name, events);
     if let Some(guard) = lane.guard() {
         guard.disarm();
     }
-    let released = panicked.contain(|| release_twice(lane));
-    if !matches!(sent, Some(Ok(())))
-        && let Some(Some(held)) = &released
-    {
-        log_held(lane.name(), held);
-    }
-    panicked.resume();
-    let (Some(sent), Some(released)) = (sent, released) else {
-        unreachable!("BUG: a send or release that panicked was resumed above");
-    };
     match sent {
-        Ok(()) => released.map_or(Ok(()), |held| Err(held.last)),
-        Err(error) => Err(error),
+        Ok(()) => lane.release_all(),
+        Err(error) => {
+            release_at_end(lane);
+            Err(error)
+        }
     }
 }
 
@@ -453,38 +436,19 @@ fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> 
     Ok(())
 }
 
-/// Two releases of a lane that both failed.
-struct StillHeld {
-    /// The first release's failure.
-    first: Error,
-    /// The second's, which names what stays held.
-    last: Error,
-}
-
-/// Release what `lane` holds: once, and once more if that failed. Both failures when the second
-/// failed too.
-fn release_twice(lane: &mut dyn Lane) -> Option<StillHeld> {
-    let first = lane.release_all().err()?;
-    let last = lane.release_all().err()?;
-    Some(StillHeld { first, last })
-}
-
-/// Log at error level what `lane` still holds after its release failed twice.
-fn log_held(lane: &str, held: &StillHeld) {
-    tracing::error!(
-        lane,
-        first = %held.first,
-        "input stays held after the lane let go of it: {}",
-        held.last
-    );
-}
-
 /// Release what `lane` holds where no caller is left to retry (the worker ending, a job that
-/// panicked): once, and once more if that failed. What a second failure leaves held is logged at
+/// panicked, a guarded send whose own error is the answer): once, and once more if that failed. What a second failure leaves held is logged at
 /// error level with the lane's error, which names it; nothing waits.
 fn release_at_end(lane: &mut dyn Lane) {
-    if let Some(held) = release_twice(lane) {
-        log_held(lane.name(), &held);
+    let Err(first) = lane.release_all() else {
+        return;
+    };
+    if let Err(last) = lane.release_all() {
+        tracing::error!(
+            lane = lane.name(),
+            first = %first,
+            "input stays held after the lane let go of it: {last}"
+        );
     }
 }
 
