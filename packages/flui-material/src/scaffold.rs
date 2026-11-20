@@ -262,9 +262,10 @@ impl Scaffold {
         self
     }
 
-    /// Sets the floating action button, positioned at the bottom-right of
-    /// the content area (the "end float" location — the only one this
-    /// substrate implements).
+    /// Sets the floating action button, positioned at the bottom of the
+    /// content area at the reading end of the ambient `Directionality`, clear
+    /// of that side's safe-area inset (the "end float" location — the only
+    /// one this substrate implements).
     #[must_use]
     pub fn floating_action_button(mut self, floating_action_button: impl IntoView) -> Self {
         self.floating_action_button = Some(floating_action_button.into_view().boxed());

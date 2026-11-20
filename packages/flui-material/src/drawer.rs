@@ -271,10 +271,13 @@ impl std::fmt::Debug for Drawer {
 impl StatelessView for Drawer {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
-        // A dependency: the side flips with the ambient direction.
+        // A dependency: the side flips with the ambient direction. Outside a
+        // controller the drawer is a start drawer, flush with the reading start.
         let side = ctx
             .depend_on::<DrawerSideScope, _>(|scope| *scope.data())
-            .unwrap_or(HorizontalSide::Left);
+            .unwrap_or_else(|| {
+                HorizontalSide::start(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr))
+            });
 
         let background_color = self
             .background_color

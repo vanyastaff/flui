@@ -1334,4 +1334,88 @@ pub fn a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction()
         (true, false),
         "a standalone controller's drawer follows the flip"
     );
+
+    // A drawer with no controller above it is a start drawer: rounded toward
+    // the interior from the reading start.
+    for (direction, corners) in [(Ltr, (false, true)), (Rtl, (true, false))] {
+        let laid = common::lay_out(
+            Directionality::new(
+                direction,
+                MediaQuery::new(
+                    MediaQueryData::default(),
+                    Theme::new(
+                        ThemeData::light(),
+                        flui_sdk::widgets::Align::new(flui_sdk::painting::Alignment::TOP_LEFT)
+                            .child(Drawer::new().child(SizedBox::height(400.0))),
+                    ),
+                ),
+            ),
+            tight(400.0, 400.0),
+        );
+        assert_eq!(
+            rounded_top_corners(&panel_outline(&laid, fill)),
+            corners,
+            "a drawer outside a controller under {direction:?}"
+        );
+    }
+}
+
+/// A direction flip in the middle of a drag keeps the drawer's progress and
+/// moves it to the other side, and the contact's next move is signed by the
+/// new side: toward the interior from the left now opens it further.
+pub fn a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_new_side() {
+    use flui_sdk::painting::Color;
+    use flui_sdk::painting::TextDirection::{self, Ltr, Rtl};
+    use flui_sdk::widgets::{ColoredBox, Directionality};
+
+    let color = Color::rgb(17, 83, 149);
+    let vsync = Vsync::new();
+    let tree = |direction: TextDirection| {
+        Directionality::new(
+            direction,
+            crate::rebuild_exactness::StaticChild {
+                inner: themed_animated(
+                    Scaffold::new().drawer(
+                        Drawer::new().child(SizedBox::height(400.0).child(ColoredBox::new(color))),
+                    ),
+                    &vsync,
+                )
+                .boxed(),
+            },
+        )
+    };
+    let mut laid = lay_out_animated(tree(Rtl), tight(400.0, 400.0), vsync.clone());
+    // The panel's painted left edge, and the fraction of its 304 that shows.
+    let painted_x =
+        |laid: &common::LaidOut| drawer_scene_sample(laid.layer_tree().expect("scene"), color).0;
+
+    // A right-to-left start drawer opens leftward from the right edge: 152
+    // of 304 shown.
+    laid.dispatch_pointer_down(395.0, 200.0);
+    for x in [365.0, 335.0, 305.0, 275.0, 243.0] {
+        laid.dispatch_pointer_move(x, 200.0);
+        laid.pump();
+    }
+    let shown_from_right = 400.0 - painted_x(&laid);
+    assert!(
+        shown_from_right > 100.0 && shown_from_right < 200.0,
+        "mid-drag: {shown_from_right} shown"
+    );
+
+    laid.pump_widget(tree(Ltr));
+    laid.pump();
+    let shown_from_left = painted_x(&laid) + 304.0;
+    assert!(
+        (shown_from_left - shown_from_right).abs() < 1e-6,
+        "the flip keeps progress: {shown_from_right} shown from the right, \
+         {shown_from_left} from the left"
+    );
+
+    laid.dispatch_pointer_move(273.0, 200.0);
+    laid.pump();
+    assert!(
+        (painted_x(&laid) + 304.0 - (shown_from_left + 30.0)).abs() < 1e-6,
+        "a rightward move opens the now-left drawer by its distance"
+    );
+    laid.dispatch_pointer_cancel();
 }
