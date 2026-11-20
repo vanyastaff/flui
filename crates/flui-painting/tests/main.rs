@@ -421,6 +421,10 @@ fn value_contract() {
                 values::decoration_gradient_falls_back_after_bounds_scaling,
             ),
             (
+                "lerp_endpoints_keep_a_gradient_fallback_and_an_image_blend",
+                values::lerp_endpoints_keep_a_gradient_fallback_and_an_image_blend,
+            ),
+            (
                 "decoration_gradient_centers_fall_back_after_bounds_scaling",
                 values::decoration_gradient_centers_fall_back_after_bounds_scaling,
             ),
@@ -530,6 +534,11 @@ fn value_contract() {
             (
                 "deserialized_images_validate_rgba_dimensions_and_data",
                 values::deserialized_images_validate_rgba_dimensions_and_data,
+            ),
+            #[cfg(feature = "serde")]
+            (
+                "a_lerp_serializes_its_gradient_fallback_but_not_its_image_blend",
+                values::a_lerp_serializes_its_gradient_fallback_but_not_its_image_blend,
             ),
         ],
     );
@@ -738,6 +747,10 @@ fn decoration_contract() {
             (
                 "paint_order_is_shadow_background_border",
                 decoration_unit::paint_order_is_shadow_background_border,
+            ),
+            (
+                "a_lerped_decoration_crossfades_its_images",
+                decoration_unit::a_lerped_decoration_crossfades_its_images,
             ),
             (
                 "hit_test_respects_rounded_corners",

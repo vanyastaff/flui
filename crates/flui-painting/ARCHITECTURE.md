@@ -1215,6 +1215,8 @@ interpolation refuses, the terminal mix is used directly. The fallback
 travels with cloned and serialized decorations; replacing the
 gradient through its setter clears it, and direct field replacement is checked
 against the original extrapolated gradient before the fallback is used.
+The image blend a lerp keeps (`styling/lerp_retained.rs`) follows the same rule: it is painted
+while `image` equals the image the lerp published, and it is not serialized.
 `BoxDecoration::lerp` forwards the raw fraction for paired gradient geometry;
 its other fields keep their bounded interpolation and exact endpoint behavior.
 Outside the interval, it preserves the selected endpoint's color/stop ramp so
