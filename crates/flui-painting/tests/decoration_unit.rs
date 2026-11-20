@@ -196,54 +196,134 @@ pub(crate) fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
     }
 }
 
-/// A lerped decoration crossfades its images: at `t = 0.25` it paints `a`'s at
-/// 75% opacity, then `b`'s over it at 25%. A lone image fades on its own, and
-/// replacing the lerped decoration's image drops the image it was fading out.
+/// A lerped decoration crossfades its images at constant coverage: at
+/// `t = 0.25` it paints `a`'s image at 75% and adds `b`'s at 25% in a layer of
+/// their own. A lone image fades in or out over the background, at its own
+/// opacity times its share; the same image on both sides stays whole; a lerp
+/// from a lerped decoration keeps the image that one was fading out; and
+/// replacing the lerped decoration's image paints the new image alone.
 pub(crate) fn a_lerped_decoration_crossfades_its_images() {
-    use flui_painting::paint::Image;
+    use flui_painting::paint::{BlendMode, Image};
     use flui_painting::styling::DecorationImage;
 
     let red = Image::solid_color(4, 4, Color::RED);
     let blue = Image::solid_color(4, 4, Color::BLUE);
+    let green = Image::solid_color(4, 4, Color::GREEN);
     let with = |image: &Image| BoxDecoration::with_image(DecorationImage::new(image.clone()));
-    // Each image the decoration paints, in order, with its paint's opacity.
-    let painted = |decoration: &BoxDecoration| -> Vec<(Image, f32)> {
+    // Each image the decoration paints, in order, with its opacity and blend.
+    let painted = |decoration: &BoxDecoration| -> Vec<(Image, f32, BlendMode)> {
         commands(decoration)
             .into_iter()
             .filter_map(|op| match op {
                 DrawOp::Image { image, paint, .. }
                 | DrawOp::ImageRegion { image, paint, .. }
-                | DrawOp::ImageRepeat { image, paint, .. } => {
-                    Some((image, paint.map_or(1.0, |paint| paint.color.opacity())))
-                }
+                | DrawOp::ImageRepeat { image, paint, .. } => Some((
+                    image,
+                    paint.as_ref().map_or(1.0, |paint| paint.color.opacity()),
+                    paint.map_or(BlendMode::SrcOver, |paint| paint.blend_mode),
+                )),
                 _ => None,
             })
             .collect()
     };
     let near = |actual: f32, expected: f32| (actual - expected).abs() < 0.01;
+    let layers = |decoration: &BoxDecoration| {
+        commands(decoration)
+            .iter()
+            .filter(|op| matches!(op, DrawOp::SaveLayer { .. }))
+            .count()
+    };
 
     let crossfaded = BoxDecoration::lerp(&with(&red), &with(&blue), 0.25);
     let images = painted(&crossfaded);
     assert_eq!(images.len(), 2, "both images are painted: {images:?}");
     assert!(
-        images[0].0 == red && near(images[0].1, 0.75),
+        images[0].0 == red && near(images[0].1, 0.75) && images[0].2 == BlendMode::SrcOver,
         "a's image first, at 75%: {:?}",
-        images[0].1
+        images[0]
     );
     assert!(
-        images[1].0 == blue && near(images[1].1, 0.25),
-        "b's image over it, at 25%: {:?}",
-        images[1].1
+        images[1].0 == blue && near(images[1].1, 0.25) && images[1].2 == BlendMode::Plus,
+        "b's image added to it, at 25%: {:?}",
+        images[1]
     );
+    assert_eq!(layers(&crossfaded), 1, "the blend has a layer of its own");
 
-    let fading = painted(&BoxDecoration::lerp(
-        &with(&red),
+    let fading_in = painted(&BoxDecoration::lerp(
         &BoxDecoration::new(),
+        &with(&red),
         0.25,
     ));
     assert!(
-        fading.len() == 1 && fading[0].0 == red && near(fading[0].1, 0.75),
-        "a lone image fades out on its own: {fading:?}"
+        fading_in.len() == 1 && near(fading_in[0].1, 0.25) && fading_in[0].2 == BlendMode::SrcOver,
+        "a lone image fades in over the background: {fading_in:?}"
+    );
+    let half = BoxDecoration::with_image(DecorationImage {
+        opacity: 0.5,
+        ..DecorationImage::new(red.clone())
+    });
+    let fading_out = painted(&BoxDecoration::lerp(&half, &BoxDecoration::new(), 0.5));
+    assert!(
+        fading_out.len() == 1 && near(fading_out[0].1, 0.25),
+        "a lone image fades out from its own opacity: {fading_out:?}"
+    );
+
+    let recolored = BoxDecoration::lerp(
+        &with(&red).set_color(Some(Color::RED)),
+        &with(&red).set_color(Some(Color::BLUE)),
+        0.5,
+    );
+    let images = painted(&recolored);
+    assert!(
+        images.len() == 1 && near(images[0].1, 1.0) && layers(&recolored) == 0,
+        "the same image on both sides stays whole: {images:?}"
+    );
+
+    let retargeted = BoxDecoration::lerp(&crossfaded, &with(&green), 0.5);
+    let images = painted(&retargeted);
+    let shares: Vec<(bool, bool, bool, f32)> = images
+        .iter()
+        .map(|(image, opacity, _)| (*image == red, *image == blue, *image == green, *opacity))
+        .collect();
+    assert!(
+        images.len() == 3
+            && images[0].0 == red
+            && near(images[0].1, 0.375)
+            && images[1].0 == blue
+            && near(images[1].1, 0.125)
+            && images[2].0 == green
+            && near(images[2].1, 0.5),
+        "a lerp from a blend keeps the image it was fading out: {shares:?}"
+    );
+
+    // Back to an image the blend still holds: its two shares are one layer.
+    let returned = painted(&BoxDecoration::lerp(&crossfaded, &with(&red), 0.5));
+    assert!(
+        returned.len() == 2
+            && returned[0].0 == red
+            && near(returned[0].1, 0.875)
+            && returned[1].0 == blue
+            && near(returned[1].1, 0.125),
+        "an image on both sides of a lerp is one layer: {returned:?}"
+    );
+
+    let circle = BoxDecoration::lerp(
+        &with(&red).set_shape(BoxShape::Circle),
+        &with(&blue).set_shape(BoxShape::Circle),
+        0.5,
+    );
+    let ops = commands_in(square_rect(), &circle);
+    let opens = ops
+        .iter()
+        .filter(|op| matches!(op, DrawOp::Save | DrawOp::SaveLayer { .. }))
+        .count();
+    let closes = ops
+        .iter()
+        .filter(|op| matches!(op, DrawOp::Restore | DrawOp::RestoreLayer))
+        .count();
+    assert!(
+        painted(&circle).len() == 2 && opens == 2 && opens == closes,
+        "a circle's blend sits in its clip, every scope closed: {ops:?}"
     );
 
     let mut replaced = crossfaded;

@@ -249,13 +249,8 @@ impl BoxDecoration {
         // The clip is a distance field, not tessellated geometry, so the circle
         // is exact — the ~6% diagonal bulge that rules out drrect for a circular
         // *ring* does not apply to a clip.
-        // A lerped decoration paints the image it fades out first, beneath the
-        // one it fades in.
-        for image in decoration
-            .fading_image()
-            .into_iter()
-            .chain(&decoration.image)
-        {
+        let layers = decoration.image_layers();
+        if !layers.is_empty() {
             match &silhouette {
                 Silhouette::Circle(circle) => {
                     let diameter = circle.radius * 2.0;
@@ -267,7 +262,7 @@ impl BoxDecoration {
                     );
                     canvas.save();
                     canvas.clip_rrect(RRect::from_rect_circular(bounds, circle.radius));
-                    paint_decoration_image(canvas, rect, image);
+                    paint_image_layers(canvas, rect, layers);
                     canvas.restore();
                 }
                 // A rounded-rect decoration still paints its image to the full
@@ -276,7 +271,7 @@ impl BoxDecoration {
                 // decorations render, and no readback oracle covers a clipped
                 // image yet — so it is named here rather than changed blind.
                 Silhouette::RRect(_) | Silhouette::Rect => {
-                    paint_decoration_image(canvas, rect, image);
+                    paint_image_layers(canvas, rect, layers);
                 }
             }
         }
@@ -499,11 +494,38 @@ pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<f64>) -> Shader {
     }
 }
 
+/// A decoration's image layers: one is painted as it is; a lerp's blend is
+/// painted into a layer of its own, the first image over nothing and each
+/// next one added to it (`Plus`), so the shares, which add up to one, cover the
+/// box as fully as one opaque image does.
+fn paint_image_layers(
+    canvas: &mut Canvas,
+    rect: Rect<f64>,
+    layers: &[crate::styling::DecorationImage],
+) {
+    use crate::paint::BlendMode;
+    if let [image] = layers {
+        paint_decoration_image(canvas, rect, image, BlendMode::SrcOver);
+        return;
+    }
+    canvas.save_layer(Some(rect), &Paint::default());
+    for (index, image) in layers.iter().enumerate() {
+        let blend = if index == 0 {
+            BlendMode::SrcOver
+        } else {
+            BlendMode::Plus
+        };
+        paint_decoration_image(canvas, rect, image, blend);
+    }
+    canvas.restore();
+}
+
 /// Source cropping and logical tile placement share the fitted image contract.
 fn paint_decoration_image(
     canvas: &mut Canvas,
     rect: Rect<f64>,
     image: &crate::styling::DecorationImage,
+    blend: crate::paint::BlendMode,
 ) {
     use crate::{BoxFit, ImagePlacement};
     use flui_foundation::geometry::Size;
@@ -517,8 +539,10 @@ fn paint_decoration_image(
         alignment: image.alignment,
         repeat: image.repeat,
     };
-    let paint =
-        (image.opacity < 1.0).then(|| Paint::fill(Color::WHITE.with_opacity(image.opacity)));
+    let paint = (image.opacity < 1.0 || blend != crate::paint::BlendMode::SrcOver).then(|| Paint {
+        blend_mode: blend,
+        ..Paint::fill(Color::WHITE.with_opacity(image.opacity))
+    });
     placement.paint(
         canvas,
         rect,

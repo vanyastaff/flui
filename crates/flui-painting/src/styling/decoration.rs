@@ -112,6 +112,76 @@ pub trait Decoration: std::fmt::Debug {
         Self: Sized;
 }
 
+/// The images a [`BoxDecoration::lerp`] blends: each image with its share of
+/// the blend folded into its opacity. The shares add up to one, and paint adds
+/// the layers together, so an opaque crossfade covers the box at every `t`.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) struct ImageBlend {
+    /// The `image` the lerp published beside the blend.
+    published: DecorationImage,
+    /// The blended layers, in paint order.
+    layers: Vec<DecorationImage>,
+}
+
+impl ImageBlend {
+    /// The most layers a blend keeps: a run retargeted from a blend blends its
+    /// layers again, and the weakest ones go first.
+    const MAX_LAYERS: usize = 4;
+
+    /// `a`'s layers at `1 - t` of their opacity and `b`'s at `t`, as the
+    /// decoration's `image` and the blend beside it. One layer needs no blend.
+    fn mix(
+        a: &[DecorationImage],
+        b: &[DecorationImage],
+        t: f64,
+    ) -> (Option<DecorationImage>, Option<Box<Self>>) {
+        let mut layers: Vec<DecorationImage> = Vec::new();
+        let shares = a
+            .iter()
+            .map(|layer| (layer, 1.0 - t))
+            .chain(b.iter().map(|layer| (layer, t)));
+        for (layer, share) in shares {
+            let opacity = layer.opacity * share;
+            if opacity <= 0.0 {
+                continue;
+            }
+            // The same image on both sides is one layer: its shares add up.
+            match layers.iter_mut().find(|kept| {
+                DecorationImage {
+                    opacity: kept.opacity,
+                    ..layer.clone()
+                } == **kept
+            }) {
+                Some(kept) => kept.opacity += opacity,
+                None => layers.push(DecorationImage {
+                    opacity,
+                    ..layer.clone()
+                }),
+            }
+        }
+        while layers.len() > Self::MAX_LAYERS {
+            let Some(weakest) = layers
+                .iter()
+                .enumerate()
+                .min_by(|(_, x), (_, y)| x.opacity.total_cmp(&y.opacity))
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            layers.remove(weakest);
+        }
+        // No layer is no image, and one layer needs no blend.
+        let (2.., Some(published)) = (layers.len(), layers.last().cloned()) else {
+            return (layers.pop(), None);
+        };
+        (
+            Some(published.clone()),
+            Some(Box::new(Self { published, layers })),
+        )
+    }
+}
+
 /// Box decoration with borders, shadows, and gradients.
 ///
 /// Generic over unit type `T` for full type safety.
@@ -153,14 +223,14 @@ pub struct BoxDecoration<T: Unit = f64> {
     /// An image to paint above the background color or gradient.
     pub image: Option<DecorationImage>,
 
-    // The image a lerp fades out beneath `image`, kept with the `image` that
-    // lerp faded in: once the public `image` is replaced, the pair no longer
-    // matches and the faded-out image is not painted (see `fading_image`).
+    // The images a lerp blends, kept with the `image` it published: once the
+    // public `image` is replaced, the blend no longer matches and `image` is
+    // painted alone (see `image_layers`).
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub(crate) image_crossfade: Option<Box<(DecorationImage, DecorationImage)>>,
+    pub(crate) image_blend: Option<Box<ImageBlend>>,
 
     /// A border to draw above the background.
     pub border: Option<Border<T>>,
@@ -215,7 +285,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: None,
-            image_crossfade: None,
+            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -231,7 +301,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: Some(color),
             image: None,
-            image_crossfade: None,
+            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -247,7 +317,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: None,
-            image_crossfade: None,
+            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -263,7 +333,7 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: Some(image),
-            image_crossfade: None,
+            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -428,21 +498,14 @@ where
             (raw, bounded) => (raw.or(bounded), None),
         };
 
-        // Images crossfade: `b`'s fades in at opacity `t` over `a`'s fading out at
-        // `1 - t`, and a lone image fades in or out on its own.
-        let faded = |image: &DecorationImage, factor: f64| DecorationImage {
-            opacity: image.opacity * factor,
-            ..image.clone()
-        };
-        let (image, image_crossfade) = match (&a.image, &b.image) {
-            (None, None) => (None, None),
-            (Some(a), None) => (Some(faded(a, 1.0 - t)), None),
-            (None, Some(b)) => (Some(faded(b, t)), None),
-            (Some(a), Some(b)) => {
-                let incoming = faded(b, t);
-                let outgoing = faded(a, 1.0 - t);
-                (Some(incoming.clone()), Some(Box::new((incoming, outgoing))))
-            }
+        // Images crossfade at constant coverage: each side's image layers keep
+        // their share, `1 - t` of `a`'s and `t` of `b`'s, and paint adds them
+        // up. The same image on both sides is one layer whose shares add back
+        // to its own opacity, so it does not dim.
+        let (image, image_blend) = if a.image_layers() == b.image_layers() {
+            (a.image.clone(), a.image_blend.clone())
+        } else {
+            ImageBlend::mix(a.image_layers(), b.image_layers(), t)
         };
         // Not interpolatable: a discrete switch at the midpoint.
         let shape = if t < 0.5 { a.shape } else { b.shape };
@@ -450,7 +513,7 @@ where
         Self {
             color,
             image,
-            image_crossfade,
+            image_blend,
             border,
             border_radius,
             box_shadow,
@@ -460,13 +523,14 @@ where
         }
     }
 
-    /// The image a lerp fades out beneath [`image`](Self::image), unless `image`
-    /// was replaced after the lerp.
-    pub(crate) fn fading_image(&self) -> Option<&DecorationImage> {
-        self.image_crossfade
-            .as_deref()
-            .filter(|(incoming, _)| self.image.as_ref() == Some(incoming))
-            .map(|(_, outgoing)| outgoing)
+    /// The images this decoration paints, each with its share folded into its
+    /// opacity: a lerp's blend while [`image`](Self::image) is still the one
+    /// the lerp published, else `image` alone.
+    pub(crate) fn image_layers(&self) -> &[DecorationImage] {
+        match self.image_blend.as_deref() {
+            Some(blend) if self.image.as_ref() == Some(&blend.published) => &blend.layers,
+            _ => self.image.as_slice(),
+        }
     }
 
     /// Ignore retained state after direct replacement of the public gradient.
