@@ -1,13 +1,12 @@
 //! RenderingBinding - the glue between the render trees and the FLUI engine.
 //!
-//! It manages multiple independent render trees, each rooted in a RenderView.
+//! It holds a presentation's root pipeline owner and its first-frame gate.
 //!
 //! # Architecture
 //!
 //! ```text
 //! RenderingBinding
 //!   ├── root_pipeline_owner   - Root of PipelineOwner tree
-//!   ├── render_views          - Map<ViewId, RenderView>
 //!   └── first-frame gate      - defer_first_frame / allow_first_frame
 //! ```
 //!
@@ -18,16 +17,12 @@
 //! `RenderingBinding` directly only when working with the rendering
 //! layer without widgets.
 
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-};
+use std::cell::Cell;
 
 use flui_foundation::geometry::Offset;
 use flui_rendering::{
     hit_testing::HitTestResult,
     pipeline::{PipelineCell, PipelineOwner, TextContextHandle},
-    view::RenderView,
 };
 
 /// Shared body for [`RenderingBinding::redirty_root_for_represent`]:
@@ -52,7 +47,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
     }
 }
 
-/// How a view answered [`RenderingBinding::hit_test_in_view`].
+/// How the render tree answered [`RenderingBinding::hit_test`].
 #[derive(Debug)]
 #[must_use = "a busy tree or a contained panic is lost if the answer is dropped"]
 #[expect(
@@ -87,7 +82,7 @@ pub enum ViewHitTest {
 /// # Responsibilities
 ///
 /// - Holding the root [`PipelineOwner`] tree
-/// - Lending [`RenderView`]s by view id
+/// - Hit testing that tree for input and the agent
 /// - The first-frame deferral gate
 ///
 /// Whether semantics are enabled belongs to each presentation's
@@ -97,7 +92,7 @@ pub enum ViewHitTest {
 ///
 /// # Thread Safety
 ///
-/// Owner-thread-confined (`!Send + !Sync`): its state is `Cell`/`RefCell`,
+/// Owner-thread-confined (`!Send + !Sync`): its state is `Cell`s,
 /// and a `PipelineOwner` belongs to exactly one presentation on exactly one
 /// thread (ADR-0323 §1).
 ///
@@ -123,9 +118,6 @@ pub struct RenderingBinding {
     /// presentation).
     root_pipeline_owner: PipelineCell,
 
-    /// Render views managed by this binding (viewId → RenderView).
-    render_views: RefCell<HashMap<u64, RenderView>>,
-
     /// Outstanding [`RenderingBinding::defer_first_frame`] calls.
     first_frame_deferred_count: Cell<u32>,
 
@@ -136,7 +128,6 @@ pub struct RenderingBinding {
 impl std::fmt::Debug for RenderingBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderingBinding")
-            .field("render_views_count", &self.render_views.borrow().len())
             .field(
                 "first_frame_deferred_count",
                 &self.first_frame_deferred_count.get(),
@@ -159,7 +150,6 @@ impl RenderingBinding {
     pub fn new_with_pipeline(pipeline_owner: PipelineCell) -> Self {
         Self {
             root_pipeline_owner: pipeline_owner,
-            render_views: RefCell::new(HashMap::new()),
             first_frame_deferred_count: Cell::new(0),
             first_frame_sent: Cell::new(false),
         }
@@ -347,21 +337,20 @@ impl RenderingBinding {
 }
 
 // ============================================================================
-// Render views and hit testing
+// Hit testing and the frame gate
 // ============================================================================
 
 impl RenderingBinding {
-    /// Hit tests at `position` in the view `_view_id`.
+    /// Hit tests at `position` in this binding's render tree.
     ///
     /// `kind` is the pointer asking, whose minimum target expanded hit areas
     /// follow. The answer says whether the tree could be asked at all; see
     /// [`ViewHitTest`].
-    pub fn hit_test_in_view(
+    pub fn hit_test(
         &self,
         result: &mut HitTestResult,
         position: Offset,
         kind: flui_interaction::events::PointerKind,
-        _view_id: u64,
     ) -> ViewHitTest {
         // Hits route through the REAL render tree (the pipeline
         // owner's), not the per-view registry — the registry views
@@ -402,37 +391,6 @@ impl RenderingBinding {
         &self.root_pipeline_owner
     }
 
-    /// Runs `visit` on the render view for `view_id`; `false` when there is
-    /// none.
-    ///
-    /// The view is lent for the call only: no lock or borrow of the map is
-    /// held while `visit` runs. While it is lent, a nested call for the same
-    /// id finds no view, and a view inserted under that id during the call
-    /// replaces the lent one.
-    pub fn with_render_view(&self, view_id: u64, visit: &mut dyn FnMut(&mut RenderView)) -> bool {
-        let Some(view) = self.render_views.borrow_mut().remove(&view_id) else {
-            return false;
-        };
-        // The view goes back when `visit` returns or unwinds, so no borrow of
-        // the map is held while it runs.
-        let mut lent = LentRenderView {
-            views: &self.render_views,
-            view_id,
-            view: Some(view),
-        };
-        visit(
-            lent.view
-                .as_mut()
-                .expect("BUG: the lent view stays lent until dropped"),
-        );
-        true
-    }
-
-    /// Inserts a render view at `view_id`, dropping the one it replaces.
-    pub fn insert_render_view(&self, view_id: u64, view: RenderView) {
-        self.render_views.borrow_mut().insert(view_id, view);
-    }
-
     /// Whether frames should be sent to the engine.
     ///
     /// If false, the framework does all frame work but doesn't render; the
@@ -440,23 +398,6 @@ impl RenderingBinding {
     /// has been sent, or while no first-frame deferral is outstanding.
     pub fn send_frames_to_engine(&self) -> bool {
         self.first_frame_sent.get() || self.first_frame_deferred_count.get() == 0
-    }
-}
-
-/// A render view lent out of [`RenderingBinding`]'s map for one
-/// [`RenderingBinding::with_render_view`] call.
-struct LentRenderView<'a> {
-    views: &'a RefCell<HashMap<u64, RenderView>>,
-    view_id: u64,
-    view: Option<RenderView>,
-}
-
-impl Drop for LentRenderView<'_> {
-    fn drop(&mut self) {
-        if let Some(view) = self.view.take() {
-            // A view inserted under this id while it was lent is the newer one.
-            self.views.borrow_mut().entry(self.view_id).or_insert(view);
-        }
     }
 }
 

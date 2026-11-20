@@ -574,12 +574,9 @@ pub struct PresentationState {
     /// may proceed, and the owner settles it on its turn. One per
     /// presentation, so it outlives every remount of the root.
     close_guard: CloseGuardSource,
-    /// Render tree, layout/paint pipeline coordination, and this
-    /// presentation's own semantics-enablement fan-out. Moved from the
-    /// retired UI runtime-level singular `UiRuntime::renderer`: `render_views`,
-    /// `first_frame_sent`, and the semantics-enabled listener are
-    /// per-presentation-window facts, not shareable once a UI runtime hosts more
-    /// than one presentation.
+    /// This presentation's root pipeline owner, its hit testing and its
+    /// first-frame gate: per-presentation facts, not shareable once a UI
+    /// runtime hosts more than one presentation.
     renderer: RenderingBinding,
     /// Total frames rendered successfully for this presentation. Moved here
     /// from the retired `AppBinding`: per-window frame accounting, beside

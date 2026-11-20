@@ -1337,9 +1337,10 @@ impl UiRuntime {
                     // A committed frame has published its layout, so the
                     // tree answers; a render object's panic is a miss and
                     // reported after the refresh.
-                    if let ViewHitTest::Answered { panic } = presentation
-                        .renderer()
-                        .hit_test_in_view(&mut result, position, kind, 0)
+                    if let ViewHitTest::Answered { panic } =
+                        presentation
+                            .renderer()
+                            .hit_test(&mut result, position, kind)
                     {
                         let mut held = hit_panic.take();
                         if let Some(payload) = panic {

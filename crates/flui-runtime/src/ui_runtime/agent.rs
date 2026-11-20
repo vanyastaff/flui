@@ -926,11 +926,10 @@ pub(super) fn actionability(
         let mut result = flui_interaction::pointer::HitTestResult::new();
         // No physical contact: the check asks about the element, not
         // about the reach of a finger or a stylus.
-        match state.renderer().hit_test_in_view(
+        match state.renderer().hit_test(
             &mut result,
             flui_foundation::geometry::Offset::new(point.x, point.y),
             flui_interaction::events::PointerKind::Virtual,
-            0,
         ) {
             ViewHitTest::Answered {
                 panic: Some(payload),
