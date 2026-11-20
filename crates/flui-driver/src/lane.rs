@@ -16,8 +16,10 @@
 //! the window ([`Lane::capture_window`]).
 //!
 //! The lanes: [`windows`], [`macos`], [`x11`] and [`wayland`] (its OS half with the `wayland`
-//! feature); both Linux lanes read the app through [`atspi`].
+//! feature); both Linux lanes read the app through [`atspi`]. [`android`] drives a device or an
+//! emulator from any host, through `adb`.
 
+pub mod android;
 pub mod atspi;
 pub mod macos;
 pub mod pacing;
@@ -291,6 +293,7 @@ pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()
         lane,
         held,
         message,
+        first: None,
     })
 }
 
@@ -334,12 +337,16 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
-/// pressed is released on every exit, a failed send included.
+/// pressed is released on every exit, a failed send included. When the release leaves input
+/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
+/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
+/// ([`Error::effect`], [`Error::is_cannot_verify`]).
 ///
 /// # Errors
 ///
-/// As [`admit`] and [`Lane::check`], before any event; [`Error::InterruptedByUser`]; the lane's
-/// own failure.
+/// As [`admit`] and [`Lane::check`], before any event; [`Error::ReleaseFailed`] naming what stays
+/// held, with the run's own failure as its `first` when there was one;
+/// [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
     lane.check(events)?;
@@ -352,7 +359,26 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
         guard.disarm();
     }
     let released = lane.release_all();
-    sent.and(released)
+    match (sent, released) {
+        // The error names what stays down whatever ended the run, and keeps that first failure,
+        // which the verdict is read from: a run the person interrupted stays cannot-verify, since
+        // it did not complete because of a person, while the key left down is named all the same.
+        (
+            Err(failure),
+            Err(Error::ReleaseFailed {
+                lane,
+                held,
+                message,
+                ..
+            }),
+        ) => Err(Error::ReleaseFailed {
+            lane,
+            held,
+            message: format!("{message}; the run had failed first: {failure}"),
+            first: Some(Box::new(failure)),
+        }),
+        (sent, released) => sent.and(released),
+    }
 }
 
 fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {

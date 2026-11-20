@@ -493,6 +493,7 @@ impl HeldInput {
             lane: LANE.to_owned(),
             held: self.held_names(),
             message: first.to_string(),
+            first: None,
         })
     }
 
@@ -619,6 +620,7 @@ impl HeldButtons {
                 lane: LANE.to_owned(),
                 held: self.held_names(),
                 message: first.to_string(),
+                first: None,
             }),
         }
     }
