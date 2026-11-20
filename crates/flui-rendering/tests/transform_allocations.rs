@@ -130,10 +130,6 @@ impl flui_rendering::delegates::FlowDelegate for RowFlowDelegate {
     fn should_repaint(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool {
         false
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// A pointer moving over a painted tree hit-tests it without allocating: the

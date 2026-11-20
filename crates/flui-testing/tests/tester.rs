@@ -1744,9 +1744,6 @@ impl flui_widgets::CustomPainter for SwatchPainter {
     fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
         true
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// `child` inside a group `find::id(identifier)` locates.
@@ -2038,9 +2035,6 @@ impl flui_widgets::CustomPainter for OverhangPainter {
     fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
         true
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// `draw_commands` reads one element's drawing: of two painted siblings,
@@ -2170,9 +2164,6 @@ impl flui_widgets::CustomPainter for RegionPainter {
             ),
             config,
         )]
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

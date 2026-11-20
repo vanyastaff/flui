@@ -5,7 +5,6 @@
 //! stiffness 200); each morph also turns the shape a quarter turn, on top of a steady full turn
 //! every 4666 ms. Determinate, the circle morphs into the soft burst as the work completes.
 
-use std::any::Any;
 use std::f64::consts::{FRAC_PI_2, TAU};
 use std::rc::Rc;
 use std::time::Duration;
@@ -461,9 +460,5 @@ impl CustomPainter for ShapePainter {
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         self.frame.repaint()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

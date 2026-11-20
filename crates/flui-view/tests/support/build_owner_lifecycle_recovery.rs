@@ -185,7 +185,7 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
         let entry = entries.values().next().expect("live LayoutBuilder entry");
         (entry.element, Rc::clone(&entry.cell))
     });
-    cell.as_any()
+    (&*cell as &dyn std::any::Any)
         .downcast_ref::<flui_objects::LayoutConstraintsCell>()
         .expect("LayoutBuilder owns a constraints cell")
         .publish(flui_rendering::constraints::BoxConstraints::tight_for(

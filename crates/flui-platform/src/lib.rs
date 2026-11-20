@@ -80,10 +80,6 @@
 //!     fn perform(&self, feedback: HapticFeedback) {
 //!         self.feedback.lock().expect("unpoisoned").push(feedback);
 //!     }
-//!
-//!     fn as_any(&self) -> &dyn std::any::Any {
-//!         self
-//!     }
 //! }
 //!
 //! let recorder = Arc::new(Recorder::default());

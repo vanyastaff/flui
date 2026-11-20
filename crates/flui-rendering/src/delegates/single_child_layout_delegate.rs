@@ -48,7 +48,7 @@ use crate::constraints::BoxConstraints;
 ///     }
 /// }
 /// ```
-pub trait SingleChildLayoutDelegate: Debug {
+pub trait SingleChildLayoutDelegate: Any + Debug {
     /// Get the size of the parent for the given constraints.
     ///
     /// Called during layout to determine the parent's size.
@@ -110,12 +110,6 @@ pub trait SingleChildLayoutDelegate: Debug {
     ///
     /// `true` if layout should be recalculated, `false` otherwise.
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool;
-
-    /// Returns self as `Any` for downcasting.
-    ///
-    /// This enables comparing delegates of the same concrete type in
-    /// `should_relayout`.
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// A layout delegate that centers the child.
@@ -140,10 +134,6 @@ impl SingleChildLayoutDelegate for CenterLayoutDelegate {
 
     fn should_relayout(&self, _old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
         false
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -188,14 +178,10 @@ impl SingleChildLayoutDelegate for AspectRatioDelegate {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+        if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
             (self.aspect_ratio - old.aspect_ratio).abs() > f64::EPSILON
         } else {
             true
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

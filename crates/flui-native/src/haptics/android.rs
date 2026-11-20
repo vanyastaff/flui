@@ -534,8 +534,4 @@ impl PlatformHaptics for AndroidHaptics {
             vibrator.envelopes,
         )
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

@@ -58,6 +58,34 @@ mod floating_action_button;
 #[path = "gesture_alternatives.rs"]
 mod gesture_alternatives;
 
+/// A `TabBarView`'s alternatives to a swipe (ADR-0216): the input-path matrix
+/// rows, whose single-pointer path is the `TabBar` beside it.
+#[test]
+fn gesture_alternatives() {
+    common::run_cases(&[
+        (
+            "gesture_alternatives::tab_bar_view_with_its_tab_bar",
+            gesture_alternatives::tab_bar_view_with_its_tab_bar,
+        ),
+        (
+            "gesture_alternatives::tab_bar_view_without_a_tab_bar",
+            gesture_alternatives::tab_bar_view_without_a_tab_bar,
+        ),
+        (
+            "gesture_alternatives::the_end_tabs_have_no_step_beyond_them",
+            gesture_alternatives::the_end_tabs_have_no_step_beyond_them,
+        ),
+        (
+            "gesture_alternatives::unmounting_the_tab_bar_unregisters_it",
+            gesture_alternatives::unmounting_the_tab_bar_unregisters_it,
+        ),
+        (
+            "gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one",
+            gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one,
+        ),
+    ]);
+}
+
 #[path = "icon_button.rs"]
 mod icon_button;
 
@@ -496,6 +524,8 @@ fn overlay_contracts() {
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
+        ("drawer::a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction", drawer::a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction),
+        ("drawer::a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_new_side", drawer::a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_new_side),
         ("drawer::grabbing_a_closing_drawer_preserves_its_panel", drawer::grabbing_a_closing_drawer_preserves_its_panel),
         ("drawer::drawer_slides_without_rebuilding_per_frame", drawer::drawer_slides_without_rebuilding_per_frame),
         ("drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel", drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel),
@@ -784,6 +814,10 @@ fn navigation_and_layout_contracts() {
             scaffold::floating_action_button_floats_above_the_keyboard,
         ),
         (
+            "scaffold::the floating action button sits at the reading end clear of that sides inset",
+            scaffold::the_floating_action_button_sits_at_the_reading_end_clear_of_that_sides_inset,
+        ),
+        (
             "scaffold::plain body text takes the theme body style and components keep theirs",
             scaffold::plain_body_text_takes_the_theme_body_style_and_components_keep_theirs,
         ),
@@ -975,34 +1009,6 @@ fn linear_progress_switches_to_determinate() {
         (
             "progress_indicator::negative zero announces zero percent",
             progress_indicator::negative_zero_announces_zero_percent,
-        ),
-    ]);
-}
-
-/// A `TabBarView`'s alternatives to a swipe (ADR-0216): the input-path matrix
-/// rows, whose single-pointer path is the `TabBar` beside it.
-#[test]
-fn gesture_alternatives() {
-    common::run_cases(&[
-        (
-            "gesture_alternatives::tab_bar_view_with_its_tab_bar",
-            gesture_alternatives::tab_bar_view_with_its_tab_bar,
-        ),
-        (
-            "gesture_alternatives::tab_bar_view_without_a_tab_bar",
-            gesture_alternatives::tab_bar_view_without_a_tab_bar,
-        ),
-        (
-            "gesture_alternatives::the_end_tabs_have_no_step_beyond_them",
-            gesture_alternatives::the_end_tabs_have_no_step_beyond_them,
-        ),
-        (
-            "gesture_alternatives::unmounting_the_tab_bar_unregisters_it",
-            gesture_alternatives::unmounting_the_tab_bar_unregisters_it,
-        ),
-        (
-            "gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one",
-            gesture_alternatives::replacing_the_controller_moves_the_pager_and_bar_to_the_new_one,
         ),
     ]);
 }
