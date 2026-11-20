@@ -131,12 +131,12 @@ No single command mirrors CI. Before a PR a contributor runs the checks of
 AGENTS.md, "Checking a change", on the crates the change touched; for any
 other job, the commands of its job in `.github/workflows/ci.yml` are the
 authority ([CI jobs and their local commands](#ci-jobs-and-their-local-commands)).
-The one repository task among them:
+The local form of those checks:
 
 ```bash
 cargo fmt --all --check; typos; taplo fmt --check   # formatting, spelling, TOML: the first steps of CI's checks job
                                           # then the job's lychee line: markdown links into the checkout, offline
-cargo nextest run -p flui-platform -p flui-testing -p flui-material -p flui-cli -p flui-painting -p flui-native -p flui-system   # the generated files (key and recording vocabularies, Material icon constants, platform floors, font assets, Android dex digests) against their sources; FLUI_BLESS=1 rewrites them
+cargo nextest run -p flui-platform -p flui-testing -p flui-material -p flui-cli -p flui-painting -p flui-native -p flui-system   # the generated files (key and recording vocabularies, Material icon constants, platform floors, font assets, Android dex digests) against their sources; FLUI_BLESS=1 rewrites what a generator wrote (not the font or dex checks, which compare)
 ```
 
 The reload-lifecycle fixture is a real plugin image. The `test` job
@@ -1305,7 +1305,7 @@ Each CI run takes one of three lanes. The `plan` job picks it with a shell step
 
 | Lane | When | Adds |
 |---|---|---|
-| `docs` | a pull request every changed file of which is documentation (a root `*.md` or licence text, `docs/` but `gaps.md` and `platform-parity.md`, `changelog.d/`, a crate's `ARCHITECTURE.md` or `docs/ARCHITECTURE.md`, `CHANGELOG.md` or licence text, the issue templates, `CODEOWNERS`; a licence text is `LICENSE`, `LICENSE-APACHE`, `LICENSE-MIT` or `NOTICE`; a rename counts both its paths; `book/` is code, since the facade's unit tests check its chapters) | nothing |
+| `docs` | a pull request every changed file of which is documentation (a root `*.md` or licence text, `docs/` but `gaps.md`, `platform-parity.md` and `version-map.md`, `changelog.d/`, a crate's `ARCHITECTURE.md` or `docs/ARCHITECTURE.md`, `CHANGELOG.md` or licence text, the issue templates, `CODEOWNERS`; a licence text is `LICENSE`, `LICENSE-APACHE`, `LICENSE-MIT` or `NOTICE`; a rename counts both its paths; `book/` is code, since the facade's unit tests check its chapters) | nothing |
 | `wide` | every other pull request | `deps`, `clippy` and `test` over the whole workspace on Linux |
 | `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `feature-matrix`, `doc-test`, `test-nested`, `test-features`, `doc`, `wasm-check`, `cross-typecheck`, `test-trybuild`, `size`, `miri`, `perf-gates` and `test-without-agent`; in `clippy` and `test` it also turns on the per-feature flui-native lint, the GPU readbacks on GL and the all-targets build |
 

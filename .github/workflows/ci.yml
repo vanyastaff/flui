@@ -341,6 +341,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
+          shopt -s dotglob
           failed=0
           for f in changelog.d/*; do
             name=$(basename "$f")
@@ -351,6 +352,10 @@ jobs:
               continue
             fi
             awk -v f="$f" '
+              # A fragment is pasted into CHANGELOG.md, so a link resolves
+              # the same in both places only when root-relative or absolute.
+              /\]\((\.\.?\/|\/\/|#)/ { print "::error file=" f ",line=" NR "::a link is root-relative (/docs/x.md) or absolute; a relative, protocol-relative or #anchor-only one changes target once merged"; bad = 1 }
+              /^[[:space:]]*\[[^]]+\]:/ { print "::error file=" f ",line=" NR "::a reference definition changes target once merged; write the link inline"; bad = 1; next }
               /^### / {
                 cur = substr($0, 5)
                 if (cur !~ /^(Added|Changed|Deprecated|Removed|Fixed|Security)$/) { print "::error file=" f ",line=" NR "::`" $0 "` is not one of Added, Changed, Deprecated, Removed, Fixed, Security"; bad = 1 }
@@ -373,6 +378,17 @@ jobs:
             echo "::error file=CHANGELOG.md::CHANGELOG.md holds $unreleased \`## [Unreleased]\` headings, not one"
             failed=1
           fi
+          # The region the fragments are merged into holds only the six
+          # sections, each once.
+          awk '
+            /^## \[Unreleased\]$/ { inside = 1; next }
+            /^## / { inside = 0 }
+            inside && /^### / {
+              s = substr($0, 5)
+              if (s !~ /^(Added|Changed|Deprecated|Removed|Fixed|Security)$/) { print "::error file=CHANGELOG.md,line=" NR "::`" $0 "` in [Unreleased] is not one of the six sections"; bad = 1 }
+              if (seen[s]++) { print "::error file=CHANGELOG.md,line=" NR "::`" $0 "` appears twice in [Unreleased]"; bad = 1 }
+            }
+            END { exit bad }' CHANGELOG.md || failed=1
           exit "$failed"
 
       - name: actionlint (workflow semantics)
@@ -391,8 +407,9 @@ jobs:
   # Documentation is a root `*.md` or licence text, anything under docs/ or
   # changelog.d/, a crate's ARCHITECTURE.md (or docs/ARCHITECTURE.md), CHANGELOG.md
   # or licence text (LICENSE, LICENSE-APACHE, LICENSE-MIT, NOTICE),
-  # and the issue templates and CODEOWNERS. docs/gaps.md and
-  # docs/platform-parity.md are not: flui-native's tests read them. Neither is
+  # and the issue templates and CODEOWNERS. docs/gaps.md,
+  # docs/platform-parity.md and docs/version-map.md are not: flui-native's and
+  # flui-cli's tests read them. Neither is
   # book/: the facade's unit tests check its chapters (src/book.rs; its doctests
   # run on main, in doc-test). Renames count
   # both paths, so a file moved into docs/ still runs the gate. A file another
@@ -442,7 +459,7 @@ jobs:
             while IFS= read -r file; do
               [ -n "$file" ] || continue
               case "$file" in
-                docs/gaps.md | docs/platform-parity.md) lane=wide ;;
+                docs/gaps.md | docs/platform-parity.md | docs/version-map.md) lane=wide ;;
                 docs/* | changelog.d/* | .github/ISSUE_TEMPLATE/* | .github/CODEOWNERS) ;;
                 crates/*/* | packages/*/*)
                   # a crate's own architecture notes, changelog and licence texts

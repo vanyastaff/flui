@@ -247,3 +247,110 @@ pub(crate) fn assert_declared_dex_is_built_from_its_sources(crate_dir: &Path) {
         .collect();
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SOURCE: &[u8] = b"class A {}";
+    const DEX: &[u8] = b"dex bytes";
+
+    fn declared() -> DeclaredDex {
+        DeclaredDex {
+            sources: "java".to_owned(),
+            dex: "classes.dex".to_owned(),
+            record: "classes.dex.toml".to_owned(),
+        }
+    }
+
+    /// A crate directory whose sources, dex and record agree.
+    fn consistent_crate() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        std::fs::create_dir_all(dir.path().join("java/p")).expect("mkdir");
+        std::fs::write(dir.path().join("java/p/A.java"), SOURCE).expect("write");
+        std::fs::write(dir.path().join("classes.dex"), DEX).expect("write");
+        let sources = sources_digest(&[("p/A.java".to_owned(), SOURCE.to_vec())]);
+        let record = format!(
+            "sources = \"{sources}\"\ndex = \"{}\"\njavac = \"21\"\nbuild-tools = \"35.0.0\"\n\
+             platform = \"android-35\"\n",
+            hex(&Sha256::digest(DEX))
+        );
+        std::fs::write(dir.path().join("classes.dex.toml"), record).expect("write");
+        dir
+    }
+
+    #[test]
+    fn a_consistent_crate_has_no_mismatch() {
+        let dir = consistent_crate();
+        assert_eq!(
+            mismatches("demo", dir.path(), &declared()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_source_edited_after_the_record_is_reported() {
+        let dir = consistent_crate();
+        std::fs::write(dir.path().join("java/p/A.java"), b"class A { }").expect("write");
+        let found = mismatches("demo", dir.path(), &declared());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("Java sources under java changed"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_replaced_dex_is_reported() {
+        let dir = consistent_crate();
+        std::fs::write(dir.path().join("classes.dex"), b"other bytes").expect("write");
+        let found = mismatches("demo", dir.path(), &declared());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("classes.dex is not the dex classes.dex.toml records"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_sources_directory_without_java_is_refused() {
+        let dir = consistent_crate();
+        std::fs::remove_file(dir.path().join("java/p/A.java")).expect("remove");
+        std::fs::write(dir.path().join("java/p/notes.txt"), b"not java").expect("write");
+        let found = mismatches("demo", dir.path(), &declared());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("no Java sources under java"), "{found:?}");
+    }
+
+    #[test]
+    fn a_pair_declared_twice_is_listed_once_in_path_order() {
+        let manifest: toml::Table = r#"
+            [package.metadata.flui.declares.features.zeta.android]
+            dex = "z/classes.dex"
+            java = "z/java"
+            [package.metadata.flui.declares.features.again.android]
+            dex = "./z/classes.dex"
+            java = "z/java"
+            [package.metadata.flui.declares.android]
+            dex = "z/classes.dex"
+            java = "z/java"
+            [package.metadata.flui.declares.features.alpha.android]
+            dex = "a/classes.dex"
+            java = "a/java"
+        "#
+        .parse()
+        .expect("the manifest is TOML");
+        let listed: Vec<(String, String)> = declared_dex(&manifest)
+            .expect("declared")
+            .into_iter()
+            .map(|dex| (dex.dex, dex.sources))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("a/classes.dex".to_owned(), "a/java".to_owned()),
+                ("z/classes.dex".to_owned(), "z/java".to_owned()),
+            ]
+        );
+    }
+}

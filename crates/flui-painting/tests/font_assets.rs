@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 const ASSETS: &str = "crates/flui-painting/assets/fonts";
 const GENERATOR: &str = "tools/decoy-face/generate.py";
-const RESTRICTED_SHA256: &str = "74d696e666f696e93db685a85c94bfbfcc0796dfcf8a2e2e2c908a54e82949";
+const RESTRICTED_SHA256: &str = "74d696e666f696e93db685a85c94bfbfcc0796dfcf8a2e2e2e2c908a54e82949";
 const FONT_SUFFIXES: [&str; 4] = ["ttf", "otf", "woff", "woff2"];
 /// Top-level directories searched for fonts outside the inventory owner.
 const SEARCHED: [&str; 5] = ["crates", "packages", "examples", "tools", "assets"];
@@ -615,4 +615,27 @@ fn package_listing_requires_every_recorded_file() {
             "package listing includes restricted Arial fixture"
         ]
     );
+}
+
+#[test]
+fn package_listing_requires_notice_files_and_the_inventory() {
+    let inventory: Inventory =
+        toml::from_str("[[notice]]\nfile = \"licenses/A.txt\"\n[[font]]\nfile = \"A.ttf\"\n")
+            .expect("parses");
+    let complete: BTreeSet<String> = [
+        "Cargo.toml",
+        "assets/fonts/inventory.toml",
+        "assets/fonts/A.ttf",
+        "assets/fonts/licenses/A.txt",
+    ]
+    .map(str::to_owned)
+    .into();
+    for missing in ["assets/fonts/licenses/A.txt", "assets/fonts/inventory.toml"] {
+        let mut listing = complete.clone();
+        assert!(listing.remove(missing));
+        assert_eq!(
+            listing_errors(&inventory, &listing),
+            [format!("package listing excludes {missing}")]
+        );
+    }
 }

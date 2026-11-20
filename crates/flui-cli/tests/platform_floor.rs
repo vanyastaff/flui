@@ -492,6 +492,53 @@ mod checker {
         (committed, vec![(GRADLE_TEMPLATE, gradle)])
     }
 
+    /// The lines the retired `^(\s*(flui\.(?:minSdk|targetSdk))\s*=\s*)([0-9]+)(\s*)$` matched,
+    /// and the ones it did not.
+    #[test]
+    fn an_sdk_line_is_a_key_an_equals_and_a_number() {
+        for (line, key, value, prefix, suffix) in [
+            ("flui.minSdk=23", "flui.minSdk", 23, "flui.minSdk=", ""),
+            (
+                "  flui.targetSdk = 34\t",
+                "flui.targetSdk",
+                34,
+                "  flui.targetSdk = ",
+                "\t",
+            ),
+            ("flui.minSdk=23\r", "flui.minSdk", 23, "flui.minSdk=", "\r"),
+            (
+                "flui.minSdk\t=  4294967295",
+                "flui.minSdk",
+                u32::MAX,
+                "flui.minSdk\t=  ",
+                "",
+            ),
+        ] {
+            let sdk = sdk_line(line).unwrap_or_else(|| panic!("{line:?} is an sdk line"));
+            assert_eq!(
+                (sdk.key, sdk.value, sdk.prefix, sdk.suffix),
+                (key, value, prefix, suffix),
+                "{line:?}"
+            );
+        }
+        for line in [
+            "flui.minSdk=23 # note",
+            "flui.minSdk=",
+            "flui.minSdk=  ",
+            "flui.minSdkX=1",
+            "flui.minSdk=abc",
+            "flui.minSdk=2x",
+            "flui.minSdk=-1",
+            "flui.minSdk=4294967296",
+            "xflui.minSdk=1",
+            "# flui.minSdk=1",
+            "flui.minSdk 1",
+            "flui.sdk=1",
+        ] {
+            assert!(sdk_line(line).is_none(), "{line:?} is not an sdk line");
+        }
+    }
+
     #[test]
     fn agreeing_sources_report_nothing() {
         let (committed, templates) = agreeing();

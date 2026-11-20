@@ -97,9 +97,8 @@ cargo-audit reads, so cargo-audit is not added beside them.
 ### §4. The `checks` job calls the formatters and the link check
 
 `cargo fmt --all --check`, typos, `taplo fmt --check` and lychee are steps of CI's `checks` job,
-each running even when one before it failed. `cargo xtask checks` keeps only the checks no standard
-tool makes: the changelog fragments and the
-generated files against their sources. lychee's command line in the job takes the options
+each running even when one before it failed. The checks no standard tool makes are shell steps of
+the same job (§9) and tests of the crates that own the generated files (§10). lychee's command line in the job takes the options
 `docs-links` passed it; the extra pass that caught a link climbing above the repository root goes
 with `docs-links`, so such a link is the reader's to catch.
 
@@ -283,7 +282,8 @@ recording table `flui-testing`'s `recording_vocabulary_table`, the Material anim
 `flui-material`'s `material_icon_constants_match_their_frames` (its Flutter import runs under
 `FLUI_FLUTTER_DIR`; the SVG and AVD importers, which no committed input used, are dropped), the OS
 floors `flui-cli`'s `platform_floor`, and the font inventory `flui-painting`'s `font_assets` (no
-bless: nothing there is generated from a source of its own). The Android dex is checked by an
+bless, as the command had no write: its generated fixtures are written by
+`tools/decoy-face/generate.py`, which the test reruns and compares). The Android dex is checked by an
 `android_dex` test in each crate that declares one, and built by `android-dex.yml` with
 `mode: write`, whose shell compiles it as the Rust did. The changelog check is a step of the
 `checks` job; fragments are merged at release by hand, as changelog.d/README.md describes. With
