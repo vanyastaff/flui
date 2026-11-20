@@ -18,14 +18,15 @@ name: Fuzz
 #
 # Each target is a job of its own, so a finding in one does not keep the
 # other from running. The corpus (the inputs kept so far) is carried from one
-# night to the next through the cache, saved from main only and after a red
-# run too, so a run starts where the last one stopped. An input that panics,
+# night to the next as the `fuzz-corpus-<target>` artifact of main's latest
+# run, saved from main only and after a red run too, so a run starts where the
+# last one stopped. An input that panics,
 # aborts, trips the sanitizer, hangs, leaks or allocates past its target's
 # limit fails the run and is uploaded as `fuzz-findings-<target>`: the same
 # command with the file in place of the corpus and seeds, and the target's
 # limits, runs it again with the same flags, and its fix adds the input's case
 # to the owning crate's tests (docs/testing.md, "Fuzzing"). The findings are
-# cached with the corpus and read back as inputs, so every later night runs
+# cached beside the corpus and read back as inputs, so every later night runs
 # them first and stays red until the fix lands, instead of turning green
 # when 600 seconds happen not to find the path again.
 #
@@ -61,6 +62,9 @@ jobs:
     name: fuzz (${{ matrix.target }})
     runs-on: ubuntu-26.04
     timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       # Each target: the package whose example (`fuzz_<target>`) it is, the
@@ -97,15 +101,29 @@ jobs:
         uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
 
       # No build cache: a sanitizer build of a target is several GB that
-      # nothing else reuses. The corpus is a few MB. Its key ends in the run
-      # and the attempt, so every run saves a new entry and the next restores
-      # the latest.
+      # nothing else reuses. The corpus is a few MB and travels as an artifact
+      # of main's latest run, not through the cache: the repository's cache
+      # holds its 10 GB of rust-cache entries, every push to main adds new
+      # ones, and an entry nobody reads in between, as a night's corpus is,
+      # is the first evicted, hours before the next run.
       - name: Restore the corpus
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/fuzz/${{ matrix.target }}/corpus
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: fuzz-corpus-${{ matrix.target }}-
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          dir=target/fuzz/$FUZZ_TARGET/corpus
+          mkdir -p "$dir"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=fuzz-corpus-$FUZZ_TARGET&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main")] | first | .id // empty')
+          if [ -z "$id" ]; then
+            echo "::warning::No corpus artifact of main for $FUZZ_TARGET: the run starts from the seeds"
+            exit 0
+          fi
+          zip=$RUNNER_TEMP/corpus-$FUZZ_TARGET.zip
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$zip"
+          unzip -q "$zip" -d "$dir"
+          echo "Restored $(find "$dir" -type f | wc -l) corpus files from artifact $id"
 
       # The inputs earlier nights found, an entry of its own so the corpus
       # entry keeps its path. The run reads them back first; one whose fix
@@ -147,12 +165,17 @@ jobs:
             -artifact_prefix="$dir/findings/" -max_total_time="$FUZZ_SECONDS" \
             -max_len="$FUZZ_MAX_LEN" "${limits[@]}" -print_final_stats=1
 
+      # After a red run too. A rerun of the job replaces its first attempt's
+      # artifact; the next night restores the newest one of main.
       - name: Save the corpus
         if: always() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: target/fuzz/${{ matrix.target }}/corpus
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: fuzz-corpus-${{ matrix.target }}
+          path: target/fuzz/${{ matrix.target }}/corpus/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
       # Saved only when there is one, so a night with none adds no entry.
       - name: Save the findings
