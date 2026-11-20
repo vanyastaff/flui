@@ -557,6 +557,15 @@ fn only_a_lone_shift_counts_toward_sticky_keys() {
         .flat_map(|_| [down("Shift"), down("a"), up("Shift"), up("a")])
         .collect::<Vec<KeyInput>>();
     assert_eq!(HeldInput::new().shell_hotkey(&crossed, &keymap), Ok(None));
+    // ... so a crossed tap and four lone ones make four in a row, not five.
+    let crossed_then_lone: Vec<KeyInput> = [down("Shift"), down("a"), up("Shift"), up("a")]
+        .into_iter()
+        .chain((0..4).flat_map(|_| [down("Shift"), up("Shift")]))
+        .collect::<Vec<KeyInput>>();
+    assert_eq!(
+        HeldInput::new().shell_hotkey(&crossed_then_lone, &keymap),
+        Ok(None)
+    );
     // A tap after a shortcut-free run that ended in a press of Shift itself still counts.
     let mut again = HeldInput::new();
     for _ in 0..4 {
