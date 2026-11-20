@@ -464,7 +464,8 @@ each method's parameter type.
   the rows admitted before the stop and the `end` row arriving ahead of the
   answer. A recording whose `end` row never came fails the command. With
   `--native <dir>` it asks for the native layer too, and each stream's
-  `record_native` lines go to `agent::record::native`: the rows to a part file
+  `record_native` lines go to `flui_driver::trace::native::NativeFiles` (the writer a
+  driver's trace shares): the rows to a part file
   as they arrive, flushed line by line, and at the end `<n>.jsonl`, its header
   naming every device the rows read (a stream's header names none, its
   devices being known only once its rows are), then `index.json`. The part

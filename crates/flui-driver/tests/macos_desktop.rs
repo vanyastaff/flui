@@ -182,7 +182,9 @@ fn the_window_server_captures_the_apps_window_alone() {
     shown(&mut driver);
     let mut window = driver.main_window().expect("a window");
     let placement = window.placement().expect("a placement");
-    let captured = window.capture_os();
+    let captured = window
+        .capture(flui_driver::pixels::CaptureSource::Os)
+        .map(|capture| capture.image().clone());
     if !permitted_for(
         "the_window_server_captures_the_apps_window_alone",
         &[Permission::ScreenRecording],
@@ -194,14 +196,14 @@ fn the_window_server_captures_the_apps_window_alone() {
     let capture = captured.expect("ScreenCaptureKit captures the window");
     let device = |logical: f64| (logical * placement.scale).round() as u32;
     assert_eq!(
-        (capture.width, capture.height),
+        (capture.width(), capture.height()),
         (device(placement.size.width), device(placement.size.height)),
         "the capture is the window's content, at its scale"
     );
     let first = capture.pixel(0, 0).expect("a first pixel");
-    let differs = (0..capture.height)
+    let differs = (0..capture.height())
         .step_by(4)
-        .flat_map(|y| (0..capture.width).step_by(4).map(move |x| (x, y)))
+        .flat_map(|y| (0..capture.width()).step_by(4).map(move |x| (x, y)))
         .any(|(x, y)| capture.pixel(x, y) != Some(first));
     assert!(differs, "the app drew its controls, not one flat colour");
 }

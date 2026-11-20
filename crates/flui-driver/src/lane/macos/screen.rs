@@ -20,8 +20,8 @@ use flui_protocol::geometry::{LogicalPoint, LogicalSize};
 
 use crate::coordinates::{DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
-use crate::lane::OsCapture;
 use crate::lane::macos::pointer::Point;
+use crate::pixels::Image;
 
 /// A rectangle in global display points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -220,7 +220,7 @@ pub fn front_window(windows: &[WindowInfo]) -> Option<&WindowInfo> {
 /// # Errors
 ///
 /// `invalid_argument` when the capture is smaller than the content.
-pub fn crop_content(capture: &OsCapture, size: LogicalSize, scale: f64) -> Result<OsCapture> {
+pub fn crop_content(capture: &Image, size: LogicalSize, scale: f64) -> Result<Image> {
     let device = |logical: f64| -> Option<u32> {
         let value = (logical * scale).round();
         (value.is_finite() && value >= 0.0 && value <= f64::from(u32::MAX)).then(|| {
@@ -239,22 +239,23 @@ pub fn crop_content(capture: &OsCapture, size: LogicalSize, scale: f64) -> Resul
             size.width, size.height
         )));
     };
-    if width > capture.width || height > capture.height {
+    if width > capture.width() || height > capture.height() {
         return Err(Error::invalid_argument(format!(
             "the window's capture of {} x {} is smaller than its {width} x {height} content",
-            capture.width, capture.height
+            capture.width(),
+            capture.height()
         )));
     }
-    let top = capture.height - height;
+    let top = capture.height() - height;
     let row = |y: u32| -> Result<&[u8]> {
-        let start = (u64::from(y) * u64::from(capture.width)) * 4;
+        let start = (u64::from(y) * u64::from(capture.width())) * 4;
         let end = start + u64::from(width) * 4;
         let range = usize::try_from(start)
             .ok()
             .zip(usize::try_from(end).ok())
             .ok_or_else(|| Error::invalid_argument("the capture does not fit in memory"))?;
         capture
-            .rgba
+            .rgba()
             .get(range.0..range.1)
             .ok_or_else(|| Error::invalid_argument("the capture holds fewer rows than it says"))
     };
@@ -262,8 +263,8 @@ pub fn crop_content(capture: &OsCapture, size: LogicalSize, scale: f64) -> Resul
         usize::try_from(u64::from(width) * u64::from(height) * 4)
             .map_err(|_| Error::invalid_argument("the content does not fit in memory"))?,
     );
-    for y in top..capture.height {
+    for y in top..capture.height() {
         rgba.extend_from_slice(row(y)?);
     }
-    OsCapture::try_new(width, height, rgba)
+    Image::try_new(width, height, rgba)
 }

@@ -1,15 +1,16 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 130 закрыты и 4 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `bc2f0ec33` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
-  исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
-  `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
+  Из 134 задач серии 131 закрыта и 3 открыты (сверено с отметками записей «Хода исполнения» на
+  `main` @ `bc2f0ec33`, закрытием LY102 и закрытием LY98 трассой драйвера, FD10 спеки
+  flui-driver); открытые — неотмеченные записи раздела «Ход исполнения». Прогоны на устройствах,
+  которых ждут закрытые задачи, — строки `crates/flui-native/platform-parity.toml`. Открытые
+  задачи и код, которого они ждут:
   - LY96 и LY99 — Windows- и macOS-lane драйвера есть; ждут прогонов на рабочем столе,
     принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane), и lane
     остальных ОС спеки flui-driver;
-  - LY97 — ждёт `--record` `os`-lane драйвера на каждой ОС (записи в драйвере пока нет);
-  - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver.
+  - LY97 — запись драйвером есть (трасса держит слои `input` и `native`); ждёт прогонов на
+    Windows, macOS и Linux и lane Android и Web (FD13, FD12 спеки flui-driver).
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -4962,8 +4963,7 @@ GPU-память простаивающего или невидимого окн
   хост, ему передавать свою (записано в gaps, запись 10). Mac, iPhone, Android-устройство,
   браузер не затронуты; `cross-typecheck` — в CI.
 
-- [ ] **LY98** (код на `main`; открыта одним: чтение записи драйвером заблокировано спекой
-  flui-driver) — схема записи — `flui-protocol::native_recording` (за фичей
+- [x] **LY98** — схема записи — `flui-protocol::native_recording` (за фичей
   `serde`); журнал — `crates/flui-native/src/journal/` (`capture`, `recorder`, `codec`, `lines`)
   под фичей `native-capture` (ADR-0151 §10 и §16); golden-записи читаются схемой без ядра и
   пишутся байт в байт (`native_recordings_write_back_byte_for_byte`,
@@ -5008,11 +5008,16 @@ GPU-память простаивающего или невидимого окн
   `a_writer_admits_a_row_only_while_the_recording_and_its_cut_fit`,
   `a_reader_refuses_the_line_past_either_bound`, `an_overrun_names_its_limit_and_its_cut`; перенос
   счёта держат прежние `native_recording_contracts` (`a_native_recording_past_its_bounds_is_refused`,
-  `a_recording_past_its_bound_is_written_cut`). Заблокировано:
-  чтение записи крейтом `flui-driver` без ребра к ядру ждёт FD6 спеки
-  [flui-driver](../flui-driver/tasks.md); сегодня запись читает `flui record` через
-  `flui-protocol`. Захват на Windows, macOS, iOS и Android не прогонялся — строка качества parity
-  «Recorded native input replays deterministically on the headless host».
+  `a_recording_past_its_bound_is_written_cut`). **Чтение драйвером** (FD10 спеки
+  [flui-driver](../flui-driver/tasks.md)): трасса драйвера просит `record.start{input, native}`,
+  если приложение служит слой `native`, и пишет каждый поток в `native/<n>.jsonl` тем же писателем,
+  что и `flui record --native` (`flui_driver::trace::native::NativeFiles`, перенесён из
+  `flui-cli`); `flui_driver::trace::native::read` читает запись схемой `flui-protocol` без ребра к
+  ядру: версия заголовка, границы строки, строк и байтов (`Budget`), объявленные устройства,
+  `gap` на месте (`trace::a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core`,
+  `trace::a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`; `cli_record` в WSL
+  9 из 9 после переноса). Захват на Windows, macOS, iOS и Android не прогонялся — строка качества
+  parity «Recorded native input replays deterministically on the headless host».
 
 - [ ] **LY97** (ждёт `--record` `os`-lane драйвера на каждой ОС) — на `main` всё, кроме
   `--record`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
@@ -5028,11 +5033,14 @@ GPU-память простаивающего или невидимого окн
   `window_store_and_close_recordings_replay_on_the_headless_host`,
   `captured_streams_replay_to_what_the_session_delivered`,
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Эти потоки пишет `flui record --native`
-  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Linux, Android и Web. Крейт
-  `flui-driver`, его Windows-lane и Linux-lane (X11, Wayland) есть, но записи в драйвере пока нет (её строят задачи спеки
-  [flui-driver](../flui-driver/tasks.md)), а `os`-lane других ОС ещё не написаны. Захват
-  настоящего метода ввода на устройствах — строка качества parity «Recorded native input replays
-  deterministically on the headless host».
+  (LY98). Запись драйвером есть (FD10 спеки [flui-driver](../flui-driver/tasks.md)): трасса
+  (`Driver::start_trace`) держит слои `input` и `native` приложения, запущенного или
+  присоединённого через любой lane, — запись идёт от агента приложения, не от lane, поэтому
+  Windows-, macOS-, X11- и Wayland-lane ничего своего для неё не требуют. Остаётся: прогон
+  записи `os`-lane на Windows, macOS и Linux с отладочной сборкой приложения (`native-capture`) —
+  строка parity «Recorded native input replays deterministically on the headless host»;
+  Android и Web — ждут своих lane (запуск и транспорт агента: FD13 и FD12 спеки flui-driver).
+  Захват настоящего метода ввода на устройствах — та же строка parity.
 
 - [ ] **LY96** (Windows и macOS начаты, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
   драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
