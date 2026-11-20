@@ -197,6 +197,21 @@ impl NativeFiles {
         file.take(line).map_err(|e| at(&path, e))
     }
 
+    /// Takes a loss of `rows` lines the writer never saw, of any of the streams (events a
+    /// connection dropped before they were taken): each stream it holds gets a `gap` of `rows`,
+    /// since which of them lost the lines is not known, so no file reads as whole past it.
+    ///
+    /// # Errors
+    ///
+    /// When a stream's part file cannot be written.
+    pub fn lose(&mut self, rows: u64) -> io::Result<()> {
+        for (stream, file) in &mut self.streams {
+            let path = self.dir.join(part_name(*stream));
+            file.take(&Line::Gap { rows }).map_err(|e| at(&path, e))?;
+        }
+        Ok(())
+    }
+
     /// Writes each stream's file and the index, removing the part files.
     ///
     /// # Errors

@@ -314,6 +314,14 @@ pub enum Reply {
         /// What is written after it, with no newline added.
         bytes: Vec<u8>,
     },
+    /// By sending each of `lines` (event lines, say), then `result`: the driver reads every one
+    /// of them while it waits for its answer.
+    LinesThenResult {
+        /// The lines sent before the answer, in order.
+        lines: Vec<Value>,
+        /// The answer.
+        result: Value,
+    },
     /// By closing the connection, unanswered.
     Close,
 }
@@ -497,6 +505,7 @@ fn serve_one(
             lines.push(&chunk[..read]);
         };
         let mut after = AfterLines::Serve;
+        let mut before: Vec<Value> = Vec::new();
         let mut then: Vec<Value> = Vec::new();
         let mut raw: Vec<u8> = Vec::new();
         let answer = if greeted {
@@ -524,6 +533,10 @@ fn serve_one(
                     raw = bytes;
                     ServerLine::answer(request.id, Ok(result))
                 }
+                Reply::LinesThenResult { lines, result } => {
+                    before = lines;
+                    ServerLine::answer(request.id, Ok(result))
+                }
                 Reply::Close => return Ok(()),
             }
         } else {
@@ -542,7 +555,11 @@ fn serve_one(
         let answer = serde_json::to_value(&answer).map_err(io::Error::other)?;
         // Handed to the OS, never flushed: flushing a Windows pipe waits until the driver has read
         // everything, and a driver that stops reading would hold the stand-in.
-        for line in std::iter::once(answer).chain(then) {
+        for line in before
+            .into_iter()
+            .chain(std::iter::once(answer))
+            .chain(then)
+        {
             let mut bytes = serde_json::to_vec(&line).map_err(io::Error::other)?;
             bytes.push(b'\n');
             writing.write_all(&bytes)?;

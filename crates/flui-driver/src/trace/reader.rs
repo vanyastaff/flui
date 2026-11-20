@@ -1,8 +1,9 @@
 //! Reading a trace back: its header and rows within their bounds, whether it is complete, and
 //! the recordings and evidence beside it.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::BufReader;
+use std::io::{BufReader, Read as _};
 use std::path::{Path, PathBuf};
 
 use flui_protocol::record::RecordLayer;
@@ -33,6 +34,46 @@ pub(crate) const NATIVE_DIR: &str = "native";
 
 /// The evidence directory.
 pub(crate) const EVIDENCE_DIR: &str = "evidence";
+
+/// The index of the native recordings, inside their directory.
+const NATIVE_INDEX: &str = "index.json";
+
+/// The most native streams a trace may hold: a backend opens a handful.
+pub const MAX_NATIVE_STREAMS: usize = 256;
+
+/// The longest `native/index.json` read.
+pub const MAX_NATIVE_INDEX_BYTES: u64 = 1 << 20;
+
+/// What `native/index.json` says of each stream, as far as a reader needs it.
+#[derive(serde::Deserialize)]
+struct NativeIndex {
+    streams: Vec<NativeIndexEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct NativeIndexEntry {
+    stream: u32,
+    #[serde(default)]
+    file: Option<String>,
+}
+
+/// Whether `path` is no symbolic link and resolves inside `root`, the trace's own directory
+/// resolved: a trace from elsewhere names no file outside itself.
+fn inside(root: &Path, path: &Path) -> Result<()> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(Error::unreadable(
+            path,
+            "a symbolic link, which a trace never holds",
+        ));
+    }
+    if !fs::canonicalize(path)?.starts_with(root) {
+        return Err(Error::unreadable(
+            path,
+            "it resolves outside the trace's directory",
+        ));
+    }
+    Ok(())
+}
 
 /// A trace read from its directory.
 #[derive(Debug, Clone, PartialEq)]
@@ -83,10 +124,30 @@ impl Trace {
                 format!("{length} bytes, past the {MAX_TRACE_BYTES} a trace may have"),
             ));
         }
-        let mut lines = BoundedLines::new(BufReader::new(file), MAX_TRACE_LINE);
+        // The length read above is of the file when it was opened; the reading itself stops one
+        // byte past the bound, so a file that grows as it is read (or a pipe) never passes it.
+        let mut lines = BoundedLines::new(
+            BufReader::new(file.take(MAX_TRACE_BYTES.saturating_add(1))),
+            MAX_TRACE_LINE,
+        );
         let bad = |line: u64, message: String| Error::unreadable_line(&path, line, message);
+        let mut total: u64 = 0;
+        let mut counted = |len: usize, line: u64| -> Result<()> {
+            total = total.saturating_add(u64::try_from(len).unwrap_or(u64::MAX));
+            if total > MAX_TRACE_BYTES {
+                return Err(Error::unreadable_line(
+                    &path,
+                    line,
+                    format!("past the {MAX_TRACE_BYTES} bytes a trace may have"),
+                ));
+            }
+            Ok(())
+        };
         let header_line = match lines.next_line()? {
-            LineRead::Line { bytes, .. } => bytes,
+            LineRead::Line { bytes, len, .. } => {
+                counted(len, 1)?;
+                bytes
+            }
             LineRead::TooLong => return Err(bad(1, "the header is past the line bound".into())),
             LineRead::End => return Err(bad(1, "the trace is empty".into())),
         };
@@ -110,14 +171,19 @@ impl Trace {
 
         let mut rows = Vec::new();
         let mut complete = false;
-        let mut open: Vec<u64> = Vec::new();
+        let mut open: BTreeSet<u64> = BTreeSet::new();
         let mut number: u64 = 1;
         loop {
             number += 1;
             let (bytes, terminated) = match lines.next_line()? {
                 LineRead::Line {
-                    bytes, terminated, ..
-                } => (bytes, terminated),
+                    bytes,
+                    len,
+                    terminated,
+                } => {
+                    counted(len, number)?;
+                    (bytes, terminated)
+                }
                 LineRead::TooLong => {
                     return Err(bad(number, "a row is past the line bound".into()));
                 }
@@ -144,15 +210,16 @@ impl Trace {
             let row: Row = serde_json::from_slice(&bytes)
                 .map_err(|error| bad(number, format!("not a row: {error}")))?;
             match &row {
-                Row::Command(command) => open.push(command.seq),
+                Row::Command(command) => {
+                    open.insert(command.seq);
+                }
                 Row::Result(result) => {
-                    let Some(at) = open.iter().position(|seq| *seq == result.seq) else {
+                    if !open.remove(&result.seq) {
                         return Err(bad(
                             number,
                             format!("a result to command {}, which is not open", result.seq),
                         ));
-                    };
-                    open.remove(at);
+                    }
                     if result.ok.is_some() == result.error.is_some() {
                         return Err(bad(
                             number,
@@ -201,23 +268,24 @@ impl Trace {
     /// Each command with its result, in the order they were sent.
     #[must_use]
     pub fn steps(&self) -> Vec<Step<'_>> {
-        let mut steps: Vec<Step<'_>> = Vec::new();
-        for row in &self.rows {
-            match row {
-                Row::Command(command) => steps.push(Step {
+        let results: BTreeMap<u64, &ResultRow> = self
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Result(result) => Some((result.seq, result)),
+                _ => None,
+            })
+            .collect();
+        self.rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Command(command) => Some(Step {
                     command,
-                    result: None,
+                    result: results.get(&command.seq).copied(),
                 }),
-                Row::Result(result) => {
-                    if let Some(step) = steps.iter_mut().find(|step| step.command.seq == result.seq)
-                    {
-                        step.result = Some(result);
-                    }
-                }
-                _ => {}
-            }
-        }
-        steps
+                _ => None,
+            })
+            .collect()
     }
 
     /// The app's input recording (ADR-0215), when the trace holds one.
@@ -227,38 +295,92 @@ impl Trace {
         (self.header.layers.contains(&RecordLayer::Input) && path.is_file()).then_some(path)
     }
 
-    /// The native recordings, one per stream in the order the backend opened them, read through
-    /// the protocol's schema ([`native::read`]).
+    /// The native recordings `native/index.json` declares, one per stream in the order the
+    /// backend opened them, read through the protocol's schema ([`native::read`]). The index is
+    /// the list: a file it does not name is not read, at most [`MAX_NATIVE_STREAMS`] are, each
+    /// under its one name (`<stream>.jsonl`), and none through a symbolic link or outside the
+    /// trace's directory.
     ///
     /// # Errors
     ///
-    /// As [`native::read`], for the first that does not read.
+    /// [`Error::Unreadable`] for a trace whose header holds the native layer and has no index
+    /// (the run ended before the trace did), an index past [`MAX_NATIVE_INDEX_BYTES`] or
+    /// [`MAX_NATIVE_STREAMS`] or naming a stream twice or a file by another name, and a symbolic
+    /// link or a path that resolves outside the trace; as [`native::read`] for the first stream
+    /// that does not read.
     pub fn native_recordings(&self) -> Result<Vec<NativeRecording>> {
-        let dir = self.dir.join(NATIVE_DIR);
-        if !self.header.layers.contains(&RecordLayer::Native) || !dir.is_dir() {
+        if !self.header.layers.contains(&RecordLayer::Native) {
             return Ok(Vec::new());
         }
-        let mut streams: Vec<(u32, PathBuf)> = Vec::new();
-        for entry in fs::read_dir(&dir)? {
-            let path = entry?.path();
-            let stream = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_suffix(".jsonl"))
-                .and_then(|stem| stem.parse::<u32>().ok());
-            if let Some(stream) = stream {
-                streams.push((stream, path));
-            }
+        let root = fs::canonicalize(&self.dir)?;
+        let dir = self.dir.join(NATIVE_DIR);
+        let index_path = dir.join(NATIVE_INDEX);
+        if fs::symlink_metadata(&index_path).is_err() {
+            return Err(Error::unreadable(
+                &index_path,
+                "the trace holds the native layer and no index of its streams: the run ended \
+                 before the trace was finished, so the streams were never written",
+            ));
         }
-        streams.sort_by_key(|(stream, _)| *stream);
-        streams.iter().map(|(_, path)| native::read(path)).collect()
+        inside(&root, &dir)?;
+        inside(&root, &index_path)?;
+        let index = fs::File::open(&index_path)?;
+        let length = index.metadata()?.len();
+        let mut text = Vec::new();
+        index
+            .take(MAX_NATIVE_INDEX_BYTES.saturating_add(1))
+            .read_to_end(&mut text)?;
+        if length > MAX_NATIVE_INDEX_BYTES
+            || u64::try_from(text.len()).map_or(true, |read| read > MAX_NATIVE_INDEX_BYTES)
+        {
+            return Err(Error::unreadable(
+                &index_path,
+                format!("past the {MAX_NATIVE_INDEX_BYTES} bytes an index may have"),
+            ));
+        }
+        let index: NativeIndex = serde_json::from_slice(&text)
+            .map_err(|error| Error::unreadable(&index_path, format!("not an index: {error}")))?;
+        if index.streams.len() > MAX_NATIVE_STREAMS {
+            return Err(Error::unreadable(
+                &index_path,
+                format!(
+                    "{} streams, past the {MAX_NATIVE_STREAMS} a trace may hold",
+                    index.streams.len()
+                ),
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        let mut recordings = Vec::new();
+        for entry in &index.streams {
+            if !seen.insert(entry.stream) {
+                return Err(Error::unreadable(
+                    &index_path,
+                    format!("stream {} is named twice", entry.stream),
+                ));
+            }
+            let Some(file) = &entry.file else {
+                // A stream whose header never came, or was longer than a line: no file.
+                continue;
+            };
+            let canonical = format!("{}.jsonl", entry.stream);
+            if *file != canonical {
+                return Err(Error::unreadable(
+                    &index_path,
+                    format!("stream {} is in `{canonical}`, not `{file}`", entry.stream),
+                ));
+            }
+            let path = dir.join(&canonical);
+            inside(&root, &path)?;
+            recordings.push(native::read(&path)?);
+        }
+        Ok(recordings)
     }
 
     /// The file of the evidence `name` a result names.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidArgument`] for a name that is not `evidence/<sha256>.<png|json>`, so a
+    /// [`Error::InvalidArgument`] for a name that is not `evidence/<sha256>.png`, so a
     /// trace from elsewhere names no file outside its directory.
     pub fn evidence(&self, name: &str) -> Result<PathBuf> {
         let file = name
@@ -269,10 +391,10 @@ impl Trace {
                     && hash
                         .bytes()
                         .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-                    && matches!(extension, "png" | "json")
+                    && extension == "png"
             })
             .ok_or_else(|| {
-                Error::invalid_argument(format!("`{name}` is not evidence/<sha256>.<png|json>"))
+                Error::invalid_argument(format!("`{name}` is not evidence/<sha256>.png"))
             })?;
         Ok(self.dir.join(EVIDENCE_DIR).join(file))
     }

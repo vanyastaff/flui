@@ -18,6 +18,7 @@ mod scenarios;
 mod socket;
 mod steps;
 mod trace;
+mod trace_bounds;
 // The test `trace::codegen` writes from a trace of the counter, compiled and run here as it was
 // written: rustfmt would rewrite what the comparison holds.
 #[rustfmt::skip]

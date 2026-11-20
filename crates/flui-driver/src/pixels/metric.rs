@@ -1,5 +1,6 @@
-//! The per-pixel metric: pixelmatch's YIQ distance (the one Playwright's `toHaveScreenshot` and
-//! egui's kittest use), so a threshold means here what it means there.
+//! The per-pixel metric: pixelmatch's YIQ distance, as pixelmatch 5 computes it (the version
+//! Playwright vendors for `toHaveScreenshot`, blending a translucent pixel over white; egui's
+//! kittest uses the same metric), so a threshold means here what it means there.
 //!
 //! Two pixels are blended over white by their alpha, converted to YIQ, and their distance is the
 //! weighted sum `0.5053 y² + 0.299 i² + 0.1957 q²` (Kotsarenko and Ramos, "Measuring perceived

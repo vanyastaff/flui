@@ -41,7 +41,8 @@ pub enum TraceMode {
     /// Always.
     #[default]
     On,
-    /// Only when the run's report fails; a run that does not fail removes it.
+    /// Unless the run passes: a failing or `cannot_verify` report keeps it, a passing one
+    /// removes it.
     RetainOnFailure,
 }
 
@@ -139,6 +140,8 @@ pub(crate) struct TraceWriter {
     recorder: Option<Recorder>,
     /// The first write that failed; nothing is written after it.
     failure: Option<io::Error>,
+    /// The recording's files this writer made, removed if the trace never starts.
+    created: Vec<PathBuf>,
 }
 
 impl TraceWriter {
@@ -174,6 +177,7 @@ impl TraceWriter {
             pending_gap: 0,
             recorder: None,
             failure: None,
+            created: Vec::new(),
         })
     }
 
@@ -189,10 +193,23 @@ impl TraceWriter {
         header: &input_recording::Header,
         native: bool,
     ) -> Result<()> {
-        let mut input = File::create(self.dir.join(INPUT_FILE))?;
+        let input_path = self.dir.join(INPUT_FILE);
+        let native_path = self.dir.join(NATIVE_DIR);
+        for path in [&input_path, &native_path] {
+            if fs::symlink_metadata(path).is_ok() {
+                return Err(Error::invalid_argument(format!(
+                    "{} is there already; a trace never writes over another's files",
+                    path.display()
+                )));
+            }
+        }
+        let mut input = File::create(&input_path)?;
+        self.created.push(input_path);
         input.write_all(&line(header)?)?;
         let native = if native {
-            Some(NativeFiles::create(&self.dir.join(NATIVE_DIR))?)
+            let files = NativeFiles::create(&native_path)?;
+            self.created.push(native_path);
+            Some(files)
         } else {
             None
         };
@@ -203,6 +220,25 @@ impl TraceWriter {
             ended: false,
         });
         Ok(())
+    }
+
+    /// Remove what this writer made, the trace never started: its rows' file and the recording's
+    /// files, and the directory when it is left empty. Nothing it did not make is touched, and a
+    /// removal that fails leaves the file behind.
+    pub(crate) fn abandon(self) {
+        let Self {
+            dir, rows, created, ..
+        } = self;
+        drop(rows);
+        for path in created.iter().rev() {
+            let _ = if path.is_dir() {
+                fs::remove_dir_all(path)
+            } else {
+                fs::remove_file(path)
+            };
+        }
+        let _ = fs::remove_file(dir.join(ROWS_FILE));
+        let _ = fs::remove_dir(&dir);
     }
 
     /// The app's recording the trace holds, by its number.
@@ -291,16 +327,24 @@ impl TraceWriter {
                 rows: dropped,
                 reason: GapReason::EventsDropped,
             }));
-            // The rows of the recording may be among them: its file says so where a replay
-            // reads it, rather than running past the hole.
-            if let Some(recorder) = self.recorder.as_mut()
-                && !recorder.ended
-            {
-                let gap = input_recording::Row::Gap { rows: dropped };
-                let written = line(&gap)
-                    .map_err(io::Error::other)
-                    .and_then(|bytes| recorder.input.write_all(&bytes));
-                self.keep_failure(written);
+            // The rows of the recording may be among them, of its input layer and of any of its
+            // native streams: each file says so where a replay reads it, rather than running
+            // past the hole. Which events were lost is not known, so every stream the loss may
+            // have touched gets the gap.
+            if let Some(recorder) = self.recorder.as_mut() {
+                let input = if recorder.ended {
+                    Ok(())
+                } else {
+                    line(&input_recording::Row::Gap { rows: dropped })
+                        .map_err(io::Error::other)
+                        .and_then(|bytes| recorder.input.write_all(&bytes))
+                };
+                let native = recorder
+                    .native
+                    .as_mut()
+                    .map_or(Ok(()), |native| native.lose(dropped));
+                self.keep_failure(input);
+                self.keep_failure(native);
             }
         }
         let t_ms = self.millis(now);
@@ -401,7 +445,7 @@ impl TraceWriter {
 
     /// End the trace with its `end` row after `stopped`, what the app's recording came to: its
     /// native streams' files are written, and a trace kept only on failure is removed when
-    /// `verdict` is not a failure.
+    /// `verdict` is a pass.
     ///
     /// # Errors
     ///
@@ -427,7 +471,7 @@ impl TraceWriter {
             )));
         }
         self.rows.flush()?;
-        let kept = self.mode == TraceMode::On || verdict == Verdict::Fail;
+        let kept = self.mode == TraceMode::On || verdict != Verdict::Pass;
         if !kept {
             fs::remove_dir_all(&self.dir)?;
         }

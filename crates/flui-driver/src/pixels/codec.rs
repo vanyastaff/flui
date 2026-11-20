@@ -79,8 +79,13 @@ pub(crate) fn decode(bytes: &[u8]) -> std::result::Result<Image, String> {
         .read_info()
         .map_err(|error| format!("not a PNG: {error}"))?;
     let (width, height) = (reader.info().width, reader.info().height);
-    let declared = u64::from(width) * u64::from(height) * 4;
-    if usize::try_from(declared).map_or(true, |declared| declared > MAX_DECODED_BYTES) {
+    let declared = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4));
+    let fits = declared
+        .and_then(|declared| usize::try_from(declared).ok())
+        .is_some_and(|declared| declared <= MAX_DECODED_BYTES);
+    if !fits {
         return Err(format!(
             "a {width} x {height} image, past the {MAX_DECODED_BYTES} pixel bytes a PNG may decode to"
         ));

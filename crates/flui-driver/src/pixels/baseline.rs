@@ -26,7 +26,8 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "the set R22 fixes, Playwright's four update modes; a fifth is a decision, not an \
+    reason = "Playwright's four update modes (none, missing, changed, all), the set the driver \
+              keeps so a baseline workflow means the same in both; a fifth is a decision, not an \
               addition"
 )]
 pub enum UpdateMode {

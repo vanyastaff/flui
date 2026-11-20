@@ -540,7 +540,7 @@ pub trait Lane: Send {
     fn release_all(&mut self) -> Result<()>;
     fn read_tree(&mut self, placement: &Placement) -> Result<Tree>;          // not_supported by default
     fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()>; // not_supported by default
-    fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture>; // not_supported by default
+    fn capture_window(&mut self, placement: &Placement) -> Result<pixels::Image>; // not_supported by default
 }
 ```
 
@@ -629,12 +629,13 @@ A trace is a directory `<name>.flui-trace/`:
 - `input.jsonl`: an ADR-0215 recording, verbatim;
 - `native/<n>.jsonl`: one native recording per stream the backend journals, in the protocol's
   native recording format (`flui_protocol::native_recording`), with `native/index.json`;
-- `evidence/<sha256>.<png|json>`: content-addressed, so a repeated tree snapshot costs nothing.
+- `evidence/<sha256>.png`: content-addressed captures, so a capture taken twice costs nothing;
+  a tree a command read is in its `result` row.
 
 ```text
-{"flui_trace":1,"protocol":"0.5","target":{"kind":"windows","backend":"win32","app":"interaction_gallery","profile":"debug"},"started_unix_ms":…,"privacy":"redact"}
+{"flui_trace":1,"protocol":"0.28","target":{"kind":"launched","os":"windows","app":"interaction_gallery","lane":"windows"},"window":{"width":800.0,"height":600.0,"scale":1.0},"isolation":"shared","fidelity":{"positions":"exact"},"started_unix_ms":…,"privacy":"redact","layers":["input","native"]}
 {"command":{"seq":1,"t_ms":0,"method":"element.tap","params":{"target":{"locator":{…}},"via":"os"}}}
-{"result":{"seq":1,"t_ms":41,"ok":{"via":"os","effect":"ran","observed":{…}},"evidence":["evidence/9f…json"]}}
+{"result":{"seq":1,"t_ms":41,"ok":{"via":"os","effect":"ran","observed":{…}},"evidence":["evidence/9f…png"]}}
 {"event":{"t_ms":42,"name":"frame","params":{"frame":118}}}
 {"gap":{"rows":3,"reason":"evidence_budget"}}
 {"end":{}}
@@ -644,8 +645,8 @@ Commands carry locators as the caller wrote them, never only the resolved handle
 re-resolves (Playwright traces keep the locator). Evidence has a size budget per trace (default
 256 MiB). Over budget, it writes a `gap` row and keeps going. A trace is complete only when it ends
 with `end`, and a crash leaves an incomplete trace that readers report as such (ADR-0215's rule).
-Modes: `off`, `on`, `retain_on_failure` (written in place, removed when the report does not
-fail).
+Modes: `off`, `on`, `retain_on_failure` (written in place, removed when the report passes; a
+`cannot_verify` run keeps it).
 
 - `trace.replay(trace, target)` re-issues the commands and compares each result with the recorded
   one modulo volatile fields: handles renumbered by first appearance, times, frame ids. Evidence is
@@ -855,7 +856,7 @@ becomes a cannot-verify check, never a failure.
     tools answer a snapshot delta by default.
   - **Groups (`--caps a,b`):** `session` (`session_attach`, `session_capabilities`, `window_placement`, `wait_frames`, `wait_settled`, `motion_set`), `input` (`input_perform`, `input_inject`, `input_os`, the other
     gestures), `inspect`, `pixels`, `record` (with `trace_*`), `perf`, `audit`, `explore`, and
-    `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `capture_os`, as Playwright MCP gates coordinate tools).
+    `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `capture.os`, as Playwright MCP gates coordinate tools).
 
   Tool failure is `isError` with the error object; protocol failure is a JSON-RPC error. Captures
   return image content plus `CaptureMeta`. The adapter keeps no handle state: refs are `w3/e12`

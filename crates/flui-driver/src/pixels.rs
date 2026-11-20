@@ -184,8 +184,11 @@ impl fmt::Debug for Image {
 
 /// The bytes a `width` by `height` image holds.
 fn byte_len(width: u32, height: u32) -> Result<usize> {
-    usize::try_from(u64::from(width) * u64::from(height) * 4)
-        .map_err(|_| Error::invalid_argument(format!("a {width} x {height} image does not fit")))
+    u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .ok_or_else(|| Error::invalid_argument(format!("a {width} x {height} image does not fit")))
 }
 
 /// A rectangle of device pixels from the top-left of an image.

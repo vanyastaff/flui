@@ -491,12 +491,22 @@ impl Driver {
     /// Hand the events the app sent to the trace, keeping for the caller every one that is not
     /// the trace's own recording's.
     fn drain_into_trace(&mut self) {
-        let Some(trace) = self.trace.as_mut() else {
+        let Some(mut trace) = self.trace.take() else {
             return;
         };
+        self.drain_events(&mut trace);
+        self.trace = Some(trace);
+    }
+
+    /// Hand the events the app sent to `trace`, keeping for the caller every one that is not
+    /// its recording's.
+    fn drain_events(&mut self, trace: &mut TraceWriter) {
         let (events, dropped) = self.connection.take_events();
         let now = self.connection.clock();
         let taken = trace.events(&events, dropped, now);
+        // The trace marks the loss with its gaps, and the caller's count has it too: the lost
+        // events may have been the caller's.
+        self.kept_events.count_dropped(dropped);
         for (event, taken) in events.into_iter().zip(taken) {
             if !taken {
                 self.kept_events.push(event);
@@ -533,9 +543,7 @@ impl Driver {
             .main_window()
             .and_then(|mut window| window.placement())
             .ok();
-        let mut layers = Vec::new();
-        let mut recording = None;
-        if options.record_layers && self.serves(method::RecordStart::NAME) {
+        let record = (options.record_layers && self.serves(method::RecordStart::NAME)).then(|| {
             let native = self
                 .hello()
                 .capabilities
@@ -545,17 +553,66 @@ impl Driver {
             if native {
                 params.layers.push(RecordLayer::Native);
             }
-            let started = self.agent::<method::RecordStart>(params.clone(), Duration::ZERO)?;
-            layers.clone_from(&params.layers);
-            recording = Some((started, native));
-        }
+            (params, native)
+        });
+        let layers = record
+            .as_ref()
+            .map_or_default(|(params, _)| params.layers.clone());
         let header = self.trace_header(&options, placement, layers);
+        // The trace's files come first: once the app records, every way out of here stops it.
         let mut writer = TraceWriter::create(&options, &header, self.clock())?;
-        if let Some((started, native)) = recording {
-            writer.hold_recording(started.recording, &started.header, native)?;
+        let Some((params, native)) = record else {
+            self.trace = Some(writer);
+            return Ok(());
+        };
+        let started = match self.agent::<method::RecordStart>(params, Duration::ZERO) {
+            Ok(started) => started,
+            Err(error) => {
+                writer.abandon();
+                return Err(error);
+            }
+        };
+        let mut first = FirstPanic::new();
+        let held =
+            first.contain(|| writer.hold_recording(started.recording, &started.header, native));
+        match held {
+            Some(Ok(())) => {
+                self.trace = Some(writer);
+                Ok(())
+            }
+            held => {
+                // The recording the trace cannot hold is stopped, its answer of no use now; a
+                // panic in the stop is held behind the first failure, never in its place.
+                first.contain(|| self.stop_recording(started.recording));
+                writer.abandon();
+                match held {
+                    Some(Err(error)) => {
+                        // The failure to hold the recording is the first; a panic of the stop
+                        // after it is destroyed under containment as the collector drops.
+                        drop(first);
+                        Err(error)
+                    }
+                    _ => std::panic::resume_unwind(
+                        first
+                            .into_payload()
+                            .expect("BUG: a hold that returned nothing held its panic"),
+                    ),
+                }
+            }
         }
-        self.trace = Some(writer);
-        Ok(())
+    }
+
+    /// Stop the app's recording `number`; called with no trace held, so it is no row of one.
+    fn stop_recording(&mut self, number: u64) -> Option<flui_protocol::record::RecordSummary> {
+        debug_assert!(
+            self.trace.is_none(),
+            "a trace's own stop is no command of it"
+        );
+        self.agent::<method::RecordStop>(
+            flui_protocol::record::RecordStopParams::new(number),
+            Duration::ZERO,
+        )
+        .ok()
     }
 
     fn trace_header(
@@ -609,7 +666,7 @@ impl Driver {
 
     /// End the trace being recorded: the app's recording is stopped and its rows written, the
     /// trace ends with its `end` row, and `report` names it, unless the trace is kept only on
-    /// failure and `report` did not fail, which removes it.
+    /// failure and `report` passed, which removes it.
     ///
     /// # Errors
     ///
@@ -617,26 +674,16 @@ impl Driver {
     /// the trace then left without its `end`. A recording the app could not stop leaves its
     /// input file without its `end` row, which the summary's missing recording says.
     pub fn finish_trace(&mut self, report: &mut Report) -> Result<TraceSummary> {
-        use flui_protocol::record::RecordStopParams;
-
-        let Some(number) = self.trace.as_ref().map(TraceWriter::recording) else {
+        let Some(mut writer) = self.trace.take() else {
             return Err(Error::invalid_argument("no trace is being recorded"));
         };
-        // The stop is the trace's own, not a command of the session: its rows, and the `end`
-        // row the app sends before it answers, are taken from the events after it.
-        let stopped = number.and_then(|number| {
-            self.command_depth += 1;
-            let stopped = self
-                .agent::<method::RecordStop>(RecordStopParams::new(number), Duration::ZERO)
-                .ok();
-            self.command_depth -= 1;
-            stopped
-        });
-        self.drain_into_trace();
-        let writer = self
-            .trace
-            .take()
-            .expect("BUG: the trace is held until it is finished");
+        // The stop is the trace's own, not a command of the session (the trace is out of the
+        // session already, so it is no row): its rows, and the `end` row the app sends before it
+        // answers, are taken from the events after it.
+        let stopped = writer
+            .recording()
+            .and_then(|number| self.stop_recording(number));
+        self.drain_events(&mut writer);
         let dir = writer.dir().to_owned();
         let summary = writer.finish(stopped, report.verdict())?;
         if summary.dir.is_some() {

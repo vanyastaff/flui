@@ -107,6 +107,54 @@ fn the_metric_measures_pixelmatchs_yiq_distance() {
 }
 
 #[test]
+fn the_metric_matches_pixelmatch_5_worked_by_hand() {
+    // pixelmatch 5's `colorDelta`, from its published source: blend a translucent pixel over
+    // white (`255 + (c - 255) * a`), then
+    //   y = r*0.29889531 + g*0.58662247 + b*0.11448223
+    //   i = r*0.59597799 - g*0.27417610 - b*0.32180189
+    //   q = r*0.21147017 - g*0.52261711 + b*0.31114694
+    //   delta = 0.5053*y^2 + 0.299*i^2 + 0.1957*q^2, negative when the first pixel is brighter.
+    // The y coefficients add to 1.00000001, the i and q ones to 0, so a grey differs by y alone.
+    //
+    // Black against grey 30: y = -30 * 1.00000001 = -30.0000003, i = q = 0;
+    //   delta = 0.5053 * 900.000018 = 454.770009.
+    // Black at alpha 128 against white: it blends to 255 - 255*128/255 = 127, so
+    //   y = (127 - 255) * 1.00000001 = -128.00000128; delta = 0.5053 * 16384.000328 = 8278.835366.
+    // Red against white: y = 255*0.29889531 - 255.00000255 = 76.21830405 - 255.00000255
+    //   = -178.7816985, i = 255*0.59597799 = 151.97438745, q = 255*0.21147017 = 53.92489335;
+    //   y^2 = 31962.895718, i^2 = 23096.214441, q^2 = 2907.894123;
+    //   delta = 16150.851206 + 6905.768118 + 569.074880 = 23625.694204.
+    for (first, second, expected) in [
+        (BLACK, [30, 30, 30, 255], 454.770_009),
+        ([0, 0, 0, 128], WHITE, 8_278.835_366),
+        ([255, 0, 0, 255], WHITE, 23_625.694_204),
+        (WHITE, [255, 0, 0, 255], -23_625.694_204),
+    ] {
+        let delta = metric::color_delta(first, second);
+        assert!(
+            (delta - expected).abs() < 0.01,
+            "{first:?} against {second:?}: {delta}, by hand {expected}"
+        );
+    }
+}
+
+#[test]
+fn an_image_too_large_to_count_is_refused() {
+    for (width, height) in [(1 << 31, 1 << 31), (u32::MAX, u32::MAX)] {
+        let refused = Image::filled(width, height, WHITE).expect_err("no such image");
+        assert!(
+            matches!(refused, Error::InvalidArgument { .. }),
+            "{refused:?}"
+        );
+        let refused = Image::try_new(width, height, Vec::new()).expect_err("no such image");
+        assert!(
+            matches!(refused, Error::InvalidArgument { .. }),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
 fn the_threshold_lets_close_colours_pass_and_far_ones_fail() {
     let base = image(4, 4, BLACK);
     // At the default threshold 0.1 two greys pass while 0.5053 y² stays under 35215 * 0.01.

@@ -719,7 +719,7 @@ graph LR
   - The writer of a recording's native layer moved from `flui-cli` into the driver
     (`trace::native::NativeFiles`), which `flui record --native` and a trace share; its files are
     one per stream (`native/<n>.jsonl` with `index.json`), as ADR-0241 §1 now says.
-  - `retain_on_failure` writes the trace in place and removes it when the report does not fail.
+  - `retain_on_failure` writes the trace in place and removes it when the report passes (a `cannot_verify` run keeps it, as a failing one does).
   - Left for later tasks: blessing `flui-native`'s native goldens through the driver in place of
     `FLUI_NATIVE_RECORDING_BLESS` (R26) comes with the scenarios that record through
     `record.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,

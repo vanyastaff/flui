@@ -3,8 +3,12 @@
 //!
 //! - **Handles** are renumbered by first appearance: the first element or window handle a result
 //!   names stands for the one the replay's result names in its place, and a later command's
-//!   parameters are sent with the replay's handle. Locators are sent as written, so the replay
-//!   resolves them again.
+//!   parameters are sent with the replay's handle. Only the fields of the protocol that hold a
+//!   handle ([`HANDLE_FIELDS`]) are read as handles: a text or a locator's name that looks like
+//!   one (`e1`) is text. Locators are sent as written, so the replay resolves them again.
+//! - **Redacted text** is never sent: a command of a redacted trace whose parameters hold the
+//!   redaction mark ends the replay there, refused (ADR-0215 §5, ADR-0241 §4); the trace does not
+//!   hold what was typed. A trace recorded with `keep_text` replays it.
 //! - **Times and frames** (`t_ms`, `frame`, `frames`) are left out of the comparison.
 //! - **Positions** (`rect`, `surface_rect`, `point`, `at`, `x`, `y`) are compared only when the
 //!   header's fidelity is exact.
@@ -34,6 +38,13 @@ const VOLATILE: &[&str] = &["t_ms", "frame", "frames"];
 /// Fields a replay compares only at exact fidelity: where things were.
 const POSITIONS: &[&str] = &["rect", "surface_rect", "point", "at", "x", "y"];
 
+/// The fields of the protocol that hold a window or element handle (`w3`, `e12`, `w3/e12`), alone
+/// or in a list: the only strings a replay renumbers. The protocol's schema test holds this list
+/// to every field whose schema is a handle.
+pub const HANDLE_FIELDS: &[&str] = &[
+    "element", "elements", "gone", "id", "node", "parent", "root", "window", "windows",
+];
+
 /// What a replay came to.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
@@ -42,6 +53,9 @@ pub struct ReplayReport {
     pub replayed: u64,
     /// The commands not sent, each with why.
     pub skipped: Vec<Skipped>,
+    /// The command the replay refused to send, which ended it: one that would send redacted
+    /// text.
+    pub refused: Option<Skipped>,
     /// The first result that differed; none when every compared result matched.
     pub divergence: Option<Divergence>,
 }
@@ -50,7 +64,7 @@ impl ReplayReport {
     /// Whether every command was sent and matched.
     #[must_use]
     pub fn matched(&self) -> bool {
-        self.divergence.is_none() && self.skipped.is_empty()
+        self.divergence.is_none() && self.skipped.is_empty() && self.refused.is_none()
     }
 }
 
@@ -116,8 +130,20 @@ pub fn replay(trace: &Trace, driver: &mut Driver) -> Result<ReplayReport> {
             });
             continue;
         }
+        if redacted && holds_redaction(&command.params) {
+            report.refused = Some(Skipped {
+                seq: command.seq,
+                method: command.method.clone(),
+                reason:
+                    "its parameters were redacted: the trace does not hold what was typed, and \
+                         a replay never sends the redaction mark in its place; record with \
+                         `keep_text` to replay it"
+                        .into(),
+            });
+            break;
+        }
         let mut params = command.params.clone();
-        handles.substitute(&mut params);
+        handles.substitute(&mut params, false);
         let answered = driver.call_value(row.name, params);
         report.replayed += 1;
         let Some(recorded) = step.result else {
@@ -208,10 +234,11 @@ impl Handles {
         }
     }
 
-    /// Replace each recorded handle in `params` with the replay's.
-    fn substitute(&self, params: &mut Value) {
+    /// Replace each recorded handle in `params` with the replay's: the strings of
+    /// [`HANDLE_FIELDS`] only, `in_handle` saying whether `params` is the value of one.
+    fn substitute(&self, params: &mut Value, in_handle: bool) {
         match params {
-            Value::String(text) if is_handle(text) => {
+            Value::String(text) if in_handle && is_handle(text) => {
                 if let Some(actual) = self.recorded_to_actual.get(text.as_str()) {
                     actual.clone_into(text);
                 } else if let Some((window, element)) = text.split_once('/') {
@@ -222,10 +249,28 @@ impl Handles {
                     *text = format!("{window}/{element}");
                 }
             }
-            Value::Array(items) => items.iter_mut().for_each(|item| self.substitute(item)),
-            Value::Object(fields) => fields.values_mut().for_each(|value| self.substitute(value)),
+            Value::Array(items) => {
+                for item in items {
+                    self.substitute(item, in_handle);
+                }
+            }
+            Value::Object(fields) => {
+                for (key, value) in fields.iter_mut() {
+                    self.substitute(value, HANDLE_FIELDS.contains(&key.as_str()));
+                }
+            }
             _ => {}
         }
+    }
+}
+
+/// Whether `params` holds the redaction mark anywhere: text the trace replaced.
+fn holds_redaction(params: &Value) -> bool {
+    match params {
+        Value::String(text) => text == flui_protocol::input_recording::REDACTED,
+        Value::Array(items) => items.iter().any(holds_redaction),
+        Value::Object(fields) => fields.values().any(holds_redaction),
+        _ => false,
     }
 }
 
@@ -257,10 +302,18 @@ struct Compare<'a> {
 
 impl Compare<'_> {
     fn values(mut self, expected: &Value, actual: &Value) -> Option<Mismatch> {
-        self.walk(String::new(), expected, actual)
+        self.walk(String::new(), expected, actual, false)
     }
 
-    fn walk(&mut self, at: String, expected: &Value, actual: &Value) -> Option<Mismatch> {
+    /// The first place `expected` and `actual` differ under `at`; `in_handle` says whether they
+    /// are the value of one of [`HANDLE_FIELDS`], where handles pair.
+    fn walk(
+        &mut self,
+        at: String,
+        expected: &Value,
+        actual: &Value,
+        in_handle: bool,
+    ) -> Option<Mismatch> {
         let differ = |at: String| Mismatch {
             at,
             expected: expected.clone(),
@@ -279,7 +332,8 @@ impl Compare<'_> {
                     let child = format!("{at}/{}", key.replace('~', "~0").replace('/', "~1"));
                     match (left.get(key), right.get(key)) {
                         (Some(left), Some(right)) => {
-                            if let Some(mismatch) = self.walk(child, left, right) {
+                            let handle = HANDLE_FIELDS.contains(&key.as_str());
+                            if let Some(mismatch) = self.walk(child, left, right, handle) {
                                 return Some(mismatch);
                             }
                         }
@@ -302,10 +356,12 @@ impl Compare<'_> {
                     .zip(right)
                     .enumerate()
                     .find_map(|(index, (left, right))| {
-                        self.walk(format!("{at}/{index}"), left, right)
+                        self.walk(format!("{at}/{index}"), left, right, in_handle)
                     })
             }
-            (Value::String(left), Value::String(right)) if is_handle(left) && is_handle(right) => {
+            (Value::String(left), Value::String(right))
+                if in_handle && is_handle(left) && is_handle(right) =>
+            {
                 let same_kind = left.contains('/') == right.contains('/')
                     && left.chars().next() == right.chars().next();
                 (!same_kind || !self.handles.pair(left, right)).then(|| differ(at))

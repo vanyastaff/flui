@@ -199,23 +199,35 @@ app's trees, frames and input, and this crate composes that with what only the O
   and it ends after `MAX_STABLE_CAPTURES` captures whatever its clock does.
 - **Every image and trace the driver reads is bounded before it is decoded.** A PNG's file
   length, then its declared size, then the decoder's allocations (`pixels::codec`); a trace's
-  file length, line length and row count (`trace::reader`); a native recording through the
-  format's own `Budget` (`trace::native::read`). An evidence name reaches no file outside its
-  trace.
+  file length, then its bytes as they are read (one past the bound stops a file that grows),
+  line length and row count (`trace::reader`); a native recording through the format's own
+  `Budget` (`trace::native::read`). Native streams are read only as `native/index.json` names
+  them, at most `MAX_NATIVE_STREAMS`, each under its one name (`<stream>.jsonl`), never through
+  a symbolic link or outside the trace. An evidence name reaches no file outside its trace.
 - **A trace records the caller's commands, once each.** `Driver::command` is the one place a
   command becomes a row: the outermost call only (`command_depth`), its parameters as written
   (locators, never only the handle they resolved to), written before it runs, its result after;
   a panic out of the command restores the depth and writes no result. The rows of the trace's own
   recording go to `input.jsonl` and `native/`; every other event is written and kept for
-  `take_events`. A write that fails is the trace's first failure, nothing is written after it,
-  and `finish_trace` answers it; a session that ends unfinished leaves no `end`, which readers
-  report as incomplete, and so does a last line torn mid-write.
+  `take_events`. Events the connection dropped are a `gap` row, a `gap` in `input.jsonl` and in
+  every native stream (which ones lost lines is not known), and part of the caller's dropped
+  count. A write that fails is the trace's first failure, nothing is written after it, and
+  `finish_trace` answers it; a session that ends unfinished leaves no `end`, which readers report
+  as incomplete, and so does a last line torn mid-write.
+- **The app records only while a trace holds its recording.** `start_trace` makes the trace's
+  files before it sends `record.start`, and every way out after it (a recording file that cannot
+  be made, a panic) sends `record.stop` and removes what it made, never what was there.
+  `finish_trace` takes the trace out of the session before its own stop, so the stop is no row.
 - **One writer of native recordings.** `trace::native::NativeFiles` writes a recording's native
   layer for a trace and for `flui record --native` alike, and `trace::native::read` reads one
   back through `flui-protocol`'s schema, without the core.
 - **Redaction is by field over the JSON a row carries** (`trace::TEXT_FIELDS`), a command's
   `TextMatch` kept as the caller's own; `trace::every_text_field_of_the_wire_is_redacted_or_named_as_kept`
-  holds every free string field of the protocol's schema to one side of the list.
+  holds every free string field of the protocol's schema to one side of the list. A replay never
+  sends redacted text: a redacted row ends it, refused there.
+- **A replay reads handles only where the wire holds them** (`trace::HANDLE_FIELDS`, which
+  `trace::the_fields_a_replay_maps_are_the_wires_handle_fields` holds to the schema): a text or a
+  locator's name shaped like `e1` is text.
 - **The verdict rule is one function.** `Report::verdict`: `fail` when a check failed, else
   `cannot_verify` when a check could not be made or nothing was checked, else `pass`.
   `Error::is_cannot_verify` decides which failures cannot be verified.

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flui_driver::pixels::{CaptureSource, Image};
+use flui_driver::protocol::input::{ActionSequence, InputSource};
 use flui_driver::protocol::input_recording::REDACTED;
 use flui_driver::testing::ScriptedLane;
 use flui_driver::trace::{
@@ -487,6 +488,20 @@ fn a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one(
     assert_eq!(report.to_json()["trace"], dir.display().to_string());
     assert!(Trace::open(&dir).expect("kept").is_complete());
 
+    // A run that could not be verified keeps its trace as a failing one does.
+    let dir = trace_dir(&root, "unverified");
+    let mut driver = counter();
+    driver
+        .start_trace(TraceOptions::new(&dir).mode(TraceMode::RetainOnFailure))
+        .expect("the trace starts");
+    let mut report = Report::new();
+    report.not_run("a check the host cannot make", "no lane");
+    assert_eq!(report.verdict(), Verdict::CannotVerify);
+    let summary = driver
+        .finish_trace(&mut report)
+        .expect("the trace finishes");
+    assert_eq!(summary.dir.as_deref(), Some(dir.as_path()));
+
     let refused = driver
         .finish_trace(&mut Report::new())
         .expect_err("no trace is being recorded");
@@ -580,11 +595,26 @@ fn a_replay_leaves_out_frames_and_compares_positions_only_at_exact_fidelity() {
 fn codegen_writes_the_checked_in_test_from_a_trace() {
     let root = tempfile::tempdir().expect("a temporary directory");
     let dir = trace_dir(&root, "generated");
+    let (lane, _) = ScriptedLane::new(Isolation::InProcess);
+    let mut driver = counter()
+        .with_lane(lane.screen(flat_screen))
+        .expect("the lane");
     let trace = record(
-        &mut counter(),
+        &mut driver,
         &dir,
         TraceOptions::new(&dir).keep_text(true),
-        tap_once,
+        |driver| {
+            tap_once(driver)?;
+            // A pixel command, which codegen marks rather than drops.
+            driver.main_window()?.capture(CaptureSource::Os)?;
+            // Text with a control character, sent as recorded: the generated literal compiles.
+            driver
+                .main_window()?
+                .perform(ActionSequence::new(vec![InputSource::Text {
+                    text: "\u{1}".into(),
+                }]))
+                .map(drop)
+        },
     );
     let options = CodegenOptions::new(
         "a_generated_test_taps_the_counter",
@@ -682,6 +712,75 @@ fn every_text_field_of_the_wire_is_redacted_or_named_as_kept() {
         unclassified.is_empty(),
         "string fields neither redacted (trace::TEXT_FIELDS) nor kept: {unclassified:?}"
     );
+}
+
+#[test]
+fn the_fields_a_replay_maps_are_the_wires_handle_fields() {
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../flui-protocol/tests/schema/protocol-{}.json",
+        flui_driver::protocol::version::PROTOCOL_VERSION
+    ));
+    let schema: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&schema_path).expect("the schema golden"))
+            .expect("JSON");
+    let mut found = std::collections::BTreeSet::new();
+    handle_properties(&schema, &mut found);
+    let listed: std::collections::BTreeSet<String> = trace::HANDLE_FIELDS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    assert_eq!(
+        listed, found,
+        "trace::HANDLE_FIELDS is every property whose schema is a window or element handle"
+    );
+}
+
+/// The names of the properties anywhere in `schema` whose value is a handle, alone, optional or
+/// in a list.
+fn handle_properties(schema: &serde_json::Value, found: &mut std::collections::BTreeSet<String>) {
+    fn is_handle(schema: &serde_json::Value) -> bool {
+        let reference = |schema: &serde_json::Value| {
+            schema
+                .get("$ref")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|reference| {
+                    [
+                        "#/$defs/WindowId",
+                        "#/$defs/ElementId",
+                        "#/$defs/ElementRef",
+                    ]
+                    .contains(&reference)
+                })
+        };
+        reference(schema)
+            || schema.get("items").is_some_and(reference)
+            || ["anyOf", "oneOf"].iter().any(|key| {
+                schema
+                    .get(*key)
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|options| options.iter().any(&reference))
+            })
+    }
+    match schema {
+        serde_json::Value::Object(fields) => {
+            if let Some(serde_json::Value::Object(properties)) = fields.get("properties") {
+                for (name, property) in properties {
+                    if is_handle(property) {
+                        found.insert(name.clone());
+                    }
+                }
+            }
+            for value in fields.values() {
+                handle_properties(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                handle_properties(item, found);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The names of the properties anywhere in `schema` that hold a free string: a string with no

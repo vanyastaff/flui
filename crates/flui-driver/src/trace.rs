@@ -31,8 +31,11 @@ pub use format::{
     CommandRow, EndRow, EventRow, FORMAT_VERSION, Fidelity, GapReason, GapRow, Header, Positions,
     Privacy, ResultRow, Row, TraceError, TraceTarget, TraceWindow,
 };
-pub use reader::{MAX_TRACE_BYTES, MAX_TRACE_LINE, MAX_TRACE_ROWS, Step, Trace};
+pub use reader::{
+    MAX_NATIVE_INDEX_BYTES, MAX_NATIVE_STREAMS, MAX_TRACE_BYTES, MAX_TRACE_LINE, MAX_TRACE_ROWS,
+    Step, Trace,
+};
 pub use redact::TEXT_FIELDS;
-pub use replay::{Divergence, ReplayReport, Skipped, replay};
+pub use replay::{Divergence, HANDLE_FIELDS, ReplayReport, Skipped, replay};
 pub(crate) use writer::TraceWriter;
 pub use writer::{DEFAULT_EVIDENCE_BUDGET, TraceMode, TraceOptions, TraceSummary};
