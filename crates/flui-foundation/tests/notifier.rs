@@ -140,7 +140,7 @@ fn retirement_competition() {
     assert_eq!(
         drops.load(Ordering::SeqCst),
         2,
-        "the second envelope is destroyed under containment"
+        "the second callback is destroyed under containment"
     );
     assert!(notifier.is_empty());
     let later = Arc::new(AtomicUsize::new(0));
@@ -183,7 +183,7 @@ fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: 
     assert_eq!(
         drops.load(Ordering::SeqCst),
         2,
-        "the later envelope is still destroyed"
+        "the later callback is still destroyed"
     );
     flui_foundation::panic::discard_payload(failure);
 }

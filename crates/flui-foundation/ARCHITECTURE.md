@@ -455,13 +455,13 @@ while it runs: it shares each registration's closure `Rc` (a count, no allocatio
 so a withdrawal during the round hands its owner a callback the snapshot still
 holds until the tail retires it.
 After a caught listener failure, the recovery owns the original
-payload until completing delivery, and outgoing callback envelopes retire one
+payload until completing delivery, and outgoing callbacks retire one
 at a time under its containment (ADR-0281 §3). Healthy live listeners and later
 notification rounds still progress. Reporting borrows the original payload behind a separate
 unwind boundary; a panicking tracing subscriber cannot interrupt notification,
 and its secondary payload is discarded under containment. Normal success retires callback
-envelopes one at a time in registration order; the first retirement failure
-propagates after the remaining envelopes are retired. A capture aggregate that
+callbacks one at a time in registration order; the first retirement failure
+propagates after the remaining callbacks are retired. A capture aggregate that
 panics again while one of its own fields unwinds aborts, as in std.
 
 The public subprocess table `notifier_ownership_and_recovery` checks borrowed
