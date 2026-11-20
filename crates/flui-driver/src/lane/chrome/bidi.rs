@@ -304,6 +304,18 @@ impl Session {
         arguments: Vec<Value>,
         ownership: &str,
     ) -> Result<Value> {
+        self.call_function_within(function, this, arguments, ownership, COMMAND_TIMEOUT)
+    }
+
+    /// [`Self::call_function`], its answer waited for at most `timeout`.
+    pub(crate) fn call_function_within(
+        &self,
+        function: &str,
+        this: Option<&str>,
+        arguments: Vec<Value>,
+        ownership: &str,
+        timeout: Duration,
+    ) -> Result<Value> {
         let mut params = json!({
             "functionDeclaration": function,
             "awaitPromise": true,
@@ -315,7 +327,7 @@ impl Session {
             params["this"] = json!({ "handle": handle });
         }
         let mut evaluated = self
-            .command("script.callFunction", params, COMMAND_TIMEOUT)
+            .command("script.callFunction", params, timeout)
             .map_err(|failure| failure.into_error("script.callFunction"))?;
         if evaluated.get("type").and_then(Value::as_str) == Some("success") {
             return Ok(evaluated.get_mut("result").map_or(Value::Null, Value::take));

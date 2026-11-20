@@ -853,10 +853,15 @@ graph LR
     `chrome_lane::each_event_is_one_command_of_one_instant_action`,
     `chrome_lane::a_composition_step_is_its_devtools_command`,
     `chrome_lane::a_screenshot_is_decoded_to_rgba_within_its_bounds`,
-    `chrome_lane::the_page_server_serves_its_root_and_nothing_outside_it`,
-    `chrome_lane::chromedriver_versions_ports_archives_and_arguments`,
-    `chrome_lane::a_chromedriver_is_fetched_whole_and_its_unpublished_patch_falls_back_to_its_build`,
-    `chrome_lane::a_kept_chromedriver_is_taken_without_a_fetch`.
+    `chrome_host::the_page_server_serves_its_root_and_nothing_outside_it`,
+    `chrome_host::a_request_for_another_host_is_refused`,
+    `chrome_host::a_slow_reader_cannot_hold_the_server_past_its_deadline`,
+    `chrome_host::chromedriver_versions_ports_archives_and_arguments`,
+    `chrome_host::a_chromedriver_is_fetched_with_its_hashes_and_an_unpublished_patch_takes_its_build`,
+    `chrome_host::without_a_fetch_allowed_a_missing_chromedriver_is_unavailable`,
+    `chrome_host::a_kept_chromedriver_runs_only_while_its_hash_matches_its_record`,
+    `chrome_host::parallel_fetches_leave_one_whole_chromedriver` (all fetches against stand-in
+    hosts on the loopback).
   - Against a BiDi session the test plays (`testing::ScriptedBrowser`):
     `chrome_lane::a_page_is_reached_through_its_export_and_driven_one_step_a_move`,
     `chrome_lane::a_composition_goes_through_the_devtools_input_method`,
@@ -872,8 +877,13 @@ graph LR
     `chrome_lane::the_app_closing_its_connection_ends_the_conversation`,
     `chrome_lane::a_wrong_token_is_refused_at_the_hello`,
     `chrome_lane::the_canvas_is_captured_clipped_to_itself`,
-    `chrome_lane::a_canvas_of_another_size_or_ratio_is_refused_before_any_input`;
-    `steps::a_composition_reaches_only_a_lane_that_composes`.
+    `chrome_lane::a_canvas_of_another_size_or_ratio_is_refused_before_any_input`,
+    `chrome_lane::an_unanswered_text_is_released_and_named_as_possibly_held`,
+    `chrome_lane::a_failed_release_keeps_the_verdict_and_effect_of_what_stopped_the_input`,
+    `chrome_lane::a_composition_for_a_lane_that_does_not_compose_is_refused_before_the_lock`,
+    `chrome_lane::closing_the_pages_connection_is_bounded_when_the_browser_stops_answering`;
+    `steps::a_composition_reaches_only_a_lane_that_composes`,
+    `steps::a_lane_sent_a_composition_directly_refuses_it`.
   - The scenario: `scenarios::the_web_input_scenario_passes_on_the_headless_target`;
     `chrome_browser::the_web_input_scenario_runs_in_headless_chrome` reports `cannot_verify`
     without `FLUI_WEB_INPUT_BUNDLE` and `CHROMEDRIVER` (and fails under `FLUI_REQUIRE_CHROME`).
@@ -884,22 +894,36 @@ graph LR
 - **As built:**
   - The lane is `lane::chrome` (feature `chrome`): `keys`, `actions`, `ime` and `screenshot` are
     pure; `bidi` owns the WebSocket on a thread of its own and matches each answer to its command
-    by id; `chromedriver` finds Chrome, takes `CHROMEDRIVER`, a cached driver or fetches the one
-    for Chrome's version from Chrome for Testing, and opens the WebDriver session; `page` serves the
-    build. The page's connection is `connection::bidi`. `Driver::launch` of an
-    `Artifact::WasmBundle` and `Driver::attach_page` put the lane on the page's tab.
+    by id; `chromedriver` finds Chrome, takes the ChromeDriver the launch's `ChromeDriverSource`
+    gives, and opens the WebDriver session; `page` serves the build. The page's connection is
+    `connection::bidi`. `Driver::launch` of an `Artifact::WasmBundle` and `Driver::attach_page`
+    put the lane on the page's tab. `chromedriver` and `page` are crate-private; their tests reach
+    them through `testing::chrome`.
+  - The ChromeDriver: by default (`ChromeDriverSource::Installed`) the `CHROMEDRIVER` file, the
+    directory `CHROMEWEBDRIVER` names (GitHub's runners), or a cached copy whose SHA-256 matches
+    the record beside it; nothing else, and no network: a miss is a lane the host cannot run, with
+    the install hint. `ChromeDriverSource::FetchAllowed` fetches on a miss, over HTTPS alone, for
+    Chrome's exact version, recording the archive's and the binary's SHA-256; each file is staged
+    in a file of its own and linked into place without replacing another fetch's, which a loser
+    takes once its bytes match. A port 0 in ChromeDriver's startup line is refused.
   - Every event is one `input.performActions` command of one action of zero duration, so a move
     is a single step and a pause the lane's own wait; text is typed a grapheme cluster at a time,
     the unit WebDriver's key action takes.
   - An input method's composition becomes `OsEvent::Composition` steps, which only a lane whose
     capabilities say it composes takes (`LaneCapabilities::compositions`), refused at
-    `lane::send_guarded` for every other; before, `steps::os_events` refused every composition.
+    `lane::send_guarded` for every other, and by `compose` before the desktop is locked or the run
+    announced; every lane's own `send` refuses one too. Before, `steps::os_events` refused every
+    composition.
   - A key, button, contact or composition is held once the browser answered the command that made
-    it, an unanswered one possibly held; `send_guarded` answers `ReleaseFailed` over the send's own
-    failure when the release leaves input held, for every lane.
+    it; an unanswered key, button or text is possibly held, an unanswered composition open. The
+    release sends `input.releaseActions` whatever the lane recorded (the browser's state is the
+    truth). When a release fails after the send failed, `send_guarded` answers `ReleaseFailed`
+    carrying the send's failure as its `first`, from which `Error::effect` and
+    `Error::is_cannot_verify` answer, for every lane.
   - The page is served by a loopback server of the lane's own on `std` rather than `tiny_http`,
-    which the lockfile does not have: it answers `GET` and `HEAD` of plain names under the root,
-    one connection at a time, within a head bound and one deadline.
+    which the lockfile does not have: it answers `GET` and `HEAD` of plain names under the root for
+    the `Host` it bound alone, one connection at a time, its head within one deadline and the
+    whole connection within another, so a slow reader cannot hold it.
   - Chrome starts `--headless=new` always, `--force-device-scale-factor=1`, at the launch's
     viewport (800 by 600 by default, `Launch::viewport`), with `--enable-unsafe-swiftshader` so WebGL
     runs on a host without a GPU, and `--no-sandbox` only as root.
@@ -908,7 +932,6 @@ graph LR
   - A headless browser takes no desktop OS-input lock: its input lands on no desktop.
   - The lane reads no accessibility tree: the canvas's ARIA mirror is there, and reading it through
     Chrome's accessibility tree (`Accessibility.getFullAXTree` over `goog:cdp`) is not built.
-    `--offline` is not built either: no `flui drive` front end launches a web build yet.
   - The probe's checks a page script made and no agent sees (vibration before and after user
     activation, HTML drag and drop into and out of the canvas, the process nonce between pages,
     the text-area fallback without `EditContext`) are not in `web-input`: they belong to the web

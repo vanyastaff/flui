@@ -39,9 +39,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Lane::guard`) refuses OS input in process and on the shared desktop without a guard, before the
   run is announced and again at every `lane::send_guarded`, which asks the guard before every
   event and releases everything on every exit, a release that leaves input held answering
-  `ReleaseFailed` over the send's own failure; an input-method composition reaches only a lane
-  whose capabilities say it composes (`LaneCapabilities::compositions`, the Chrome lane alone),
-  refused at `send_guarded` before any event for every other; `OsInputLock` holds one session per
+  `ReleaseFailed` that carries the send's own failure as its `first`, so the call's effect and the
+  check's verdict stay that failure's; an input-method composition reaches only a lane whose
+  capabilities say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused
+  before the desktop is locked or the run announced, at `send_guarded`, and by every other lane's
+  own `send`; `OsInputLock` holds one session per
   user's desktop (a headless browser, the session's own, takes none), its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
   existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
   of mode 0700 in the temporary directory on Unix), `busy` only while another
@@ -185,11 +187,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   server, the ChromeDriver), ended after the socket once its last handle went; Chrome always starts
   `--headless=new`, so its input lands on no desktop and the lane needs no guard. The lane records
   a key, button, contact or composition as held once the browser answered the command that made
-  it, an unanswered one as possibly held, and its release (`input.releaseActions`, after cancelling
-  a composition) names what stays held when the browser refuses it. What the browser sends is
-  untrusted: a screenshot's base64 length and PNG header are checked before either is decoded
-  (`lane::chrome::screenshot`), ChromeDriver's and the archives' answers are read within bounds,
-  and the page's server answers only `GET` and `HEAD` of plain names under its root.
+  it, an unanswered one (a text's included) as possibly held, and its release cancels a
+  composition and sends `input.releaseActions` whatever it recorded, naming what stays held when
+  the browser refuses it. What the browser sends is untrusted: a screenshot's base64 length and
+  PNG header are checked before either is decoded (`lane::chrome::screenshot`), ChromeDriver's and
+  the archives' answers are read within bounds, and the page's server answers only `GET` and
+  `HEAD` of plain names under its root, for the `Host` it bound, each connection within one
+  deadline. A launch reaches no network unless its `ChromeDriverSource` allows a fetch, which is
+  HTTPS alone and records the SHA-256 a cached ChromeDriver is checked against before it runs;
+  the cache's files are linked into place, never replaced, so parallel fetches cannot tear them.
 - **The OS tree is read against the app's through one projection.** A lane projects its OS tree
   onto the wire's nodes, and `projection::Projection` compares the two through
   `flui_protocol::tree::normalized_outline` (ADR-0095 §4), the one definition of what only one

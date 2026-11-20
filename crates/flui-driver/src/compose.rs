@@ -418,10 +418,26 @@ fn perform_os(
 ) -> Result<ActOutcome> {
     // The same admission `send_guarded` holds, asked before anything is locked or announced.
     lane_run(driver, crate::lane::admit)??;
-    let isolation = driver
+    let (isolation, composes, name) = driver
         .lane()
-        .map(|lane| lane.capabilities().isolation)
+        .map(|lane| {
+            let capabilities = lane.capabilities();
+            (
+                capabilities.isolation,
+                capabilities.compositions,
+                lane.name().to_owned(),
+            )
+        })
         .ok_or_else(no_lane)?;
+    // A composition the lane cannot send is refused before the desktop is locked or the run
+    // announced, as `send_guarded` refuses it again before any event.
+    let composition = sequence
+        .sources
+        .iter()
+        .any(|source| matches!(source, InputSource::Ime { .. }));
+    if composition && !composes {
+        return Err(crate::lane::no_composition(&name));
+    }
     // A headless browser is the session's own: its input lands on no desktop another session's
     // could interleave with.
     if isolation != Isolation::HeadlessBrowser {

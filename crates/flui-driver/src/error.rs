@@ -248,6 +248,10 @@ pub enum Error {
         held: Vec<String>,
         /// The first release each part could not make, in the order the parts ran, for people.
         message: String,
+        /// The failure that stopped the input before the release ran, when one did
+        /// (`lane::send_guarded`): what it says of the call's effect and of the check's verdict
+        /// stays true of this error ([`Error::effect`], [`Error::is_cannot_verify`]).
+        first: Option<Box<Error>>,
     },
     /// The conversation with the app broke its protocol: a line that is not one, an answer to
     /// nothing asked.
@@ -498,6 +502,9 @@ impl Error {
             Self::Timeout { effect, .. }
             | Self::Platform { effect, .. }
             | Self::Gone { effect, .. } => effect.as_ref(),
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.effect(),
             _ => None,
         }
     }
@@ -515,15 +522,17 @@ impl Error {
     /// failure and never a pass.
     #[must_use]
     pub fn is_cannot_verify(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::NotSupported { .. }
-                | Self::InterruptedByUser { .. }
-                | Self::Lane {
-                    unavailable: true,
-                    ..
-                }
-        )
+            | Self::InterruptedByUser { .. }
+            | Self::Lane {
+                unavailable: true, ..
+            } => true,
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.is_cannot_verify(),
+            _ => false,
+        }
     }
 
     /// The capability a cannot-verify failure names, for a report's list.
@@ -539,6 +548,9 @@ impl Error {
                 unavailable: true,
                 ..
             } => Some(format!("{lane}_lane")),
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.missing_capability(),
             _ => None,
         }
     }

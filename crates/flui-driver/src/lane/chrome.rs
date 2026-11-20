@@ -10,10 +10,11 @@
 //!   method's text takes; it is the one lane that sends compositions.
 //! - **Held input.** A key, a button or a contact is recorded as held once the browser answered
 //!   the command that pressed it, and an open composition once the browser showed it; a command
-//!   the browser did not answer in time leaves what it pressed recorded as possibly held. The
-//!   release of everything (`input.releaseActions`, after cancelling an open composition) runs on
-//!   every exit, and a release the browser refuses fails with [`Error::ReleaseFailed`] naming what
-//!   stays held.
+//!   the browser did not answer in time (a text's included) leaves what it pressed recorded as
+//!   possibly held. The release of everything cancels an open composition and sends
+//!   `input.releaseActions` whatever the lane recorded, since the browser's own input state is the
+//!   truth; it runs on every exit, and a release the browser refuses fails with
+//!   [`Error::ReleaseFailed`] naming what stays held.
 //! - **Where.** The lane's screen is the page's viewport in device pixels; the window is the
 //!   canvas `#flui-canvas` the web host draws the first window into, located again before every
 //!   sequence, and refused when its size or the page's device pixel ratio is not the window's.
@@ -24,25 +25,26 @@
 //! - **Reading.** None: the canvas exposes no DOM accessibility tree for FLUI's nodes to a client
 //!   of the browser, so `os_accessibility_tree` and `os_invoke` stay not supported.
 //! - **Replay fidelity.** Positions are exact: one step a move, never interpolated.
-//! - **Process.** The lane's session ([`bidi`]) owns the browser it runs in: the page's server
-//!   ([`page`]) and the ChromeDriver ([`chromedriver`]) end once its last handle went.
+//! - **Process.** The lane's session (`bidi`) owns the browser it runs in: the page's server
+//!   (`page`) and the ChromeDriver (`chromedriver`) end once its last handle went.
 //!
-//! A launch of a web build (`Artifact::WasmBundle`) serves the build, starts ChromeDriver, opens
-//! a headless session at the launch's viewport, installs the page's launch object (the agent's
-//! endpoint and token) with a preload script before the app's module runs, and connects to the
-//! page's export (`connection::bidi`): no URL carries the token.
+//! A launch of a web build (`Artifact::WasmBundle`) serves the build, starts the ChromeDriver its
+//! [`ChromeDriverSource`] gives (by default none it would have to download), opens a headless
+//! session at the launch's viewport, installs the page's launch object (the agent's endpoint and
+//! token) with a preload script before the app's module runs, and connects to the page's export
+//! (`connection::bidi`): no URL carries the token.
 
 pub mod actions;
 pub(crate) mod bidi;
-pub mod chromedriver;
+pub(crate) mod chromedriver;
 pub mod ime;
 pub mod keys;
-pub mod page;
+pub(crate) mod page;
 pub mod screenshot;
 
 pub use self::bidi::{MAX_MESSAGE, MAX_PENDING, PAGE_BYTES, PAGE_ROOM};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flui_protocol::act::{Effect, EffectKind};
@@ -53,7 +55,7 @@ use flui_protocol::session::{Isolation, Placement};
 use serde_json::{Value, json};
 
 use self::bidi::{COMMAND_TIMEOUT, Failure, PageLines, Session};
-use self::chromedriver::{ChromeDriver, ChromeForTesting};
+use self::chromedriver::{ChromeDriver, Fetcher};
 use self::page::PageServer;
 use crate::coordinates::WindowGeometry;
 
@@ -168,11 +170,13 @@ impl Held {
     }
 
     /// Record what `event`, which the browser did not answer in time, may have pressed or opened:
-    /// a key or button as possibly held, a composition as open, which a release cancels either
-    /// way.
+    /// a key, a button or the keys typing a text as possibly held (a text's command presses and
+    /// releases each key, and may have stopped between the two), a composition as open, which a
+    /// release cancels either way.
     fn record_unanswered(&mut self, event: &OsEvent) {
         match event {
             OsEvent::KeyDown(key) => self.unconfirmed.push(key.clone()),
+            OsEvent::Text(text) => self.unconfirmed.push(format!("a key typing {text:?}")),
             OsEvent::PointerDown {
                 pointer, button, ..
             } => self
@@ -462,38 +466,60 @@ impl Lane for ChromeLane {
                     lane: NAME.to_owned(),
                     held: vec![COMPOSITION.to_owned()],
                     message: error.to_string(),
+                    first: None,
                 }),
             }
         } else {
             Ok(())
         };
+        // Sent whatever the lane recorded: the browser's own input state is the truth, and a
+        // command that stopped part-way (a text's keys) may have left in it what no answer
+        // reported. The release is idempotent.
         let pressed = self.held.pressed();
-        let actions = if pressed.is_empty() {
-            Ok(())
-        } else {
-            match self.session.command(
-                "input.releaseActions",
-                json!({ "context": self.session.context() }),
-                COMMAND_TIMEOUT,
-            ) {
-                Ok(_) => {
-                    self.held.clear_pressed();
-                    Ok(())
-                }
-                Err(failure) => Err(Error::ReleaseFailed {
-                    lane: NAME.to_owned(),
-                    held: pressed,
-                    message: failure.into_error("input.releaseActions").to_string(),
-                }),
+        let actions = match self.session.command(
+            "input.releaseActions",
+            json!({ "context": self.session.context() }),
+            COMMAND_TIMEOUT,
+        ) {
+            Ok(_) => {
+                self.held.clear_pressed();
+                Ok(())
             }
+            // A session that ended holds nothing of the lane's any more.
+            Err(Failure::Gone(_)) if pressed.is_empty() => Ok(()),
+            Err(failure) if pressed.is_empty() => Err(failure.into_error("input.releaseActions")),
+            Err(failure) => Err(Error::ReleaseFailed {
+                lane: NAME.to_owned(),
+                held: pressed,
+                message: failure.into_error("input.releaseActions").to_string(),
+                first: None,
+            }),
         };
         release_outcome([composition, actions])
     }
 }
 
+/// Where a launch's ChromeDriver comes from. The default reaches no network.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ChromeDriverSource {
+    /// The one the environment names (the `CHROMEDRIVER` file, or the directory
+    /// `CHROMEWEBDRIVER` names), else the one a fetch kept for the installed Chrome's version,
+    /// its SHA-256 checked against its record before it runs. Without either, the lane is one the
+    /// host cannot run, with the install hint.
+    #[default]
+    Installed,
+    /// This file, whatever the environment names.
+    Path(PathBuf),
+    /// As [`Self::Installed`], and on a miss the ChromeDriver of the installed Chrome's exact
+    /// version fetched over HTTPS from Chrome for Testing into the cache, the archive's and the
+    /// binary's SHA-256 recorded beside it.
+    FetchAllowed,
+}
+
 /// A web build at `bundle` launched in headless Chrome: served on the loopback, opened in a
-/// session at `viewport`, its launch object holding `token` installed before its module runs.
-/// The session owns the server and the ChromeDriver.
+/// session at `viewport` with the ChromeDriver `source` gives, its launch object holding `token`
+/// installed before its module runs. The session owns the server and the ChromeDriver.
 ///
 /// # Errors
 ///
@@ -503,6 +529,7 @@ pub(crate) fn launch(
     bundle: &Path,
     viewport: (u32, u32),
     token: &str,
+    source: &ChromeDriverSource,
 ) -> Result<(Session, PageLines)> {
     let page = PageServer::serve(bundle)?;
     let chrome = chromedriver::installed()?.ok_or_else(|| Error::Lane {
@@ -515,7 +542,13 @@ pub(crate) fn launch(
         unavailable: true,
         message: "no cache directory to keep ChromeDriver in; set CHROMEDRIVER".to_owned(),
     })?;
-    let path = chromedriver::resolve(&chrome, &cache, &ChromeForTesting::default())?;
+    let fetcher = Fetcher::chrome_for_testing();
+    let (named, fetch) = match source {
+        ChromeDriverSource::Path(path) => (Some(path.clone()), None),
+        ChromeDriverSource::FetchAllowed => (chromedriver::named_by_environment(), Some(&fetcher)),
+        ChromeDriverSource::Installed => (chromedriver::named_by_environment(), None),
+    };
+    let path = chromedriver::resolve(&chrome, &cache, named, fetch)?;
     let mut driver = ChromeDriver::start(&path)?;
     let url = driver.open_session(Some(&chrome), viewport)?;
     let url_of_page = page.url();

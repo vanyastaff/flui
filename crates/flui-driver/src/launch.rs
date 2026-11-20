@@ -64,7 +64,10 @@ pub struct Launch {
     args: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
     connect_wait: Duration,
+    #[cfg(feature = "chrome")]
     viewport: (u32, u32),
+    #[cfg(feature = "chrome")]
+    chromedriver: crate::lane::chrome::ChromeDriverSource,
 }
 
 pub(crate) enum Target {
@@ -85,7 +88,10 @@ impl Launch {
             args: Vec::new(),
             env: Vec::new(),
             connect_wait: CONNECT_WAIT,
+            #[cfg(feature = "chrome")]
             viewport: (800, 600),
+            #[cfg(feature = "chrome")]
+            chromedriver: crate::lane::chrome::ChromeDriverSource::default(),
         }
     }
 
@@ -188,10 +194,27 @@ impl Launch {
         self.viewport
     }
 
+    /// Where a web build's ChromeDriver comes from.
+    #[cfg(feature = "chrome")]
+    pub(crate) fn chromedriver_source(&self) -> &crate::lane::chrome::ChromeDriverSource {
+        &self.chromedriver
+    }
+
     /// Launch a web build into a `width` by `height` CSS-pixel viewport at a device pixel ratio of
     /// one; 800 by 600, the scenarios' window, when not named. Only a web build has a viewport.
+    #[cfg(feature = "chrome")]
     pub fn viewport(mut self, width: u32, height: u32) -> Self {
         self.viewport = (width, height);
+        self
+    }
+
+    /// Take a web build's ChromeDriver from `source`. The default,
+    /// [`ChromeDriverSource::Installed`](crate::lane::chrome::ChromeDriverSource::Installed),
+    /// reaches no network; only [`ChromeDriverSource::FetchAllowed`](crate::lane::chrome::ChromeDriverSource::FetchAllowed)
+    /// downloads one.
+    #[cfg(feature = "chrome")]
+    pub fn chromedriver(mut self, source: crate::lane::chrome::ChromeDriverSource) -> Self {
+        self.chromedriver = source;
         self
     }
 }

@@ -92,8 +92,12 @@ impl Driver {
             #[cfg(feature = "chrome")]
             crate::launch::Target::Artifact(crate::launch::Artifact::WasmBundle(ref bundle)) => {
                 let token = crate::launch::launch_token()?;
-                let (session, lines) =
-                    crate::lane::chrome::launch(bundle, launch.viewport_size(), &token)?;
+                let (session, lines) = crate::lane::chrome::launch(
+                    bundle,
+                    launch.viewport_size(),
+                    &token,
+                    launch.chromedriver_source(),
+                )?;
                 Self::page(session, lines, &token, launch.connect_timeout())
             }
             _ => Self::launch_process(&launch),

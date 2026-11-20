@@ -88,7 +88,8 @@ impl BrowserLog {
     }
 }
 
-/// A stand-in for a BiDi session: see the [module docs](self).
+/// A stand-in for a ChromeDriver's BiDi session on a loopback WebSocket, playing a page whose agent
+/// a [`Script`] answers.
 pub struct ScriptedBrowser {
     url: String,
     token: String,

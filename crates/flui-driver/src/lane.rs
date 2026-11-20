@@ -306,6 +306,7 @@ pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()
         lane,
         held,
         message,
+        first: None,
     })
 }
 
@@ -404,7 +405,8 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
 /// pressed is released on every exit, a failed send included; a release that leaves input held
-/// fails with [`Error::ReleaseFailed`] naming it, the send's own failure kept in its message.
+/// fails with [`Error::ReleaseFailed`] naming it, carrying the send's own failure as its `first`,
+/// so the call's effect and the check's verdict stay what that failure says.
 ///
 /// # Errors
 ///
@@ -419,13 +421,7 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
             .iter()
             .any(|event| matches!(event, OsEvent::Composition(_)))
     {
-        return Err(Error::not_supported(
-            "os_ime_composition",
-            format!(
-                "the {} lane sends no input-method composition; use the synthetic path",
-                lane.name()
-            ),
-        ));
+        return Err(no_composition(lane.name()));
     }
     lane.check(events)?;
     let name = lane.name().to_owned();
@@ -438,21 +434,32 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     }
     let released = lane.release_all();
     match (sent, released) {
-        // What stays held outranks why the send stopped, which its message keeps.
+        // What stays held is named, and why the send stopped is carried whole.
         (
             Err(first),
             Err(Error::ReleaseFailed {
                 lane,
                 held,
                 message,
+                ..
             }),
         ) => Err(Error::ReleaseFailed {
             lane,
             held,
             message: format!("{first}; then the release failed: {message}"),
+            first: Some(Box::new(first)),
         }),
         (sent, released) => sent.and(released),
     }
+}
+
+/// What a lane that does not compose answers for an input-method composition: refused at
+/// [`send_guarded`] before any event, and by the lane's own `send` when it is called directly.
+pub(crate) fn no_composition(lane: &str) -> Error {
+    Error::not_supported(
+        "os_ime_composition",
+        format!("the {lane} lane sends no input-method composition; use the synthetic path"),
+    )
 }
 
 fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {

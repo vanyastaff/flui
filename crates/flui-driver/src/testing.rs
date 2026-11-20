@@ -9,10 +9,13 @@
 //!   slowly, a driver that leaves) run without a FLUI app.
 //! - [`ScriptedBrowser`] (with `chrome`): a stand-in for a ChromeDriver's WebDriver BiDi session on
 //!   a loopback WebSocket, playing a page whose agent a [`Script`] answers, so the Chrome lane and
-//!   the page's connection run without a browser.
+//!   the page's connection run without a browser, and [`chrome`], the lane's host side (the page's
+//!   server, the ChromeDriver kept or fetched from stand-in hosts on the loopback).
 
 #[cfg(feature = "chrome")]
 mod browser;
+#[cfg(feature = "chrome")]
+pub mod chrome;
 
 #[cfg(feature = "chrome")]
 pub use browser::{BrowserLog, BrowserReply, BrowserScript, ScriptedBrowser};
@@ -223,6 +226,10 @@ impl Lane for ScriptedLane {
     }
 
     fn send(&mut self, event: &OsEvent) -> Result<()> {
+        // A scripted lane composes nothing, as `capabilities` says.
+        if matches!(event, OsEvent::Composition(_)) {
+            return Err(crate::lane::no_composition(self.name()));
+        }
         self.log
             .sent
             .lock()
@@ -243,6 +250,7 @@ impl Lane for ScriptedLane {
                 lane: self.name().to_owned(),
                 held: vec!["Control".to_owned()],
                 message: "the scripted OS refused the release".into(),
+                first: None,
             });
         }
         Ok(())

@@ -36,6 +36,7 @@ chrome = [
     "dep:icu_segmenter",
     "dep:png",
     "dep:rustls",
+    "dep:sha2",
     "dep:tungstenite",
     "dep:ureq",
     "dep:zip",
@@ -73,6 +74,9 @@ icu_segmenter = { workspace = true, optional = true }
 # session ChromeDriver opens over HTTP on the loopback; the archive's deflated entry.
 ureq = { workspace = true, optional = true }
 rustls = { workspace = true, features = ["std", "aws_lc_rs"], optional = true }
+# The SHA-256 of a fetched ChromeDriver and its archive, recorded beside it and checked before a
+# kept one runs.
+sha2 = { workspace = true, optional = true }
 zip = { workspace = true, features = ["deflate-flate2-zlib-rs"], optional = true }
 
 # Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.

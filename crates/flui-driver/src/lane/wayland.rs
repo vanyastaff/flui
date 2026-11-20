@@ -365,7 +365,7 @@ mod lane {
                 OsEvent::KeyUp(name) => self.key(Self::keysym(name)?, false),
                 OsEvent::Text(text) => self.text(text),
                 // `send_guarded` refuses it first: the lane does not compose.
-                OsEvent::Composition(_) => Err(unsent("an input-method composition".to_owned())),
+                OsEvent::Composition(_) => Err(crate::lane::no_composition(LANE)),
             }
         }
 
@@ -400,6 +400,7 @@ mod lane {
                         )
                         .collect::<Vec<String>>(),
                     message: first.to_string(),
+                    first: None,
                 }),
             }
         }

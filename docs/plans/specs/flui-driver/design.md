@@ -563,7 +563,7 @@ event is sent.
 | wayland | libei (`reis`) from a compositor's EIS socket or the RemoteDesktop portal (asked over zbus); keys and text through EI's text interface; portal refusal is cannot-verify | AT-SPI | none: the ScreenCast portal's PipeWire stream needs a C library no Linux build links (`docs/gaps.md`) | same as x11 |
 | android | `adb shell input` (tap, swipe, keyevent, text, stylus, mouse) and `uinput` JSON-line scripts for stylus and touchpad, ported from `android_input.rs`. `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers and removes a test device once per session, and stylus and touchpad answer `not_supported` where it fails; system UI such as the soft keyboard located by `uiautomator dump` | `uiautomator dump` for system UI only: FLUI publishes no Android accessibility tree, so FLUI nodes are `not_supported` until an adapter lands (recorded in `docs/gaps.md`) | `screencap -p` via `exec-out` | `adb install`, `am start` with extras, `am force-stop` |
 | ios_sim | Simulator HID: `SimDeviceLegacyHIDClient` from `SimulatorKit.framework` through `objc2` dynamic loading, the channel `idb` uses. A runtime probe checks the selectors on first use and answers `not_supported` with the Xcode version when they are missing | none (FLUI's iOS backend publishes no AX tree; recorded in gaps) | `simctl io <udid> screenshot` | `simctl install/launch/terminate` |
-| chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys), one command of one instant action an event; IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, the one lane that composes | none yet: the canvas mirrors its tree as an ARIA DOM, which the lane does not read; Chrome's accessibility tree over it (`Accessibility.getFullAXTree` through `goog:cdp`) is where it would | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from `CHROMEDRIVER`, the cache, or Chrome for Testing; Chrome always headless; the page served by a loopback server of the lane's own |
+| chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys), one command of one instant action an event; IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, the one lane that composes | none yet: the canvas mirrors its tree as an ARIA DOM, which the lane does not read; Chrome's accessibility tree over it (`Accessibility.getFullAXTree` through `goog:cdp`) is where it would | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from `CHROMEDRIVER` (or `CHROMEWEBDRIVER`'s directory) or a cached copy whose SHA-256 matches its record, fetched from Chrome for Testing only when the launch allows it; Chrome always headless; the page served by a loopback server of the lane's own |
 
 ### Determinism of OS lanes
 
@@ -902,9 +902,12 @@ enforced, not just intended.
 
 - **No network beyond the target.** The driver's dependencies carry no HTTP client except
   `ureq`, which the `chrome` lane uses for the one ChromeDriver archive fetch and for the WebDriver
-  session a ChromeDriver on the loopback opens. That fetch is skipped when `CHROMEDRIVER` or a
-  cache hit supplies the binary, and refused under `--offline` with the install hint (a switch of
-  the `flui drive` front end, which launches no web build yet). A test in `flui-driver` lists the crate's resolved
+  session a ChromeDriver on the loopback opens. A launch reaches no network unless it allows the
+  fetch (`ChromeDriverSource::FetchAllowed`): by default a host without `CHROMEDRIVER` (or the
+  directory `CHROMEWEBDRIVER` names) and without a cached copy cannot run the lane, with the
+  install hint, which is what `--offline` means. A fetch is HTTPS alone, for the installed
+  Chrome's exact version, and records the archive's and the binary's SHA-256 beside the binary; a
+  cached copy runs only while its hash matches that record. A test in `flui-driver` lists the crate's resolved
   dependencies and fails on any other network client (`reqwest`, `hyper` clients, telemetry SDKs).
   Sockets are opened only to loopback, to the `adb`-forwarded port and to the BiDi WebSocket of a
   local ChromeDriver.

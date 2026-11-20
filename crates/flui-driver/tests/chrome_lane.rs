@@ -1,21 +1,15 @@
-//! The Chrome lane on every host: its tables (keys, actions, input-method steps, screenshots, the
-//! page's server, ChromeDriver's versions and archives) and, against a stand-in BiDi session
+//! The Chrome lane on every host: its tables (keys, actions, input-method steps, screenshots)
+//! and, against a stand-in BiDi session
 //! (`ScriptedBrowser`), the session, the lane and the page's connection: one step a move, held
 //! input released or named, answers matched by id, untrusted sizes refused, the canvas located
 //! and captured.
 
-use std::io::{Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use flui_driver::coordinates::DevicePoint;
-use flui_driver::lane::chrome::chromedriver::{
-    self, ChromeForTesting, archive_url, chrome_args, is_version, newest_version, reported_port,
-};
-use flui_driver::lane::chrome::page::{MAX_HEAD, PageServer, resolve};
 use flui_driver::lane::chrome::{PAGE_ROOM, actions, ime, keys, screenshot};
 use flui_driver::protocol::act::EffectKind;
 use flui_driver::protocol::geometry::LogicalPoint;
@@ -282,273 +276,6 @@ fn a_screenshot_is_decoded_to_rgba_within_its_bounds() {
     ));
 }
 
-/// The status line and body of `request` sent to `server`.
-fn http(server: &PageServer, request: &[u8]) -> (String, Vec<u8>) {
-    let url = server.url();
-    let authority = url
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_owned();
-    let mut stream = TcpStream::connect(authority).expect("the server accepts");
-    stream.write_all(request).expect("the request goes out");
-    let mut answer = Vec::new();
-    stream
-        .read_to_end(&mut answer)
-        .expect("the answer comes back");
-    let text = String::from_utf8_lossy(&answer).into_owned();
-    let status = text.lines().next().unwrap_or("").to_owned();
-    let body = text
-        .split_once("\r\n\r\n")
-        .map_or_else(Vec::new, |(_, body)| body.as_bytes().to_vec());
-    (status, body)
-}
-
-#[test]
-fn the_page_server_serves_its_root_and_nothing_outside_it() {
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    let root = dir.path().join("site");
-    std::fs::create_dir_all(root.join("pkg")).expect("the build's directories");
-    std::fs::write(root.join("index.html"), "<p>app</p>").expect("the page");
-    std::fs::write(root.join("pkg").join("app_bg.wasm"), b"\0asm").expect("the module");
-    std::fs::write(dir.path().join("secret.txt"), "outside").expect("a file outside");
-    let server = PageServer::serve(&root).expect("the build is served");
-
-    let (status, body) = http(&server, b"GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert_eq!(
-        (status.as_str(), body.as_slice()),
-        ("HTTP/1.1 200 OK", b"<p>app</p>".as_slice())
-    );
-    let (status, body) = http(&server, b"GET /pkg/app_bg.wasm?v=1 HTTP/1.1\r\n\r\n");
-    assert_eq!(
-        (status.as_str(), body.as_slice()),
-        ("HTTP/1.1 200 OK", b"\0asm".as_slice())
-    );
-    let (status, body) = http(&server, b"HEAD /index.html HTTP/1.1\r\n\r\n");
-    assert_eq!((status.as_str(), body.len()), ("HTTP/1.1 200 OK", 0));
-    for target in [
-        "/../secret.txt",
-        "/pkg/../../secret.txt",
-        "/%2e%2e/secret.txt",
-        "/pkg\\..\\..\\secret.txt",
-        "/missing.js",
-        "//etc/passwd",
-    ] {
-        let (status, _) = http(&server, format!("GET {target} HTTP/1.1\r\n\r\n").as_bytes());
-        assert_eq!(status, "HTTP/1.1 404 Not Found", "{target}");
-    }
-    let (status, _) = http(&server, b"POST / HTTP/1.1\r\n\r\n");
-    assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
-    let mut long = b"GET / HTTP/1.1\r\nX: ".to_vec();
-    long.extend(std::iter::repeat_n(b'a', MAX_HEAD));
-    long.extend(b"\r\n\r\n");
-    let (status, _) = http(&server, &long);
-    assert_eq!(status, "HTTP/1.1 431 Request Header Fields Too Large");
-
-    let canonical = root.canonicalize().expect("the root");
-    assert_eq!(resolve(&canonical, "/"), Some(canonical.join("index.html")));
-    assert_eq!(
-        resolve(&canonical, "index.html"),
-        None,
-        "a target starts at the root"
-    );
-    assert_eq!(resolve(&canonical, "/pkg/./app_bg.wasm"), None);
-    assert_eq!(resolve(&canonical, "/pkg"), None, "a directory is no file");
-}
-
-#[test]
-fn chromedriver_versions_ports_archives_and_arguments() {
-    assert!(is_version("157.0.8103.79"));
-    for not in [
-        "157.0.8103",
-        "Google",
-        "157.0..79",
-        "157.0.8103.79.1",
-        "1.2.3.x",
-        "1234567890.0.0.0",
-        "1a.2.3.4",
-    ] {
-        assert!(!is_version(not), "{not}");
-    }
-    let names = [
-        "99.0.1.2",
-        "157.0.8103.79",
-        "SetupMetrics",
-        "157.0.8103.110",
-    ]
-    .map(str::to_owned);
-    assert_eq!(newest_version(&names).as_deref(), Some("157.0.8103.110"));
-    assert_eq!(
-        reported_port("ChromeDriver was started successfully on port 51234.\n"),
-        Some(51234)
-    );
-    assert_eq!(reported_port("Starting ChromeDriver 157.0.8103.79"), None);
-    assert_eq!(
-        archive_url(
-            &ChromeForTesting::default().archives,
-            "157.0.8103.79",
-            "win64"
-        ),
-        "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.79/win64/chromedriver-win64.zip"
-    );
-    let args = chrome_args(800, 600);
-    assert_eq!(
-        args.first().map(String::as_str),
-        Some("--headless=new"),
-        "always headless"
-    );
-    assert!(args.contains(&"--window-size=800,600".to_owned()));
-    assert!(args.contains(&"--force-device-scale-factor=1".to_owned()));
-}
-
-/// A ChromeDriver archive holding `name` with `contents`.
-fn archive(name: &str, contents: &[u8]) -> Vec<u8> {
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    {
-        let mut zip = zip::ZipWriter::new(&mut bytes);
-        zip.start_file(
-            name,
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated),
-        )
-        .expect("an entry");
-        zip.write_all(contents).expect("its contents");
-        zip.finish().expect("the archive");
-    }
-    bytes.into_inner()
-}
-
-/// A stand-in for the Chrome for Testing hosts on a loopback port, answering each path from
-/// `files` and 404 otherwise; the count of requests served.
-fn archives(files: Vec<(String, Vec<u8>)>) -> (ChromeForTesting, Arc<AtomicUsize>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-    let root = format!("http://{}", listener.local_addr().expect("its address"));
-    let served = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&served);
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { return };
-            let mut head = Vec::new();
-            let mut byte = [0_u8; 1];
-            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-                head.push(byte[0]);
-            }
-            counted.fetch_add(1, Ordering::SeqCst);
-            let path = String::from_utf8_lossy(&head)
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or("")
-                .to_owned();
-            let answer = match files.iter().find(|(name, _)| *name == path) {
-                Some((_, body)) => {
-                    let mut answer = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .into_bytes();
-                    answer.extend(body);
-                    answer
-                }
-                None => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    .to_vec(),
-            };
-            let _ = stream.write_all(&answer);
-        }
-    });
-    (
-        ChromeForTesting {
-            archives: format!("{root}/archives"),
-            latest_of_build: format!("{root}/latest/LATEST_RELEASE"),
-        },
-        served,
-    )
-}
-
-#[test]
-fn a_chromedriver_is_fetched_whole_and_its_unpublished_patch_falls_back_to_its_build() {
-    let name = chromedriver::executable_name();
-    let platform = "linux64";
-    let (hosts, _) = archives(vec![
-        (
-            format!("/archives/157.0.8103.79/{platform}/chromedriver-{platform}.zip"),
-            archive(&format!("chromedriver-{platform}/{name}"), b"driver 79"),
-        ),
-        (
-            "/latest/LATEST_RELEASE_157.0.8103".to_owned(),
-            b"157.0.8103.79\n".to_vec(),
-        ),
-        (
-            format!("/archives/158.0.1.1/{platform}/chromedriver-{platform}.zip"),
-            archive("chromedriver/LICENSE", b"no driver here"),
-        ),
-    ]);
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    let kept = dir.path().join("157.0.8103.79").join(name);
-    chromedriver::fetch(&hosts, "157.0.8103.79", platform, &kept).expect("a published patch");
-    assert_eq!(std::fs::read(&kept).expect("the executable"), b"driver 79");
-    let fallback = dir.path().join("157.0.8103.80").join(name);
-    chromedriver::fetch(&hosts, "157.0.8103.80", platform, &fallback)
-        .expect("an unpublished patch takes the newest of its build");
-    assert_eq!(
-        std::fs::read(&fallback).expect("the executable"),
-        b"driver 79"
-    );
-    assert!(
-        !fallback.with_extension("partial").exists(),
-        "written whole, then renamed"
-    );
-    let refused = chromedriver::fetch(
-        &hosts,
-        "158.0.1.1",
-        platform,
-        &dir.path().join("158").join(name),
-    );
-    assert!(
-        matches!(&refused, Err(Error::Lane { unavailable: true, message, .. }) if message.contains("holds no")),
-        "{refused:?}"
-    );
-    let missing = chromedriver::fetch(
-        &hosts,
-        "159.0.0.1",
-        platform,
-        &dir.path().join("159").join(name),
-    );
-    assert!(
-        matches!(
-            missing,
-            Err(Error::Lane {
-                unavailable: true,
-                ..
-            })
-        ),
-        "{missing:?}"
-    );
-}
-
-#[test]
-fn a_kept_chromedriver_is_taken_without_a_fetch() {
-    let (hosts, served) = archives(Vec::new());
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    let kept = dir
-        .path()
-        .join("157.0.8103.79")
-        .join(chromedriver::executable_name());
-    std::fs::create_dir_all(kept.parent().expect("its directory")).expect("the cache");
-    std::fs::write(&kept, b"kept").expect("a kept driver");
-    let chrome = chromedriver::Chrome {
-        binary: dir.path().join("chrome"),
-        version: "157.0.8103.79".to_owned(),
-    };
-    // `CHROMEDRIVER` would take precedence: the test runs only where it is not set.
-    if std::env::var_os("CHROMEDRIVER").is_some() {
-        return;
-    }
-    assert_eq!(
-        chromedriver::resolve(&chrome, dir.path(), &hosts).expect("the kept one"),
-        kept
-    );
-    assert_eq!(served.load(Ordering::SeqCst), 0, "nothing was fetched");
-}
-
 // --- Through a stand-in session ---
 
 const WINDOW: &str = "w1";
@@ -683,9 +410,10 @@ fn a_page_is_reached_through_its_export_and_driven_one_step_a_move() {
             json!([{ "type": "pointerUp", "button": 0 }]),
         ]
     );
-    assert!(
-        log.of("input.releaseActions").is_empty(),
-        "nothing stayed held, so nothing needed releasing"
+    assert_eq!(
+        log.of("input.releaseActions").len(),
+        1,
+        "the browser's input state is released at the sequence's end whatever the lane recorded"
     );
 }
 
@@ -793,7 +521,7 @@ fn held_input_is_released_and_a_refused_release_names_what_stays_held() {
     let mut driver = attach(&refusing);
     let refused = driver.window(window()).perform(held_keys());
     assert!(
-        matches!(&refused, Err(Error::ReleaseFailed { lane, held, message }) if lane == "chrome" && held == &["Control".to_owned()] && message.contains("the tab is busy")),
+        matches!(&refused, Err(Error::ReleaseFailed { lane, held, message, .. }) if lane == "chrome" && held == &["Control".to_owned()] && message.contains("the tab is busy")),
         "{refused:?}"
     );
 }
@@ -1244,5 +972,185 @@ fn only_the_pages_own_tab_closing_ends_the_conversation() {
     assert!(
         matches!(&gone, Err(Error::Gone { message, .. }) if message.contains("tab closed")),
         "{gone:?}"
+    );
+}
+
+/// A text whose command the browser never answers may have left a key down: the release is sent
+/// all the same, names it as possibly held when the browser refuses it, and the call still says it
+/// may have run.
+#[test]
+fn an_unanswered_text_is_released_and_named_as_possibly_held() {
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, params| match method {
+            "input.performActions" if params["actions"][0]["type"] == "key" => BrowserReply::Silent,
+            "input.releaseActions" => BrowserReply::Error {
+                error: "unknown error".into(),
+                message: "refused".into(),
+            },
+            _ => BrowserReply::Played,
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    let refused = driver
+        .window(window())
+        .perform(ActionSequence::new(vec![InputSource::Text {
+            text: "hi".into(),
+        }]));
+    match &refused {
+        Err(error @ Error::ReleaseFailed { held, .. }) => {
+            assert_eq!(held, &["possibly a key typing \"hi\"".to_owned()]);
+            assert!(
+                error.may_have_run(),
+                "the unanswered text may have run: {error:?}"
+            );
+        }
+        other => panic!("the text's keys are possibly held: {other:?}"),
+    }
+    assert_eq!(browser.log().of("input.releaseActions").len(), 1);
+}
+
+/// A release that fails keeps what the failure before it said: the input the user interrupted is
+/// still cannot-verify (the scripted lane, guarded), and input the browser did not answer still
+/// may have run (the Chrome lane).
+#[test]
+fn a_failed_release_keeps_the_verdict_and_effect_of_what_stopped_the_input() {
+    use flui_driver::coordinates::DevicePoint;
+    use flui_driver::lane::send_guarded;
+    use flui_driver::report::Check;
+    use flui_driver::testing::ScriptedLane;
+    use flui_driver::{Outcome, Verdict};
+
+    let (lane, _log) = ScriptedLane::new(Isolation::Xvfb);
+    let mut lane = lane
+        .foreign_input_after(1, "a mouse move")
+        .failing_releases(1);
+    let events = [
+        OsEvent::KeyDown("Control".into()),
+        OsEvent::PointerMove {
+            pointer: "m".into(),
+            device: PointerDevice::Mouse,
+            to: DevicePoint::new(1, 1),
+        },
+    ];
+    let interrupted = send_guarded(&mut lane, &events);
+    assert!(
+        matches!(&interrupted, Err(Error::ReleaseFailed { held, .. }) if held == &["Control".to_owned()]),
+        "{interrupted:?}"
+    );
+    assert!(
+        interrupted.as_ref().is_err_and(Error::is_cannot_verify),
+        "the interruption stays cannot-verify: {interrupted:?}"
+    );
+    let check = Check::from_result("interrupted", &interrupted);
+    assert!(
+        matches!(check.outcome, Outcome::CannotVerify { .. }),
+        "{check:?}"
+    );
+    assert_eq!(check.outcome.verdict(), Verdict::CannotVerify);
+
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, params| match method {
+            "input.performActions"
+                if params["actions"][0]["actions"][0]["type"] == "pointerDown" =>
+            {
+                BrowserReply::Silent
+            }
+            "input.releaseActions" => BrowserReply::Error {
+                error: "unknown error".into(),
+                message: "refused".into(),
+            },
+            _ => BrowserReply::Played,
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    let refused = driver
+        .window(window())
+        .perform(press(LogicalPoint::new(10.0, 10.0)));
+    let error = refused.expect_err("the release was refused");
+    assert!(matches!(error, Error::ReleaseFailed { .. }), "{error:?}");
+    assert!(
+        error.may_have_run(),
+        "the unanswered press may have run: {error:?}"
+    );
+    assert_eq!(
+        error.effect().map(|effect| effect.kind),
+        Some(EffectKind::MayHaveRun)
+    );
+    assert!(
+        !error.is_cannot_verify(),
+        "a timeout is a failure: {error:?}"
+    );
+}
+
+/// A composition for a lane that does not compose is refused before the desktop is locked or the
+/// run announced.
+#[test]
+fn a_composition_for_a_lane_that_does_not_compose_is_refused_before_the_lock() {
+    use flui_driver::testing::ScriptedLane;
+
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|_, _| BrowserReply::Played),
+    )
+    .expect("the stand-in binds");
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let lock = dir.path().join("os-input.lock");
+    let (lane, log) = ScriptedLane::new(Isolation::Xvfb);
+    let mut driver = attach(&browser)
+        .with_os_input_lock(&lock)
+        .with_lane(lane)
+        .expect("the scripted lane takes over");
+    let refused = driver
+        .window(window())
+        .perform(ActionSequence::new(vec![InputSource::Ime {
+            actions: vec![ImeAction::Commit {
+                text: "日本".into(),
+            }],
+        }]));
+    assert!(
+        matches!(&refused, Err(Error::NotSupported { capability: Some(capability), .. }) if capability == "os_ime_composition"),
+        "{refused:?}"
+    );
+    assert!(!lock.exists(), "the desktop was not locked");
+    assert!(
+        driver.take_announcements().is_empty(),
+        "nothing was announced"
+    );
+    assert!(log.sent().is_empty(), "nothing was sent");
+}
+
+/// A browser that stops answering costs the driver's leaving one bounded wait, not a command
+/// timeout for each of its two commands.
+#[test]
+fn closing_the_pages_connection_is_bounded_when_the_browser_stops_answering() {
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, params| {
+            let closing = method == "script.callFunction"
+                && params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("this.close()"));
+            if closing || method == "script.disown" {
+                return BrowserReply::Silent;
+            }
+            BrowserReply::Played
+        }),
+    )
+    .expect("the stand-in binds");
+    let driver = attach(&browser);
+    let started = Instant::now();
+    drop(driver);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the driver left in {:?}",
+        started.elapsed()
     );
 }

@@ -375,6 +375,44 @@ fn a_composition_reaches_only_a_lane_that_composes() {
     assert!(log.sent().is_empty(), "nothing was sent: {:?}", log.sent());
 }
 
+/// A lane that does not compose, called directly rather than through `send_guarded`, refuses a
+/// composition with a typed error instead of reporting it sent.
+#[test]
+fn a_lane_sent_a_composition_directly_refuses_it() {
+    use flui_driver::Lane;
+
+    let composition = OsEvent::Composition(ImeAction::Commit { text: "亜".into() });
+    let refused = |lane: &mut dyn Lane| {
+        let sent = lane.send(&composition);
+        assert!(
+            matches!(&sent, Err(Error::NotSupported { capability: Some(capability), .. }) if capability == "os_ime_composition"),
+            "the {} lane: {sent:?}",
+            lane.name()
+        );
+    };
+    let (mut scripted, log) = ScriptedLane::new(Isolation::Xvfb);
+    refused(&mut scripted);
+    assert!(log.sent().is_empty(), "the scripted lane recorded nothing");
+    #[cfg(windows)]
+    refused(
+        &mut flui_driver::lane::windows::WindowsLane::try_new(
+            std::process::id(),
+            Isolation::Shared,
+        )
+        .expect("a Windows lane"),
+    );
+    #[cfg(target_os = "linux")]
+    refused(
+        &mut flui_driver::lane::x11::X11Lane::try_new(std::process::id(), None, Isolation::Xvfb)
+            .expect("an X11 lane"),
+    );
+    #[cfg(target_os = "macos")]
+    refused(
+        &mut flui_driver::lane::macos::MacosLane::try_new(std::process::id(), Isolation::Shared)
+            .expect("a macOS lane"),
+    );
+}
+
 /// What no OS lane sends is refused before any event: a point outside the window.
 #[test]
 fn input_no_lane_sends_is_refused_before_any_event() {

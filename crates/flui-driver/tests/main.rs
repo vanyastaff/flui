@@ -2,6 +2,7 @@
 
 mod apps;
 mod chrome_browser;
+mod chrome_host;
 mod chrome_lane;
 mod coordinates;
 mod failure_matrix;

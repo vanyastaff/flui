@@ -2,43 +2,81 @@
 //! opens in headless Chrome.
 //!
 //! ChromeDriver must match Chrome's version, so it is not a tool a host is expected to have:
-//! [`resolve`] takes `CHROMEDRIVER` when it names one (the GitHub runners ship one), else the one
-//! fetched for the installed Chrome's version into the cache before, else fetches that one from
-//! the Chrome for Testing archives into the cache, once per version. `FLUI_CHROME` names a Chrome
-//! other than the one installed in the usual place.
+//! [`resolve`] takes the ChromeDriver the launch names (`ChromeDriverSource::Path`, or the
+//! `CHROMEDRIVER` file, or the directory `CHROMEWEBDRIVER` names, which GitHub's runners set),
+//! else the one a fetch kept in the cache for the installed Chrome's version, its SHA-256 checked
+//! against the one recorded beside it before it runs. Only a launch that allows it
+//! (`ChromeDriverSource::FetchAllowed`) fetches on a miss, over HTTPS alone, from the Chrome for
+//! Testing archives of Chrome's exact version, recording the archive's and the binary's SHA-256.
+//! Otherwise a miss is a lane the host cannot run, with the install hint. `FLUI_CHROME` names a
+//! Chrome other than the one installed in the usual place.
+//!
+//! The cache is written so that parallel fetches never tear it: each file is staged in a file of
+//! its own beside its place and linked there without replacing what another fetch put first,
+//! which the loser checks against its own hash and takes.
 //!
 //! What ChromeDriver and the archives answer is untrusted: every body is read within a bound
 //! ([`MAX_ARCHIVE`], [`MAX_ANSWER`]), every request within a deadline, and the session's
 //! WebSocket must be on the loopback (`bidi`). The session's Chrome is always headless: no window
 //! of it reaches the desktop.
 
-use std::io::{BufRead as _, BufReader, Cursor, Read as _};
+use std::fs::OpenOptions;
+use std::io::{BufRead as _, BufReader, Cursor, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 
 use crate::error::{Error, Result};
 use crate::launch::AppProcess;
 
 /// Where Chrome for Testing publishes its archives, and the newest release of each build.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChromeForTesting {
-    /// The archives' root: `<root>/<version>/<platform>/chromedriver-<platform>.zip`.
-    pub archives: String,
-    /// The root of the newest release of each build: `<root>_<major.minor.build>`.
-    pub latest_of_build: String,
+const ARCHIVES: &str = "https://storage.googleapis.com/chrome-for-testing-public";
+
+/// The root of the newest release of each build: `<root>_<major.minor.build>`.
+const LATEST_OF_BUILD: &str =
+    "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE";
+
+/// The name of the record of a kept ChromeDriver's hashes, beside it.
+const RECORD: &str = "chromedriver.sha256";
+
+/// What fetches a ChromeDriver: the hosts it asks and the client it asks them with.
+pub(crate) struct Fetcher {
+    archives: String,
+    latest_of_build: String,
+    agent: ureq::Agent,
 }
 
-impl Default for ChromeForTesting {
-    fn default() -> Self {
+impl Fetcher {
+    /// Chrome for Testing, over HTTPS alone.
+    pub(crate) fn chrome_for_testing() -> Self {
         Self {
-            archives: "https://storage.googleapis.com/chrome-for-testing-public".to_owned(),
-            latest_of_build: "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE"
-                .to_owned(),
+            archives: ARCHIVES.to_owned(),
+            latest_of_build: LATEST_OF_BUILD.to_owned(),
+            agent: agent(true),
         }
+    }
+
+    /// Stand-in hosts at `root` on the loopback, over plain HTTP: the tests' archives. Any other
+    /// host is refused.
+    #[cfg(feature = "testing")]
+    pub(crate) fn loopback(root: &str) -> Result<Self> {
+        let loopback = ["http://127.0.0.1:", "http://[::1]:", "http://localhost:"]
+            .iter()
+            .any(|prefix| root.starts_with(prefix));
+        if !loopback {
+            return Err(Error::invalid_argument(format!(
+                "{root} is not on the loopback"
+            )));
+        }
+        Ok(Self {
+            archives: format!("{root}/archives"),
+            latest_of_build: format!("{root}/latest/LATEST_RELEASE"),
+            agent: agent(false),
+        })
     }
 }
 
@@ -217,31 +255,55 @@ pub fn cache_dir() -> Option<PathBuf> {
     Some(root.join("flui").join("chromedriver"))
 }
 
-/// The ChromeDriver for `chrome`: `CHROMEDRIVER` when set, else the one kept for its version in
-/// `cache`, fetched from `archives` first when it is not there yet.
+/// The ChromeDriver the environment names: the `CHROMEDRIVER` file, else the ChromeDriver in the
+/// directory `CHROMEWEBDRIVER` names (GitHub's runners set that one).
+#[must_use]
+pub fn named_by_environment() -> Option<PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    var("CHROMEDRIVER")
+        .map(PathBuf::from)
+        .or_else(|| var("CHROMEWEBDRIVER").map(|dir| PathBuf::from(dir).join(executable_name())))
+}
+
+/// The ChromeDriver for `chrome`: `named` when given, else the one kept for its version in
+/// `cache` once its hash matches its record, else, when `fetch` is given, the one it fetches into
+/// `cache`.
 ///
 /// # Errors
 ///
-/// [`Error::Lane`] marked as a host that cannot run the lane when no ChromeDriver is published
-/// for this platform or Chrome's version; the fetch's failure.
-pub fn resolve(chrome: &Chrome, cache: &Path, archives: &ChromeForTesting) -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("CHROMEDRIVER").filter(|path| !path.is_empty()) {
-        return Ok(PathBuf::from(path));
+/// [`Error::Lane`] marked as a host that cannot run the lane: no ChromeDriver and no fetch allowed
+/// (with the install hint), a kept one whose hash does not match its record, none published for
+/// this platform or Chrome's version; the fetch's failure.
+pub(crate) fn resolve(
+    chrome: &Chrome,
+    cache: &Path,
+    named: Option<PathBuf>,
+    fetch: Option<&Fetcher>,
+) -> Result<PathBuf> {
+    if let Some(named) = named {
+        return Ok(named);
     }
-    let kept = cache.join(&chrome.version).join(executable_name());
-    if kept.is_file() {
+    let dir = cache.join(&chrome.version);
+    let kept = dir.join(executable_name());
+    if kept.exists() {
+        verify_kept(&dir)?;
         return Ok(kept);
     }
-    let platform = platform().ok_or_else(|| Error::Lane {
-        lane: "chrome".to_owned(),
-        unavailable: true,
-        message: format!(
+    let Some(fetcher) = fetch else {
+        return Err(unavailable(format!(
+            "no ChromeDriver for Chrome {}: set CHROMEDRIVER to one that matches it, or allow the \
+             launch to fetch it (`ChromeDriverSource::FetchAllowed`)",
+            chrome.version
+        )));
+    };
+    let platform = platform().ok_or_else(|| {
+        unavailable(format!(
             "Chrome for Testing publishes no ChromeDriver for {}/{}; set CHROMEDRIVER",
             std::env::consts::OS,
             std::env::consts::ARCH
-        ),
+        ))
     })?;
-    fetch(archives, &chrome.version, platform, &kept)?;
+    fetch_into(fetcher, &chrome.version, platform, &dir)?;
     Ok(kept)
 }
 
@@ -251,24 +313,20 @@ pub fn archive_url(archives: &str, version: &str, platform: &str) -> String {
     format!("{archives}/{version}/{platform}/chromedriver-{platform}.zip")
 }
 
-/// Fetch ChromeDriver for Chrome `version` on `platform` and write it to `to`. Not every patch
-/// release is published; the newest of the same build speaks the same protocol to it.
-///
-/// # Errors
-///
-/// [`Error::Lane`] naming what failed: a fetch, an archive past [`MAX_ARCHIVE`] or without
-/// ChromeDriver in it, the write.
-pub fn fetch(archives: &ChromeForTesting, version: &str, platform: &str, to: &Path) -> Result<()> {
-    let agent = agent();
+/// Fetch ChromeDriver for Chrome `version` on `platform` into `dir`, beside the record of the
+/// archive's and the binary's hashes. Not every patch release is published; the newest of the
+/// same build speaks the same protocol to it.
+fn fetch_into(fetcher: &Fetcher, version: &str, platform: &str, dir: &Path) -> Result<()> {
+    let agent = &fetcher.agent;
     let archive = match get(
-        &agent,
-        &archive_url(&archives.archives, version, platform),
+        agent,
+        &archive_url(&fetcher.archives, version, platform),
         MAX_ARCHIVE,
     ) {
         Ok(archive) => archive,
         Err(Fetched::NotFound) => {
             let build = version.rsplit_once('.').map_or(version, |(build, _)| build);
-            let latest = get(&agent, &format!("{}_{build}", archives.latest_of_build), 64)
+            let latest = get(agent, &format!("{}_{build}", fetcher.latest_of_build), 64)
                 .map_err(|failure| fetch_failed(version, &failure.to_string()))?;
             let latest = String::from_utf8_lossy(&latest).trim().to_owned();
             if !is_version(&latest) {
@@ -278,34 +336,151 @@ pub fn fetch(archives: &ChromeForTesting, version: &str, platform: &str, to: &Pa
                 ));
             }
             get(
-                &agent,
-                &archive_url(&archives.archives, &latest, platform),
+                agent,
+                &archive_url(&fetcher.archives, &latest, platform),
                 MAX_ARCHIVE,
             )
             .map_err(|failure| fetch_failed(version, &failure.to_string()))?
         }
         Err(failure) => return Err(fetch_failed(version, &failure.to_string())),
     };
-    let dir = to
-        .parent()
-        .ok_or_else(|| fetch_failed(version, "the cache path has no directory"))?;
+    let binary = extract(&archive)?;
+    let record = format!(
+        "archive {}\nbinary {}\n",
+        sha256_hex(&archive),
+        sha256_hex(&binary)
+    );
     std::fs::create_dir_all(dir)?;
-    extract(&archive, to)
+    // The record first: a binary is taken only beside a record that names its hash.
+    place(dir, RECORD, record.as_bytes(), false)?;
+    place(dir, executable_name(), &binary, true)?;
+    verify_kept(dir)
 }
 
 fn fetch_failed(version: &str, why: &str) -> Error {
+    unavailable(format!(
+        "no ChromeDriver for Chrome {version}: {why}; set CHROMEDRIVER to one that matches"
+    ))
+}
+
+fn unavailable(message: String) -> Error {
     Error::Lane {
         lane: "chrome".to_owned(),
         unavailable: true,
-        message: format!(
-            "no ChromeDriver for Chrome {version}: {why}; set CHROMEDRIVER to one that matches"
-        ),
+        message,
     }
 }
 
-/// The HTTP client of the fetch and of ChromeDriver's session: rustls with the platform's
-/// verifier, no redirect, a deadline over each exchange.
-fn agent() -> ureq::Agent {
+/// The lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            write!(hex, "{byte:02x}").expect("BUG: writing to a String cannot fail");
+            hex
+        })
+}
+
+/// Check the ChromeDriver kept in `dir` against its record before it runs.
+///
+/// # Errors
+///
+/// [`Error::Lane`] marked as a host that cannot run the lane when the record is missing or
+/// malformed, or the binary's hash is not the one it names: a file torn, replaced or tampered
+/// with is never run.
+pub fn verify_kept(dir: &Path) -> Result<()> {
+    let refused = |why: &str| {
+        unavailable(format!(
+            "the ChromeDriver kept in {} is refused: {why}; delete the directory",
+            dir.display()
+        ))
+    };
+    let mut record = String::new();
+    std::fs::File::open(dir.join(RECORD))
+        .map_err(|_| refused("its hash record is missing"))?
+        .take(1024)
+        .read_to_string(&mut record)
+        .map_err(|_| refused("its hash record does not read"))?;
+    let expected = record
+        .lines()
+        .find_map(|line| line.strip_prefix("binary "))
+        .filter(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| refused("its hash record names no binary hash"))?;
+    let binary = read_bounded(&dir.join(executable_name()))
+        .map_err(|_| refused("it does not read whole"))?;
+    if sha256_hex(&binary) != expected {
+        return Err(refused("its SHA-256 is not the one recorded"));
+    }
+    Ok(())
+}
+
+/// The file at `path`, at most [`MAX_ARCHIVE`] bytes.
+fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_ARCHIVE + 1)
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_ARCHIVE {
+        return Err(std::io::Error::other("larger than a ChromeDriver"));
+    }
+    Ok(bytes)
+}
+
+/// Put `bytes` at `dir/name` without replacing what is there: staged in a file of its own beside
+/// it, then linked into place. When another fetch put the file first, it is taken only if it holds
+/// the same bytes.
+///
+/// # Errors
+///
+/// The write's failure; [`Error::Lane`] marked as a host that cannot run the lane when the file
+/// another fetch put there differs.
+fn place(dir: &Path, name: &str, bytes: &[u8], executable: bool) -> Result<()> {
+    let target = dir.join(name);
+    let staged = dir.join(format!(
+        ".{name}.{}-{}.partial",
+        std::process::id(),
+        crate::launch::random_hex(8)?
+    ));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        #[cfg(unix)]
+        if executable {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+        }
+        #[cfg(not(unix))]
+        let _ = executable;
+        Ok(())
+    })();
+    let linked = written.and_then(|()| std::fs::hard_link(&staged, &target));
+    let _ = std::fs::remove_file(&staged);
+    match linked {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let there = read_bounded(&target)?;
+            if there == bytes {
+                Ok(())
+            } else {
+                Err(unavailable(format!(
+                    "{} differs from what this fetch wrote; delete {}",
+                    target.display(),
+                    dir.display()
+                )))
+            }
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The HTTP client of a fetch: rustls with the platform's verifier, HTTPS alone unless `https`
+/// is false (the tests' loopback stand-in), no redirect, a deadline over each exchange.
+fn agent(https: bool) -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder()
         .provider(ureq::tls::TlsProvider::Rustls)
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
@@ -315,6 +490,7 @@ fn agent() -> ureq::Agent {
         .build();
     ureq::Agent::config_builder()
         .tls_config(tls)
+        .https_only(https)
         .max_redirects(0)
         .http_status_as_error(false)
         .timeout_global(Some(FETCH_TIMEOUT))
@@ -360,19 +536,14 @@ fn get(agent: &ureq::Agent, url: &str, limit: u64) -> std::result::Result<Vec<u8
         })
 }
 
-/// Write the archive's ChromeDriver executable to `to`: whole to a partial file, then renamed, so
-/// an interrupted fetch leaves nothing a later run takes for a complete one.
+/// The archive's ChromeDriver executable.
 ///
 /// # Errors
 ///
-/// [`Error::Lane`] for an archive that does not read, holds no ChromeDriver, or whose ChromeDriver
-/// is past [`MAX_ARCHIVE`] unpacked; the write's failure.
-pub fn extract(archive: &[u8], to: &Path) -> Result<()> {
-    let refused = |why: String| Error::Lane {
-        lane: "chrome".to_owned(),
-        unavailable: true,
-        message: format!("the ChromeDriver archive is refused: {why}"),
-    };
+/// [`Error::Lane`] marked as a host that cannot run the lane for an archive that does not read,
+/// holds no ChromeDriver, or whose ChromeDriver is past [`MAX_ARCHIVE`] unpacked.
+pub fn extract(archive: &[u8]) -> Result<Vec<u8>> {
+    let refused = |why: String| unavailable(format!("the ChromeDriver archive is refused: {why}"));
     let mut zip = zip::ZipArchive::new(Cursor::new(archive)).map_err(|e| refused(e.to_string()))?;
     let name = executable_name();
     let index = (0..zip.len())
@@ -396,15 +567,7 @@ pub fn extract(archive: &[u8], to: &Path) -> Result<()> {
             "its {name} is larger than {MAX_ARCHIVE} bytes"
         )));
     }
-    let partial = to.with_extension("partial");
-    std::fs::write(&partial, &bytes)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o755))?;
-    }
-    std::fs::rename(&partial, to)?;
-    Ok(())
+    Ok(bytes)
 }
 
 /// A running ChromeDriver, which the session owns: a session it opened is ended and the process
@@ -575,7 +738,12 @@ impl Drop for ChromeDriver {
 #[must_use]
 pub fn reported_port(line: &str) -> Option<u16> {
     let (_, rest) = line.split_once("started successfully on port ")?;
-    rest.trim().trim_end_matches('.').parse::<u16>().ok()
+    // Port 0 is no port a client can reach: ChromeDriver reports the one it bound.
+    rest.trim()
+        .trim_end_matches('.')
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
 }
 
 /// The arguments the session's Chrome starts with: always headless, so no window of it reaches

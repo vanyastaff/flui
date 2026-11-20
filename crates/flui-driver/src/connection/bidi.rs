@@ -31,6 +31,9 @@ pub(crate) const PAGE_EXPORT: &str = "__flui_agent";
 /// How long the hello's answer may take.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long closing the page's connection may take, its handle let go of included.
+const CLOSE_BUDGET: Duration = Duration::from_secs(2);
+
 /// How often the page is asked again for its export while it is still loading.
 const CONNECT_RETRY: Duration = Duration::from_millis(100);
 
@@ -253,13 +256,24 @@ impl Drop for BidiConnection {
         if self.broken.is_some() {
             return;
         }
-        let _ = self
-            .session
-            .call_function(CLOSE, Some(&self.remote), Vec::new(), "none");
-        let _ = self.session.command(
-            "script.disown",
-            json!({ "handles": [self.remote], "target": { "context": self.session.context() } }),
-            COMMAND_TIMEOUT,
+        // Both commands share one deadline: a browser that stops answering costs the drop
+        // `CLOSE_BUDGET`, not a command timeout each.
+        let deadline = Instant::now() + CLOSE_BUDGET;
+        let left = || deadline.saturating_duration_since(Instant::now());
+        let _ = self.session.call_function_within(
+            CLOSE,
+            Some(&self.remote),
+            Vec::new(),
+            "none",
+            left(),
         );
+        let left = left();
+        if !left.is_zero() {
+            let _ = self.session.command(
+                "script.disown",
+                json!({ "handles": [self.remote], "target": { "context": self.session.context() } }),
+                left,
+            );
+        }
     }
 }
