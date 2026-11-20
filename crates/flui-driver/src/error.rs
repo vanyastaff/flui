@@ -78,6 +78,9 @@ pub enum Error {
         handle: Option<String>,
         /// The process's exit code, when the app exited and the OS reported one.
         exit: Option<i32>,
+        /// How much of an acting call reached what went, when that is known: an element that went
+        /// away while it was acted on may have run the act first.
+        effect: Option<Effect>,
         /// For people.
         message: String,
         /// Whether the same call can succeed later.
@@ -295,6 +298,7 @@ impl Error {
                 kind,
                 handle,
                 exit,
+                effect,
                 message,
                 retry,
             },
@@ -395,6 +399,7 @@ impl Error {
             kind: Some(kind),
             handle,
             exit,
+            effect: None,
             message: message.into(),
             retry: ErrorCode::Gone.default_retry(),
         }
@@ -474,7 +479,9 @@ impl Error {
     #[must_use]
     pub fn effect(&self) -> Option<&Effect> {
         match self {
-            Self::Timeout { effect, .. } | Self::Platform { effect, .. } => effect.as_ref(),
+            Self::Timeout { effect, .. }
+            | Self::Platform { effect, .. }
+            | Self::Gone { effect, .. } => effect.as_ref(),
             _ => None,
         }
     }

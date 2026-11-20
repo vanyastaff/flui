@@ -329,6 +329,22 @@ fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> 
     Ok(())
 }
 
+/// Release what `lane` holds where no caller is left to retry (the worker ending, a job that
+/// panicked): once, and once more if that failed. What a second failure leaves held is logged at
+/// error level with the lane's error, which names it; nothing waits.
+fn release_at_end(lane: &mut dyn Lane) {
+    let Err(first) = lane.release_all() else {
+        return;
+    };
+    if let Err(last) = lane.release_all() {
+        tracing::error!(
+            lane = lane.name(),
+            first = %first,
+            "input stays held after the lane let go of it: {last}"
+        );
+    }
+}
+
 /// A job for the lane's thread.
 type Job = Box<dyn FnOnce(&mut dyn Lane) + Send>;
 
@@ -368,7 +384,7 @@ impl LaneWorker {
                     }
                 }
                 // The worker is ending: nothing may stay pressed.
-                let _ = lane.release_all();
+                release_at_end(&mut lane);
             })?;
         Ok(Self {
             jobs: Some(jobs),
@@ -411,7 +427,7 @@ impl LaneWorker {
             let outcome =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut *lane)));
             if outcome.is_err() {
-                let _ = lane.release_all();
+                release_at_end(lane);
             }
             let _ = answer.send(outcome);
         });

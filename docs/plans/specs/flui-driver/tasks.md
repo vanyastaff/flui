@@ -711,7 +711,7 @@ graph LR
     `a_client_origin_maps_back_to_its_device_pixel_at_every_scale`,
     `an_absolute_move_lands_on_the_pixel_it_names`,
     `the_projection_drops_what_one_backend_reports_and_names_the_differences`,
-    `only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut`,
+    `a_release_that_would_complete_a_shell_shortcut_is_masked`,
     `typed_text_goes_through_the_shell_hotkey_check_as_the_keys_it_sends`,
     `keys_and_text_are_planned_against_what_the_lane_holds`, `a_release_windows_refused_stays_held`,
     `a_pause_is_waited_out_whole_in_watched_slices`, `a_contact_is_held_only_once_windows_took_it`,
@@ -725,7 +725,8 @@ graph LR
     `no_property_is_read_after_the_first_timeout`,
     `a_pattern_request_and_an_invoke_tell_their_failures_apart`;
     `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`;
-    `steps::small_scrolls_add_up_and_a_part_of_a_pixel_is_carried`.
+    `steps::small_scrolls_add_up_and_a_part_of_a_pixel_is_carried`;
+    `socket::a_lane_worker_tries_once_more_to_release_when_it_ends`.
   - The scenarios on the headless target (CI): `scenarios::the_gallery_scenario_passes_on_the_headless_target`,
     `the_accessibility_scenario_passes_on_the_headless_target`,
     `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
@@ -740,7 +741,7 @@ graph LR
     `the_guard_watches_and_stops_on_a_desktop_of_its_own`,
     `a_guard_whose_watcher_died_ends_the_run`,
     `the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey`,
-    `the_lanes_check_counts_a_shift_click_as_a_shift_tap`,
+    `the_lanes_check_allows_chords_whose_release_is_masked`,
     `a_job_ends_its_processes_when_it_closes`,
     `a_process_joins_its_job_before_it_runs`,
     `a_launched_app_ends_with_its_session`; `the_conformance_scenario_runs_through_the_os_lane` and
@@ -774,11 +775,12 @@ graph LR
     reads and the lane sends stroke by stroke; held keys, buttons and contacts are recorded once
     Windows took them, before the guard confirms the echo; `HeldKeys` is the one owner of the
     shell's shortcut counts too, and only another key restarts the run of Shift taps (Windows
-    documents five presses and nothing about a pause or pointer input between them); a sequence
-    that leaves a chord of modifiers down is refused, and the release of everything masks held
-    modifiers with the unassigned key `0xE8` so it completes no shortcut; reading an element stops
-    at its first property timeout, and an invoke tells a timeout, a gone element and a missing
-    pattern apart; a pause is waited out whole; a launched app starts suspended and joins its
+    documents five presses and nothing about a pause or pointer input between them); a release
+    that would complete a shell shortcut, the release of everything's included, is masked with
+    the unassigned key `0xE8`, so only a press the shell takes is refused; the worker releases
+    once more when it ends after a failed release and logs what stays held; reading an element
+    stops at its first property timeout, and an invoke tells a timeout, a gone element (both
+    `may_have_run`) and a missing pattern apart; a pause is waited out whole; a launched app starts suspended and joins its
     job before its first instruction. UI Automation, Windows
     Graphics Capture and the job object go through the `windows` crate the workspace already pins,
     not `uiautomation` and `windows-capture`.

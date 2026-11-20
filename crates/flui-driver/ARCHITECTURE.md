@@ -66,13 +66,19 @@ app's trees, frames and input, and this crate composes that with what only the O
   of lone Shift taps): every key edge Windows took goes through it, a release of everything
   included. Only another key restarts the run or breaks a chord: Windows documents five presses
   of Shift and nothing about a pause or pointer input between them, so neither resets the count.
-  A sequence that leaves a chord of modifiers or a fifth lone Shift down is refused, and the
-  release of everything never completes a shell shortcut: while a modifier is held it presses and
-  releases the unassigned virtual key `0xE8` first (`held::MASK`), and a release that would still
-  complete one is not sent.
+  The lane never completes a shortcut the shell takes on a release: a release that would (letting
+  go of Control+Shift or Alt+Shift, the fifth lone Shift) is preceded by a press and release of
+  the unassigned virtual key `0xE8` (`held::MASK`), as AutoHotkey masks one, so the app still gets
+  its chord. The release of everything masks whenever a modifier is held, and a release that
+  would still complete a shortcut (the mask not sent) is not sent. Only a press the shell takes
+  (the Windows key, Alt+Tab, Ctrl+Shift+Esc, a lock key) is refused before a sequence.
+- **Nothing stays pressed without a word.** Where no caller is left to retry (the lane's worker
+  ending, a job that panicked), the worker releases once more after a failed release and logs
+  what is still held at error level; the error names the keys. It never waits.
 - **An accessibility provider's answers stay apart.** A UI Automation read or invoke tells a
-  provider that timed out (`timeout`, `may_have_run` for an invoke), an element that went away
-  (`gone`) and a pattern the element does not offer (`action_unsupported`) from each other.
+  provider that timed out (`timeout`), an element that went away (`gone`) and a pattern the
+  element does not offer (`action_unsupported`) from each other; a timeout or a gone element
+  during an invoke carries `may_have_run`.
 - **A pause is waited out whole,** in slices with the guard looked at between them; a guard whose
   watcher is gone, or whose hook no longer sees the lane's own input, ends the run, never reads as
   a quiet desktop.

@@ -717,3 +717,19 @@ fn a_lane_worker_cancels_a_queued_job_and_serves_past_a_panicking_one() {
     );
     assert_eq!(worker.run(|_| 7).expect("the worker serves on"), 7);
 }
+
+/// A lane whose release fails when its worker ends gets one more release, and the worker ends
+/// either way: nothing waits on a lane that cannot let go.
+#[test]
+fn a_lane_worker_tries_once_more_to_release_when_it_ends() {
+    for (failing, expected) in [(0, 1), (1, 2), (5, 2)] {
+        let (lane, log) = ScriptedLane::new(Isolation::Xvfb);
+        let worker = LaneWorker::start(lane.failing_releases(failing)).expect("the worker starts");
+        drop(worker);
+        assert_eq!(
+            log.releases(),
+            expected,
+            "{failing} failing releases: one release, and one more when it failed"
+        );
+    }
+}

@@ -103,6 +103,8 @@ pub struct ScriptedLane {
     log: LaneLog,
     /// The capability its check names when it refuses every sequence.
     refuses: Option<String>,
+    /// How many of its next releases fail, as an OS that refuses them does.
+    failing_releases: usize,
 }
 
 impl ScriptedLane {
@@ -116,9 +118,17 @@ impl ScriptedLane {
                 guard: None,
                 log: log.clone(),
                 refuses: None,
+                failing_releases: 0,
             },
             log,
         )
+    }
+
+    /// Whose next `count` releases fail, each still counted in the log.
+    #[must_use]
+    pub fn failing_releases(mut self, count: usize) -> Self {
+        self.failing_releases = count;
+        self
     }
 
     /// Whose check refuses every sequence as not supported, naming `capability`, as a lane
@@ -204,6 +214,13 @@ impl Lane for ScriptedLane {
 
     fn release_all(&mut self) -> Result<()> {
         self.log.releases.fetch_add(1, Ordering::SeqCst);
+        if self.failing_releases > 0 {
+            self.failing_releases -= 1;
+            return Err(Error::InputHeld {
+                message: "Control still held after the release of everything".into(),
+                retry: flui_protocol::error::ErrorCode::InputHeld.default_retry(),
+            });
+        }
         Ok(())
     }
 }

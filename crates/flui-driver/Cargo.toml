@@ -31,6 +31,8 @@ flui-protocol = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# Input a lane could not release when no caller was left to tell.
+tracing = { workspace = true }
 # The launch token handed to a launched app.
 getrandom = { workspace = true }
 flui-testing = { workspace = true, optional = true }

@@ -4,6 +4,8 @@
 //! only once Windows took its press, and forgotten only once Windows took its release, so a
 //! release Windows refused stays held for the next [`HeldKeys::release_all`] to try again.
 
+use flui_protocol::error::ErrorCode;
+
 use crate::error::{Error, Result};
 use crate::lane::windows::keys::{self, Modifier, SHIFT, TextStroke, VirtualKey};
 use crate::lane::windows::safety::{KeyEdge, Refusal, ShellShortcuts};
@@ -100,7 +102,9 @@ impl HeldKeys {
         &self.held
     }
 
-    /// The strokes `input` takes from this state.
+    /// The strokes `input` takes from this state. A release that would complete a shortcut of the
+    /// shell's (letting go of Control+Shift or Alt+Shift, the fifth lone Shift) is preceded by a
+    /// press and release of [`MASK`], so the app still gets its chord and the shell nothing.
     #[must_use]
     pub fn plan(&self, input: &KeyInput) -> Vec<Keystroke> {
         match input {
@@ -116,6 +120,9 @@ impl HeldKeys {
                 if self.shifted.contains(&key.code) {
                     strokes.push(Keystroke::UnshiftFor(key.code));
                 }
+                if self.completes_shortcut(&strokes) {
+                    strokes.splice(0..0, [Keystroke::Press(MASK), Keystroke::Release(MASK)]);
+                }
                 strokes
             }
             KeyInput::Text(text) => keys::text_strokes(text)
@@ -126,6 +133,12 @@ impl HeldKeys {
                 })
                 .collect(),
         }
+    }
+
+    /// Whether `strokes`, sent from this state, complete a shortcut of the shell's.
+    fn completes_shortcut(&self, strokes: &[Keystroke]) -> bool {
+        let mut state = self.clone();
+        strokes.iter().any(|stroke| state.apply(*stroke).is_some())
     }
 
     /// Record `stroke`, which Windows took; what of the shell's it completed, if anything.
@@ -178,11 +191,10 @@ impl HeldKeys {
         confirm()
     }
 
-    /// What of the shell's `inputs`, sent from this state, would take: see
-    /// [`safety::press_takes`](crate::lane::windows::safety::press_takes) and [`ShellShortcuts`].
-    /// A sequence that leaves modifiers down whose release, by a later sequence or by an
-    /// interrupted run's release of everything, would complete a shortcut with no other key
-    /// pressed first (a chord of modifiers, the fifth lone Shift) is refused too.
+    /// What of the shell's `inputs`, sent from this state, would take: a press the shell takes
+    /// ([`safety::press_takes`](crate::lane::windows::safety::press_takes)). A release that would
+    /// complete a shortcut is masked by [`Self::plan`], and modifiers a sequence leaves down by
+    /// [`Self::release_all`], so neither is refused.
     #[must_use]
     pub fn shell_hotkey(&self, inputs: &[KeyInput]) -> Option<&'static str> {
         let mut state = self.clone();
@@ -193,7 +205,7 @@ impl HeldKeys {
                 }
             }
         }
-        state.shortcuts.pending()
+        None
     }
 
     /// Release every key held, last pressed first, through `send`, completing no shortcut of the
@@ -204,7 +216,8 @@ impl HeldKeys {
     ///
     /// # Errors
     ///
-    /// The first stroke that failed or was refused, after every key was tried.
+    /// After every key was tried: [`Error::InputHeld`] naming the keys still held and the first
+    /// stroke that failed or was refused, or that stroke's error when nothing stayed held.
     pub fn release_all(&mut self, mut send: impl FnMut(Keystroke) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
         let modifier_held = self.held.iter().any(|&code| {
@@ -231,7 +244,21 @@ impl HeldKeys {
                 first.get_or_insert(error);
             }
         }
-        first.map_or(Ok(()), Err)
+        match first {
+            None => Ok(()),
+            Some(first) if self.held.is_empty() => Err(first),
+            Some(first) => Err(Error::InputHeld {
+                message: format!(
+                    "{} still held after the release of everything: {first}",
+                    self.held
+                        .iter()
+                        .map(|&code| keys::name_of(code))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ),
+                retry: ErrorCode::InputHeld.default_retry(),
+            }),
+        }
     }
 
     /// Send `stroke` through `send` unless it completes a shortcut of the shell's from this state,
