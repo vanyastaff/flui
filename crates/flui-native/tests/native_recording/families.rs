@@ -55,12 +55,12 @@ pub(super) const FAMILY_RECORDINGS: [(&str, &str); 5] = [
 
 /// Asserts a replay reproduced every row: a cut recording is not a match.
 #[track_caller]
-pub(super) fn whole(replayed: Replayed) {
+pub(crate) fn whole(replayed: Replayed) {
     assert_eq!(replayed, Replayed::Whole, "the recording replayed whole");
 }
 
 /// Replays an application stream into a headless host's events.
-pub(super) struct HostEventsTarget(pub(super) HeadlessHostEvents);
+pub(crate) struct HostEventsTarget(pub(crate) HeadlessHostEvents);
 
 impl ReplayTarget for HostEventsTarget {
     fn notice(&mut self, notice: SystemNotice) -> Result<(), Unsupported> {
@@ -82,13 +82,13 @@ impl ReplayTarget for HostEventsTarget {
 /// Replays a window stream into a headless window: its input method's
 /// events, its close requests and close, and the locks on each text store it
 /// served, replayed on a store of the target's own per recorded store.
-pub(super) struct WindowTarget {
+pub(crate) struct WindowTarget {
     window: HeadlessHostWindow,
     pub(super) stores: HashMap<RecordedStore, Rc<InMemoryTextStore>>,
 }
 
 impl WindowTarget {
-    pub(super) fn new(window: HeadlessHostWindow) -> Self {
+    pub(crate) fn new(window: HeadlessHostWindow) -> Self {
         Self {
             window,
             stores: HashMap::new(),
@@ -138,7 +138,7 @@ impl ReplayTarget for WindowTarget {
 /// display by its label within the recording and its fields, a failure by
 /// the kind of error it was.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum Read {
+pub(crate) enum Read {
     /// A read of the system preferences.
     Preferences(Result<SystemPreferences, ReadFailure>),
     /// A read of the displays.
@@ -146,13 +146,13 @@ pub(super) enum Read {
 }
 
 /// The headless platform's system sources, taken before `run` consumes it.
-pub(super) struct Sources {
-    preferences: HeadlessPreferences,
-    displays: HeadlessDisplayControls,
+pub(crate) struct Sources {
+    pub(crate) preferences: HeadlessPreferences,
+    pub(crate) displays: HeadlessDisplayControls,
 }
 
 impl Sources {
-    pub(super) fn of(platform: &HeadlessPlatform) -> Self {
+    pub(crate) fn of(platform: &HeadlessPlatform) -> Self {
         Self {
             preferences: platform.preference_source(),
             displays: platform.display_controls(),
@@ -164,7 +164,7 @@ impl Sources {
 /// by every stream it replays: a display a `platform` stream labelled is the
 /// display a `window_state` stream of the same session names by that label.
 #[derive(Default)]
-pub(super) struct Labels {
+pub(crate) struct Labels {
     registry: DisplayRegistry,
     ids: RefCell<HashMap<DisplayId, u64>>,
 }
@@ -198,15 +198,15 @@ impl Labels {
 /// Replays a platform stream into a headless platform's sources, reading
 /// the system back through `owner` after each row, as the application reads
 /// it. A recorded display's label is issued an id of the replay's own.
-pub(super) struct PlatformTarget<'a> {
+pub(crate) struct PlatformTarget<'a> {
     sources: Sources,
     owner: &'a OwnerPlatform,
     labels: &'a Labels,
-    pub(super) reads: Vec<Read>,
+    pub(crate) reads: Vec<Read>,
 }
 
 impl<'a> PlatformTarget<'a> {
-    pub(super) fn new(sources: Sources, owner: &'a OwnerPlatform, labels: &'a Labels) -> Self {
+    pub(crate) fn new(sources: Sources, owner: &'a OwnerPlatform, labels: &'a Labels) -> Self {
         Self {
             sources,
             owner,
@@ -270,17 +270,17 @@ impl ReplayTarget for PlatformTarget<'_> {
 /// Replays a `window_state` stream into a headless window: each snapshot is
 /// published as the window system's report, on the display the replay
 /// issued for its label, and what a reader of the window then sees is kept.
-pub(super) struct WindowStateTarget<'a> {
+pub(crate) struct WindowStateTarget<'a> {
     window: HeadlessHostWindow,
     labels: &'a Labels,
     /// The window's state as a consumer reads it after each replayed
     /// snapshot (`PlatformWindow::state`), which is what the application's
     /// `state_changed` route reads.
-    pub(super) published: Vec<WindowState>,
+    pub(crate) published: Vec<WindowState>,
 }
 
 impl<'a> WindowStateTarget<'a> {
-    pub(super) fn new(window: HeadlessHostWindow, labels: &'a Labels) -> Self {
+    pub(crate) fn new(window: HeadlessHostWindow, labels: &'a Labels) -> Self {
         Self {
             window,
             labels,
@@ -309,13 +309,13 @@ impl ReplayTarget for WindowStateTarget<'_> {
 }
 
 /// What the application reads of the system preferences through `owner`.
-pub(super) fn read_preferences(owner: &OwnerPlatform) -> Result<SystemPreferences, ReadFailure> {
+pub(crate) fn read_preferences(owner: &OwnerPlatform) -> Result<SystemPreferences, ReadFailure> {
     owner.preferences().map_err(|error| ReadFailure::of(&error))
 }
 
 /// What the application reads of the displays through `owner`, each display
 /// under the label `label` gives its id.
-pub(super) fn read_displays(
+pub(crate) fn read_displays(
     owner: &OwnerPlatform,
     label: impl Fn(DisplayId) -> u64,
 ) -> Result<Vec<(u64, DisplayParts)>, ReadFailure> {
@@ -406,7 +406,7 @@ fn recorded_states(
 }
 
 /// A headless window, opened on `owner` with a recording handler.
-pub(super) fn headless_window(
+pub(crate) fn headless_window(
     owner: &flui_native::OwnerPlatform,
 ) -> (HeadlessHostWindow, std::rc::Rc<RecordingWindowHandler>) {
     let handler = RecordingWindowHandler::new();
@@ -424,7 +424,7 @@ pub(super) fn headless_window(
 }
 
 /// The input method events `handler` heard, in order.
-pub(super) fn ime_events(handler: &RecordingWindowHandler) -> Vec<ImeEvent> {
+pub(crate) fn ime_events(handler: &RecordingWindowHandler) -> Vec<ImeEvent> {
     handler
         .inputs()
         .into_iter()

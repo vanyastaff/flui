@@ -73,6 +73,19 @@ mod served;
 ))]
 compile_error!("BUG: build.rs set `driver_agent` against this build's profile and features");
 
+// The native journal follows the profile's debug assertions on every system with a transport,
+// a page included (ADR-0390): a build `build.rs` misread fails here rather than leaving the
+// `native` layer out of a debug build, or journaling a release one.
+#[cfg(any(
+    all(native_journal, not(debug_assertions)),
+    all(
+        not(native_journal),
+        debug_assertions,
+        any(unix, windows, target_arch = "wasm32")
+    )
+))]
+compile_error!("BUG: build.rs set `native_journal` against this build's profile and target");
+
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

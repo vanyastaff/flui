@@ -27,6 +27,12 @@ use super::ime_rows::{
 use super::key_rows::{
     a_key_during_composition_is_the_input_methods, menu_keys_arrive_as_the_bindings_name_them,
 };
+use super::recording_rows::{
+    a_recorded_composition_replays_as_it_was_delivered,
+    a_recorded_lifecycle_replays_as_it_was_reported,
+    recorded_display_reads_replay_as_they_were_answered,
+    recorded_preference_reads_replay_as_they_were_answered,
+};
 use super::{
     BackendUnderTest, ContactAction, ContactStep, PanStep, PinchChange, PinchStep, RowFailure,
     RowGroup, RowOutcome, Stamp, Step, StepPhase,
@@ -104,6 +110,19 @@ pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
         row!(Ime, a_composition_reaches_the_field_in_order),
         row!(Ime, a_cancelled_composition_leaves_the_field_as_it_was),
         row!(Ime, each_composition_step_is_one_edit_of_the_field),
+        row!(
+            Recordings,
+            a_recorded_composition_replays_as_it_was_delivered
+        ),
+        row!(Recordings, a_recorded_lifecycle_replays_as_it_was_reported),
+        row!(
+            Recordings,
+            recorded_preference_reads_replay_as_they_were_answered
+        ),
+        row!(
+            Recordings,
+            recorded_display_reads_replay_as_they_were_answered
+        ),
     ]
 }
 

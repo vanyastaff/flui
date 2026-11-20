@@ -820,12 +820,21 @@ where
         application,
         move || {
             let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
-            // Before the platform, whose registries report only to a capture already installed.
+            // Before the platform, whose registries report only to a capture already installed;
+            // ended if the platform fails to start or another instance takes the launch. The
+            // loop reads the launch and settles it.
+            // A build without the journal has no backend to name.
             #[cfg(native_journal)]
-            super::native_journal::begin(host.backend());
+            let backend = Some(host.backend());
+            #[cfg(not(native_journal))]
+            let backend = None;
+            let journal = super::journal_start::JournalStart::begin(backend);
             let placement = super::raster_host::desktop_placement(host);
-            start_host(host, app_id.as_ref(), one_instance)
-                .map(|started| started.map(|platform| (platform, placement)))
+            let started = start_host(host, app_id.as_ref(), one_instance)?;
+            if started.is_some() {
+                journal.release_to_loop();
+            }
+            Ok(started.map(|platform| (platform, placement)))
         },
         Rc::default(),
         RasterFactory::Gpu,

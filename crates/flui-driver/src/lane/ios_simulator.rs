@@ -177,7 +177,7 @@ impl SimulatorLock {
     ///
     /// # Errors
     ///
-    /// As [`Self::acquire_in`]; [`Error::Io`] when the private directory cannot be made.
+    /// As `acquire_in`, the same hold in a directory a test names; [`Error::Io`] when the private directory cannot be made.
     pub fn acquire(udid: &Udid) -> Result<Self> {
         Self::acquire_in(&crate::os_input::private_lock_dir()?, udid)
     }

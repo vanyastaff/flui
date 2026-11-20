@@ -202,13 +202,16 @@ where
     V: View + Clone + 'static,
 {
     use flui_native::{IOSPlatform, Platform};
-    // Before the platform, whose registries report only to a capture already installed.
-    #[cfg(native_journal)]
-    super::native_journal::begin(flui_native::journal::codec::Backend::UiKit);
+    // Before the platform, whose registries report only to a capture already installed; ended
+    // if the platform fails to start. The loop reads the launch and settles it.
+    let journal = super::journal_start::JournalStart::begin(Some(
+        flui_protocol::native_recording::Backend::UiKit,
+    ));
     let platform = IOSPlatform::try_new().map_err(|error| {
         tracing::error!(%error, "iOS initialization failed");
         LaunchError::from_platform(error)
     })?;
+    journal.release_to_loop();
     // The loop makes a session's window, with its handler, before the
     // session connects; the connection names the session and its window, so
     // the routes made for that session are adopted for that window, whatever

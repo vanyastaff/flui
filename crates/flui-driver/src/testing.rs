@@ -11,9 +11,9 @@
 //! - [`ScriptedXcrun`]: a Simulator scripted for the iOS Simulator lane; [`host_xcrun_with`], the
 //!   host's `xcrun` door in an environment a test names, and [`simulator_lock_in`], a hold on a
 //!   simulator whose lock file is in a test's own directory.
-//! - [`ScriptedBrowser`] (with `chrome`): a stand-in for a ChromeDriver's WebDriver BiDi session on
+//! - `ScriptedBrowser` (with the `chrome` feature): a stand-in for a ChromeDriver's WebDriver BiDi session on
 //!   a loopback WebSocket, playing a page whose agent a [`Script`] answers, so the Chrome lane and
-//!   the page's connection run without a browser, and [`chrome`], the lane's host side (the page's
+//!   the page's connection run without a browser, and `chrome`, the lane's host side (the page's
 //!   server, the ChromeDriver kept or fetched from stand-in hosts on the loopback).
 
 #[cfg(feature = "chrome")]
