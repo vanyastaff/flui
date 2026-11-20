@@ -1,11 +1,4 @@
-//! Writing a trace as a session runs (ADR-0241 §1–§4).
-//!
-//! Each row is one line, written whole and handed to the OS before the next command runs, so a
-//! crash leaves every row that came before and no `end`: a reader reports such a trace
-//! incomplete. A write that fails (a full disk) is kept as the trace's first failure and nothing
-//! more is written, never an earlier row rewritten; the session goes on, and finishing the trace
-//! answers that failure. Evidence is content-addressed under `evidence/`, so a capture taken
-//! twice is stored once, and evidence past the trace's budget becomes a `gap` row instead.
+//! Writing a trace as a session runs: [`TraceOptions`] says how, and what a writer keeps.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -46,7 +39,14 @@ pub enum TraceMode {
     RetainOnFailure,
 }
 
-/// How a session records its trace: see the [module docs](self).
+/// How a session records its trace (ADR-0241 §1–§4).
+///
+/// Each row is one line, written whole and handed to the OS before the next command runs, so a
+/// crash leaves every row that came before and no `end`: a reader reports such a trace
+/// incomplete. A write that fails (a full disk) is kept as the trace's first failure and nothing
+/// more is written, never an earlier row rewritten; the session goes on, and finishing the trace
+/// answers that failure. Evidence is content-addressed under `evidence/`, so a capture taken
+/// twice is stored once, and evidence past the trace's budget becomes a `gap` row instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub struct TraceOptions {
