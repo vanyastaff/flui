@@ -1845,8 +1845,8 @@ impl RasterHost {
     /// `size`, outside its frames: the development reload plugin's scene.
     /// Answers whether it was shown. The window's next frame draws in full.
     #[cfg_attr(
-        not(any(target_os = "android", all(test, feature = "testing"))),
-        expect(dead_code, reason = "only the Android runner drives a scene plugin")
+        all(target_arch = "wasm32", not(all(test, feature = "testing"))),
+        expect(dead_code, reason = "the web runner drives no development reload hook")
     )]
     pub(crate) fn render_lent(
         &mut self,
@@ -1872,7 +1872,8 @@ impl RasterHost {
         // A panic of the render is the slot's, held for the window's report.
         let mut caught = FirstPanic::new();
         // A lent scene is drawn within this call, which only an inline
-        // executor can do; only Android lends one, and it turns inline.
+        // executor can do; `RasterSlot::lends_scenes` keeps a window on a
+        // raster thread from asking.
         let Some(executor) = placed.executor.inline_mut() else {
             tracing::warn!("raster host: a lent scene met a raster thread, which cannot draw it");
             return false;
@@ -2891,6 +2892,27 @@ impl RasterSlot {
         let _told = self
             .host
             .try_with(|host| host.set_visibility(address, visibility));
+    }
+
+    /// Whether the window's executor can draw a lent scene: one that turns
+    /// inline, which draws it within the call. A raster thread cannot.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn lends_scenes(&self) -> bool {
+        self.host.placement == RasterPlacement::Inline
+    }
+
+    /// Show the window and draw `scene`, lent for this call alone, into it
+    /// at the size the platform last announced
+    /// ([`RasterHost::render_lent`]): the development reload plugin's scene.
+    /// Answers whether it was shown; `false` while the host is turning.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn render_lent(&self, scene: &flui_layer::Scene, reset_fonts: bool) -> bool {
+        // A window back from the background draws the plugin's scene first.
+        self.show(true);
+        let (address, size) = (self.address, self.size);
+        self.host
+            .try_with(|host| host.render_lent(address, size, scene, reset_fonts))
+            .unwrap_or(false)
     }
 
     /// Whether the application asked, through `ui_runtime`, for a rebuild of

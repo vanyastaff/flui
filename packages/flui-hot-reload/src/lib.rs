@@ -105,9 +105,10 @@
 //! A `flui-app` host does not drive these types itself: it installs a
 //! development reload hook (ADR-0094 §1) on its configuration, and the runner
 //! drives it. With the `host-hook` feature, `WorkerReloadHook` drives the
-//! host/worker split and `ScenePluginHook` lets an Android scene plugin draw
-//! frames. An application adds this package as a dependency of its own (the
-//! facade names no official package, ADR-0311 §6).
+//! host/worker split and `ScenePluginHook` lets a scene plugin draw a
+//! window's frames on every native host. An application adds this package as
+//! a dependency of its own (the facade names no official package, ADR-0311
+//! §6).
 //!
 //! ```rust,ignore
 //! use flui_hot_reload::WorkerReloadHook;

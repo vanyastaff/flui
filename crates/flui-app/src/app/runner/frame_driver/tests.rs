@@ -1065,6 +1065,15 @@ fn installed_frame_driver_contract() {
                 "the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled",
                 the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled as fn(),
             ),
+            #[cfg(all(
+                feature = "testing",
+                not(any(target_os = "android", target_os = "ios"))
+            ))]
+            (
+                "a_desktop_window_draws_its_scene_plugins_frame_in_place_of_the_widget_frame",
+                a_desktop_window_draws_its_scene_plugins_frame_in_place_of_the_widget_frame
+                    as fn(),
+            ),
             #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             (
                 "agent_notification_follows_live_native_initialization",
@@ -1454,6 +1463,274 @@ fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
         earliest, drawn_floor,
         "it wakes for the rendering window's floor"
     );
+}
+
+/// A desktop window whose development reload hook draws a scene shows that
+/// scene, lent to its slot, and runs no widget frame; a hook that draws
+/// nothing leaves the window its widget frame (ADR-0391). Either way the
+/// hook is asked once for the wake's frame, at the window's physical size,
+/// the frame request the wake served is consumed, and the frame reveals the
+/// window. A hook that panics is contained and the widget frame runs. A
+/// window whose frames are off, or whose executor turns on a raster
+/// thread, does not ask the hook.
+///
+/// Red-check: take the `ScenePlugin::own_frame` call out of
+/// `DesktopFrameDriver::turn` and the drawing hook is never asked, nothing is
+/// lent and the widget frame renders; drop the `PluginFrame` instead of
+/// finishing it and the frame request stays scheduled; skip its
+/// `after_presented` and the window is never revealed; take the
+/// `frames_enabled` or the `lends_scenes` check out of `own_frame` and the
+/// hidden or threaded window asks the hook.
+#[cfg(all(
+    feature = "testing",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+fn a_desktop_window_draws_its_scene_plugins_frame_in_place_of_the_widget_frame() {
+    use flui_engine::testing::{ScriptedSlots, SlotCall};
+    use flui_view::dev_reload::{DevReloadHook, ReloadEvent, ReloadWake};
+
+    use super::super::{
+        desktop::{DesktopFrameDriver, DesktopWakeDeadlines},
+        first_reveal::FirstReveal,
+        frame_pacing::FallbackWake,
+        raster_host::{RasterFactory, RasterSlot, SharedRasterHost, tests::attach_a_window},
+    };
+    use crate::app::hot_reload::WorkerReload;
+
+    /// What a scene plugin's hook does when it is asked for a frame.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Answer {
+        /// Draws an empty scene.
+        Draws,
+        /// Has no scene to draw.
+        DrawsNothing,
+        /// Panics, as user code may.
+        Panics,
+    }
+
+    /// A scene plugin's hook, recording the size of each frame it was asked
+    /// for.
+    struct SceneHook {
+        answer: Answer,
+        asked: Arc<parking_lot::Mutex<Vec<(f64, f64)>>>,
+    }
+
+    impl DevReloadHook for SceneHook {
+        fn attach(&mut self, _wake: ReloadWake) {}
+
+        fn poll(&mut self) -> ReloadEvent {
+            ReloadEvent::Unchanged
+        }
+
+        #[expect(unsafe_code, reason = "implements `scene_frame`, an `unsafe fn`")]
+        unsafe fn scene_frame(
+            &mut self,
+            width: f64,
+            height: f64,
+            render: &mut dyn FnMut(&flui_layer::Scene, bool) -> bool,
+        ) -> bool {
+            self.asked.lock().push((width, height));
+            match self.answer {
+                Answer::Draws => render(
+                    &flui_layer::Scene::new(flui_layer::LayerTree::default()),
+                    true,
+                ),
+                Answer::DrawsNothing => false,
+                Answer::Panics => std::panic::panic_any("a scene plugin's hook panics"),
+            }
+        }
+    }
+
+    /// One wake of the window: what its hook answers, whether its frames
+    /// are on, and where its executor turns.
+    #[derive(Debug, Clone, Copy)]
+    struct Case {
+        answer: Answer,
+        shown: bool,
+        placement: flui_engine::RasterPlacement,
+    }
+    /// What the wake made of the window's frame.
+    #[derive(Debug, PartialEq)]
+    struct Seen {
+        asked: Vec<(f64, f64)>,
+        lent: usize,
+        /// Widget frames the slot rendered; not read on a raster thread,
+        /// which renders when it turns.
+        rendered: Option<usize>,
+        scheduled: Option<bool>,
+        revealed: bool,
+    }
+
+    const SIZE: (u32, u32) = (20, 30);
+    let size = (f64::from(SIZE.0), f64::from(SIZE.1));
+    let inline = flui_engine::RasterPlacement::Inline;
+    for (case, expected) in [
+        // The plugin's scene is lent to the window's slot and no widget
+        // frame renders beside it.
+        (
+            Case {
+                answer: Answer::Draws,
+                shown: true,
+                placement: inline,
+            },
+            Seen {
+                asked: vec![size],
+                lent: 1,
+                rendered: Some(0),
+                scheduled: Some(false),
+                revealed: true,
+            },
+        ),
+        // A hook that draws nothing lends no scene: the widget frame runs.
+        (
+            Case {
+                answer: Answer::DrawsNothing,
+                shown: true,
+                placement: inline,
+            },
+            Seen {
+                asked: vec![size],
+                lent: 0,
+                rendered: Some(1),
+                scheduled: Some(false),
+                revealed: true,
+            },
+        ),
+        // A hook that panics is contained and dropped: the widget frame runs.
+        (
+            Case {
+                answer: Answer::Panics,
+                shown: true,
+                placement: inline,
+            },
+            Seen {
+                asked: vec![size],
+                lent: 0,
+                rendered: Some(1),
+                scheduled: Some(false),
+                revealed: true,
+            },
+        ),
+        // A window whose frames are off is not drawn: the hook is not asked.
+        (
+            Case {
+                answer: Answer::Draws,
+                shown: false,
+                placement: inline,
+            },
+            Seen {
+                asked: vec![],
+                lent: 0,
+                rendered: Some(0),
+                scheduled: Some(false),
+                revealed: false,
+            },
+        ),
+        // A raster thread cannot draw a lent scene within the call: the hook
+        // is not asked, and the widget frame goes to the thread.
+        (
+            Case {
+                answer: Answer::Draws,
+                shown: true,
+                placement: flui_engine::RasterPlacement::Threaded,
+            },
+            Seen {
+                asked: vec![],
+                lent: 0,
+                rendered: None,
+                scheduled: Some(false),
+                revealed: false,
+            },
+        ),
+    ] {
+        let Case {
+            answer,
+            shown,
+            placement,
+        } = case;
+        let _clear = OwnerHostClearGuard::arm();
+        let slots = ScriptedSlots::new();
+        let shared = SharedRasterHost::new(RasterFactory::Scripted(slots.clone()), placement);
+        let _previous = LoopRasterHost::swap_in(&shared);
+        let runtime = UiRuntime::for_test();
+        runtime
+            .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
+            .expect("the root attaches");
+        let window = crate::app::window_test_support::headless_test_window();
+        let mut installation =
+            super::super::owner_dispatch::prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
+        let dispatcher = installation.dispatcher();
+        attach_a_window(&shared, dispatcher.address, 1);
+        let first_reveal = Rc::new(FirstReveal::new());
+        let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let reload =
+            WorkerReload::from_config(&crate::app::AppConfig::new().dev_reload(SceneHook {
+                answer,
+                asked: Arc::clone(&asked),
+            }));
+        let frame = installation
+            .frame_driver(FrameDriver::Desktop(DesktopFrameDriver {
+                deadlines: Rc::new(DesktopWakeDeadlines {
+                    fallback: Rc::new(FallbackWake::new()),
+                    first_reveal: Rc::clone(&first_reveal),
+                }),
+                raster: RasterSlot {
+                    host: shared,
+                    address: dispatcher.address,
+                    size: SIZE,
+                    device: flui_engine::DeviceHealth::Healthy,
+                    renderer_dead: false,
+                },
+                scene_plugin: reload.scene_plugin(),
+                worker_reload: reload,
+                reveal_window: Rc::downgrade(&window),
+                device_retry: None,
+            }))
+            .expect("the desktop driver");
+        installation
+            .submit()
+            .outcome()
+            .expect("settled")
+            .expect("installed");
+        if !shown {
+            dispatcher
+                .runtime()
+                .lifecycle(flui_scheduler::AppLifecycleState::Hidden)
+                .expect("the window's lifecycle changes");
+        }
+        let _outcome =
+            dispatch_platform_frame(dispatcher, frame.binding, flui_native::frame_request_now());
+        // The frame request the wake served, still held, would keep the
+        // window's next request from waking it.
+        let scheduled = Rc::new(Cell::new(None));
+        let read = Rc::clone(&scheduled);
+        dispatch_platform_ui_runtime(
+            dispatcher,
+            RuntimeTask::TestCallback(Box::new(move |ui_runtime| {
+                read.set(Some(ui_runtime.scheduler().is_frame_scheduled()));
+            })),
+        )
+        .expect("the runtime answers");
+        let seen = Seen {
+            asked: asked.lock().clone(),
+            lent: slots
+                .calls()
+                .iter()
+                .filter(|call| matches!(call, SlotCall::Lent(..)))
+                .count(),
+            rendered: (placement == inline).then(|| slots.renders().len()),
+            scheduled: scheduled.get(),
+            // A window the wake's frame revealed earns no second reveal.
+            revealed: !first_reveal.after_frame(true, web_time::Instant::now()),
+        };
+
+        // Everything the row installed goes before it asserts, so a failed
+        // assertion leaves the table's later rows the loop they expect.
+        close_this_window(dispatcher);
+        teardown_platform_ui_runtime();
+
+        assert_eq!(seen, expected, "{case:?}");
+    }
 }
 
 fn unpublished_window_retires_native_resources_independently() {

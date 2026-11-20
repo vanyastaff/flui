@@ -14,14 +14,14 @@
 //!
 //! | Host | `attach` / `detach` | `poll` | `scene_frame` |
 //! |------|---------------------|--------|---------------|
-//! | desktop, iOS | yes | yes | no |
+//! | desktop, iOS | yes | yes | yes, every frame |
 //! | Android | no | no | yes, every frame |
 //! | web | no | no | no |
 //!
 //! So a worker hook ([`DevReloadHook::poll`]-driven) does nothing on Android,
-//! and a scene plugin ([`DevReloadHook::scene_frame`]) draws only there; the
-//! Android host logs which calls it makes when a hook is installed. Where a
-//! host calls them:
+//! and a scene plugin ([`DevReloadHook::scene_frame`]) draws on every native
+//! host; the Android host logs which calls it makes when a hook is installed.
+//! Where a host calls them:
 //!
 //! - [`DevReloadHook::attach`] runs once per event loop, on the owner thread,
 //!   before the first window opens; [`DevReloadHook::detach`] runs once when
@@ -32,7 +32,10 @@
 //!   next boundary (an idle window applies it when it next draws), and never
 //!   to a UI runtime mounted after the poll.
 //! - [`DevReloadHook::scene_frame`] runs on the owner thread at the start of
-//!   each frame, before the widget pipeline.
+//!   each window's frame, before the widget pipeline, with the window's
+//!   physical size: not while the window's frames are off, nor on a host whose
+//!   raster executor turns on its own thread (Wayland), which cannot draw a
+//!   lent scene within the call.
 //! - A hook that panics in any method is dropped and never called again; the
 //!   frame that caught the panic continues without a reload.
 //!
@@ -148,8 +151,9 @@ pub trait DevReloadHook: Send + 'static {
     fn poll(&mut self) -> ReloadEvent;
 
     /// Let a loaded scene plugin draw this frame instead of the widget tree
-    /// (Android's `flui run --scene`). Returns `true` when `render` succeeded,
-    /// in which case the host skips the widget pipeline for this frame.
+    /// (a scene plugin, on every native host). Returns `true` when `render`
+    /// succeeded, in which case the host skips the widget pipeline for this
+    /// frame.
     ///
     /// The callback's second argument requests a fresh font identity namespace
     /// for the plugin image. It starts true and becomes true after loading a
