@@ -1,0 +1,641 @@
+//! Bundled font assets: offline inventory, provenance, notice, and
+//! deterministic-fixture checks.
+//!
+//! Every font `flui-painting` distributes is recorded in
+//! `assets/fonts/inventory.toml` with its SHA-256, provenance and license
+//! notices; generated fixtures must reproduce byte for byte from their
+//! first-party generator; and the restricted Arial fixture must never come
+//! back. `cargo_package_list_selects_every_recorded_file` additionally checks
+//! Cargo's file selection for the crate: evidence about selection only, not a
+//! successful archive or build.
+//!
+//! The checks read the committed tree. The tests that break an input first
+//! copy the assets and the generator into a scratch directory.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde::Deserialize;
+
+const ASSETS: &str = "crates/flui-painting/assets/fonts";
+const GENERATOR: &str = "tools/decoy-face/generate.py";
+const RESTRICTED_SHA256: &str = "74d696e666f696e93db685a85c94bfbfcc0796dfcf8a2e2e2e2c908a54e82949";
+const FONT_SUFFIXES: [&str; 4] = ["ttf", "otf", "woff", "woff2"];
+/// Top-level directories searched for fonts outside the inventory owner.
+const SEARCHED: [&str; 5] = ["crates", "packages", "examples", "tools", "assets"];
+const PRUNED: [&str; 3] = ["target", ".git", ".claude"];
+
+/// The repository root: this crate sits at `crates/flui-painting`.
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("BUG: the crate sits two levels under the repository root")
+}
+
+/// `assets/fonts/inventory.toml`.
+#[derive(Debug, Deserialize)]
+struct Inventory {
+    #[serde(default)]
+    notice: Vec<Notice>,
+    #[serde(default)]
+    font: Vec<Font>,
+}
+
+/// A license or attribution file shipped next to the fonts.
+#[derive(Debug, Deserialize)]
+struct Notice {
+    file: String,
+    sha256: Option<String>,
+    source: Option<String>,
+}
+
+/// One distributed font and where it came from.
+#[derive(Debug, Deserialize)]
+struct Font {
+    file: String,
+    sha256: Option<String>,
+    kind: Option<String>,
+    source: Option<String>,
+    license: Option<String>,
+    notices: Option<Vec<String>>,
+    revision: Option<String>,
+    archive_sha256: Option<String>,
+    generator: Option<String>,
+}
+
+/// A present, non-empty field.
+fn given(field: Option<&String>) -> bool {
+    field.is_some_and(|value| !value.is_empty())
+}
+
+fn is_font(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| FONT_SUFFIXES.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// `path` relative to `base`, with `/` separators.
+fn relative(path: &Path, base: &Path) -> String {
+    path.strip_prefix(base)
+        .expect("BUG: walked paths sit under their root")
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Lowercase SHA-256 of the complete asset bytes, using RustCrypto's digest.
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(data)
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            write!(hex, "{byte:02x}").expect("BUG: writing to a String cannot fail");
+            hex
+        })
+}
+
+fn digest_file(path: &Path) -> String {
+    let bytes =
+        std::fs::read(path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    sha256_hex(&bytes)
+}
+
+fn read_inventory(assets: &Path) -> Inventory {
+    let path = assets.join("inventory.toml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    toml::from_str(&text).unwrap_or_else(|error| panic!("parsing {}: {error}", path.display()))
+}
+
+/// The inventory, provenance and notice findings for the tree at `root`.
+fn check(root: &Path) -> Vec<String> {
+    let assets = root.join(ASSETS);
+    let mut errors = Vec::new();
+
+    let mut discovered = BTreeMap::new();
+    for entry in walkdir::WalkDir::new(&assets)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if entry.file_type().is_file() && is_font(entry.path()) {
+            discovered.insert(relative(entry.path(), &assets), entry.path().to_path_buf());
+        }
+    }
+    for (name, path) in &discovered {
+        let file_name = path.file_name().map(|n| n.to_string_lossy().to_lowercase());
+        if file_name.as_deref() == Some("arial.ttf") || digest_file(path) == RESTRICTED_SHA256 {
+            errors.push(format!(
+                "{name}: restricted Arial fixture must not be distributed"
+            ));
+        }
+    }
+
+    for directory in SEARCHED {
+        let walk = walkdir::WalkDir::new(root.join(directory))
+            .sort_by_file_name()
+            .into_iter()
+            .filter_entry(|entry| {
+                !(entry.depth() > 0
+                    && entry.file_type().is_dir()
+                    && PRUNED.contains(&entry.file_name().to_string_lossy().as_ref()))
+            });
+        for entry in walk.filter_map(Result::ok) {
+            let path = entry.path();
+            if entry.file_type().is_file() && is_font(path) && !path.starts_with(&assets) {
+                errors.push(format!(
+                    "{}: unlisted font outside the inventory owner",
+                    relative(path, root)
+                ));
+            }
+        }
+    }
+
+    if !assets.join("inventory.toml").exists() {
+        errors.push("font provenance inventory and license notice records are missing".to_owned());
+        return errors;
+    }
+    let inventory = read_inventory(&assets);
+
+    let mut notices = BTreeSet::new();
+    for notice in &inventory.notice {
+        let name = &notice.file;
+        if !notices.insert(name.as_str()) {
+            errors.push(format!("{name}: duplicate notice record"));
+        }
+        let path = assets.join(name);
+        if !path.is_file() {
+            errors.push(format!("{name}: missing license/notice file"));
+        } else if Some(&digest_file(&path)) != notice.sha256.as_ref() {
+            errors.push(format!("{name}: notice hash mismatch"));
+        }
+        if !given(notice.source.as_ref()) {
+            errors.push(format!("{name}: missing notice provenance"));
+        }
+    }
+
+    let mut records = BTreeSet::new();
+    for font in &inventory.font {
+        let name = &font.file;
+        if !records.insert(name.as_str()) {
+            errors.push(format!("{name}: duplicate font record"));
+        }
+        match discovered.get(name) {
+            None => errors.push(format!("{name}: recorded font is missing")),
+            Some(path) => {
+                if Some(&digest_file(path)) != font.sha256.as_ref() {
+                    errors.push(format!("{name}: font hash mismatch"));
+                }
+            }
+        }
+        if !given(font.source.as_ref()) || !given(font.license.as_ref()) {
+            errors.push(format!("{name}: missing source or license provenance"));
+        }
+        let kind = font.kind.as_deref();
+        if !matches!(kind, Some("generated" | "upstream")) {
+            errors.push(format!("{name}: invalid provenance kind"));
+        }
+        let associated = font.notices.as_ref().is_some_and(|list| {
+            !list.is_empty() && list.iter().all(|notice| notices.contains(notice.as_str()))
+        });
+        if !associated {
+            errors.push(format!(
+                "{name}: missing recorded license/notice association"
+            ));
+        }
+        if kind == Some("upstream")
+            && !(given(font.revision.as_ref()) || given(font.archive_sha256.as_ref()))
+        {
+            errors.push(format!(
+                "{name}: upstream source must pin revision or archive checksum"
+            ));
+        }
+        if kind == Some("generated")
+            && !root
+                .join(font.generator.as_deref().unwrap_or_default())
+                .is_file()
+        {
+            errors.push(format!("{name}: missing first-party generator"));
+        }
+    }
+    for name in discovered.keys() {
+        if !records.contains(name.as_str()) {
+            errors.push(format!("{name}: unlisted font asset"));
+        }
+    }
+    errors
+}
+
+/// Regenerates every generated fixture into a scratch directory and compares
+/// it byte for byte with the committed file; the committed assets are never
+/// written.
+fn reproduce(root: &Path) -> Vec<String> {
+    let assets = root.join(ASSETS);
+    let inventory = read_inventory(&assets);
+    let generated: BTreeSet<&str> = inventory
+        .font
+        .iter()
+        .filter(|font| font.kind.as_deref() == Some("generated"))
+        .map(|font| font.file.as_str())
+        .collect();
+
+    let Some(python) = find_python() else {
+        return vec![format!(
+            "fixture generation needs Python >= 3.10 for {GENERATOR}; none found on PATH"
+        )];
+    };
+    let scratch = tempfile::Builder::new()
+        .prefix("font-assets-")
+        .tempdir()
+        .expect("creating a scratch directory");
+    let result = Command::new(&python)
+        .arg("-B")
+        .arg(root.join(GENERATOR))
+        .arg("--output-dir")
+        .arg(scratch.path())
+        .output()
+        .unwrap_or_else(|error| panic!("spawning `{python}`: {error}"));
+    if !result.status.success() {
+        return vec![format!(
+            "fixture generation failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        )];
+    }
+
+    let mut outputs = BTreeSet::new();
+    for entry in std::fs::read_dir(scratch.path()).expect("listing the generator output") {
+        let name = entry
+            .expect("reading a generator output entry")
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        // Exactly `*.ttf`, as the generator names its outputs.
+        if Path::new(&name).extension().is_some_and(|ext| ext == "ttf") {
+            outputs.insert(name);
+        }
+    }
+    let mut errors = Vec::new();
+    let differing: Vec<&str> = outputs
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !generated.contains(name))
+        .chain(
+            generated
+                .iter()
+                .copied()
+                .filter(|name| !outputs.contains(*name)),
+        )
+        .collect();
+    if !differing.is_empty() {
+        errors.push(format!(
+            "generated inventory differs from generator outputs: {differing:?}"
+        ));
+    }
+    for name in outputs
+        .iter()
+        .filter(|name| generated.contains(name.as_str()))
+    {
+        let fresh = std::fs::read(scratch.path().join(name)).expect("reading a generated font");
+        let committed = std::fs::read(assets.join(name))
+            .unwrap_or_else(|error| panic!("reading {ASSETS}/{name}: {error}"));
+        if fresh != committed {
+            errors.push(format!("{name}: generated bytes are not reproducible"));
+        }
+    }
+    errors
+}
+
+/// Evidence about Cargo's file selection for `flui-painting`, not a
+/// successful archive or build.
+fn package_listing(root: &Path) -> Vec<String> {
+    let inventory = read_inventory(&root.join(ASSETS));
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .args([
+            "package",
+            "-p",
+            "flui-painting",
+            "--list",
+            "--offline",
+            "--allow-dirty",
+        ])
+        .current_dir(root)
+        .output()
+        .expect("spawning `cargo package`");
+    if !output.status.success() {
+        return vec![format!(
+            "Cargo package listing failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )];
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let included: BTreeSet<String> = stdout
+        .lines()
+        .map(|line| line.trim_end().replace('\\', "/"))
+        .collect();
+    listing_errors(&inventory, &included)
+}
+
+fn listing_errors(inventory: &Inventory, included: &BTreeSet<String>) -> Vec<String> {
+    let mut required = BTreeSet::from(["assets/fonts/inventory.toml".to_owned()]);
+    required.extend(
+        inventory
+            .font
+            .iter()
+            .map(|f| format!("assets/fonts/{}", f.file)),
+    );
+    required.extend(
+        inventory
+            .notice
+            .iter()
+            .map(|n| format!("assets/fonts/{}", n.file)),
+    );
+    let mut errors: Vec<String> = required
+        .difference(included)
+        .map(|name| format!("package listing excludes {name}"))
+        .collect();
+    if included.iter().any(|name| {
+        name.rsplit('/')
+            .next()
+            .is_some_and(|file| file.eq_ignore_ascii_case("arial.ttf"))
+    }) {
+        errors.push("package listing includes restricted Arial fixture".to_owned());
+    }
+    errors
+}
+
+/// A Python interpreter able to run the font generator (it needs >= 3.10),
+/// probed by running it: on Windows `python3` can be a Store stub that exists
+/// on PATH and fails.
+fn find_python() -> Option<String> {
+    [
+        "python3",
+        "python3.14",
+        "python3.13",
+        "python3.12",
+        "python3.11",
+        "python3.10",
+        "python",
+    ]
+    .into_iter()
+    .find(|candidate| {
+        Command::new(candidate)
+            .args(["-c", "import sys; sys.exit(sys.version_info < (3, 10))"])
+            .output()
+            .is_ok_and(|out| out.status.success())
+    })
+    .map(str::to_owned)
+}
+
+/// A scratch copy of the font assets and their generator: the only parts of
+/// the tree the checks read.
+struct Fixture {
+    scratch: tempfile::TempDir,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let scratch = tempfile::Builder::new()
+            .prefix("font-assets-test-")
+            .tempdir()
+            .expect("creating a scratch directory");
+        let real = repo_root();
+        for dir in [ASSETS, "tools/decoy-face"] {
+            copy_dir(&real.join(dir), &scratch.path().join(dir));
+        }
+        Self { scratch }
+    }
+
+    fn root(&self) -> &Path {
+        self.scratch.path()
+    }
+
+    fn assets(&self) -> PathBuf {
+        self.root().join(ASSETS)
+    }
+
+    fn check(&self) -> String {
+        check(self.root()).join("\n")
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    for entry in walkdir::WalkDir::new(from) {
+        let entry = entry.expect("walk");
+        let target = to.join(entry.path().strip_prefix(from).expect("under root"));
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(&target).expect("mkdir");
+        } else {
+            std::fs::copy(entry.path(), &target).expect("copy");
+        }
+    }
+}
+
+#[test]
+fn sha256_matches_the_fips_vectors() {
+    assert_eq!(
+        sha256_hex(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(
+        sha256_hex(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    assert_eq!(
+        sha256_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+    );
+}
+
+#[test]
+fn committed_inventory_matches_the_font_files() {
+    let errors = check(&repo_root());
+    assert!(
+        errors.is_empty(),
+        "crates/flui-painting/assets/fonts/inventory.toml disagrees with the files; fix the \
+         record or the asset it names:\n{}",
+        errors.join("\n")
+    );
+}
+
+#[test]
+fn committed_generated_fonts_reproduce_byte_for_byte() {
+    let errors = reproduce(&repo_root());
+    assert!(
+        errors.is_empty(),
+        "a generated font differs from tools/decoy-face/generate.py (or Python >= 3.10 is \
+         missing); regenerate with `python tools/decoy-face/generate.py --output-dir \
+         crates/flui-painting/assets/fonts` and update inventory.toml:\n{}",
+        errors.join("\n")
+    );
+}
+
+/// Runs `cargo package --list --offline`: it reads the manifest and the
+/// workspace only, so it needs no network.
+#[test]
+fn cargo_package_list_selects_every_recorded_file() {
+    let errors = package_listing(&repo_root());
+    assert!(
+        errors.is_empty(),
+        "`cargo package -p flui-painting --list` disagrees with inventory.toml; fix `exclude` in \
+         crates/flui-painting/Cargo.toml or the inventory:\n{}",
+        errors.join("\n")
+    );
+}
+
+#[test]
+fn inventory_and_every_generated_file_reproduce_from_a_copy() {
+    let fixture = Fixture::new();
+    assert_eq!(fixture.check(), "");
+    assert_eq!(reproduce(fixture.root()), Vec::<String>::new());
+}
+
+#[test]
+fn changed_font_bytes_fail() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.assets().join("Roboto-Regular.ttf"), b"changed").expect("write");
+    assert!(
+        fixture
+            .check()
+            .contains("Roboto-Regular.ttf: font hash mismatch")
+    );
+}
+
+#[test]
+fn missing_and_modified_license_fail() {
+    let fixture = Fixture::new();
+    let notice = fixture.assets().join("licenses/Roboto-Apache-2.0.txt");
+    std::fs::write(&notice, "not the complete license").expect("write");
+    assert!(fixture.check().contains("notice hash mismatch"));
+    std::fs::remove_file(&notice).expect("remove");
+    assert!(fixture.check().contains("missing license/notice"));
+}
+
+#[test]
+fn unlisted_font_fails_inside_and_outside_current_owner() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.assets().join("surprise.otf"), b"font").expect("write");
+    let elsewhere = fixture.root().join("crates/new-owner/assets");
+    std::fs::create_dir_all(&elsewhere).expect("mkdir");
+    std::fs::write(elsewhere.join("surprise.woff2"), b"font").expect("write");
+    let errors = fixture.check();
+    assert!(
+        errors.contains("surprise.otf: unlisted font asset"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains(
+            "crates/new-owner/assets/surprise.woff2: unlisted font outside the inventory owner"
+        ),
+        "{errors}"
+    );
+}
+
+#[test]
+fn fonts_under_pruned_directories_are_ignored() {
+    let fixture = Fixture::new();
+    let build = fixture.root().join("crates/x/target/debug");
+    std::fs::create_dir_all(&build).expect("mkdir");
+    std::fs::write(build.join("copied.ttf"), b"font").expect("write");
+    assert_eq!(fixture.check(), "");
+}
+
+#[test]
+fn reintroduced_arial_name_is_rejected() {
+    let fixture = Fixture::new();
+    let assets = fixture.assets();
+    std::fs::copy(assets.join("probe-sans-400.ttf"), assets.join("Arial.ttf")).expect("copy");
+    assert!(fixture.check().contains("Arial.ttf: restricted Arial"));
+}
+
+#[test]
+fn missing_provenance_and_notice_association_fail() {
+    let fixture = Fixture::new();
+    let inventory = fixture.assets().join("inventory.toml");
+    let source = std::fs::read_to_string(&inventory).expect("read");
+    let stripped: Vec<&str> = source
+        .lines()
+        .filter(|line| !line.starts_with("source =") && !line.starts_with("notices ="))
+        .collect();
+    std::fs::write(&inventory, stripped.join("\n")).expect("write");
+    let errors = fixture.check();
+    assert!(
+        errors.contains("missing source or license provenance"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("missing recorded license/notice association"),
+        "{errors}"
+    );
+    assert!(errors.contains("missing notice provenance"), "{errors}");
+}
+
+#[test]
+fn modified_generator_is_detected_without_overwriting_assets() {
+    let fixture = Fixture::new();
+    let generator = fixture.root().join(GENERATOR);
+    let source = std::fs::read_to_string(&generator).expect("read");
+    assert!(source.contains("space_advance=500"), "fixture anchor moved");
+    std::fs::write(
+        &generator,
+        source.replace("space_advance=500", "space_advance=501"),
+    )
+    .expect("write");
+    let committed = fixture.assets().join("probe-sans-400.ttf");
+    let before = std::fs::read(&committed).expect("read");
+    let errors = reproduce(fixture.root()).join("\n");
+    assert!(errors.contains("not reproducible"), "{errors}");
+    assert_eq!(std::fs::read(&committed).expect("read"), before);
+}
+
+#[test]
+fn package_listing_requires_every_recorded_file() {
+    let inventory: Inventory =
+        toml::from_str("[[notice]]\nfile = \"licenses/A.txt\"\n[[font]]\nfile = \"A.ttf\"\n")
+            .expect("parses");
+    let complete: BTreeSet<String> = [
+        "Cargo.toml",
+        "assets/fonts/inventory.toml",
+        "assets/fonts/A.ttf",
+        "assets/fonts/licenses/A.txt",
+    ]
+    .map(str::to_owned)
+    .into();
+    assert_eq!(listing_errors(&inventory, &complete), [] as [String; 0]);
+    let mut broken = complete;
+    broken.remove("assets/fonts/A.ttf");
+    broken.insert("assets/fonts/ARIAL.TTF".to_owned());
+    assert_eq!(
+        listing_errors(&inventory, &broken),
+        [
+            "package listing excludes assets/fonts/A.ttf",
+            "package listing includes restricted Arial fixture"
+        ]
+    );
+}
+
+#[test]
+fn package_listing_requires_notice_files_and_the_inventory() {
+    let inventory: Inventory =
+        toml::from_str("[[notice]]\nfile = \"licenses/A.txt\"\n[[font]]\nfile = \"A.ttf\"\n")
+            .expect("parses");
+    let complete: BTreeSet<String> = [
+        "Cargo.toml",
+        "assets/fonts/inventory.toml",
+        "assets/fonts/A.ttf",
+        "assets/fonts/licenses/A.txt",
+    ]
+    .map(str::to_owned)
+    .into();
+    for missing in ["assets/fonts/licenses/A.txt", "assets/fonts/inventory.toml"] {
+        let mut listing = complete.clone();
+        assert!(listing.remove(missing));
+        assert_eq!(
+            listing_errors(&inventory, &listing),
+            [format!("package listing excludes {missing}")]
+        );
+    }
+}

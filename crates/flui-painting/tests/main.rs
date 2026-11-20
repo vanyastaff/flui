@@ -169,6 +169,8 @@ mod compile_fail;
 mod damage_extent;
 #[path = "decoration_unit.rs"]
 mod decoration_unit;
+#[path = "font_assets.rs"]
+mod font_assets;
 #[path = "font_registration.rs"]
 mod font_registration;
 #[path = "support/foreign_image.rs"]

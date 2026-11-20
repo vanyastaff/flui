@@ -40,11 +40,6 @@ runner = "wasm-bindgen-test-runner"
 # Android builds go through `cargo ndk`, which sets the NDK linkers itself
 # (docs/getting-started.md).
 
-[alias]
-# The repository's generators and the changelog check (tools/xtask);
-# `cargo xtask --help` lists them.
-xtask = "run --package xtask --locked --quiet --"
-
 # Incremental compilation is governed by `[profile.dev] incremental` in the root
 # `Cargo.toml` (on for local development) and by `CARGO_INCREMENTAL=0` in CI. An
 # `[env]` entry here would not reach it: `[env]` feeds the processes Cargo runs,

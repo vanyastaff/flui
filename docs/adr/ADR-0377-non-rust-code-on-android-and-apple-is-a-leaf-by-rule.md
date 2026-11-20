@@ -17,7 +17,7 @@
   §2 (every closure the host posts to Android's main thread goes through one function),
   [ADR-0366](ADR-0366-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
   (one Activity runs at a time), [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
-  §3 (`android-dex` stays a check of generated files)
+  §3 (the dex stays a checked generated file)
 - **Sources:** `slint-ui/slint@af1798f58`, `makepad/makepad@506ec0510`,
   `project-robius/robius@729692cc6`, `tauri-apps/wry@55289ad74`, `emilk/egui@9c2080470`,
   `linebender/xilem@dc496876a`, `rust-mobile/android-activity@b4ddf059b`,
@@ -116,13 +116,16 @@ a Gradle build gets the sources and the rules. No `javac`, `d8` or JDK runs in a
 Java that needs a library outside the platform (AndroidX, Play Services) or resources is a Gradle
 library module of its crate, and the crate's platform row says "Android (Gradle)".
 
-### §3. One check over every dex, from the manifests
+### §3. Every dex is checked, from the manifests
 
-`cargo xtask android-dex` checks, for every workspace crate that declares `android.dex` and
-`android.java` (at the top or under a feature), that the record's digests match the sources and
-the dex; the list comes from `cargo metadata`, never from a list kept by hand, and no path
-convention is assumed: the `Android dex` workflow runs on a change to any Java source or dex and
-uploads the paths `--list` names. Each crate's Java
+Each workspace crate that declares `android.dex` and `android.java` (at the top or under a
+feature) has an `android_dex` test that reads its own manifest's declarations and checks that the
+record's digests match the sources and the dex, with no JDK; the check is one file
+(`crates/flui-native/tests/support/declared_dex.rs`) that each such crate mounts, so a crate that
+starts shipping a dex mounts it in the same change. No list is kept by hand and no path
+convention is assumed: the `Android dex` workflow runs on a change to any Java source or dex,
+lists the declared dex from `cargo metadata`, compiles them and uploads them under their paths.
+Each crate's Java
 declares a protocol constant (`FluiHost.PROTOCOL`, `FluiCallback.PROTOCOL`) that its Rust compares
 with its own before it binds a native or calls a method, and refuses with a typed error naming
 both values; a provider that needs its crate's classes answers `NotDeclared` when they are
@@ -161,7 +164,9 @@ that thread by itself.
 - Good, because a user's build needs neither a JDK nor Xcode, and no code is loaded at run time,
   so a device that blocks dynamic code loading runs FLUI.
 - Good, because the Java is a list of classes the platform forces, each forwarding to Rust, and
-  the gate's list cannot drift from the crates that ship a dex.
+  neither the workflow's list nor a crate's check can drift from what the manifests declare.
+- Bad, because a crate that starts declaring a dex is checked only once it mounts the shared
+  `android_dex` check; the workflow still compiles its dex from the manifest alone.
 - Good, because a Gradle variant's suffixed id serves its own documents, and two installs never
   collide on an authority.
 - Good, because a provider's main-thread work has the host's deadline and refusal, and a work the
@@ -173,9 +178,11 @@ that thread by itself.
 
 ### Confirmation
 
-- `cargo xtask android-dex` (in `cargo xtask checks`) and its table test `android_dex_contract`:
-  `the_trees_are_what_the_crates_declare` (the list is the manifests', a feature's dex included, a
-  half-declared pair refused) and `the_checked_in_dex_matches_its_sources`.
+- `the_checked_in_dex_is_built_from_its_java_sources` in `flui-native`'s and `flui-system`'s
+  `android_dex` tests, and `flui-native`'s `the_declared_dex_are_what_the_manifest_declares` (a
+  feature's dex included, a half-declared pair refused),
+  `the_source_digest_covers_paths_and_bytes` (pinned to the digest the workflow's shell computes)
+  and `a_record_names_its_digests_and_tools`.
 - `flui-system`'s `the_java_classes_state_what_the_library_and_the_manifest_name` (one protocol,
   the bound natives, the provider class the manifest declares, an authority taken from
   `attachInfo` and never from the package name).

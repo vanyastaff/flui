@@ -177,7 +177,7 @@ Back) becomes the owner, and the finishing platform hears nothing more. The mani
   `fluihost_applies_this_model` holds `FluiHost` and `FluiActivity` to it statement by statement;
   `the_platform_starts_only_over_its_own_java_classes` refuses a non-owner with `SecondActivity`,
   `only_the_activity_that_owns_the_queues_binds_and_reads_them` holds the binding and the reads,
-  and `cargo xtask android-dex` holds the dex to the sources.
+  and `the_checked_in_dex_is_built_from_its_java_sources` holds the dex to the sources.
 - Runs on a device are owed (`crates/flui-native/platform-parity.toml`, the "Suspend, resume,
   GPU-surface loss" and "Deep links, URL schemes, file associations" rows).
 

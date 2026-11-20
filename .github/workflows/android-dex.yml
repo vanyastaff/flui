@@ -1,22 +1,26 @@
 name: Android dex
 
 # Compiles the dex of each workspace crate that declares Java classes
-# (`[package.metadata.flui.declares.android]` `java` and `dex`, ADR-0377 §2;
-# `cargo xtask android-dex --list` names them) on a GitHub runner, so changing
-# the Java sources needs no local JDK or Android SDK. A pull request that
-# changes any Java source or dex (or this file) runs it in `write` mode, so
-# its checks carry the `android-dex` artifact to commit. Or run it by hand on
-# the branch that changed them:
+# (`[package.metadata.flui.declares.android]` `java` and `dex`, at the top or
+# under `features.<name>`; ADR-0247, ADR-0377 §2) on a GitHub runner, so
+# changing the Java sources needs no local JDK or Android SDK. A pull request
+# that changes any Java source or dex (or this file) runs it in `write` mode,
+# so its checks carry the `android-dex` artifact to commit. Or run it by hand
+# on the branch that changed them:
 #
 #   gh workflow run android-dex.yml --ref <branch>             # mode: write
 #   gh workflow run android-dex.yml --ref <branch> -f mode=rebuild
 #
-# `write` runs `cargo xtask android-dex --write` and uploads each declared dex
-# and its record as the `android-dex` artifact, under their repository paths;
-# commit them to the branch.
-# `rebuild` runs `--rebuild`, which requires the checked-in dex to reproduce
-# byte for byte with the recorded build tools and platform. PR CI checks only
-# the digests (`cargo xtask checks`), which needs no JDK.
+# `write` compiles each declared dex with `javac` and `d8`, writes it and its
+# record (`classes.dex` → `classes.dex.toml`: the SHA-256 of the sources and
+# of the dex, and the tools that compiled it), and uploads both as the
+# `android-dex` artifact, under their repository paths; commit them to the
+# branch. It compiles with the build tools and platform the record names
+# (installed below when the image lacks them), the newest installed when no
+# record names them yet.
+# `rebuild` requires the checked-in dex to reproduce byte for byte with the
+# recorded build tools and platform. PR CI checks only the digests (each
+# declaring crate's `android_dex` test), which needs no JDK.
 
 on:
   pull_request:
@@ -60,11 +64,38 @@ jobs:
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
 
+      # Each declared dex as `sources<TAB>dex<TAB>record`, every path relative
+      # to the repository root, each once and in that order; and the dex and
+      # record paths alone, one per line, which the upload takes. A table that
+      # names one of `java` and `dex` without the other fails the step.
       - name: The declared dex files
         id: declared
         run: |
           set -euo pipefail
-          cargo xtask android-dex --list > "$RUNNER_TEMP/declared-dex.txt"
+          cargo metadata --no-deps --format-version 1 --locked | jq -r '
+            def slashes: gsub("\\\\"; "/");
+            def declared($dir; $key):
+              if type != "object" or (has($key) | not) then null
+              elif (.[$key] | type) == "string" then "\($dir)/\(.[$key] | sub("^(\\./)+"; ""))"
+              else error("\($dir): android.\($key) is not a path")
+              end;
+            (.workspace_root | slashes) as $root
+            | [ .packages[]
+                | (.manifest_path | slashes | sub("/[^/]*$"; "") | ltrimstr("\($root)/")) as $dir
+                | .metadata.flui.declares? // empty
+                | (., (.features | if type == "object" then .[] else empty end))
+                | .android? // empty
+                | [declared($dir; "java"), declared($dir; "dex")]
+                | if .[0] != null and .[1] != null then [.[0], .[1], "\(.[1]).toml"]
+                  elif .[0] == null and .[1] == null then empty
+                  else error("\($dir): android.java and android.dex are declared together")
+                  end
+              ]
+            | if length == 0 then error("no workspace crate declares android.dex and android.java") else . end
+            | unique[]
+            | @tsv
+          ' > "$RUNNER_TEMP/declared-dex.tsv"
+          cut -f 2,3 "$RUNNER_TEMP/declared-dex.tsv" | tr '\t' '\n' > "$RUNNER_TEMP/declared-dex.txt"
           cat "$RUNNER_TEMP/declared-dex.txt"
           {
             echo "paths<<DECLARED_DEX"
@@ -79,10 +110,10 @@ jobs:
           sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?the runner image has no Android SDK}}"
           echo "JAVA_HOME=$java_home" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
-          # The build tools and platform each record names, which `--write`
-          # and `--rebuild` use when installed: install them if the image
-          # lacks them. A record not written yet names nothing.
-          grep '\.toml$' "$RUNNER_TEMP/declared-dex.txt" | while read -r record; do
+          # The build tools and platform each record names, which `write` and
+          # `rebuild` compile with: install them if the image lacks them. A
+          # record not written yet names nothing.
+          cut -f 3 "$RUNNER_TEMP/declared-dex.tsv" | while read -r record; do
             [ -f "$record" ] || continue
             tools="$(sed -n 's/^build-tools = "\(.*\)"$/\1/p' "$record")"
             platform="$(sed -n 's/^platform = "\(.*\)"$/\1/p' "$record")"
@@ -94,12 +125,172 @@ jobs:
           done
           "$java_home/bin/javac" -version
 
-      - name: cargo xtask android-dex --${{ env.MODE }}
+      # For each declared dex: the digest of its sources (each `.java` file's
+      # path relative to the sources' directory, a NUL, its bytes and a NUL,
+      # in byte order of the paths: what the `android_dex` tests recompute),
+      # then `javac` against the platform's `android.jar` and `d8` from the
+      # build tools, run through `java` so every host runs the same jar.
+      - name: Compile the dex (${{ env.MODE }})
         run: |
           set -euo pipefail
-          cargo xtask android-dex "--$MODE"
+          shopt -s inherit_errexit
+          # The oldest API level the dex runs on: FLUI's `minSdk`.
+          min_api=23
+          # The Java language level: what `d8` accepts for that API level
+          # without desugaring.
+          java_release=8
+          sdk="$ANDROID_HOME"
+          scratch="$RUNNER_TEMP/android-dex"
+          rm -rf "$scratch"
+          mkdir -p "$scratch"
+
+          # A JDK tool from `JAVA_HOME`'s `bin`, else from `PATH`.
+          jdk_tool() {
+            if [ -n "${JAVA_HOME:-}" ] && [ -f "$JAVA_HOME/bin/$1" ]; then
+              printf '%s\n' "$JAVA_HOME/bin/$1"
+            else
+              printf '%s\n' "$1"
+            fi
+          }
+
+          # pick PARENT WANTED FILE: the subdirectory of PARENT named WANTED
+          # when it has FILE, else the one with the highest version that has it.
+          pick() {
+            local parent="$1" wanted="$2" file="$3" dir newest
+            if [ -n "$wanted" ]; then
+              if [ -f "$parent/$wanted/$file" ]; then
+                printf '%s\n' "$wanted"
+                return
+              fi
+              echo "android-dex: $wanted is not installed under $parent; using the newest" >&2
+            fi
+            newest="$(
+              for dir in "$parent"/*/; do
+                dir="${dir%/}"
+                if [ -f "$dir/$file" ]; then
+                  basename "$dir"
+                fi
+              done | sort -V | tail -n 1
+            )"
+            if [ -z "$newest" ]; then
+              echo "android-dex: no directory under $parent has $file" >&2
+              return 1
+            fi
+            printf '%s\n' "$newest"
+          }
+
+          # record_field RECORD KEY: the string KEY holds in RECORD, empty when
+          # the record or the key is missing.
+          record_field() {
+            if [ -f "$1" ]; then
+              sed -n "s/^$2 = \"\\(.*\\)\"\$/\\1/p" "$1"
+            fi
+          }
+
+          # compile SOURCES LIST WORK TOOLS PLATFORM: compiles the files LIST
+          # names under SOURCES into WORK/out/classes.dex with the build tools
+          # and platform named (the newest installed when empty or missing),
+          # and sets `built_tools`, `built_platform` and `built_javac`.
+          compile() {
+            local sources="$1" list="$2" work="$3" file android_jar
+            local -a java_sources=() class_files=()
+            built_tools="$(pick "$sdk/build-tools" "$4" lib/d8.jar)"
+            built_platform="$(pick "$sdk/platforms" "$5" android.jar)"
+            android_jar="$sdk/platforms/$built_platform/android.jar"
+            "$(jdk_tool javac)" -version > "$work/javac-version.out" 2> "$work/javac-version.err"
+            # The second word of the version output: `javac 21.0.12.1`.
+            built_javac="$(cat "$work/javac-version.out" "$work/javac-version.err" \
+              | awk '{ for (i = 1; i <= NF; i++) if (++n == 2) { print $i; exit } }')"
+            built_javac="${built_javac:-unknown}"
+            mkdir -p "$work/classes" "$work/out"
+            while IFS= read -r file; do
+              java_sources+=("$PWD/$sources/$file")
+            done < "$list"
+            "$(jdk_tool javac)" --release "$java_release" -encoding UTF-8 -Xlint:all,-options \
+              -Werror -classpath "$android_jar" -d "$work/classes" "${java_sources[@]}"
+            # The class files in path order, a directory's name before its
+            # entries (`/` sorts first).
+            find "$work/classes" -name '*.class' | tr '/' '\001' | LC_ALL=C sort | tr '\001' '/' \
+              > "$work/classes.txt"
+            while IFS= read -r file; do
+              class_files+=("$file")
+            done < "$work/classes.txt"
+            "$(jdk_tool java)" -cp "$sdk/build-tools/$built_tools/lib/d8.jar" com.android.tools.r8.D8 \
+              --release --min-api "$min_api" --lib "$android_jar" --output "$work/out" \
+              "${class_files[@]}"
+            if [ ! -f "$work/out/classes.dex" ]; then
+              echo "android-dex: d8 wrote no classes.dex" >&2
+              return 1
+            fi
+          }
+
+          held=true
+          index=0
+          # The list is read on descriptor 3, so no tool the loop runs reads it.
+          while IFS=$'\t' read -r -u 3 sources dex record; do
+            index=$((index + 1))
+            work="$scratch/$index"
+            mkdir -p "$work"
+            (cd "$sources" && find . -type f -name '*.java' ! -name '.java') \
+              | sed 's|^\./||' | LC_ALL=C sort > "$work/sources.txt"
+            if [ ! -s "$work/sources.txt" ]; then
+              echo "android-dex: no Java sources under $sources" >&2
+              exit 1
+            fi
+            sources_digest="$(
+              cd "$sources"
+              while IFS= read -r file; do
+                printf '%s\0' "$file"
+                cat -- "$file"
+                printf '\0'
+              done < "$work/sources.txt" | sha256sum | cut -d ' ' -f 1
+            )"
+            recorded_tools="$(record_field "$record" build-tools)"
+            recorded_platform="$(record_field "$record" platform)"
+
+            if [ "$MODE" = write ]; then
+              compile "$sources" "$work/sources.txt" "$work" "$recorded_tools" "$recorded_platform"
+              cp "$work/out/classes.dex" "$dex"
+              {
+                printf '%s\n' "# Written by \`.github/workflows/android-dex.yml\` (mode: write); checked by the crate's \`android_dex\` test."
+                printf '%s\n' "# The dex is compiled from the sources under \`java/\` (ADR-0247)."
+                printf 'sources = "%s"\n' "$sources_digest"
+                printf 'dex = "%s"\n' "$(sha256sum "$dex" | cut -d ' ' -f 1)"
+                printf 'javac = "%s"\n' "$built_javac"
+                printf 'build-tools = "%s"\n' "$built_tools"
+                printf 'platform = "%s"\n' "$built_platform"
+                printf 'min-api = %s\n' "$min_api"
+              } > "$record"
+              echo "android-dex: wrote $dex ($(wc -c < "$dex") bytes) and $record"
+              continue
+            fi
+
+            # rebuild: both digests, then the bytes.
+            failed=false
+            if [ "$(record_field "$record" sources)" != "$sources_digest" ]; then
+              echo "android-dex: the Java sources under $sources changed since the dex was built; run this workflow with mode: write" >&2
+              failed=true
+            fi
+            if [ "$(record_field "$record" dex)" != "$(sha256sum "$dex" | cut -d ' ' -f 1)" ]; then
+              echo "android-dex: $dex is not the dex $record records; run this workflow with mode: write" >&2
+              failed=true
+            fi
+            if [ "$failed" = false ]; then
+              compile "$sources" "$work/sources.txt" "$work" "$recorded_tools" "$recorded_platform"
+              if ! cmp -s "$work/out/classes.dex" "$dex"; then
+                echo "android-dex: compiling the sources with javac $built_javac and build-tools $built_tools does not reproduce $dex (recorded: javac $(record_field "$record" javac), build-tools $recorded_tools)" >&2
+                failed=true
+              fi
+            fi
+            if [ "$failed" = true ]; then
+              held=false
+            else
+              echo "android-dex: $dex is built from the sources under $sources and reproduces byte for byte"
+            fi
+          done 3< "$RUNNER_TEMP/declared-dex.tsv"
           # Whether a written dex differs from the checked-in one.
           xargs git diff --stat -- < "$RUNNER_TEMP/declared-dex.txt"
+          [ "$held" = true ]
 
       - name: Upload the dex
         if: env.MODE == 'write'

@@ -18,7 +18,7 @@
 //! them and the vocabulary (`record_to_wire` in its hidden `__runtime` seam),
 //! and this module frames them as JSON Lines and replays them. A generated table
 //! of the vocabulary's variants keeps the conversions in step
-//! (`cargo xtask recording-vocabulary`).
+//! (the `recording_vocabulary_table` test).
 //!
 //! ```
 //! use flui_testing::recording::{

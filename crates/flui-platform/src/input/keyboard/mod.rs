@@ -4,7 +4,7 @@
 //! current layout ([`Key`]), which physical key it was ([`Code`], [`Location`]), the modifiers
 //! reported active (including toggles), whether it is an auto-repeat and whether an input
 //! method was composing. [`NamedKey`]
-//! and [`Code`] are generated from the W3C value lists by `cargo xtask key-vocabulary`, so a key
+//! and [`Code`] are generated from the W3C value lists by `tests/key_vocabulary.rs`, so a key
 //! the specification adds after the last regeneration arrives as `Unidentified`, a documented
 //! loss rather than a silent one. Text input does not travel here: an input method edits the
 //! focused field's [`TextStore`](crate::text::store::TextStore) (ADR-0090).

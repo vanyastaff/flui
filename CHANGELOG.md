@@ -13,7 +13,7 @@ match. Fine-grained phase history up to September 2026 lives in the
 [archived roadmap tracker](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP-TRACKER.md);
 this file records the repo-consumer-visible summary.
 Unreleased entries arrive as fragments under [`changelog.d/`](changelog.d/README.md), merged
-here by `cargo xtask changelog --write` at release time.
+here by hand at release time, as that README describes.
 
 ## [Unreleased]
 

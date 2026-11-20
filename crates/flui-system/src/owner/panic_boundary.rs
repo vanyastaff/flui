@@ -80,8 +80,8 @@ fn payload_text(payload: &(dyn Any + Send)) -> &str {
 /// The ivars of an Objective-C class the crate declares: objc2's generated
 /// `dealloc` destroys a class's ivars in place, on whatever thread and under
 /// whatever frames the last release comes from, so a class keeps them here
-/// and they are destroyed by one call of [`os_entry`]. `cargo xtask
-/// panic-boundary` holds every class of the crate to this type.
+/// and they are destroyed by one call of [`os_entry`]. A review reads
+/// every class of the crate against this type.
 ///
 /// Read through `Deref`; never moved, since objc2 keeps the ivars pinned.
 #[cfg(any(target_os = "macos", target_os = "ios"))]

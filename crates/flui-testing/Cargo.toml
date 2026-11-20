@@ -139,6 +139,10 @@ flui-native = { workspace = true, features = ["scripted"] }
 flui-runtime = { workspace = true, features = ["testing", "hot-reload"] }
 # The painting values the integration tests' widgets paint with.
 flui-painting = { workspace = true }
+# `recording_vocabulary_table` reads the recorded enums' sources with `syn` and
+# locates the accesskit release `flui-runtime` resolves with `cargo_metadata`.
+syn = { workspace = true, features = ["full"] }
+cargo_metadata = { workspace = true }
 
 [[test]]
 name = "flui_testing_it"

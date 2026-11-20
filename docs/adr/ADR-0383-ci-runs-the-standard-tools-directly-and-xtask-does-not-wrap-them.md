@@ -17,14 +17,17 @@
   `checks` job (§9).
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   §3 only for the formatters, the linters and the link check it keeps in `cargo xtask checks`:
-  `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4).
+  `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4). ADR-0303 §1 for the
+  generators and importers it keeps in xtask, and ADR-0371 §3 for the changelog check: tests of
+  the owning crates and a `checks` step (§10).
 - **Revised:** 2026-11-19 — §5 and the wasm names in Supersedes: `wasm-check` links the web demos,
   runs wasm-bindgen over them and reads their import modules with node, and runs the wasm32 tests
   itself; §6 and `cross-typecheck` in Supersedes: each native leg lints the whole workspace; §7 and
   `perf` in Supersedes: the perf scenarios hold their baseline, and `perf-gates`, `size` and `deps`
   compare the rest in steps. 2026-11-20 — §8 and `fuzz` in Supersedes: the fuzz workflow builds
   each target with `cargo +nightly --config .cargo/fuzz.toml run`; §9: the tools for working in
-  the repository are removed, the source checks are steps, and `test-desktop` is a crate.
+  the repository are removed, the source checks are steps, and `test-desktop` is a crate; §10: the
+  generators are tests of the crates that own their output, and `tools/xtask` is deleted.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -94,9 +97,8 @@ cargo-audit reads, so cargo-audit is not added beside them.
 ### §4. The `checks` job calls the formatters and the link check
 
 `cargo fmt --all --check`, typos, `taplo fmt --check` and lychee are steps of CI's `checks` job,
-each running even when one before it failed. `cargo xtask checks` keeps only the checks no standard
-tool makes: the changelog fragments and the
-generated files against their sources. lychee's command line in the job takes the options
+each running even when one before it failed. The checks no standard tool makes are shell steps of
+the same job (§9) and tests of the crates that own the generated files (§10). lychee's command line in the job takes the options
 `docs-links` passed it; the extra pass that caught a link climbing above the repository root goes
 with `docs-links`, so such a link is the reader's to catch.
 
@@ -266,9 +268,30 @@ check was either a convenience no job runs or a check a few lines of shell state
 - `test-desktop`, the program nextest starts each Windows test through (ADR-0355), is the crate
   `tools/test-desktop`, which `.config/nextest.toml`'s setup script builds.
 
-A step reads its inputs as text, where the Rust read them as TOML and Rust: a `mod` line that sits
-in an unmounted file still counts as mounting, and an MSRV written in a form the patterns do not
-name is not compared. The reader of a change to those steps holds that.
+A step reads its inputs as text, where the Rust read them as TOML and Rust: a mount is a `mod x;`
+or `#[path = "x.rs"]` line at column 0 of a test target's own root file, so one inside a block
+comment or a raw string at column 0 still counts, and each MSRV source is matched in the one form
+it states today. The reader of a change to those steps holds that.
+
+### §10. The generators are tests of the crates that own their output, and xtask is deleted
+
+Each generator xtask kept wrote files one crate owns, so it becomes a test of that crate: the test
+regenerates the files in memory and fails when they differ from the committed ones, and with
+`FLUI_BLESS=1` it writes them instead. The key tables are `flui-platform`'s `key_vocabulary`, the
+recording table `flui-testing`'s `recording_vocabulary_table`, the Material animated icons
+`flui-material`'s `material_icon_constants_match_their_frames` (its Flutter import runs under
+`FLUI_FLUTTER_DIR`; the SVG and AVD importers, which no committed input used, are dropped), the OS
+floors `flui-cli`'s `platform_floor`, and the font inventory `flui-painting`'s `font_assets` (no
+bless, as the command had no write: its generated fixtures are written by
+`tools/decoy-face/generate.py`, which the test reruns and compares). The Android dex is checked by an
+`android_dex` test in each crate that declares one, and built by `android-dex.yml` with
+`mode: write`, whose shell compiles it as the Rust did. The changelog check is a step of the
+`checks` job; fragments are merged at release by hand, as changelog.d/README.md describes. With
+nothing left in it, `tools/xtask` and the `cargo xtask` alias are deleted.
+
+The options for where a generator's check lives were a command (what xtask was), a step (a
+generator is too much logic for shell), or the owning crate's tests (chosen): they run in the
+`test` job with the crate's other tests, and a change to the crate is the change that runs them.
 
 ### Consequences
 

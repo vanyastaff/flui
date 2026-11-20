@@ -2,26 +2,24 @@
 //!
 //! `flui_platform::input::keyboard::{NamedKey, Code}` are FLUI's own enums, so no `keyboard-types`
 //! type reaches a Stable signature, but their variants are the W3C `key` and `code` value lists,
-//! which `keyboard-types` already transcribes from the specifications. This command reads the
-//! `keyboard-types` sources pinned by xtask (`named_key.rs` and `code.rs`) and writes
-//! both enums with their documentation, an `ALL` table and the W3C spelling of every variant.
+//! which `keyboard-types` already transcribes from the specifications. This module reads the
+//! pinned `keyboard-types` sources (`named_key.rs` and `code.rs`) and generates both enums with
+//! their documentation, an `ALL` table and the W3C spelling of every variant.
 //!
-//! Without arguments it checks that the checked-in files are what the pinned `keyboard-types`
-//! generates, so a `keyboard-types` bump that adds, removes or renames a key fails `cargo xtask
-//! checks` until the tables are regenerated with `--write`. A variant upstream marks
-//! `#[deprecated]` is not generated: the specification lists it as legacy, and the backend
-//! conversion maps its spelling to the current key. Any other upstream attribute on a variant
-//! fails the run instead of being dropped silently. `--self-test` runs the generator over an
-//! embedded fixture and fails unless the fixture's output and its stale-file finding come back.
+//! The test regenerates the files in memory and asserts each equals the committed file, so a
+//! `keyboard-types` bump that adds, removes or renames a key fails until the tables are
+//! regenerated with `FLUI_BLESS=1`. A variant upstream marks `#[deprecated]` is not generated:
+//! the specification lists it as legacy, and the backend conversion maps its spelling to the
+//! current key. Any other upstream attribute on a variant fails the run instead of being dropped
+//! silently. The fixture tests run the generator over an embedded upstream-shaped file.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
-use anyhow::{Context, anyhow, bail};
 use syn::visit::Visit;
 
-use crate::util::repo_root;
+/// A generator failure, worded for the person reading the test output.
+type Failure = String;
 
 /// One generated table: the upstream file it is read from and the file it is written to.
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +28,7 @@ struct Table {
     name: &'static str,
     /// The upstream file, relative to the `keyboard-types` package root.
     upstream: &'static str,
-    /// The generated file, relative to the repository root.
+    /// The generated file, relative to the `flui-platform` package root.
     output: &'static str,
     /// The enum's own documentation.
     summary: &'static str,
@@ -45,7 +43,7 @@ const TABLES: [Table; 2] = [
     Table {
         name: "NamedKey",
         upstream: "src/named_key.rs",
-        output: "crates/flui-platform/src/input/keyboard/named_key.rs",
+        output: "src/input/keyboard/named_key.rs",
         summary: "A key the W3C names: the `key` value of a key that produces no character.\n\n\
                   The variants are the [UI Events `key` values](https://w3c.github.io/uievents-key/).\n\
                   A value the specification adds before FLUI regenerates this table arrives as\n\
@@ -58,7 +56,7 @@ const TABLES: [Table; 2] = [
     Table {
         name: "Code",
         upstream: "src/code.rs",
-        output: "crates/flui-platform/src/input/keyboard/code.rs",
+        output: "src/input/keyboard/code.rs",
         summary: "The physical key, independent of the keyboard layout: the W3C `code` value.\n\n\
                   The variants are the [UI Events `code` values](https://w3c.github.io/uievents-code/).\n\
                   A value the specification adds before FLUI regenerates this table arrives as\n\
@@ -68,98 +66,75 @@ const TABLES: [Table; 2] = [
     },
 ];
 
-/// Arguments for `cargo xtask key-vocabulary`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct KeyVocabularyArgs {
-    /// Regenerate the tables instead of checking them.
-    #[arg(long, conflicts_with = "self_test")]
-    write: bool,
-    /// Run the generator over the embedded fixture instead of `keyboard-types`.
-    #[arg(long)]
-    self_test: bool,
-}
+/// The command that rewrites the generated files, named in their header and in a failure.
+const BLESS_COMMAND: &str = "FLUI_BLESS=1 cargo nextest run -p flui-platform --test platform_api_it -E 'test(key_vocabulary)'";
 
-/// `cargo xtask key-vocabulary`: check (or `--write`) the generated W3C key tables.
-pub(crate) fn key_vocabulary(args: &KeyVocabularyArgs) -> anyhow::Result<ExitCode> {
-    if args.self_test {
-        return self_test();
-    }
-    let root = repo_root();
-    let (upstream_root, version) = keyboard_types_root(&root)?;
+/// Regenerates the tables in memory and compares them with the committed files; with
+/// `FLUI_BLESS=1` it writes them instead.
+#[test]
+fn key_tables_match_the_pinned_keyboard_types() {
+    let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let (upstream_root, version) = keyboard_types_root(&package_root);
+    let bless = std::env::var("FLUI_BLESS").is_ok_and(|value| value == "1");
     let mut stale = Vec::new();
     for table in TABLES {
-        let source = read(&upstream_root.join(table.upstream))?;
-        let generated = generate(table, &source, &version)
-            .with_context(|| format!("generating {} from {}", table.name, table.upstream))?;
-        let output = root.join(table.output);
-        if args.write {
+        let upstream = upstream_root.join(table.upstream);
+        let source = std::fs::read_to_string(&upstream)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", upstream.display()));
+        let generated = generate(table, &source, &version).unwrap_or_else(|failure| {
+            panic!(
+                "generating {} from {}: {failure}",
+                table.name, table.upstream
+            )
+        });
+        let output = package_root.join(table.output);
+        if bless {
             std::fs::write(&output, &generated)
-                .with_context(|| format!("writing {}", output.display()))?;
-            println!("key-vocabulary: wrote {}", table.output);
+                .unwrap_or_else(|error| panic!("writing {}: {error}", output.display()));
         } else if std::fs::read_to_string(&output).ok().as_deref() != Some(generated.as_str()) {
             stale.push(table.output);
         }
     }
-    if stale.is_empty() {
-        if !args.write {
-            println!("key-vocabulary: the key tables match keyboard-types {version}");
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-    for path in stale {
-        eprintln!(
-            "key-vocabulary: {path} is not what keyboard-types {version} generates; \
-             run `cargo xtask key-vocabulary --write`"
-        );
-    }
-    Ok(ExitCode::FAILURE)
+    assert!(
+        stale.is_empty(),
+        "{} not what keyboard-types {version} generates; run `{BLESS_COMMAND}`",
+        stale.join(", ")
+    );
 }
 
-fn read(path: &Path) -> anyhow::Result<String> {
-    std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
-}
-
-/// The package root and version of xtask's direct `keyboard-types` dependency.
-fn keyboard_types_root(root: &Path) -> anyhow::Result<(PathBuf, String)> {
+/// The package root and version of `flui-platform`'s `keyboard-types` dev-dependency.
+fn keyboard_types_root(package_root: &Path) -> (PathBuf, String) {
     let metadata = cargo_metadata::MetadataCommand::new()
-        .current_dir(root)
+        .current_dir(package_root)
         .other_options(vec!["--locked".to_owned()])
         .exec()
-        .context("running `cargo metadata --locked`")?;
+        .expect("`cargo metadata --locked` runs");
     let resolve = metadata
         .resolve
         .as_ref()
-        .context("`cargo metadata` returned no dependency graph")?;
-    let xtask: Vec<_> = metadata
-        .packages
-        .iter()
-        .filter(|package| package.name.as_str() == "xtask")
-        .collect();
-    let [xtask] = xtask.as_slice() else {
-        bail!(
-            "expected one xtask package in the dependency graph, found {}",
-            xtask.len()
-        );
-    };
+        .expect("`cargo metadata` returns a dependency graph");
     let node = resolve
         .nodes
         .iter()
-        .find(|node| node.id == xtask.id)
-        .context("xtask is not in the dependency graph")?;
+        .find(|node| {
+            metadata[&node.id].name.as_str() == "flui-platform"
+                && metadata[&node.id].manifest_path.as_std_path() == package_root.join("Cargo.toml")
+        })
+        .expect("flui-platform is in the dependency graph");
     let dependency = node
         .deps
         .iter()
         .find(|dep| dep.name == "keyboard_types")
-        .context("xtask does not have its keyboard-types generator dependency")?;
+        .expect("flui-platform has its keyboard-types generator dev-dependency");
     let package = &metadata[&dependency.pkg];
     let manifest_dir = package
         .manifest_path
         .parent()
-        .context("keyboard-types' manifest path has no parent")?;
-    Ok((
+        .expect("keyboard-types' manifest path has a parent");
+    (
         manifest_dir.as_std_path().to_owned(),
         package.version.to_string(),
-    ))
+    )
 }
 
 /// One upstream variant: its name, documentation lines, search aliases and W3C spelling.
@@ -172,15 +147,20 @@ struct Variant {
 }
 
 /// The generated file for `table`, from the upstream source text.
-fn generate(table: Table, source: &str, version: &str) -> anyhow::Result<String> {
-    let file = syn::parse_file(source).context("parsing the upstream file")?;
+fn generate(table: Table, source: &str, version: &str) -> Result<String, Failure> {
+    let file =
+        syn::parse_file(source).map_err(|error| format!("parsing the upstream file: {error}"))?;
     let variants = variants(&file, table.name, table.carried_by_key)?;
     let mut out = String::new();
-    write_file(&mut out, table, version, &variants)?;
+    write_file(&mut out, table, version, &variants).expect("writing to a String cannot fail");
     Ok(out)
 }
 
-fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Result<Vec<Variant>> {
+fn variants(
+    file: &syn::File,
+    name: &str,
+    carried_by_key: &[&str],
+) -> Result<Vec<Variant>, Failure> {
     let item = file
         .items
         .iter()
@@ -188,7 +168,7 @@ fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Re
             syn::Item::Enum(item) if item.ident == name => Some(item),
             _ => None,
         })
-        .with_context(|| format!("no `enum {name}` upstream"))?;
+        .ok_or_else(|| format!("no `enum {name}` upstream"))?;
     let mut spellings = Spellings::default();
     for item in &file.items {
         if let syn::Item::Impl(item) = item
@@ -198,11 +178,13 @@ fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Re
         }
     }
     if spellings.arms.is_empty() {
-        bail!("no `impl Display for {name}` upstream");
+        return Err(format!("no `impl Display for {name}` upstream"));
     }
     for carried in carried_by_key {
         if !item.variants.iter().any(|variant| variant.ident == carried) {
-            bail!("{name}::{carried}, which `Key` carries, is gone upstream");
+            return Err(format!(
+                "{name}::{carried}, which `Key` carries, is gone upstream"
+            ));
         }
     }
     let mut variants = Vec::new();
@@ -214,7 +196,7 @@ fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Re
             continue;
         }
         if !matches!(variant.fields, syn::Fields::Unit) {
-            bail!("{name}::{} carries data", variant.ident);
+            return Err(format!("{name}::{} carries data", variant.ident));
         }
         let mut doc = Vec::new();
         let mut aliases = Vec::new();
@@ -223,26 +205,30 @@ fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Re
                 continue 'variants;
             }
             if !attr.path().is_ident("doc") {
-                bail!(
+                return Err(format!(
                     "{name}::{} has an attribute the generator does not know: {}",
                     variant.ident,
                     attr.path()
                         .get_ident()
                         .map_or_else(|| "a path".to_owned(), ToString::to_string)
-                );
+                ));
             }
             match &attr.meta {
                 syn::Meta::NameValue(meta) => doc.push(string_literal(&meta.value)?),
-                syn::Meta::List(_) => attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("alias") {
-                        let alias: syn::LitStr = meta.value()?.parse()?;
-                        aliases.push(alias.value());
-                        Ok(())
-                    } else {
-                        Err(meta.error("only `doc(alias)` is generated"))
-                    }
-                })?,
-                syn::Meta::Path(_) => bail!("{name}::{} has a bare `#[doc]`", variant.ident),
+                syn::Meta::List(_) => attr
+                    .parse_nested_meta(|meta| {
+                        if meta.path.is_ident("alias") {
+                            let alias: syn::LitStr = meta.value()?.parse()?;
+                            aliases.push(alias.value());
+                            Ok(())
+                        } else {
+                            Err(meta.error("only `doc(alias)` is generated"))
+                        }
+                    })
+                    .map_err(|error| format!("{name}::{}: {error}", variant.ident))?,
+                syn::Meta::Path(_) => {
+                    return Err(format!("{name}::{} has a bare `#[doc]`", variant.ident));
+                }
             }
         }
         let ident = variant.ident.to_string();
@@ -251,7 +237,7 @@ fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Re
             .iter()
             .find(|(arm, _)| *arm == ident)
             .map(|(_, spelling)| spelling.clone())
-            .with_context(|| format!("{name}::{ident} has no Display spelling upstream"))?;
+            .ok_or_else(|| format!("{name}::{ident} has no Display spelling upstream"))?;
         variants.push(Variant {
             name: ident,
             doc,
@@ -263,7 +249,9 @@ fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Re
         .iter()
         .any(|variant| variant.name == "Unidentified")
     {
-        bail!("{name} has no `Unidentified` variant, the fallback for an unknown value");
+        return Err(format!(
+            "{name} has no `Unidentified` variant, the fallback for an unknown value"
+        ));
     }
     Ok(variants)
 }
@@ -279,13 +267,13 @@ fn implements_display_for(item: &syn::ItemImpl, name: &str) -> bool {
     is_display && is_target
 }
 
-fn string_literal(expr: &syn::Expr) -> anyhow::Result<String> {
+fn string_literal(expr: &syn::Expr) -> Result<String, Failure> {
     match expr {
         syn::Expr::Lit(syn::ExprLit {
             lit: syn::Lit::Str(literal),
             ..
         }) => Ok(literal.value()),
-        _ => Err(anyhow!("a `#[doc = ...]` that is not a string literal")),
+        _ => Err("a `#[doc = ...]` that is not a string literal".to_owned()),
     }
 }
 
@@ -324,11 +312,11 @@ fn write_file(
     let name = table.name;
     writeln!(
         out,
-        "// @generated by `cargo xtask key-vocabulary --write` from keyboard-types {version}"
+        "// @generated by `{BLESS_COMMAND}` from keyboard-types {version}"
     )?;
     writeln!(
         out,
-        "// ({}, MIT OR Apache-2.0). Edit the generator, not this file.",
+        "// ({}, MIT OR Apache-2.0). Edit the generator in tests/key_vocabulary.rs, not this file.",
         table.upstream
     )?;
     writeln!(out)?;
@@ -441,7 +429,7 @@ fn doc_line(out: &mut String, indent: &str, line: &str) -> std::fmt::Result {
 
 /// An upstream-shaped file: a deprecated variant, an alias and a spelling that differs from
 /// the variant name.
-const SELF_TEST_FIXTURE: &str = r#"
+const FIXTURE: &str = r#"
 pub enum NamedKey {
     /// Unknown key.
     Unidentified,
@@ -470,43 +458,51 @@ impl Display for NamedKey {
 }
 "#;
 
-fn self_test() -> anyhow::Result<ExitCode> {
-    let table = TABLES[0];
-    let generated = generate(table, SELF_TEST_FIXTURE, "0.0.0")?;
-    let mut missed: Vec<&str> = [
+#[test]
+fn the_fixture_generates_its_variants_and_spellings() {
+    let generated = generate(TABLES[0], FIXTURE, "0.0.0").expect("the fixture generates");
+    for expected in [
         "    /// The Enter key.\n    #[doc(alias = \"Return\")]\n    Enter,\n",
         "            Self::Spelled => \"W3cSpelling\",\n",
         "        Self::Unidentified,\n        Self::Enter,\n        Self::Spelled,\n    ];\n",
-    ]
-    .into_iter()
-    .filter(|expected| !generated.contains(expected))
-    .collect();
-    if generated.contains("Hyper") {
-        missed.push("the deprecated variant is generated");
+    ] {
+        assert!(
+            generated.contains(expected),
+            "missing {expected:?} in\n{generated}"
+        );
     }
-    if generated.contains("    Dead,") || generated.contains("Self::Dead") {
-        missed.push("the variant `Key` carries is generated");
-    }
-    let carried_gone = SELF_TEST_FIXTURE.replace("Dead", "Deceased");
-    if generate(table, &carried_gone, "0.0.0").is_ok() {
-        missed.push("a carried variant gone upstream is accepted");
-    }
+    assert!(
+        !generated.contains("Hyper"),
+        "the deprecated variant is generated"
+    );
+    assert!(
+        !generated.contains("    Dead,") && !generated.contains("Self::Dead"),
+        "the variant `Key` carries is generated"
+    );
+}
+
+#[test]
+fn the_generator_refuses_what_it_would_otherwise_drop() {
+    let table = TABLES[0];
+    let carried_gone = FIXTURE.replace("Dead", "Deceased");
+    assert!(
+        generate(table, &carried_gone, "0.0.0").is_err(),
+        "a carried variant gone upstream is accepted"
+    );
     let unknown_attribute =
-        SELF_TEST_FIXTURE.replace("#[doc(alias = \"Return\")]", "#[cfg(feature = \"x\")]");
-    if generate(table, &unknown_attribute, "0.0.0").is_ok() {
-        missed.push("an unknown variant attribute is accepted");
-    }
-    let renamed = SELF_TEST_FIXTURE.replace("\"W3cSpelling\"", "\"Renamed\"");
-    if generate(table, &renamed, "0.0.0")? == generated {
-        missed.push("a renamed spelling generates the same file");
-    }
-    for finding in &missed {
-        println!("self-test: MISSED {finding}");
-    }
-    if missed.is_empty() {
-        println!("key-vocabulary self-test: the fixture generates as expected");
-        Ok(ExitCode::SUCCESS)
-    } else {
-        Ok(ExitCode::FAILURE)
-    }
+        FIXTURE.replace("#[doc(alias = \"Return\")]", "#[cfg(feature = \"x\")]");
+    assert!(
+        generate(table, &unknown_attribute, "0.0.0").is_err(),
+        "an unknown variant attribute is accepted"
+    );
+}
+
+#[test]
+fn a_renamed_spelling_changes_the_generated_file() {
+    let renamed = FIXTURE.replace("\"W3cSpelling\"", "\"Renamed\"");
+    assert_ne!(
+        generate(TABLES[0], &renamed, "0.0.0").expect("the renamed fixture generates"),
+        generate(TABLES[0], FIXTURE, "0.0.0").expect("the fixture generates"),
+        "a renamed spelling generates the same file"
+    );
 }

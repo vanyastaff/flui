@@ -13,7 +13,7 @@ stay in one place as they evolve:
 - [`CONTRIBUTING.md`](https://github.com/vanyastaff/flui/blob/main/CONTRIBUTING.md) — planning a
   large change, git hygiene, reporting bugs, security.
 - [`docs/testing.md`](https://github.com/vanyastaff/flui/blob/main/docs/testing.md) — the test
-  pyramid, quality gates, and which `cargo xtask` command to run for what you touched.
+  pyramid, quality gates, and which CI job's commands to run for what you touched.
 
 ## Quick start
 

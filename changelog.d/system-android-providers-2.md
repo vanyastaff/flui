@@ -23,6 +23,6 @@
 
 ### Changed
 
-- `cargo xtask android-dex` checks and writes the dex of every workspace crate that declares
-  `android.dex` and `android.java`, read from `cargo metadata`; `--list` names them, and the
-  `Android dex` workflow runs on a change to any Java source or dex and uploads what it lists.
+- Each workspace crate that declares `android.dex` and `android.java` checks its dex against its
+  sources in its `android_dex` test, and the `Android dex` workflow, on a change to any Java
+  source or dex, lists the declared dex from `cargo metadata`, compiles them and uploads them.

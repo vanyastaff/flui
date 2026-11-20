@@ -46,7 +46,7 @@ To create your own application against the checkout, follow the
 It installs the CLI from the same source and selects the toolchain for the
 generated project outside the checkout.
 
-Repository tasks beyond plain `cargo` (generators, the changelog, the pre-PR check) are `cargo xtask <command>` — `cargo xtask --help` lists them. There is no separate task runner to install; the tools a gate uses (cargo-nextest, typos, taplo, lychee) are installed by the job in `.github/workflows/ci.yml` that runs it.
+There is no task runner to install: the tools a check uses (cargo-nextest, typos, taplo, lychee) are installed by the job in `.github/workflows/ci.yml` that runs it.
 
 For a step-by-step setup including platform notes (Windows / macOS / Android NDK / WASM), see [`docs/getting-started.md`](docs/getting-started.md).
 

@@ -54,14 +54,13 @@ incomplete.
 
 - A change a consumer would notice adds a fragment, `changelog.d/<branch-slug>.md`, instead of
   editing `CHANGELOG.md`: a Keep a Changelog `###` header and bullets under it. The format,
-  naming and link rules are in [`changelog.d/README.md`](changelog.d/README.md), and
-  `cargo xtask changelog --check` (part of `cargo xtask checks`) enforces them.
-- A contributor is a consumer too: a new or changed `cargo xtask` command or workflow they run
-  gets a fragment. Docs-only and CI-only changes need none, and no gate requires one.
-- At release: `cargo xtask changelog --dry-run` to read the merged `## [Unreleased]` region,
-  then `cargo xtask changelog --write` to write it and remove the fragments, then commit.
-  Renaming `[Unreleased]` to the version stays a manual edit; add a fresh, empty
-  `## [Unreleased]` above it in the same commit, since `cargo xtask checks` requires one.
+  naming and link rules are in [`changelog.d/README.md`](changelog.d/README.md), and the
+  `checks` job's "Changelog fragments" step enforces them.
+- A contributor is a consumer too: a new or changed command or workflow they run gets a
+  fragment. Docs-only and CI-only changes need none, and no gate requires one.
+- At release the fragments are merged into the `## [Unreleased]` region by hand, as
+  `changelog.d/README.md` describes. Renaming `[Unreleased]` to the version stays a manual edit;
+  add a fresh, empty `## [Unreleased]` above it in the same commit.
 - A pull request that already edits `CHANGELOG.md` directly can land as it is; the merge never
   touches existing lines.
 

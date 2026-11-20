@@ -77,7 +77,7 @@ press, a repeat of it or a press with no key behind it.
 where the platform does not say; its release carries the same value: every host settles
 its key events through one ledger, `PressedAs` in `flui-native`, which keeps the key a dead or
 code-less key was pressed as until its release, whatever Shift, the layout or a compose sequence
-made of the key since. The `key-vocabulary`
+made of the key since. The `key_vocabulary` test generator
 generator leaves `Dead` out of `NamedKey` (`carried_by_key`) and fails if keyboard-types renames
 it. Windows reads the accent from `WM_DEADCHAR`, XKB from the dead keysym, Android from
 `KeyCharacterMap`; the DOM names no accent, and AppKit and UIKit compose dead keys as marked
@@ -125,7 +125,7 @@ and its scroll an optional `inversion`; the format is version 4 and refuses vers
 
 - The compiler: `KeyState::Up(KeyPress::AutoRepeat)` does not compile (`KeyState`'s
   `compile_fail` doctest).
-- `cargo xtask key-vocabulary` and its self-test: `NamedKey` has no `Dead`, and a carried
+- `tests/key_vocabulary.rs` of flui-platform and its fixture tests: `NamedKey` has no `Dead`, and a carried
   variant gone upstream fails the run.
 - Tests: `a_hardware_dead_key_composes_with_the_next_key` (flui-native, the Android composer over
   a stand-in key map), `a_repeat_and_a_missing_release_are_kinds_of_key_down` and
