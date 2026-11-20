@@ -46,6 +46,11 @@ flui-view = { workspace = true, optional = true }
 flui-foundation = { workspace = true }
 # The instants the in-process agent's conversation is polled at (std's on native targets).
 web-time = { workspace = true, optional = true }
+# The Android lane, which runs on every host: the window `uiautomator dump` describes, and a
+# display capture `screencap` writes as a PNG when its raw pixels are in a format the lane does
+# not read raw.
+roxmltree = { workspace = true }
+image = { workspace = true }
 
 # Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.
 [target.'cfg(any(unix, windows))'.dependencies]

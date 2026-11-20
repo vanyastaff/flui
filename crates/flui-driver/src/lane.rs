@@ -16,8 +16,10 @@
 //! the window ([`Lane::capture_window`]).
 //!
 //! The lanes: [`windows`], [`macos`], [`x11`] and [`wayland`] (its OS half with the `wayland`
-//! feature); both Linux lanes read the app through [`atspi`].
+//! feature); both Linux lanes read the app through [`atspi`]. [`android`] drives a device or an
+//! emulator from any host, through `adb`.
 
+pub mod android;
 pub mod atspi;
 pub mod macos;
 pub mod wayland;

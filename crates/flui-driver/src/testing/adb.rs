@@ -1,0 +1,343 @@
+//! [`ScriptedAdb`]: a device scripted for the Android lane, answering each command by the first
+//! rule its text starts with, so the lane's every command, refusal and release runs without a
+//! device or an `adb`.
+
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use flui_protocol::act::{Effect, EffectKind};
+use flui_protocol::error::ErrorCode;
+
+use crate::error::{Error, Result};
+use crate::lane::android::adb::{Adb, AdbCommand, AdbReply, AdbStream, Framing};
+
+/// How a rule answers.
+#[derive(Debug, Clone)]
+enum Answer {
+    Reply(AdbReply),
+    Timeout,
+}
+
+#[derive(Debug, Clone)]
+struct Rule {
+    prefix: String,
+    answer: Answer,
+    once: bool,
+}
+
+/// What a stream answers each line written to it with.
+pub type Responder = fn(&str) -> Vec<String>;
+
+#[derive(Debug, Clone)]
+struct StreamRule {
+    prefix: String,
+    records: Vec<String>,
+    responder: Option<Responder>,
+    refuse: bool,
+}
+
+/// A record pushed into an open stream when a command runs.
+#[derive(Debug, Clone)]
+struct Push {
+    command: String,
+    stream: String,
+    record: String,
+}
+
+#[derive(Debug, Default)]
+struct StreamState {
+    records: VecDeque<String>,
+    ended: Option<String>,
+    responder: Option<Responder>,
+}
+
+#[derive(Debug, Default)]
+struct Script {
+    rules: Vec<Rule>,
+    streams: Vec<StreamRule>,
+    pushes: Vec<Push>,
+    open: Vec<(String, Arc<Mutex<StreamState>>)>,
+    log: Vec<String>,
+}
+
+/// A device scripted for the Android lane: see the [module docs](self). Clones share one script
+/// and one log, so a test keeps one while the lane owns another.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptedAdb {
+    script: Arc<Mutex<Script>>,
+}
+
+fn lock(script: &Mutex<Script>) -> std::sync::MutexGuard<'_, Script> {
+    script.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl ScriptedAdb {
+    /// A device that answers nothing yet: a command no rule names exits 1 and says so.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Answer every command whose text (`shell input keyevent KEYCODE_ENTER`) starts with
+    /// `prefix` with `reply`, once the rules added before it pass.
+    #[must_use]
+    pub fn reply(self, prefix: impl Into<String>, reply: AdbReply) -> Self {
+        self.rule(prefix.into(), Answer::Reply(reply), false)
+    }
+
+    /// Answer the next command starting with `prefix` with `reply`, before any lasting rule.
+    #[must_use]
+    pub fn reply_once(self, prefix: impl Into<String>, reply: AdbReply) -> Self {
+        self.rule(prefix.into(), Answer::Reply(reply), true)
+    }
+
+    /// Let the next command starting with `prefix` outlive its deadline.
+    #[must_use]
+    pub fn timeout_once(self, prefix: impl Into<String>) -> Self {
+        self.rule(prefix.into(), Answer::Timeout, true)
+    }
+
+    fn rule(self, prefix: String, answer: Answer, once: bool) -> Self {
+        lock(&self.script).rules.push(Rule {
+            prefix,
+            answer,
+            once,
+        });
+        self
+    }
+
+    /// Open a stream for a command starting with `prefix` that prints `records`, then waits, and
+    /// answers each line written to it with what `responder` makes of it.
+    #[must_use]
+    pub fn stream(
+        self,
+        prefix: impl Into<String>,
+        records: Vec<String>,
+        responder: Option<Responder>,
+    ) -> Self {
+        lock(&self.script).streams.push(StreamRule {
+            prefix: prefix.into(),
+            records,
+            responder,
+            refuse: false,
+        });
+        self
+    }
+
+    /// Refuse to start a stream for a command starting with `prefix`, as a device without the
+    /// program does.
+    #[must_use]
+    pub fn refuse_stream(self, prefix: impl Into<String>) -> Self {
+        lock(&self.script).streams.push(StreamRule {
+            prefix: prefix.into(),
+            records: Vec::new(),
+            responder: None,
+            refuse: true,
+        });
+        self
+    }
+
+    /// When a command starting with `command` runs, push `record` into the open stream whose
+    /// command starts with `stream`, once.
+    #[must_use]
+    pub fn on_command(
+        self,
+        command: impl Into<String>,
+        stream: impl Into<String>,
+        record: impl Into<String>,
+    ) -> Self {
+        lock(&self.script).pushes.push(Push {
+            command: command.into(),
+            stream: stream.into(),
+            record: record.into(),
+        });
+        self
+    }
+
+    /// End every open stream whose command starts with `prefix`, as a program that exits does.
+    pub fn end_stream(&self, prefix: &str) {
+        let script = lock(&self.script);
+        for (command, state) in &script.open {
+            if command.starts_with(prefix) {
+                state.lock().unwrap_or_else(PoisonError::into_inner).ended =
+                    Some(format!("`adb {command}` ended"));
+            }
+        }
+    }
+
+    /// The device, for the lane.
+    #[must_use]
+    pub fn device(&self) -> Box<dyn Adb> {
+        Box::new(self.clone())
+    }
+
+    /// Every command run and stream opened, as its text, and every line written to a stream, as
+    /// `<command> <- <line>`, in order.
+    #[must_use]
+    pub fn log(&self) -> Vec<String> {
+        lock(&self.script).log.clone()
+    }
+
+    /// The commands run whose text starts with `prefix`, in order.
+    #[must_use]
+    pub fn commands(&self, prefix: &str) -> Vec<String> {
+        self.log()
+            .into_iter()
+            .filter(|line| line.starts_with(prefix))
+            .collect()
+    }
+}
+
+impl Adb for ScriptedAdb {
+    fn run(&mut self, command: &AdbCommand, limit: usize, timeout: Duration) -> Result<AdbReply> {
+        let text = command.to_string();
+        let mut script = lock(&self.script);
+        script.log.push(text.clone());
+        let pushes: Vec<Push> = script
+            .pushes
+            .iter()
+            .filter(|push| text.starts_with(&push.command))
+            .cloned()
+            .collect();
+        script
+            .pushes
+            .retain(|push| !text.starts_with(&push.command));
+        for push in pushes {
+            if let Some((_, state)) = script
+                .open
+                .iter()
+                .find(|(command, _)| command.starts_with(&push.stream))
+            {
+                state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .records
+                    .push_back(push.record);
+            }
+        }
+        let found = script
+            .rules
+            .iter()
+            .position(|rule| rule.once && text.starts_with(&rule.prefix))
+            .or_else(|| {
+                script
+                    .rules
+                    .iter()
+                    .position(|rule| !rule.once && text.starts_with(&rule.prefix))
+            });
+        let Some(index) = found else {
+            return Ok(AdbReply::new(1, Vec::new())
+                .stderr(format!("scripted adb: no rule answers `{text}`")));
+        };
+        let rule = if script.rules[index].once {
+            script.rules.remove(index)
+        } else {
+            script.rules[index].clone()
+        };
+        match rule.answer {
+            Answer::Timeout => Err(Error::Timeout {
+                effect: Some(Effect::new(EffectKind::MayHaveRun)),
+                message: format!("`adb {text}` did not end within {} ms", timeout.as_millis()),
+                retry: ErrorCode::Timeout.default_retry(),
+            }),
+            Answer::Reply(reply) if reply.stdout.len() > limit => Err(Error::Lane {
+                lane: "android".to_owned(),
+                unavailable: false,
+                message: format!("`adb {text}` printed more than {limit} bytes"),
+            }),
+            Answer::Reply(reply) => Ok(reply),
+        }
+    }
+
+    fn open(&mut self, command: &AdbCommand, framing: Framing) -> Result<Box<dyn AdbStream>> {
+        let _ = framing;
+        let text = command.to_string();
+        let mut script = lock(&self.script);
+        script.log.push(text.clone());
+        let rule = script
+            .streams
+            .iter()
+            .find(|rule| text.starts_with(&rule.prefix))
+            .cloned();
+        let Some(rule) = rule.filter(|rule| !rule.refuse) else {
+            return Err(Error::Lane {
+                lane: "android".to_owned(),
+                unavailable: false,
+                message: format!("scripted adb: no stream for `{text}`"),
+            });
+        };
+        let state = Arc::new(Mutex::new(StreamState {
+            records: rule.records.into_iter().collect(),
+            ended: None,
+            responder: rule.responder,
+        }));
+        script.open.push((text.clone(), Arc::clone(&state)));
+        Ok(Box::new(ScriptedStream {
+            command: text,
+            state,
+            script: Arc::clone(&self.script),
+        }))
+    }
+}
+
+/// A stream of a [`ScriptedAdb`].
+struct ScriptedStream {
+    command: String,
+    state: Arc<Mutex<StreamState>>,
+    script: Arc<Mutex<Script>>,
+}
+
+impl ScriptedStream {
+    fn state(&self) -> std::sync::MutexGuard<'_, StreamState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl AdbStream for ScriptedStream {
+    fn send_line(&mut self, line: &str) -> Result<()> {
+        lock(&self.script)
+            .log
+            .push(format!("{} <- {line}", self.command));
+        let mut state = self.state();
+        if let Some(why) = &state.ended {
+            return Err(Error::Lane {
+                lane: "android".to_owned(),
+                unavailable: false,
+                message: why.clone(),
+            });
+        }
+        if let Some(responder) = state.responder {
+            state.records.extend(responder(line));
+        }
+        Ok(())
+    }
+
+    fn next_record(&mut self, wait: Duration) -> Result<Option<String>> {
+        let mut state = self.state();
+        if let Some(record) = state.records.pop_front() {
+            return Ok(Some(record));
+        }
+        if let Some(why) = &state.ended {
+            return Err(Error::Lane {
+                lane: "android".to_owned(),
+                unavailable: false,
+                message: why.clone(),
+            });
+        }
+        drop(state);
+        if !wait.is_zero() {
+            std::thread::sleep(wait.min(Duration::from_millis(2)));
+        }
+        Ok(None)
+    }
+}
+
+impl Drop for ScriptedStream {
+    fn drop(&mut self) {
+        let mut script = lock(&self.script);
+        script.log.push(format!("{} ended", self.command));
+        let state = Arc::clone(&self.state);
+        script.open.retain(|(_, open)| !Arc::ptr_eq(open, &state));
+    }
+}

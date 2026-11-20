@@ -246,6 +246,13 @@ fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
         ),
         ("shared, guarded", Isolation::Shared, true, None),
         ("an emulator, unguarded", Isolation::Emulator, false, None),
+        (
+            "a device in someone's hands, unguarded",
+            Isolation::Device,
+            false,
+            Some("user_activity_guard"),
+        ),
+        ("a device, guarded", Isolation::Device, true, None),
     ];
     for (row, isolation, guarded, refused) in rows {
         let (lane, log) = ScriptedLane::new(isolation);

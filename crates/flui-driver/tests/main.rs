@@ -1,5 +1,8 @@
 //! `flui-driver`'s integration tests, through its public API.
 
+#[cfg(any(unix, windows))]
+mod android_device;
+mod android_lane;
 mod apps;
 mod coordinates;
 mod failure_matrix;
