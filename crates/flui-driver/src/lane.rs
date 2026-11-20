@@ -8,6 +8,16 @@
 //! [`send_guarded`] asks the lane's [`ActivityGuard`] before every event, and on the first foreign
 //! one stops before the next event, releases everything and fails the run with
 //! [`Error::InterruptedByUser`], which a report records as cannot-verify.
+//!
+//! What a lane cannot send at all (a key it has no code for, a shell hotkey, a device it lacks) is
+//! refused by [`Lane::check`] before the guard is armed and before any event goes out. A lane also
+//! reads what the OS itself shows of the app: its accessibility tree ([`Lane::read_tree`]), the
+//! tree assistive technology reads, projected onto the wire's nodes, and the OS's own capture of
+//! the window ([`Lane::capture_window`]).
+//!
+//! The lanes: [`windows`].
+
+pub mod windows;
 
 use std::fmt;
 use std::sync::Arc;
@@ -17,6 +27,7 @@ use std::thread::{self, JoinHandle};
 
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{Isolation, Placement};
+use flui_protocol::tree::Tree;
 
 use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
@@ -134,6 +145,18 @@ pub trait Lane: Send {
         Ok(WindowGeometry::new(origin, placement.size, placement.scale))
     }
 
+    /// Whether the lane can send every one of `events`, asked before the first is sent: a key it
+    /// has no code for, a device it lacks, a chord the OS shell takes before the app sees it. The
+    /// default accepts every sequence.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`] naming what the lane cannot send.
+    fn check(&mut self, events: &[OsEvent]) -> Result<()> {
+        let _ = events;
+        Ok(())
+    }
+
     /// Send one event; a pause waits.
     ///
     /// # Errors
@@ -141,12 +164,112 @@ pub trait Lane: Send {
     /// When the OS refused it.
     fn send(&mut self, event: &OsEvent) -> Result<()>;
 
+    /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
+    /// nodes (ADR-0095 §4): what a screen reader reads of the app.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`] naming `os_accessibility_tree` for a lane that reads none, which is
+    /// the default.
+    fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
+        let _ = placement;
+        Err(Error::not_supported(
+            "os_accessibility_tree",
+            format!("the {} lane reads no OS accessibility tree", self.name()),
+        ))
+    }
+
+    /// Activate the element of the window `placement` describes whose OS automation id is
+    /// `identifier` (an ADR-0240 identifier, as the adapter publishes it) through the OS
+    /// accessibility API, as a screen reader's activate command does.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`] naming `os_invoke` for a lane that acts through no accessibility
+    /// API, which is the default; [`Error::NotFound`] when no element has the identifier.
+    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
+        let _ = (placement, identifier);
+        Err(Error::not_supported(
+            "os_invoke",
+            format!("the {} lane acts through no accessibility API", self.name()),
+        ))
+    }
+
+    /// The OS's own capture of the window `placement` describes: its surface only, never the
+    /// screen around it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`] naming `os_capture` for a lane that captures nothing, which is the
+    /// default.
+    fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+        let _ = placement;
+        Err(Error::not_supported(
+            "os_capture",
+            format!("the {} lane captures no window", self.name()),
+        ))
+    }
+
     /// Release every key, button and contact the lane holds.
     ///
     /// # Errors
     ///
     /// When the OS refused a release.
     fn release_all(&mut self) -> Result<()>;
+}
+
+/// The OS's capture of a window's surface: tightly packed RGBA rows, top row first.
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OsCapture {
+    /// Width in device pixels.
+    pub width: u32,
+    /// Height in device pixels.
+    pub height: u32,
+    /// Four bytes a pixel, red first, `width * 4` bytes a row.
+    pub rgba: Vec<u8>,
+}
+
+impl OsCapture {
+    /// A `width` by `height` capture of `rgba`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when `rgba` is not four bytes for each of its pixels.
+    pub fn try_new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self> {
+        let expected = u64::from(width) * u64::from(height) * 4;
+        if u64::try_from(rgba.len()).ok() != Some(expected) {
+            return Err(Error::invalid_argument(format!(
+                "a {width} x {height} capture holds {expected} bytes, not {}",
+                rgba.len()
+            )));
+        }
+        Ok(Self {
+            width,
+            height,
+            rgba,
+        })
+    }
+
+    /// The pixel at (`x`, `y`) as red, green, blue and alpha; `None` past the capture.
+    #[must_use]
+    pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let at = usize::try_from((u64::from(y) * u64::from(self.width) + u64::from(x)) * 4).ok()?;
+        let bytes = self.rgba.get(at..at + 4)?;
+        Some([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+}
+
+impl fmt::Debug for OsCapture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OsCapture")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Whether `lane` may send OS input: [`os_input::admit`](crate::os_input::admit) over where its
@@ -168,9 +291,11 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 ///
 /// # Errors
 ///
-/// As [`admit`], before any event; [`Error::InterruptedByUser`]; the lane's own failure.
+/// As [`admit`] and [`Lane::check`], before any event; [`Error::InterruptedByUser`]; the lane's
+/// own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
+    lane.check(events)?;
     let name = lane.name().to_owned();
     if let Some(guard) = lane.guard() {
         guard.arm()?;

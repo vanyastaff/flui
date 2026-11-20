@@ -1933,6 +1933,7 @@ dependencies = [
 name = "flui-driver"
 version = "0.1.0-dev"
 dependencies = [
+ "flui-app",
  "flui-driver",
  "flui-foundation",
  "flui-protocol",
@@ -1947,6 +1948,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "web-time",
+ "windows 0.62.2",
 ]
 
 [[package]]

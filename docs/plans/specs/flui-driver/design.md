@@ -492,9 +492,11 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
    an ad-hoc CLI call announces its own single action. On an interactive terminal on a shared
    desktop, `flui drive` also waits a 3 s grace period, which `--yes` skips.
 2. **User-activity abort.** Each desktop lane watches for input it did not inject:
-   - Windows: `WH_MOUSE_LL` / `WH_KEYBOARD_LL` hooks on the lane worker; events without
-     `LLMHF_INJECTED`/`LLKHF_INJECTED` are the user's. Touch and pen come through
-     `GetPointerInfo`'s source device, set against the synthetic device handle;
+   - Windows: `WH_MOUSE_LL` / `WH_KEYBOARD_LL` hooks on a guard thread; an event is the lane's
+     only when it carries `LLMHF_INJECTED`/`LLKHF_INJECTED` and the lane's tag in its extra
+     information, so another program's injected input ends a run too. Touch and pen come as raw
+     input from the digitizers, which a device sends and the lane's synthetic device does not. A
+     hook procedure posts what it saw to its own thread's queue, so no trampoline holds the state;
    - macOS: a listen-only `CGEventTap` comparing `kCGEventSourceUnixProcessID` and the source state
      with the lane's own source;
    - X11: XInput2 raw events from devices other than the XTEST virtual devices;
@@ -513,7 +515,7 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
 
 | Platform | Isolation mode | How the driver uses it |
 |---|---|---|
-| Windows | three candidates, each gated by a spike in FD11 that shows injected input stays out of the host session and GPU presentation works: Windows Sandbox (`.wsb` with the build mapped read-only, the driver launched inside); a second user session; a loopback RDP session to the same machine (the separate-desktop approach UFO² documents) | the driver runs inside and writes its report and trace to a mapped or shared folder; a candidate that fails its spike is removed from the spec |
+| Windows | three candidates, each gated by a spike (its procedure and go/no-go criteria in tasks.md, FD11) that shows injected input stays out of the host session and GPU presentation works: Windows Sandbox (`.wsb` with the build mapped read-only, the driver launched inside); a second user session; a loopback RDP session to the same machine (the separate-desktop approach UFO² documents). Until a spike passes, the lane refuses its mode (`not_supported` naming `windows_isolation_<mode>`) | the driver runs inside and writes its report and trace to a mapped or shared folder; a candidate that fails its spike is removed from the spec |
 | Linux | Xvfb (CI default) or a separate seat; for Wayland a headless or nested compositor (weston, cage) | `DISPLAY` / `WAYLAND_DISPLAY` set for the launched app and the lane only |
 | macOS | a second user session (fast user switching) or a VM | the run happens in that session; the host session is untouched |
 | Android | an emulator (`emulator -no-window`) when hardware fidelity is not the point | the target picks the AVD; a physical device is chosen explicitly |
@@ -531,15 +533,21 @@ pub trait Lane: Send {
     fn capabilities(&self) -> LaneCapabilities;      // pointers, keys, isolation, guarded, fidelity
     fn guard(&mut self) -> Option<&mut dyn ActivityGuard>;
     fn locate_window(&mut self, placement: &Placement) -> Result<WindowGeometry>;
+    fn check(&mut self, events: &[OsEvent]) -> Result<()>; // before the first event; accepts by default
     fn send(&mut self, event: &OsEvent) -> Result<()>; // one event: a single-step move, a press, a pause
     fn release_all(&mut self) -> Result<()>;
+    fn read_tree(&mut self, placement: &Placement) -> Result<Tree>;          // not_supported by default
+    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()>; // not_supported by default
+    fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture>; // not_supported by default
 }
 ```
 
 The driver turns an action sequence into `OsEvent`s (`steps::os_events`) and sends them through
-`lane::send_guarded`, which asks the guard before every event and releases on every exit, so the
-user-activity rule is held once, at the seam. Capture, the OS tree and launching through a lane
-join the trait with the tasks that bring them (FD10 and the OS-lane tasks). A trait object,
+`lane::send_guarded`, which asks `check` once, then the guard before every event, and releases on
+every exit, so the user-activity rule is held once, at the seam. The OS tree (`read_tree`, the
+projection `os.compare_projection` compares) and activation through the accessibility API
+(`invoke`) came with the Windows lane, and so did its capture (`capture_window`), which FD10 makes
+the `os` source; launching through a lane joins with the device lanes. A trait object,
 because the lane is chosen at run time from the target. Each lane is a module
 behind `cfg(target_os)` or a cargo feature (`android`, `ios-sim`, `chrome`, `wayland`; the host
 desktop lane is default). An operation the lane lacks is `not_supported` naming it, before any
@@ -547,7 +555,7 @@ event is sent.
 
 | Lane | Real input | OS accessibility read | OS capture | Process |
 |---|---|---|---|---|
-| windows | `SendInput` (mouse, keys, `VK_PACKET` text); `InjectSyntheticPointerInput` (touch, pen); TSF IME through the target's text store is out of the lane's reach, so IME uses `input.inject`. The safety checks are ported from desktop-mcp (`input/{mod,device}.rs`): foreground, window under each point, physical state, Sticky Keys, held-input recovery | UIA (`uiautomation`), the role table from `tools/xtask/src/device/uia_role_table.rs` | Windows Graphics Capture (`windows-capture`), window-scoped | `CreateProcess` in a kill-on-close job |
+| windows | `SendInput` (mouse, keys, `VK_PACKET` text); `InjectSyntheticPointerInput` (touch, pen); TSF IME through the target's text store is out of the lane's reach, so IME uses `input.inject`. The safety checks are ported from desktop-mcp (`input/{mod,device}.rs`): the input desktop, foreground, window under each point, physical state, shell hotkeys and Sticky Keys, held-input recovery | UIA through the `windows` crate, the role table from `tools/xtask/src/device/uia_role_table.rs` (`lane::windows::roles`) | Windows Graphics Capture through the `windows` crate, window-scoped | `CreateProcess` in a kill-on-close job |
 | macos | `CGEventPostToPid` (mouse, keys, scroll, tablet pen fields) via `objc2-core-graphics` | AX via `objc2-application-services` (`AXUIElement`), replacing `macos-ax-client.swift` | ScreenCaptureKit window capture (`objc2-screen-capture-kit`), replacing `screencapture -l` | `posix_spawn` in a process group |
 | x11 | XTEST (`x11rb`), ported from `tools/live-smoke` | AT-SPI (`atspi`) | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG` |
 | wayland | libei through the RemoteDesktop portal (`reis`, `ashpd`); portal refusal is cannot-verify | AT-SPI | ScreenCast portal (`ashpd`, PipeWire), window-scoped | same as x11 |
@@ -934,10 +942,10 @@ enforced, not just intended.
 
 | Today | Becomes |
 |---|---|
-| `windows-a11y` (UIA walk, invoke) | scenario: launch `a11y_probe`, `os.compare_projection`, semantic actions through UIA and through the agent, the roles page |
-| `windows-gallery` (built on the integration branch now, against `examples/interaction_gallery`) | the **first scenario ported**: the same checks, by identifier, synthetic by default and OS input as the certification variant |
-| `windows-input` (contract child test + SendInput probe) | scenario: `input.os` mouse, wheel, touch and pen against `interaction_gallery`, verified through the journal; native recording captured and held against the goldens (`record.start{native}`) |
-| `windows-notes` | scenario on `two_screens`: chords, `VK_PACKET` text, IME through `input.inject`, DPI after resize |
+| `windows-a11y` (UIA walk, invoke) | scenario on the driver's scenario app (`a11y_probe` is gone): `os.compare_projection`, semantic actions through UIA and through the agent, the roles page (a page of every role of the role table) |
+| `windows-gallery` (built on the integration branch, against `examples/interaction_gallery`, both gone) | the **first scenario ported**, on the driver's scenario gallery until `interaction_gallery` returns: its checks by identifier, synthetic by default and OS input as the certification variant |
+| `windows-input` (contract child test + SendInput probe) | scenario: OS mouse, wheel, touch, pen and keys against the scenario gallery, verified through the journal, and a press beside the controls leaving them alone; native recording captured and held against the goldens (`record.start{native}`) once the driver records native input |
+| `windows-notes` | scenario on a note field (`two_screens` is gone): chords, `VK_PACKET` text, IME through `input.inject`; DPI after resize once the driver resizes a window |
 | `web-input` (BiDi, wasm probe, JS API) | scenario on the chrome target: the same checks through the agent, and the probe's JS API is deleted |
 | `android-input` (adb, uinput, F-key probe, `status.txt`) | scenario on the android target: lane input, journal verification, `record` events replace F12 flush, and `dumpsys` reads stay as lane helpers (`AndroidLane::shell`) |
 | `macos-*` (Python, Swift, `screencapture`) | scenarios on the macos target; `tools/device-checks/` is deleted |

@@ -43,7 +43,8 @@ const AGENT_REPLY: Duration = Duration::from_secs(5);
 /// the call names no timeout.
 pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// One target driven through one connection: see the [module docs](self).
+/// One target driven through one connection: the app's methods go to its agent as they are, the
+/// driver's are composed from them, and a lane's need one attached.
 ///
 /// `Send` but not `Sync`: a front end that needs concurrency puts it behind a worker. Its methods
 /// are synchronous.

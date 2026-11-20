@@ -5,8 +5,9 @@
   `main` @ `bc2f0ec33` и закрытием LY102); открытые — неотмеченные записи раздела «Ход
   исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
-  - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
+  - LY96 и LY99 — Windows-lane драйвера есть; ждут прогонов на рабочем столе, принимающем ввод
+    (Narrator, сценарий conformance через `os`-lane), и lane остальных ОС спеки flui-driver;
+  - LY97 — ждёт `--record` `os`-lane драйвера на каждой ОС (записи в драйвере пока нет);
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
@@ -5012,7 +5013,7 @@ GPU-память простаивающего или невидимого окн
   `flui-protocol`. Захват на Windows, macOS, iOS и Android не прогонялся — строка качества parity
   «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY97** (заблокирована спекой flui-driver: `--record` `os`-lane) — на `main` всё, кроме
+- [ ] **LY97** (ждёт `--record` `os`-lane драйвера на каждой ОС) — на `main` всё, кроме
   `--record`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
   headless (`NativeRecording::replay_into`, отказ — типизированный `ReplayError`), строки IME,
   закрытия и блокировок хранилища pull-модели (`store_focus`, `store_lock`; защищённое хранилище —
@@ -5026,21 +5027,32 @@ GPU-память простаивающего или невидимого окн
   `window_store_and_close_recordings_replay_on_the_headless_host`,
   `captured_streams_replay_to_what_the_session_delivered`,
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Эти потоки пишет `flui record --native`
-  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Android и Web; крейта
-  `flui-driver` нет, задача ждёт FD6 спеки [flui-driver](../flui-driver/tasks.md). Захват
+  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Android и Web. Крейт
+  `flui-driver` и его Windows-lane есть, но записи в драйвере пока нет (её строят задачи спеки
+  [flui-driver](../flui-driver/tasks.md)), а `os`-lane других ОС ещё не написаны. Захват
   настоящего метода ввода на устройствах — строка качества parity «Recorded native input replays
   deterministically on the headless host».
 
-- [ ] **LY96** (заблокирована спекой flui-driver, не начата) — сценарии `os`-lane драйвера
-  (ADR-0238), читающие приложение через Narrator, VoiceOver, Orca и TalkBack, требуют крейта
-  `flui-driver` с его `os`-lane ([спека flui-driver](../flui-driver/tasks.md)); крейта нет. Долг на
-  каждой ОС — строка качества parity «Conformance executed with assistive technology on each OS».
+- [ ] **LY96** (Windows начата, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
+  драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
+  приложение через UI Automation, то дерево, что читает Narrator: нормализованная проекция дерева
+  UIA равна дереву приложения, каждая роль таблицы ролей читается своим control type, элемент
+  вызывается через `InvokePattern` (`windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`,
+  `windows_desktop::every_role_reads_back_as_its_control_type_through_ui_automation`, прогон на
+  отдельном рабочем столе nextest, Windows 11, 2026-11-19). Долг: сеанс Narrator на Windows и
+  VoiceOver, Orca, TalkBack на остальных ОС — строка качества parity «Conformance executed with
+  assistive technology on each OS».
 
-- [ ] **LY99** (заблокирована спекой flui-driver, не начата) — строки conformance, которым нужна
-  ОС, становятся сценариями `flui-driver` с отчётом lane и результата, когда появятся крейт и его
-  `os`-lane ([спека flui-driver](../flui-driver/tasks.md)); headless-таблица
-  `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs`) — то, что эти
-  сценарии повторят на headless.
+- [ ] **LY99** (сценарий есть; прогон на Windows через `os`-lane в долгу) — сценарий conformance
+  драйвера `scenarios::conformance` (`crates/flui-driver/tests/scenarios.rs`): имя, роль и
+  идентификатор кнопки, её нажатие и прочитанный эффект, через `os`-lane ещё и дерево UIA. На
+  headless в CI — `scenarios::the_conformance_scenario_passes_on_the_headless_target`; через
+  `os`-lane на Windows — `windows_desktop::the_conformance_scenario_runs_through_the_os_lane`,
+  который на отдельном рабочем столе nextest объявляет OS-ввод и выходит `cannot_verify` (ввод
+  туда не доходит) и проходит только на рабочем столе, принимающем ввод пользователя; этот прогон
+  — долг строки качества parity «Real OS input drives an app through the driver's OS lane».
+  Headless-таблица `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs`) —
+  то, что такие сценарии повторяют на headless.
 
 - [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
   `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей

@@ -25,7 +25,7 @@
 //! # fn main() {}
 //! ```
 //!
-//! - **Targets.** [`Launch::headless`] hosts a view in process on a virtual clock (feature
+//! - **Targets.** `Launch::headless` hosts a view in process on a virtual clock (feature
 //!   `headless`); [`Launch::executable`] and [`Launch::cargo_example`] start an app on this host;
 //!   [`Driver::attach`] connects to one already running. Code written against one runs against
 //!   every other.
@@ -45,6 +45,7 @@ mod expect;
 pub mod lane;
 mod launch;
 pub mod os_input;
+pub mod projection;
 pub mod report;
 pub mod scenario;
 pub mod steps;

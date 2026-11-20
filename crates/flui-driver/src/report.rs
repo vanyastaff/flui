@@ -3,7 +3,7 @@
 //!
 //! The verdict rule: `fail` when a check failed; else `cannot_verify` when a check that was asked
 //! for could not run, or when nothing was checked at all; else `pass`. A check whose failure
-//! [is cannot-verify](Error::is_cannot_verify) (a capability the target lacks, a lane the host
+//! [is cannot-verify](crate::Error::is_cannot_verify) (a capability the target lacks, a lane the host
 //! cannot run, the user taking the desktop back) is `cannot_verify`, never a failure and never a
 //! pass, and the capability it lacked joins the report's list. A pass therefore always says what
 //! it covered: the checks it lists.
@@ -79,7 +79,7 @@ impl Check {
     }
 
     /// The check `name` whose attempt answered `result`: passed on success, cannot-verify on a
-    /// [cannot-verify](Error::is_cannot_verify) failure, failed on any other.
+    /// [cannot-verify](crate::Error::is_cannot_verify) failure, failed on any other.
     #[must_use]
     pub fn from_result<T>(name: impl Into<String>, result: &Result<T>) -> Self {
         let outcome = match result {

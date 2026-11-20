@@ -299,3 +299,27 @@ fn an_rtl_windows_button_is_aimed_at_from_the_surfaces_physical_left() {
         "the OS path maps the point the app published, with no mirroring"
     );
 }
+
+/// A sequence the lane says it cannot send is refused before its guard arms and before any event
+/// goes out, as a lane refuses a key it has no code for or a shell hotkey.
+#[test]
+fn a_sequence_the_lane_cannot_send_is_refused_before_any_event() {
+    let (lane, log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().refusing("os_shell_hotkey");
+    let events = [
+        OsEvent::KeyDown("Meta".into()),
+        OsEvent::KeyUp("Meta".into()),
+    ];
+    let refused = lane::send_guarded(&mut lane, &events);
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::NotSupported { capability: Some(capability), .. })
+                if capability == "os_shell_hotkey"
+        ),
+        "{refused:?}"
+    );
+    assert!(log.sent().is_empty(), "nothing was sent");
+    assert_eq!(log.arms(), 0, "the guard never armed");
+    assert_eq!(log.releases(), 0, "nothing was pressed to release");
+}

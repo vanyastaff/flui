@@ -51,7 +51,8 @@ impl Artifact {
     }
 }
 
-/// What to start and how: see the [module docs](self).
+/// What to start and how: an app built for this host, an artifact a lane installs, or a view
+/// hosted in process, with the arguments, environment and connect wait it starts with.
 #[must_use]
 pub struct Launch {
     pub(crate) target: Target,
@@ -166,17 +167,33 @@ impl Launch {
             .env(TOKEN_ENV, &token)
             .env(EXIT_ON_DISCONNECT_ENV, "1")
             .stdin(Stdio::null());
-        let child = command.spawn().map_err(|error| {
+        let started = |error: io::Error| {
             Error::Io(io::Error::new(
                 error.kind(),
                 format!("could not start {}: {error}", executable.display()),
             ))
-        })?;
+        };
+        // The job comes first, and the app joins it before its first instruction: nothing it
+        // starts escapes the job.
+        #[cfg(windows)]
+        let job = crate::lane::windows::job::KillOnCloseJob::try_new()?;
+        #[cfg(windows)]
+        let child = job
+            .spawn_suspended(&mut command)
+            .map_err(|error| match error {
+                Error::Io(error) => started(error),
+                other => other,
+            })?
+            .resume()?;
+        #[cfg(not(windows))]
+        let child = command.spawn().map_err(started)?;
         Ok(Launched {
             endpoint: place.address.clone(),
             token,
             process: AppProcess {
                 child,
+                #[cfg(windows)]
+                _job: job,
                 _place: place,
             },
         })
@@ -208,9 +225,13 @@ pub(crate) struct Launched {
     pub(crate) token: String,
 }
 
-/// A process the session owns: killed when the session ends while it still runs.
+/// A process the session owns: killed when the session ends while it still runs. On Windows it
+/// runs in a kill-on-close job, so whatever it started ends with it, and so does the app when the
+/// driver's process ends without dropping the session.
 pub(crate) struct AppProcess {
     child: Child,
+    #[cfg(windows)]
+    _job: crate::lane::windows::job::KillOnCloseJob,
     /// Where its agent listens: the private directory its socket lives in (Unix), removed with the
     /// session, after the process ended.
     _place: EndpointPlace,

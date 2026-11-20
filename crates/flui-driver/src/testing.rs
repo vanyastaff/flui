@@ -101,6 +101,8 @@ pub struct ScriptedLane {
     isolation: Isolation,
     guard: Option<ScriptedGuard>,
     log: LaneLog,
+    /// The capability its check names when it refuses every sequence.
+    refuses: Option<String>,
 }
 
 impl ScriptedLane {
@@ -113,9 +115,18 @@ impl ScriptedLane {
                 isolation,
                 guard: None,
                 log: log.clone(),
+                refuses: None,
             },
             log,
         )
+    }
+
+    /// Whose check refuses every sequence as not supported, naming `capability`, as a lane
+    /// refuses a key it has no code for.
+    #[must_use]
+    pub fn refusing(mut self, capability: impl Into<String>) -> Self {
+        self.refuses = Some(capability.into());
+        self
     }
 
     /// With a guard that reports no foreign input.
@@ -172,6 +183,16 @@ impl Lane for ScriptedLane {
         ))
     }
 
+    fn check(&mut self, events: &[OsEvent]) -> Result<()> {
+        match &self.refuses {
+            Some(capability) => Err(Error::not_supported(
+                capability.clone(),
+                format!("the scripted lane refuses all {} events", events.len()),
+            )),
+            None => Ok(()),
+        }
+    }
+
     fn send(&mut self, event: &OsEvent) -> Result<()> {
         self.log
             .sent
@@ -185,6 +206,13 @@ impl Lane for ScriptedLane {
         self.log.releases.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
+}
+
+/// End an armed Windows guard's watching thread from outside, as a watcher that dies under the
+/// guard does; whether there was one to end.
+#[cfg(windows)]
+pub fn end_guard_watcher(guard: &crate::lane::windows::WindowsGuard) -> bool {
+    guard.end_watcher()
 }
 
 /// How a [`ScriptedAgent`] answers one request.

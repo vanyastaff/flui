@@ -23,6 +23,8 @@ use flui_protocol::wait::{Condition, WaitOutcome};
 use crate::compose;
 use crate::driver::Driver;
 use crate::error::Result;
+use crate::lane::OsCapture;
+use crate::projection::Projection;
 use crate::scenario::WindowSpec;
 
 /// One window of the app.
@@ -79,6 +81,66 @@ impl<'d> Window<'d> {
     pub fn placement(&mut self) -> Result<Placement> {
         self.driver
             .agent::<method::WindowPlacement>(WindowParams::new(self.id), Duration::ZERO)
+    }
+
+    /// The window as the OS accessibility API shows it, through the session's lane, projected
+    /// onto the wire's nodes ([`Lane::read_tree`](crate::Lane::read_tree)). Its nodes' ids number
+    /// them in the order they were read: they are no handles the app issued.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_accessibility_tree` without
+    /// a lane that reads one; the lane's and the app's failures.
+    pub fn os_tree(&mut self) -> Result<Tree> {
+        let placement = self.placement()?;
+        let lane = self.driver.lane().ok_or_else(|| {
+            crate::Error::not_supported("os_accessibility_tree", "the session has no OS lane")
+        })?;
+        lane.run(move |lane| lane.read_tree(&placement))?
+    }
+
+    /// Activate the element whose identifier is `identifier` through the OS accessibility API, as
+    /// a screen reader does ([`Lane::invoke`](crate::Lane::invoke)): proof that assistive
+    /// technology can act on it, not only read it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_invoke` without a lane that
+    /// acts through one; the lane's and the app's failures.
+    pub fn os_invoke(&mut self, identifier: &str) -> Result<()> {
+        let placement = self.placement()?;
+        let lane = self.driver.lane().ok_or_else(|| {
+            crate::Error::not_supported("os_invoke", "the session has no OS lane")
+        })?;
+        let identifier = identifier.to_owned();
+        lane.run(move |lane| lane.invoke(&placement, &identifier))?
+    }
+
+    /// The window's semantics tree and its OS accessibility tree, each as its normalized outline
+    /// (ADR-0095 §4): whether assistive technology reads what the app published.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`] and [`Self::os_tree`].
+    pub fn compare_projection(&mut self) -> Result<Projection> {
+        let os = self.os_tree()?;
+        let app = self.read()?;
+        Ok(Projection::of(&app, &os))
+    }
+
+    /// The OS's own capture of the window's surface, through the session's lane
+    /// ([`Lane::capture_window`](crate::Lane::capture_window)).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_capture` without a lane that
+    /// captures; the lane's and the app's failures.
+    pub fn capture_os(&mut self) -> Result<OsCapture> {
+        let placement = self.placement()?;
+        let lane = self.driver.lane().ok_or_else(|| {
+            crate::Error::not_supported("os_capture", "the session has no OS lane")
+        })?;
+        lane.run(move |lane| lane.capture_window(&placement))?
     }
 
     /// Whether the window is the one `spec` describes.

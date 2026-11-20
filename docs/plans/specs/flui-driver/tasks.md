@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -693,6 +693,139 @@ graph LR
     released;
   - the other scenarios run on W, and each check that existed before is present;
   - the pure mapping tables run on L.
+- **Status (2026-11-19):** built; the pull request is under review. Open until the runs on the
+  input desktop below are made, which this host's owner does not run by hand: they are the
+  `OS input through the driver` and `assistive technology conformance` rows of
+  `crates/flui-native/platform-parity.toml`.
+- **Evidence (2026-11-19):**
+  - On every host (`driver_it`, the tables): `windows_lane::a_key_name_maps_to_its_virtual_key_or_to_the_layout`,
+    `text_is_typed_as_packets_and_line_breaks_as_keys`,
+    `the_role_table_was_read_against_the_locked_adapter`,
+    `every_role_that_publishes_a_node_has_a_row_in_vocabulary_order`,
+    `a_control_type_reads_back_from_its_id`,
+    `a_control_type_folds_to_its_wire_role_with_its_aria_role_and_flags`,
+    `each_safety_rule_refuses_with_its_code`, `shell_hotkeys_are_refused_and_app_chords_are_not`,
+    `the_lane_runs_on_the_shared_desktop_and_refuses_unproven_isolation`,
+    `only_input_with_both_of_the_lanes_marks_is_its_own`,
+    `touch_and_pen_frames_carry_every_contact_and_their_phases`,
+    `a_client_origin_maps_back_to_its_device_pixel_at_every_scale`,
+    `an_absolute_move_lands_on_the_pixel_it_names`,
+    `the_projection_drops_what_one_backend_reports_and_names_the_differences`,
+    `only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut`,
+    `typed_text_goes_through_the_shell_hotkey_check_as_the_keys_it_sends`,
+    `keys_and_text_are_planned_against_what_the_lane_holds`, `a_release_windows_refused_stays_held`,
+    `a_pause_is_waited_out_whole_in_watched_slices`, `a_contact_is_held_only_once_windows_took_it`,
+    `the_primary_contact_is_the_first_down_and_stays_so`,
+    `a_long_text_is_cut_at_the_same_place_on_both_sides`,
+    `the_walk_reads_the_window_and_leaves_a_gone_element_out`,
+    `a_provider_that_times_out_fails_the_read_with_a_timeout`,
+    `the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart`,
+    `the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_included`,
+    `a_key_windows_took_is_held_even_when_its_echo_never_comes`,
+    `no_property_is_read_after_the_first_timeout`,
+    `a_pattern_request_and_an_invoke_tell_their_failures_apart`;
+    `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`;
+    `steps::small_scrolls_add_up_and_a_part_of_a_pixel_is_carried`.
+  - The scenarios on the headless target (CI): `scenarios::the_gallery_scenario_passes_on_the_headless_target`,
+    `the_accessibility_scenario_passes_on_the_headless_target`,
+    `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
+    `flui-semantics`' own fold, through the agent), `the_input_scenario_passes_on_the_headless_target`,
+    `the_notes_scenario_passes_on_the_headless_target`,
+    `the_conformance_scenario_passes_on_the_headless_target` (the conformance row the platform-layer
+    spec names).
+  - On W, a nextest desktop of its own (Windows 11 build 26300): `windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`
+    (the scenario app's UI Automation tree projects equal to its semantics, `AutomationId` is the
+    identifier, an `InvokePattern` invoke acts, an unknown id is `not_found`),
+    `every_role_reads_back_as_its_control_type_through_ui_automation`,
+    `the_guard_watches_and_stops_on_a_desktop_of_its_own`,
+    `a_guard_whose_watcher_died_ends_the_run`,
+    `the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey`,
+    `the_lanes_check_counts_a_shift_click_as_a_shift_tap`,
+    `a_job_ends_its_processes_when_it_closes`,
+    `a_process_joins_its_job_before_it_runs`,
+    `a_launched_app_ends_with_its_session`; `the_conformance_scenario_runs_through_the_os_lane` and
+    `the_device_check_scenarios_run_through_the_os_lane` announce their OS run and come out
+    `cannot_verify` (`windows_lane`) with nothing sent, `windows-a11y`, which sends no OS input,
+    passing; `the_compositor_captures_the_apps_window_alone` is `cannot_verify` (a window there has
+    no compositor area); `a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input` reports
+    `CANNOT_VERIFY`.
+  - Taken out one at a time, each fails a test above: the check before the first event, the
+    millionth-of-a-pixel origin lift, the headless window's text input, the framework
+    namespace in the projection, recording a key or button before its echo is confirmed, a
+    release of everything reaching the shortcut counts, the refusal of a chord left down, the
+    mask key and the refusal of a completing release in the release of everything, a pointer
+    press not resetting the run of Shift taps, the lane's check reading typed text, the scroll
+    remainder carry, the stop at the first property timeout and the pattern request's typed
+    failures.
+  - Owed on W, by hand on the desktop that takes the user's input (`FLUI_TEST_VISIBLE_DESKTOP=1`;
+    no automated run reaches that desktop: `nightly-platforms.yml` runs only `flui-native`
+    there): the gallery, input and notes scenarios and the conformance scenario passing through the
+    OS lane, a foreign mouse move ending a run `cannot_verify` with its contact released
+    (`a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input`), the guard's hook seeing the
+    lane's own input come back, the foreground read again before each typed stroke, the mask key
+    keeping the release of a held Control+Shift or Alt+Shift from switching the input language,
+    Windows
+    Graphics Capture of the app's window, a Narrator session over the scenario app, and the
+    isolation spikes below.
+- **As built:**
+  - The lane is `lane::windows`: `keys`, `roles`, `safety`, `held`, `contacts`, `screen`,
+    `activity` and `walk` are pure; `win32`, `guard`, `uia`, `capture` and `job` call Windows. Key
+    events and typed text go through one plan (`held::HeldKeys`), which the shell-hotkey check
+    reads and the lane sends stroke by stroke; held keys, buttons and contacts are recorded once
+    Windows took them, before the guard confirms the echo; `HeldKeys` is the one owner of the
+    shell's shortcut counts too, and only another key restarts the run of Shift taps (Windows
+    documents five presses and nothing about a pause or pointer input between them); a sequence
+    that leaves a chord of modifiers down is refused, and the release of everything masks held
+    modifiers with the unassigned key `0xE8` so it completes no shortcut; reading an element stops
+    at its first property timeout, and an invoke tells a timeout, a gone element and a missing
+    pattern apart; a pause is waited out whole; a launched app starts suspended and joins its
+    job before its first instruction. UI Automation, Windows
+    Graphics Capture and the job object go through the `windows` crate the workspace already pins,
+    not `uiautomation` and `windows-capture`.
+  - `Lane` gains `check` (asked by `send_guarded` before the guard arms), `read_tree`, `invoke` and
+    `capture_window`, each `not_supported` by default; the Rust API reaches them as
+    `Window::os_tree`, `compare_projection`, `os_invoke` and `capture_os`. The protocol rows
+    `os.tree`, `os.compare_projection` and `capture.os` are not in `flui_protocol::method` yet: they
+    join it with the front ends, and FD10 makes `capture_window` its `os` source.
+  - ADR-0095 §4's projection is `flui_protocol::tree::normalized_outline`; it leaves out the
+    window node, a title bar and the framework's own identifiers (`flui:`, the announcer's live
+    regions), and reads an OS automation id as the identifier.
+  - The guard watches the low-level hooks and the digitizers' raw input (a synthetic pointer
+    device sends no raw input) rather than `GetPointerInfo`, which only the app's window can call;
+    an event is the lane's when it is injected and carries the lane's tag, so a second `SendInput`
+    caller ends a run too. A hook procedure posts to its own thread's queue: no trampoline.
+  - The window is found among the app's visible top-level windows by its client size and DPI
+    against the placement; its logical origin is lifted a millionth of a device pixel so it maps
+    back to its device column at every scale.
+  - A scroll of `n` device pixels turns the wheel `n` wheel units; the app's distance is its own,
+    so the scenarios check that a scroll arrived, not how far.
+  - A composition goes through `input.inject` on every target, the session's path whatever it is.
+  - The device checks became scenarios on the apps in `tests/apps.rs`, which the headless target
+    and `examples/scenario_app.rs` (a window, `flui-app` a Windows-only dev-dependency) share:
+    the gallery (`windows-gallery`), the accessibility checks with the roles page
+    (`windows-a11y`, on a page of every role of the table instead of `a11y_probe`), `windows-input`
+    and `windows-notes` (on a note field instead of `two_screens`). DPI after a resize and native
+    goldens through `record.start{native}` are not checked: the driver neither resizes a window nor
+    records native input yet (FD6, FD10).
+  - The headless target's window offers text input (`HeadlessWindow::with_text_input`): without it
+    `element.type_text` and a composition reached no field.
+  - The isolation modes are refused, `not_supported` naming `windows_isolation_<mode>`
+    (`WindowsLane::try_new`), until their spikes pass:
+    - **Windows Sandbox.** Generate a `.wsb` that maps the built driver test binary and the
+      scenario app read-only and a results folder read-write, with `vGPU` enabled and a logon
+      command that runs the `windows_desktop` tests of `driver_it` with
+      `FLUI_REQUIRE_INPUT_DESKTOP=1`, writing their output to the results folder. Go when, with the
+      host's mouse moved and keys pressed throughout, every certification scenario passes inside
+      the Sandbox, the host sees no input it did not make (a hook logger on the host stays empty),
+      and `the_compositor_captures_the_apps_window_alone` passes there (GPU presentation); no-go
+      otherwise, and the spec drops the mode.
+    - **A second interactive session.** A second local user signed in by fast user switching runs
+      the same command; go on the same three criteria, the host session's hook logger empty while
+      the second session takes input; no-go otherwise.
+    - **A loopback RDP session.** An RDP session from the machine to itself (a second user, since
+      a session of the same user takes the console) runs the same command; go on the same criteria
+      with the RDP window minimized and then restored, since a minimized RDP client stops
+      rendering the remote desktop; no-go otherwise.
 
 ### FD12. Chrome lane (IC)
 

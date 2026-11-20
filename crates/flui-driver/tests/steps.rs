@@ -8,6 +8,7 @@ use flui_driver::coordinates::{DevicePoint, WindowGeometry};
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::input::{
     ActionSequence, ImeAction, InputSource, PointerAction, PointerButton, PointerDevice,
+    ScrollUnit, WheelAction,
 };
 use flui_driver::steps::{MAX_STEPS, OsEvent, STEP, os_events};
 
@@ -348,5 +349,46 @@ fn input_no_lane_sends_is_refused_before_any_event() {
     assert!(
         matches!(outside, Err(Error::OutsideTarget { .. })),
         "{outside:?}"
+    );
+}
+
+/// A scroll smaller than a device pixel is carried into the next, so small scrolls add up to what
+/// they ask for in all, and one that adds up to no whole pixel yet sends nothing.
+#[test]
+fn small_scrolls_add_up_and_a_part_of_a_pixel_is_carried() {
+    let scroll = |delta_y: f64| WheelAction::Scroll {
+        at: LogicalPoint::new(10.0, 10.0),
+        delta_x: 0.0,
+        delta_y,
+        unit: ScrollUnit::Pixel,
+    };
+    // At scale 2, a tenth of a logical pixel is a fifth of a device pixel.
+    let wheel = ActionSequence::new(vec![InputSource::Wheel {
+        id: "w".into(),
+        actions: (0..5).map(|_| scroll(0.1)).collect(),
+    }]);
+    let scrolls: Vec<i32> = os_events(&wheel, &geometry())
+        .expect("events")
+        .into_iter()
+        .filter_map(|event| match event {
+            OsEvent::Scroll { delta_y, .. } => Some(delta_y),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        scrolls,
+        [1],
+        "five fifths of a pixel are one pixel, sent once it is whole"
+    );
+    let alone = ActionSequence::new(vec![InputSource::Wheel {
+        id: "w".into(),
+        actions: vec![scroll(0.1)],
+    }]);
+    assert!(
+        !os_events(&alone, &geometry())
+            .expect("events")
+            .iter()
+            .any(|event| matches!(event, OsEvent::Scroll { .. })),
+        "a part of a pixel alone sends no turn"
     );
 }

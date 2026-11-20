@@ -43,12 +43,63 @@ app's trees, frames and input, and this crate composes that with what only the O
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
   `may_have_run`, never not run.
+- **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
+  `Lane::check` over the whole sequence before it arms the guard: a key a lane has no code for, a
+  device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
+  released.
+- **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
+  the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
+  Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
+  and `WindowsLane` are `cfg(windows)`.
+- **The Windows lane rechecks the desktop before every event.** It sends nothing off the desktop
+  that takes the user's input (`UOI_IO`), and that refusal is a lane the host cannot run
+  (`cannot_verify`); then the window, the foreground, the window under the point and the physical
+  input held, each refusal with its wire code (`safety::Refusal`). Every event carries the lane's
+  tag, which is how its guard tells the lane's input from anyone else's.
+- **Every key goes through one checked plan.** A key event and typed text become keystrokes
+  planned against what the lane holds (`lane::windows::held::HeldKeys`): the shell-hotkey rule
+  reads those strokes before a sequence, and the lane sends them, reading the desktop again before
+  each. What the lane holds (keys, buttons, contacts) is recorded as soon as Windows took the
+  press, before the guard confirms its echo, and forgotten once it took the release, so a press
+  whose echo never came and a refused release are both released again. `HeldKeys` is also the
+  one owner of what the shell's shortcuts count across sends (the modifiers of a chord, the run
+  of lone Shift taps): every key edge Windows took goes through it, a release of everything
+  included. Only another key restarts the run or breaks a chord: Windows documents five presses
+  of Shift and nothing about a pause or pointer input between them, so neither resets the count.
+  A sequence that leaves a chord of modifiers or a fifth lone Shift down is refused, and the
+  release of everything never completes a shell shortcut: while a modifier is held it presses and
+  releases the unassigned virtual key `0xE8` first (`held::MASK`), and a release that would still
+  complete one is not sent.
+- **An accessibility provider's answers stay apart.** A UI Automation read or invoke tells a
+  provider that timed out (`timeout`, `may_have_run` for an invoke), an element that went away
+  (`gone`) and a pattern the element does not offer (`action_unsupported`) from each other.
+- **A pause is waited out whole,** in slices with the guard looked at between them; a guard whose
+  watcher is gone, or whose hook no longer sees the lane's own input, ends the run, never reads as
+  a quiet desktop.
+- **No trampoline for the guard.** A low-level hook procedure gets no context, and a process-global
+  cell would be a trampoline only `flui-app` and `flui-native` may hold (ADR-0097): the procedure
+  posts what it saw to its own thread's queue, and the loop that owns the state classifies it.
+- **A lane stays `Send` without a new `unsafe impl`.** OS handles a lane keeps (a window, a
+  synthetic pointer device) are kept as integers; a COM object (UI Automation, Direct3D, a
+  capture session) and its apartment live for one call on the lane's thread.
+- **A launched Windows app runs in a kill-on-close job.** The app starts suspended and joins the
+  job before its first instruction, and the job's handle closes with the session or with the
+  driver's process, however that ends.
+- **The OS tree is read against the app's through one projection.** A lane projects its OS tree
+  onto the wire's nodes, and `projection::Projection` compares the two through
+  `flui_protocol::tree::normalized_outline` (ADR-0095 §4), the one definition of what only one
+  backend reports.
 - **Mapping refuses, never clamps.** `coordinates::to_device` maps in `f64` with every step checked
   and refuses a point outside the surface; `steps::os_events` hands a lane single-step moves, each
   followed by a pause, at most `steps::MAX_STEPS` per move; the moving sources of a tick share
   one timeline, each split by its own duration, so they move together and each keeps its own
   speed, as on the synthetic path. Steps due within one millisecond go out together, so every
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
+  A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
+  that adds up to no whole pixel yet sends nothing.
+- **A hung app costs one timeout.** Reading a UI Automation element stops at the first property
+  read that times out or finds the element gone (`lane::windows::walk::Properties`), and the walk
+  ends with `timeout`.
 - **Waits are on the connection's clock.** An action's actionability wait ends at a deadline on
   the clock the connection counts budgets in, or as soon as the window presents no frame before
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts
