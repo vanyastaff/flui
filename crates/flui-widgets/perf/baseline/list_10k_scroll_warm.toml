@@ -1,5 +1,5 @@
-# Written by `cargo xtask perf --bless`; counts, not timings.
-# One scenario of crates/flui-widgets/tests/perf.rs.
+# Written by `FLUI_PERF_BASELINE=bless cargo nextest run --locked --no-fail-fast -p flui-widgets --test perf -E 'test(/^perf_/)'`;
+# counts, not timings. One scenario of crates/flui-widgets/tests/perf.rs.
 
 [list_10k_scroll_warm]
 allocated_bytes = 268273

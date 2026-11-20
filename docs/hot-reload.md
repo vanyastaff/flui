@@ -84,7 +84,7 @@ beside the binary; `reload` turns on `flui-hot-reload/host-hook` and installs
 `--no-default-features --features <host>/reload`, the feature that `flui.toml`
 names in `[hot_reload] reload_feature`, so the running host links no copy of the
 logic crate and is not relinked when it changes (on Windows the running
-executable is locked). `cargo xtask perf --size` holds the release size of the
+executable is locked). CI's `size` job holds the release size of the
 generated host (`hot_reload_host_release_bytes`).
 
 ### How the host drives the reload

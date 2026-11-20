@@ -164,9 +164,10 @@ name = "nested_scroll_ui"
 path = "tests/nested_scroll_ui.rs"
 harness = true
 
-# The counted perf scenarios `cargo xtask perf` runs. A target of its own, not
-# a module of `widgets_it`: it pins the process-global font system and reads
-# `FLUI_PERF_OUT` from the environment.
+# The counted perf scenarios, which hold `perf/baseline/` when
+# `FLUI_PERF_BASELINE` asks (CI's `perf-gates` job). A target of its own, not
+# a module of `widgets_it`: it pins the process-global font system, installs a
+# counting global allocator and reads the environment.
 [[test]]
 name = "perf"
 path = "tests/perf.rs"
