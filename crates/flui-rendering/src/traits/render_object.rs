@@ -50,10 +50,7 @@ pub enum SemanticsClip {
 use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::inspect::Inspect;
 
-use crate::{
-    protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
-    traits::PaintEffects,
-};
+use crate::{protocol::Protocol, traits::PaintEffects};
 use flui_interaction::pointer::{CursorRequest, MouseTrackerAnnotation, PointerTarget};
 use flui_semantics::SemanticsConfiguration;
 
@@ -207,12 +204,12 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// # Signature evolution
     ///
     /// 1. **Originally** — `fn perform_layout_raw(&mut self, constraints:
-    ///    ProtocolConstraints<P>) -> ProtocolGeometry<P>`. Blanket impl
+    ///    P::Constraints) -> P::Geometry`. Blanket impl
     ///    shipped as a no-op returning `*self.size()` because the trait
     ///    surface didn't carry children.
     ///
     /// 2. **Next revision** — signature changed to
-    ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>) -> ProtocolGeometry<P>`
+    ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>) -> P::Geometry`
     ///    so the blanket impl can construct a typed [`RawBoxLayoutContext`]
     ///    with children access. Contract-violation signalling went
     ///    through `std::panic::panic_any(RenderError::ContractViolation)`
@@ -224,7 +221,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///    handle.
     ///
     /// 3. **Current shape** — signature returns
-    ///    `RenderResult<ProtocolGeometry<P>>` so contract violations
+    ///    `RenderResult<P::Geometry>` so contract violations
     ///    propagate as typed `Err(RenderError::...)` directly through
     ///    `?`. `panic_any` removed; `catch_unwind` in
     ///    `RenderEntry::layout_leaf_only` retained only to wrap genuine
@@ -243,7 +240,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>,
-    ) -> crate::error::RenderResult<ProtocolGeometry<P>>;
+    ) -> crate::error::RenderResult<P::Geometry>;
 
     /// Records this render object's paint fragment.
     ///
@@ -309,12 +306,12 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// [`hit_test_transform`]: Self::hit_test_transform
     fn hit_test_raw(
         &self,
-        position: ProtocolPosition<P>,
+        position: P::Position,
         child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
-            Option<ProtocolPosition<P>>,
+            Option<P::Position>,
             Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome;
@@ -362,9 +359,9 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// in layout tests without poisoning release builds).
     fn dry_layout_raw(
         &self,
-        _constraints: ProtocolConstraints<P>,
+        _constraints: P::Constraints,
         _ctx: &mut crate::context::BoxDryLayoutContext<'_>,
-    ) -> crate::error::RenderResult<ProtocolGeometry<P>> {
+    ) -> crate::error::RenderResult<P::Geometry> {
         Ok(P::default_geometry())
     }
 
@@ -377,7 +374,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// memoizes every level in the per-node layout cache.
     fn dry_baseline_raw(
         &self,
-        _constraints: ProtocolConstraints<P>,
+        _constraints: P::Constraints,
         _baseline: crate::traits::TextBaseline,
         _ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {

@@ -9,7 +9,7 @@
 //! `&mut self` on the entry so the borrow chain reaches the state mutably.
 
 use super::{LayoutRecord as _, RenderState};
-use crate::protocol::{Protocol, ProtocolConstraints};
+use crate::protocol::Protocol;
 
 // ============================================================================
 // CONSTRAINTS (CACHE VALIDATION)
@@ -31,7 +31,7 @@ impl<P: Protocol> RenderState<P> {
     /// }
     /// ```
     #[inline]
-    pub fn constraints(&self) -> Option<&ProtocolConstraints<P>> {
+    pub fn constraints(&self) -> Option<&P::Constraints> {
         self.layout.constraints()
     }
 
@@ -45,7 +45,7 @@ impl<P: Protocol> RenderState<P> {
     /// invocation. Re-layout of the same node now
     /// straight-assigns the constraints. See module-level doc for rationale.
     #[inline]
-    pub fn set_constraints(&mut self, constraints: ProtocolConstraints<P>) {
+    pub fn set_constraints(&mut self, constraints: P::Constraints) {
         self.layout.set_constraints(constraints);
     }
 
@@ -63,9 +63,9 @@ impl<P: Protocol> RenderState<P> {
     /// Checks if constraints match the given value.
     ///
     /// Returns `false` if constraints are not set.
-    pub fn has_constraints(&self, constraints: &ProtocolConstraints<P>) -> bool
+    pub fn has_constraints(&self, constraints: &P::Constraints) -> bool
     where
-        ProtocolConstraints<P>: PartialEq,
+        P::Constraints: PartialEq,
     {
         self.layout.constraints().is_some_and(|c| c == constraints)
     }

@@ -36,12 +36,9 @@ use crate::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
     protocol::{
-        BoxProtocol, Protocol, SliverProtocol,
-        box_protocol::{
-            ActualBaselineChildCallback, ErasedBoxLayoutContext, LayoutChildCallback,
-            SliverLayoutChildCallback,
-        },
-        sliver_protocol::{ErasedSliverLayoutContext, SliverChildLayoutCallback},
+        ActualBaselineChildCallback, BoxProtocol, ErasedBoxLayoutContext,
+        ErasedSliverLayoutContext, LayoutChildCallback, Protocol, SliverChildLayoutCallback,
+        SliverLayoutChildCallback, SliverProtocol,
     },
     storage::{ErasedConstraints, RenderNode, RenderTree},
 };
@@ -1225,7 +1222,7 @@ fn layout_subtree_borrowed_impl(
                  budget (layout poison).",
             )
         };
-        let box_intrinsic_cb_ref: crate::protocol::box_protocol::BoxChildIntrinsicCallback<'_> =
+        let box_intrinsic_cb_ref: crate::protocol::BoxChildIntrinsicCallback<'_> =
             &box_intrinsic_cb_owned;
 
         // Construct the driver-side PARENT-DATA-ERASED context.  The walk
@@ -1610,8 +1607,7 @@ fn layout_sliver_subtree_borrowed_impl(
                     ),
                 }
             };
-        let box_cb_ref: crate::protocol::sliver_protocol::ErasedBoxChildLayoutCallback<'_> =
-            &box_cb_owned;
+        let box_cb_ref: crate::protocol::ErasedBoxChildLayoutCallback<'_> = &box_cb_owned;
 
         let box_intrinsic_cb_owned = move |child_id: RenderId,
                                            dimension: crate::storage::IntrinsicDimension,
@@ -1628,7 +1624,7 @@ fn layout_sliver_subtree_borrowed_impl(
                  budget (layout poison).",
             )
         };
-        let box_intrinsic_cb_ref: crate::protocol::sliver_protocol::BoxChildIntrinsicCallback<'_> =
+        let box_intrinsic_cb_ref: crate::protocol::BoxChildIntrinsicCallback<'_> =
             &box_intrinsic_cb_owned;
 
         let mut ctx = crate::protocol::DriverSliverLayoutContext::new(
