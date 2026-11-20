@@ -305,7 +305,7 @@ pub use scroll::{
     SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
     SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
     SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
-    SliverPersistentHeaderDelegate, SliverToBoxAdapter, SnapPolicy, StretchTriggerSignal, Viewport,
+    SliverPersistentHeaderDelegate, SliverToBoxAdapter, SnapPolicy, StretchTrigger, Viewport,
     ViewportFraction, WheelScrollDistances,
 };
 pub use scroll::{

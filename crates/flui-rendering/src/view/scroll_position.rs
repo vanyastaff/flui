@@ -1028,7 +1028,7 @@ impl ViewportOffset for ScrollPosition {
 
     fn user_scroll_direction(&self) -> ScrollDirection {
         // The activity state IS the tracked direction — the render layer
-        // (`RenderViewport::layout_child_sequence` reading this through
+        // (`ViewportCore::layout_child_sequence` in flui-objects reading this through
         // `dyn ViewportOffset`) must see the same answer the widget layer
         // sees, or direction-dependent sliver behavior (a floating header's
         // reveal) runs on a permanently-Idle constraint.

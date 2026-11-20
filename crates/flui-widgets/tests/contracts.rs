@@ -1209,6 +1209,7 @@ fn lazy_slivers() {
             ("lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions", crate::lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions),
             ("sliver_persistent_header::a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends", crate::sliver_persistent_header::a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends),
             ("sliver_persistent_header::an_active_floating_snap_migrates_and_unmounts", crate::sliver_persistent_header::an_active_floating_snap_migrates_and_unmounts),
+            ("sliver_persistent_header::a_stretching_header_runs_its_trigger_once_per_crossing_of_the_offset", crate::sliver_persistent_header::a_stretching_header_runs_its_trigger_once_per_crossing_of_the_offset),
         ],
     );
 }
