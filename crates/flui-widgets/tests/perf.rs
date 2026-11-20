@@ -43,9 +43,9 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use flui_layer::TextureRegistration;
 use flui_painting::paint::{Image as PixelImage, TextureId};
 use flui_painting::styling::Color;
-use flui_rendering::layer::TextureRegistration;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
 use flui_testing::control_cost::control_over_text;
@@ -952,7 +952,7 @@ fn frames_taken(laid: &LaidOut, feeds: &Feeds) -> Vec<(usize, u8)> {
     frames
 }
 
-fn shown_version(laid: &LaidOut) -> flui_rendering::layer::SceneVersionId {
+fn shown_version(laid: &LaidOut) -> flui_layer::SceneVersionId {
     laid.sink().version().expect("a version was presented").id()
 }
 

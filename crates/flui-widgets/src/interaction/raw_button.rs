@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::actions::{

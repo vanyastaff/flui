@@ -15,6 +15,6 @@ pub use flui_painting::{
 /// Paint, style and text values: paths, shaders, colours, borders, decorations, text styles.
 pub use flui_painting::{paint, styling, typography};
 pub use flui_rendering::delegates::CustomPainter;
-pub use flui_rendering::semantics::{
+pub use flui_semantics::{
     SemanticsRegion, SemanticsRegionId, SemanticsRegionKey, SemanticsRegions,
 };

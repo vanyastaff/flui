@@ -20,16 +20,16 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::BoxLayoutContext,
     parent_data::BoxParentData,
-    semantics::{
-        AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole,
-        States,
-    },
     testing::{FrameRun, Probe, RenderTester, SceneHost, box_node, edit_render_object},
     traits::RenderBox,
 };
+use flui_semantics::{
+    AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole,
+    States,
+};
 
 pub(crate) fn nonfinite_reading_order_is_refused_before_publication() {
-    use flui_rendering::semantics::SemanticsSortKey;
+    use flui_semantics::SemanticsSortKey;
     for order in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let mut config = SemanticsConfiguration::new();
         config.set_label("invalid ordering");
@@ -1060,7 +1060,7 @@ pub(crate) fn a_semantics_clip_drops_a_child_that_falls_entirely_outside_it() {
 pub(crate) fn a_table_shape_the_role_drops_bounds_no_cell() {
     use std::num::NonZeroUsize;
 
-    use flui_rendering::semantics::{CellPosition, SetSize, TableShape};
+    use flui_semantics::{CellPosition, SetSize, TableShape};
 
     let mut list = SemanticsConfiguration::new();
     list.set_role(SemanticsRole::List);
@@ -1115,7 +1115,7 @@ pub(crate) fn a_table_shape_the_role_drops_bounds_no_cell() {
 /// eight leaves on a mounted tree re-assembles under eight group anchors and
 /// must name that same host.
 pub(crate) fn re_assembling_marked_subtrees_refuses_like_the_whole_tree() {
-    use flui_rendering::semantics::SemanticsSortKey;
+    use flui_semantics::SemanticsSortKey;
     const GROUPS: usize = 8;
     fn invalid() -> SemanticsConfiguration {
         let mut config = SemanticsConfiguration::new();

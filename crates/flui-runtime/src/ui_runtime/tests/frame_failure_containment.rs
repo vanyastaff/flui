@@ -381,8 +381,8 @@ impl flui_foundation::inspect::Inspect for PanicOnLayoutForReportBox {
 }
 
 impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
-    type Arity = flui_rendering::prelude::Leaf;
-    type ParentData = flui_rendering::prelude::BoxParentData;
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,

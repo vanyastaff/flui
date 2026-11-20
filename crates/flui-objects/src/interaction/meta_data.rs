@@ -23,12 +23,8 @@ use std::{any::Any, fmt};
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
 
-use flui_rendering::{
-    context::BoxHitTestContext,
-    hit_testing::{HitMetadata, HitTestBehavior},
-    parent_data::BoxParentData,
-    traits::RenderBox,
-};
+use flui_interaction::pointer::{HitMetadata, HitTestBehavior};
+use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, traits::RenderBox};
 
 /// A render object that attaches opaque metadata to hit-test results.
 ///

@@ -11,7 +11,7 @@ use flui_foundation::ElementId;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerObserver};
 use flui_painting::text_boundaries;
-use flui_rendering::semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
+use flui_semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
 use flui_view::EventContextError;
 
 use super::input::CaretMemory;

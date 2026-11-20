@@ -1299,7 +1299,7 @@ impl WidgetsBinding {
     pub fn run_frame_with_layout_builders(
         &self,
         pipeline: &PipelineCell,
-        writer: &mut flui_rendering::layer::SceneWriter<'_>,
+        writer: &mut flui_layer::SceneWriter<'_>,
     ) -> Result<bool, flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {

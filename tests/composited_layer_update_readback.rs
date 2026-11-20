@@ -391,7 +391,7 @@ impl flui_foundation::inspect::Inspect for RunLocalClipParent {
 }
 
 impl flui_rendering::traits::RenderBox for RunLocalClipParent {
-    type Arity = flui_rendering::prelude::Single;
+    type Arity = flui_foundation::Single;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(

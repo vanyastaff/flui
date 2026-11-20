@@ -373,7 +373,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         let scene = laid.layer_tree().expect("dragged card scene");
         assert!(
             scene.iter().any(|(_, node)| {
-                if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                if let flui_layer::Layer::Picture(picture) = node.layer() {
                     picture.picture().iter().any(|command| {
                         matches!(&command.op,
                     flui_painting::DrawOp::Rect { paint, .. } if paint.color == expected)
@@ -647,7 +647,7 @@ pub(crate) fn cancelling_a_fully_slid_card_restores_it_without_dismissal() {
 
 /// Read the card's painted leading edge through its complete ancestor transform.
 fn painted_card_axis(laid: &crate::common::LaidOut, vertical: bool) -> f64 {
-    use flui_rendering::layer::Layer;
+    use flui_layer::Layer;
     let tree = laid.layer_tree().expect("committed card scene");
     for (_, node) in tree.iter() {
         let Layer::Picture(picture) = node.layer() else {

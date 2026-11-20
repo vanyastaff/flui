@@ -835,7 +835,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &self,
         position: Offset,
         kind: flui_interaction::events::PointerKind,
-        result: &mut crate::hit_testing::HitTestResult,
+        result: &mut flui_interaction::pointer::HitTestResult,
     ) -> bool
     where
         // The child-recursion callback must be Send + Sync (inherited
@@ -863,7 +863,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &self,
         id: RenderId,
         position: Offset,
-        result: &mut crate::hit_testing::HitTestResult,
+        result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
     ) -> bool
     where
@@ -882,7 +882,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &self,
         id: RenderId,
         position: Offset,
-        result: &mut crate::hit_testing::HitTestResult,
+        result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
     ) -> bool
     where
@@ -970,7 +970,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // stays a plain structural forward (flui-rendering ARCHITECTURE.md, follower hit-testing).
         let slop_area = render_object.hit_slop_area(own_size, walk.kind());
 
-        let hit_node = |result: &mut crate::hit_testing::HitTestResult,
+        let hit_node = |result: &mut flui_interaction::pointer::HitTestResult,
                         walk: &mut HitWalk,
                         position: Offset| {
             // Entries already on the path: a node that joins the hits below it
@@ -1002,52 +1002,53 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // in this walk (`hit_test_transform` above, the follower offset).
                 // Scoped to exactly this one child recursion — the ctx that accumulated it already
                 // scoped the push/pop to the same call.
-                let mut dispatch_child = |result: &mut crate::hit_testing::HitTestResult| -> bool {
-                    if child_node.as_sliver().is_some() {
-                        // Explicit positions are already child-local; the layout-offset
-                        // fallback starts from the child's physical paint offset.
-                        return if let Some(position) = override_pos {
-                            let child_position =
-                                Self::sliver_hit_position_from_offset(child_node, position);
-                            self.hit_test_sliver_subtree(child_id, child_position, result, walk)
+                let mut dispatch_child =
+                    |result: &mut flui_interaction::pointer::HitTestResult| -> bool {
+                        if child_node.as_sliver().is_some() {
+                            // Explicit positions are already child-local; the layout-offset
+                            // fallback starts from the child's physical paint offset.
+                            return if let Some(position) = override_pos {
+                                let child_position =
+                                    Self::sliver_hit_position_from_offset(child_node, position);
+                                self.hit_test_sliver_subtree(child_id, child_position, result, walk)
+                            } else {
+                                if !Self::sliver_child_is_visible(child_node) {
+                                    return false;
+                                }
+                                let child_offset = child_node.offset();
+                                result
+                                    .with_paint_offset(child_offset, |result| {
+                                        let child_position =
+                                            Self::sliver_hit_position_from_paint_offset(
+                                                child_node,
+                                                position - child_offset,
+                                            );
+                                        self.hit_test_sliver_subtree(
+                                            child_id,
+                                            child_position,
+                                            result,
+                                            walk,
+                                        )
+                                    })
+                                    .unwrap_or(false)
+                            };
+                        }
+                        if let Some(child_position) = override_pos {
+                            self.hit_test_subtree(child_id, child_position, result, walk)
                         } else {
-                            if !Self::sliver_child_is_visible(child_node) {
-                                return false;
-                            }
                             let child_offset = child_node.offset();
                             result
                                 .with_paint_offset(child_offset, |result| {
-                                    let child_position =
-                                        Self::sliver_hit_position_from_paint_offset(
-                                            child_node,
-                                            position - child_offset,
-                                        );
-                                    self.hit_test_sliver_subtree(
+                                    self.hit_test_subtree(
                                         child_id,
-                                        child_position,
+                                        position - child_offset,
                                         result,
                                         walk,
                                     )
                                 })
                                 .unwrap_or(false)
-                        };
-                    }
-                    if let Some(child_position) = override_pos {
-                        self.hit_test_subtree(child_id, child_position, result, walk)
-                    } else {
-                        let child_offset = child_node.offset();
-                        result
-                            .with_paint_offset(child_offset, |result| {
-                                self.hit_test_subtree(
-                                    child_id,
-                                    position - child_offset,
-                                    result,
-                                    walk,
-                                )
-                            })
-                            .unwrap_or(false)
-                    }
-                };
+                        }
+                    };
 
                 match local_transform {
                     Some(local_transform) => result
@@ -1072,7 +1073,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // other render object returns `None`, leaving a target-less entry.
                 // A hit that chose its own target and cursor (a paragraph's
                 // link) overrides the node-wide ones.
-                let entry = crate::hit_testing::HitTestEntry::new(id)
+                let entry = flui_interaction::pointer::HitTestEntry::new(id)
                     .subtree_entries(result.len() - entries_before);
                 let entry = match hit
                     .pointer_target
@@ -1114,7 +1115,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // A node with an expanded area hit-tests visually unless this is the
         // walk that expands it; then it is probed inside its own bounds so its
         // child's path is built (`hit_slop` module docs).
-        let visit = |result: &mut crate::hit_testing::HitTestResult,
+        let visit = |result: &mut flui_interaction::pointer::HitTestResult,
                      walk: &mut HitWalk,
                      position: Offset| {
             let Some(area) = slop_area else {
@@ -1136,7 +1137,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
             hit
         };
-        let mut hit_follower = |result: &mut crate::hit_testing::HitTestResult,
+        let mut hit_follower = |result: &mut flui_interaction::pointer::HitTestResult,
                                 position: Offset| {
             let Some(transform) = follower_transform else {
                 return visit(result, walk, position);
@@ -1314,7 +1315,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &self,
         id: RenderId,
         position: MainAxisPosition,
-        result: &mut crate::hit_testing::HitTestResult,
+        result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
     ) -> bool
     where
@@ -1331,7 +1332,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &self,
         id: RenderId,
         position: MainAxisPosition,
-        result: &mut crate::hit_testing::HitTestResult,
+        result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
     ) -> bool
     where
@@ -1450,7 +1451,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         let hit = render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
         if hit.add_self {
-            let entry = crate::hit_testing::HitTestEntry::new(id)
+            let entry = flui_interaction::pointer::HitTestEntry::new(id)
                 .cursor_request(hit.cursor.unwrap_or_else(|| render_object.mouse_cursor()));
             let entry = match render_object.mouse_tracker_annotation(id) {
                 Some(annotation) => entry.mouse_annotation(annotation),
@@ -2366,9 +2367,9 @@ fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback 
 /// in `walk` until the path is complete. A descendant's panic is contained at
 /// the descendant, so its ancestors still decide for themselves.
 fn contain_node(
-    result: &mut crate::hit_testing::HitTestResult,
+    result: &mut flui_interaction::pointer::HitTestResult,
     walk: &mut HitWalk,
-    visit: impl FnOnce(&mut crate::hit_testing::HitTestResult, &mut HitWalk) -> bool,
+    visit: impl FnOnce(&mut flui_interaction::pointer::HitTestResult, &mut HitWalk) -> bool,
 ) -> bool {
     let mark = result.len();
     let slop = walk.mark();

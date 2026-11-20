@@ -420,7 +420,7 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
             self.0.borrow_mut().push("down");
         }
         fn handle_event(&self, dispatch: PointerDispatch<'_>) {
-            use flui_rendering::hit_testing::PointerEvent;
+            use flui_interaction::events::PointerEvent;
             self.0.borrow_mut().push(match dispatch.local {
                 PointerEvent::Up(_) => "up",
                 PointerEvent::Move(_) => "move",
@@ -519,11 +519,11 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
 }
 
 pub(crate) fn custom_recognizer_competes_through_a_listener() {
+    use flui_interaction::events::PointerEvent;
     use flui_interaction::gesture::{
         ArenaMembership, CancelOutcome, ContactEnd, GestureArenaMember, GestureContest,
         GestureRecognizer, GestureSettings, PrimaryContact, TapGestureRecognizer,
     };
-    use flui_rendering::hit_testing::PointerEvent;
     use flui_view::environment::GestureArenaScope;
     use flui_view::prelude::*;
     use std::cell::RefCell;

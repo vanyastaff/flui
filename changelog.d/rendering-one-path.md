@@ -1,0 +1,7 @@
+### Removed
+
+- `flui_rendering::layer`: the glob re-export of `flui_layer`. Import the items from `flui_layer`.
+- `flui_rendering::semantics`: the alias of `flui_semantics`. Import the items from `flui_semantics`.
+- `flui_rendering::hit_testing`: the module of re-exports from `flui_interaction`. `HitTestBehavior`, `HitTestEntry`, `HitTestResult`, `HitMetadata`, `CursorRequest`, `MouseTrackerAnnotation`, the `*Target` types, `PointerDispatch`, `EventPropagation` and the mouse-region callbacks live in `flui_interaction::pointer`; `Cursor`, `CursorIcon`, `CursorImage`, `PointerEvent` and `PointerEventExt` in `flui_interaction::events`; `DeviceId` in `flui_interaction::ids`.
+- `flui_rendering::prelude`: import each item from its own path. The crate root keeps `RenderObject`, `RenderError`, `RenderResult`, `PipelineOwner`, `PipelineCell`, `BoxProtocol`, `SliverProtocol`, `Protocol`, the layout, paint and hit-test contexts and `RenderUpdateImpact`; `RenderBox` and `TextBaseline` are in `flui_rendering::traits`, the constraints in `flui_rendering::constraints`, the parent-data types in `flui_rendering::parent_data`, `Leaf`, `Single` and the other arities in `flui_foundation`.
+- The `flui_rendering::pipeline` re-exports of `flui_layer` (`Layer`, `LayerId`, `LayerTree`, `OffsetLayer`, `SceneBuilder`) and of `flui_painting` (`Clip`, `BlendMode`, `ClipOp`, `FilterQuality`, `ImageFilter`, `PointMode`, `Shader`, `StrokeCap`, `StrokeJoin`, `TileMode`, `Canvas`, `DisplayList`, `Paint`, `PaintStyle`). Import them from `flui_layer` and `flui_painting`.

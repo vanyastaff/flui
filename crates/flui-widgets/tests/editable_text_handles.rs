@@ -850,7 +850,7 @@ pub(crate) fn shown_handles_follow_a_new_line_height() {
 /// moved by the layers up to the follower that places it, and by where
 /// that follower resolves.
 pub(crate) fn magnifiers(laid: &LaidOut) -> Vec<flui_foundation::geometry::Rect<f64>> {
-    use flui_rendering::layer::{Layer, resolve_follower_transform};
+    use flui_layer::{Layer, resolve_follower_transform};
 
     let tree = laid.layer_tree().expect("a painted frame");
     let mut found = Vec::new();

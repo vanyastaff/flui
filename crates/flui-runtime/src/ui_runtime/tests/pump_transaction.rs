@@ -20,8 +20,10 @@ use flui_foundation::ManualClock;
 /// pipeline after end frame (the callback sees no layout), or that ends the
 /// frame without the UI runtime's local lane (the lane is never drained).
 pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
-    use flui_rendering::prelude::Leaf;
-    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, PaintContext, RenderBox};
+    use flui_foundation::Leaf;
+    use flui_rendering::{
+        BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+    };
 
     #[derive(Debug, Default)]
     struct FixedBox;

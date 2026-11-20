@@ -17,6 +17,10 @@
 
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_foundation::{RenderId, Single};
+use flui_interaction::pointer::{
+    CursorRequest, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
+    ScrollTarget, SmartZoomTarget,
+};
 use flui_rendering::{
     RenderUpdateImpact,
     constraints::BoxConstraints,
@@ -24,16 +28,12 @@ use flui_rendering::{
         BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxLayoutContext,
         PaintContext,
     },
-    hit_testing::{
-        CursorRequest, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
-        ScrollTarget, SmartZoomTarget,
-    },
     input_regions::InputRegionSink,
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
-    semantics::SemanticsConfiguration,
     traits::{RenderBox, TextBaseline},
 };
+use flui_semantics::SemanticsConfiguration;
 
 use super::{FocusRingStyle, RenderListener, RenderMouseRegion};
 use crate::{RenderSemanticsAnnotations, SubtreeAnchor};

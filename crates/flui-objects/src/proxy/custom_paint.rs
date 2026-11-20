@@ -308,8 +308,8 @@ impl RenderBox for RenderCustomPaint {
 
     flui_rendering::forward_single_child_baselines!();
 
-    fn semantics_regions(&self, size: Size) -> flui_rendering::semantics::SemanticsRegions {
-        flui_rendering::semantics::SemanticsRegions {
+    fn semantics_regions(&self, size: Size) -> flui_semantics::SemanticsRegions {
+        flui_semantics::SemanticsRegions {
             before_children: self
                 .painter
                 .as_ref()

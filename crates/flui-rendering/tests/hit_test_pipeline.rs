@@ -445,7 +445,7 @@ fn contained_hit_path(
     )>,
     Option<String>,
 ) {
-    let mut result = flui_rendering::hit_testing::HitTestResult::new();
+    let mut result = flui_interaction::pointer::HitTestResult::new();
     let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner.hit_test(
             Offset::new(x, y),
@@ -668,8 +668,8 @@ impl flui_rendering::traits::RenderBox for BombMetadataLeaf {
 
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintContext<'_, Self::Arity>) {}
 
-    fn metadata(&self) -> Option<flui_rendering::hit_testing::HitMetadata> {
-        Some(flui_rendering::hit_testing::HitMetadata::new(
+    fn metadata(&self) -> Option<flui_interaction::pointer::HitMetadata> {
+        Some(flui_interaction::pointer::HitMetadata::new(
             PanicsWhenDropped,
         ))
     }
@@ -836,7 +836,7 @@ pub(crate) fn a_rejected_slop_rewalk_retains_its_entries_behind_an_earlier_panic
     let owner = laid_out(owner, root);
 
     // Over the bomb and the panicking leaf, inside the slop's area only.
-    let mut result = flui_rendering::hit_testing::HitTestResult::new();
+    let mut result = flui_interaction::pointer::HitTestResult::new();
     let walk = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner.hit_test(
             Offset::new(38.0, 10.0),

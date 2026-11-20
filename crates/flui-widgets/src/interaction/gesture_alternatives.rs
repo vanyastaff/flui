@@ -67,7 +67,7 @@ use flui_objects::{CrossAxisAlignment, MainAxisSize, StackFit};
 use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::parent_data::FlexFit;
-use flui_rendering::semantics::SemanticsAnchor;
+use flui_semantics::SemanticsAnchor;
 
 // ============================================================================
 // Commands

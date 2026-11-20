@@ -12,7 +12,7 @@ use flui_painting::paint::{Image as PixelImage, ImageFilter, Path, TextureId};
 use flui_painting::styling::{BoxDecoration, Color};
 use flui_painting::typography::{TextSpan, TextStyle};
 use flui_rendering::delegates::CenterLayoutDelegate;
-use flui_rendering::semantics::SemanticsConfiguration;
+use flui_semantics::SemanticsConfiguration;
 use flui_view::{BoxedView, View};
 use flui_widgets::prelude::*;
 use flui_widgets::{

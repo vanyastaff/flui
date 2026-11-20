@@ -16,6 +16,7 @@ use flui_interaction::gesture::{
     ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
     SmartZoomDetails,
 };
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
     gesture::{
@@ -31,7 +32,6 @@ use flui_interaction::{
 use flui_platform::EventTime;
 use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerSource};
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::raw_gesture_detector::{

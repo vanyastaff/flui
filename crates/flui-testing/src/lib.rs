@@ -245,11 +245,9 @@ impl SceneReport {
             (0, 0)
         } else {
             match &after.patch_damage {
-                flui_rendering::layer::DamageRegion::Unchanged => (0, 0),
-                flui_rendering::layer::DamageRegion::Region(region) => {
-                    (region.rects().len() as u64, 0)
-                }
-                flui_rendering::layer::DamageRegion::Full(_) => (0, 1),
+                flui_layer::DamageRegion::Unchanged => (0, 0),
+                flui_layer::DamageRegion::Region(region) => (region.rects().len() as u64, 0),
+                flui_layer::DamageRegion::Full(_) => (0, 1),
             }
         };
         Self {
@@ -280,9 +278,9 @@ impl std::ops::AddAssign for SceneReport {
 /// semantics hides nothing from it.
 pub(crate) fn take_semantics_findings(
     pipeline: &flui_rendering::pipeline::PipelineCell,
-) -> Vec<flui_rendering::semantics::SemanticsDiagnostic> {
+) -> Vec<flui_semantics::SemanticsDiagnostic> {
     use flui_rendering::pipeline::PipelineOwner;
-    use flui_rendering::semantics::SemanticsDiagnostic;
+    use flui_semantics::SemanticsDiagnostic;
 
     let mut findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
     // Withheld text runs report an exhausted identity space, not an author

@@ -129,7 +129,7 @@ fn painted(laid: &LaidOut) -> (f64, f64) {
 /// Where the first rectangle painted `color` is, through every layer above
 /// its picture: its left and top edges.
 pub(crate) fn painted_at(laid: &LaidOut, color: Color) -> (f64, f64) {
-    use flui_rendering::layer::Layer;
+    use flui_layer::Layer;
     let tree = laid.layer_tree().expect("a committed scene");
     for (_, node) in tree.iter() {
         let Layer::Picture(picture) = node.layer() else {

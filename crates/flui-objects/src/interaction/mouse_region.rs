@@ -3,12 +3,14 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::inspect::Value;
+use flui_interaction::{
+    events::Cursor,
+    ids::DeviceId,
+    pointer::{CursorRequest, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation},
+};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryLayoutContext, BoxHitTestContext, BoxLayoutContext},
-    hit_testing::{
-        Cursor, CursorRequest, DeviceId, HitTestBehavior, MouseRegionTarget, MouseTrackerAnnotation,
-    },
     parent_data::BoxParentData,
     traits::RenderBox,
 };

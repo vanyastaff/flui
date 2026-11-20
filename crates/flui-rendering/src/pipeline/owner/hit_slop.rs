@@ -41,8 +41,8 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::events::PointerKind;
 
-use crate::hit_testing::{HitTestEntry, HitTestResult};
 use crate::pipeline::phase::PipelinePhase;
+use flui_interaction::pointer::{HitTestEntry, HitTestResult};
 
 use super::PipelineOwner;
 

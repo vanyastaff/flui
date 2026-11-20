@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
-use flui_rendering::semantics::DocumentSelection;
+use flui_semantics::DocumentSelection;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 

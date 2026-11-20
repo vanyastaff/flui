@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
 use flui_layer::Scene;
+use flui_layer::{BoundaryContent, SceneOp, SceneOwner, SceneVersion, SurfaceKey};
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::layer::{BoundaryContent, SceneOp, SceneOwner, SceneVersion, SurfaceKey};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
 use flui_view::{__runtime::BindingRuntime as _, StatelessView, View, WidgetsBinding};
 
@@ -296,8 +296,8 @@ mod tests {
     /// reads no leader).
     #[test]
     fn a_plugin_frame_publishes_its_leaders_attached() {
+        use flui_layer::LayerLink;
         use flui_objects::{RenderLeaderLayer, RenderSizedBox};
-        use flui_rendering::layer::LayerLink;
         use flui_rendering::testing::{box_node, tree};
 
         let root = KeyedRoot {

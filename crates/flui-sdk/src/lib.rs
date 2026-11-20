@@ -358,14 +358,14 @@ pub mod painting {
     pub use flui_painting::typography::TextDecorationLines;
     pub use flui_painting::typography::TextDecorationStyle;
     pub use flui_painting::typography::TextStyle;
-    pub use flui_rendering::semantics::SemanticsRegion;
-    pub use flui_rendering::semantics::SemanticsRegionKey;
+    pub use flui_semantics::SemanticsRegion;
+    pub use flui_semantics::SemanticsRegionKey;
 }
 
 /// Render-object authoring, at the paths `flui::rendering` uses.
 pub mod rendering {
+    pub use flui_interaction::pointer::HitTestBehavior;
     pub use flui_rendering::constraints::BoxConstraints;
-    pub use flui_rendering::hit_testing::HitTestBehavior;
     pub use flui_rendering::protocol::BoxProtocol;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 
