@@ -235,8 +235,8 @@ conflict rows; `nested_merge_semantics_keeps_its_own_node` in
 ### 3. Semantics assembly is mark-scoped with a whole-tree fallback, and the tree reaches the OS through AccessKit
 
 **Rule.** The `SemanticsOwner` lives on `PipelineOwner` as `Option<SemanticsOwner>`, created
-when semantics is enabled and disposed when it is disabled (firing the owner-created/disposed
-notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_semantics`,
+when semantics is enabled and disposed when it is disabled.
+Assembly runs in the existing post-paint semantics phase (`run_semantics`,
 `crates/flui-rendering/src/pipeline/owner/semantics.rs`):
 
 - Each render object describes itself through `describe_semantics_configuration`; non-boundary

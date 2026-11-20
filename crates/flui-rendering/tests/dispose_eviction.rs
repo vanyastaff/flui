@@ -80,10 +80,6 @@ impl flui_rendering::traits::RenderBox for RetirementProbe {
 impl flui_rendering::parent_data::ParentData for RetirementProbe {}
 
 fn retirement_child(mode: &str) {
-    if let Some(mode) = mode.strip_prefix("visual-") {
-        visual_notifier_retirement_child(mode);
-        return;
-    }
     use flui_rendering::{pipeline::PipelineCell, storage::RenderTree};
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut tree = RenderTree::new();
@@ -187,127 +183,6 @@ fn retirement_child(mode: &str) {
     );
 }
 
-fn visual_notifier_retirement_child(mode: &str) {
-    use flui_rendering::pipeline::VisualUpdateNotifier;
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    if mode == "reentry" {
-        struct ReplaceOnDrop {
-            slot: Arc<Mutex<Option<VisualUpdateNotifier>>>,
-            calls: Arc<AtomicUsize>,
-        }
-        impl Drop for ReplaceOnDrop {
-            fn drop(&mut self) {
-                let mut replacement = VisualUpdateNotifier::new();
-                let calls = Arc::clone(&self.calls);
-                replacement.set_need_visual_update(move || {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                });
-                let mut slot = self.slot.lock().expect("external notifier slot");
-                assert!(slot.is_none(), "outer owner released before retirement");
-                *slot = Some(replacement);
-            }
-        }
-        let slot = Arc::new(Mutex::new(None));
-        let calls = Arc::new(AtomicUsize::new(0));
-        let capture = ReplaceOnDrop {
-            slot: Arc::clone(&slot),
-            calls: Arc::clone(&calls),
-        };
-        let mut notifier = VisualUpdateNotifier::new();
-        notifier.set_need_visual_update(move || {
-            let _capture = &capture;
-        });
-        *slot.lock().expect("external notifier slot") = Some(notifier);
-        let outgoing = slot.lock().expect("external notifier slot").take();
-        drop(outgoing);
-        let replacement = slot
-            .lock()
-            .expect("external notifier slot")
-            .take()
-            .expect("capture installed replacement");
-        replacement.fire_need_visual_update();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        drop(replacement);
-        return;
-    }
-
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let mut notifier = VisualUpdateNotifier::new();
-    let visual = RetirementProbe {
-        label: "visual",
-        fail: mode == "visual",
-        log: Arc::clone(&log),
-    };
-    notifier.set_need_visual_update(move || {
-        let _capture = &visual;
-    });
-    let created = RetirementProbe {
-        label: "created",
-        fail: mode == "created",
-        log: Arc::clone(&log),
-    };
-    notifier.set_semantics_owner_created(move || {
-        let _capture = &created;
-    });
-    let disposed = RetirementProbe {
-        label: "disposed",
-        fail: mode == "disposed",
-        log: Arc::clone(&log),
-    };
-    notifier.set_semantics_owner_disposed(move || {
-        let _capture = &disposed;
-    });
-    let expected = match mode {
-        "healthy" | "shared" => (None, vec!["visual", "created", "disposed"]),
-        "visual" => (Some("visual"), vec!["visual", "created", "disposed"]),
-        "created" => (Some("created"), vec!["visual", "created", "disposed"]),
-        "disposed" => (Some("disposed"), vec!["visual", "created", "disposed"]),
-        _ => panic!("unknown visual notifier retirement mode {mode}"),
-    };
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if mode == "shared" {
-            let shared = Arc::new(notifier);
-            let alias = Arc::clone(&shared);
-            drop(shared);
-            assert!(
-                log.lock().expect("probe log").is_empty(),
-                "nonlast owner retires nothing"
-            );
-            drop(alias);
-        } else {
-            drop(notifier);
-        }
-    }));
-    match (outcome, expected.0) {
-        (Ok(()), None) => {}
-        (Err(payload), Some(text)) => {
-            assert_eq!(payload.downcast_ref::<&'static str>(), Some(&text));
-            flui_foundation::panic::discard_payload(payload);
-        }
-        _ => panic!("unexpected visual notifier outcome for {mode}"),
-    }
-    assert_eq!(
-        *log.lock().expect("probe log"),
-        expected.1,
-        "retirement order: every capture is destroyed"
-    );
-
-    // The actual public event producer works again after the contained failure.
-    let calls = Arc::new(AtomicUsize::new(0));
-    let mut next = VisualUpdateNotifier::new();
-    let next_calls = Arc::clone(&calls);
-    next.set_need_visual_update(move || {
-        next_calls.fetch_add(1, Ordering::SeqCst);
-    });
-    next.fire_need_visual_update();
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    drop(next);
-}
-
 const RETIREMENT_CASE: &str = "FLUI_RENDER_TREE_RETIREMENT_CASE";
 
 /// Child-process entry for one row of
@@ -335,12 +210,6 @@ pub(crate) fn render_tree_retirement_preserves_independent_envelopes() {
         "pipeline",
         "shared",
         "sparse",
-        "visual-healthy",
-        "visual-visual",
-        "visual-created",
-        "visual-disposed",
-        "visual-shared",
-        "visual-reentry",
     ]
     .into_iter()
     .filter_map(|mode| {
@@ -520,10 +389,7 @@ pub(crate) fn a_destructor_that_panics_during_removal_still_commits_the_owner() 
         "the parent lays out again without its child"
     );
     assert!(
-        owner
-            .nodes_needing_layout()
-            .iter()
-            .any(|entry| entry.id == parent),
+        owner.queued_for_layout().contains(&parent),
         "the parent's relayout is queued"
     );
 }

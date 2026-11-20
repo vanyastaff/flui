@@ -8,9 +8,7 @@ use crate::constraints::BoxConstraints;
 use crate::context::{BoxLayoutContext, FragmentRecorder, PaintContext};
 use crate::error::{RenderError, RenderResult};
 use crate::parent_data::BoxParentData;
-use crate::protocol::{
-    BoxProtocol, Protocol, ProtocolGeometry, ProtocolPosition, RawBoxLayoutContext, RenderObject,
-};
+use crate::protocol::{BoxProtocol, Protocol, RawBoxLayoutContext, RenderObject};
 use crate::traits::HitTestOutcome;
 
 /// The root of the render tree.
@@ -41,7 +39,7 @@ impl RenderObject<BoxProtocol> for RenderView {
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <BoxProtocol as Protocol>::ErasedLayoutContext<'_>,
-    ) -> RenderResult<ProtocolGeometry<BoxProtocol>> {
+    ) -> RenderResult<Size> {
         let typed_inner = RawBoxLayoutContext::<Variable, BoxParentData>::from_erased(ctx);
         let mut layout_ctx = BoxLayoutContext::<Variable, BoxParentData>::new(typed_inner);
 
@@ -72,14 +70,10 @@ impl RenderObject<BoxProtocol> for RenderView {
 
     fn hit_test_raw(
         &self,
-        _position: ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         child_count: usize,
         _size: Size,
-        hit_child: &mut dyn FnMut(
-            usize,
-            Option<ProtocolPosition<BoxProtocol>>,
-            Option<Matrix4>,
-        ) -> bool,
+        hit_child: &mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool,
     ) -> HitTestOutcome {
         // Topmost first: later siblings paint on top. An empty window region
         // reports a miss instead of a phantom root target.

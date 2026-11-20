@@ -1,0 +1,39 @@
+Usage: input [<source>] [-d DISPLAY_ID] <command> [<arg>...]
+
+The sources are:
+      dpad
+      keyboard
+      mouse
+      touchpad
+      gamepad
+      touchnavigation
+      joystick
+      touchscreen
+      stylus
+      trackball
+      rotaryencoder
+[axis_value] represents an option specifying the value of a given axis
+      The syntax is as follows: --axis <axis_name>,<axis_value>
+            where <axis_name> is the name of the axis as defined in
+            MotionEvent without the AXIS_ prefix (e.g. SCROLL, X)
+      Sample [axis_values] entry: `--axis Y,3`, `--axis SCROLL,-2`
+
+-d: specify the display ID.
+      (Default: -1 for key event, 0 for motion event if not specified.)
+The commands and default sources are:
+      text <string> (Default: keyboard)
+      keyevent [--longpress|--duration <duration to hold key down in ms>] [--doubletap] [--async] [--delay <duration between keycodes in ms>] <key code number or name> ... (Default: keyboard)
+      tap <x> <y> (Default: touchscreen)
+      swipe <x1> <y1> <x2> <y2> [duration(ms)] (Default: touchscreen)
+      draganddrop <x1> <y1> <x2> <y2> [duration(ms)] (Default: touchscreen)
+      press (Default: trackball)
+      roll <dx> <dy> (Default: trackball)
+      motionevent <DOWN|UP|MOVE|CANCEL> <x> <y> (Default: touchscreen)
+      scroll (Default: rotaryencoder). Has the following syntax:
+            scroll <x> <y> [axis_value] (for pointer-based sources)
+            scroll [axis_value] (for non-pointer-based sources)
+            Axis options: SCROLL, HSCROLL, VSCROLL
+            None or one or multiple axis value options can be specified.
+            To specify multiple axes, use one axis option for per axis.
+            Example: `scroll --axis VSCROLL,2 --axis SCROLL,-2.4`
+      keycombination [-t duration(ms)] <key code 1> <key code 2> ... (Default: keyboard, the key order is important here.)

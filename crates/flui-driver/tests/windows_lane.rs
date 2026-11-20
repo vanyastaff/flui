@@ -5,6 +5,8 @@
 use std::time::Duration;
 
 use flui_driver::coordinates::{DevicePoint, to_device};
+use flui_driver::lane::pacing;
+use flui_driver::lane::walk::{self, Properties, Provider, ProviderError};
 use flui_driver::lane::windows::activity::{self, LANE_TAG, MouseMotion, Observed};
 use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
 use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK};
@@ -12,7 +14,6 @@ use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, Virt
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
 use flui_driver::lane::windows::safety::{self, Desk, Held, Landing, Refusal, check_event};
 use flui_driver::lane::windows::screen;
-use flui_driver::lane::windows::walk::{self, Properties, Provider, ProviderError};
 use flui_driver::lane::{release_outcome, windows};
 use flui_driver::projection::{Projection, ProjectionDifference};
 use flui_driver::protocol::error::ErrorCode;
@@ -815,6 +816,7 @@ fn release_failure(outcome: &flui_driver::Result<()>) -> Option<(String, Vec<Str
             lane,
             held,
             message,
+            ..
         }) => Some((lane.clone(), held.clone(), message.clone())),
         _ => None,
     }
@@ -1086,9 +1088,9 @@ fn a_pause_is_waited_out_whole_in_watched_slices() {
         Duration::from_millis(120),
         Duration::from_secs(25),
     ] {
-        let slices: Vec<Duration> = activity::slices(pause).collect();
+        let slices: Vec<Duration> = pacing::slices(pause).collect();
         assert_eq!(slices.iter().sum::<Duration>(), pause, "{pause:?}");
-        assert!(slices.iter().all(|slice| *slice <= activity::WATCH_SLICE));
+        assert!(slices.iter().all(|slice| *slice <= pacing::WATCH_SLICE));
     }
 }
 
@@ -1447,7 +1449,7 @@ fn a_client_origin_maps_back_to_its_device_pixel_at_every_scale() {
     for dpi in [72, 96, 120, 144, 168, 192, 240, 288, 384, 768] {
         let scale = screen::scale_of(dpi);
         for device in (-7_681..7_681).step_by(13) {
-            let geometry = screen::window_geometry(
+            let geometry = flui_driver::lane::screen::window_geometry(
                 point(device, -device),
                 LogicalSize::new(800.0, 600.0),
                 scale,

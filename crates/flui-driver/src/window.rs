@@ -14,7 +14,7 @@ use flui_protocol::input::{
     ScrollIntoViewParams, SwipeParams, TapParams, TypeTextParams,
 };
 use flui_protocol::locator::{LocateParams, Locator, Matches, Target};
-use flui_protocol::method;
+use flui_protocol::method::{self, Method as _};
 use flui_protocol::session::{Placement, WindowParams};
 use flui_protocol::snapshot::Snapshot;
 use flui_protocol::tree::{ElementRef, ReadParams, ReadQuery, Tree, WindowId};
@@ -23,14 +23,13 @@ use flui_protocol::wait::{Condition, WaitOutcome};
 use crate::compose;
 use crate::driver::Driver;
 use crate::error::Result;
-use crate::lane::OsCapture;
 use crate::projection::Projection;
 use crate::scenario::WindowSpec;
 
 /// One window of the app.
 pub struct Window<'d> {
-    driver: &'d mut Driver,
-    id: WindowId,
+    pub(crate) driver: &'d mut Driver,
+    pub(crate) id: WindowId,
 }
 
 impl<'d> Window<'d> {
@@ -128,21 +127,6 @@ impl<'d> Window<'d> {
         Ok(Projection::of(&app, &os))
     }
 
-    /// The OS's own capture of the window's surface, through the session's lane
-    /// ([`Lane::capture_window`](crate::Lane::capture_window)).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_capture` without a lane that
-    /// captures; the lane's and the app's failures.
-    pub fn capture_os(&mut self) -> Result<OsCapture> {
-        let placement = self.placement()?;
-        let lane = self.driver.lane().ok_or_else(|| {
-            crate::Error::not_supported("os_capture", "the session has no OS lane")
-        })?;
-        lane.run(move |lane| lane.capture_window(&placement))?
-    }
-
     /// Whether the window is the one `spec` describes.
     ///
     /// # Errors
@@ -170,7 +154,9 @@ impl<'d> Window<'d> {
     ///
     /// As `input.perform`.
     pub fn perform(&mut self, actions: ActionSequence) -> Result<ActOutcome> {
-        compose::perform(self.driver, InputParams::new(self.id, actions))
+        let params = InputParams::new(self.id, actions);
+        self.driver
+            .command(method::InputPerform::NAME, params, compose::perform)
     }
 
     /// Perform `actions` by `policy`'s input path.
@@ -185,7 +171,8 @@ impl<'d> Window<'d> {
     ) -> Result<ActOutcome> {
         let mut params = InputParams::new(self.id, actions);
         params.via = Some(policy);
-        compose::perform(self.driver, params)
+        self.driver
+            .command(method::InputPerform::NAME, params, compose::perform)
     }
 
     /// Tap at `at`, in the window's logical surface coordinates: the explicit last resort.
@@ -194,13 +181,12 @@ impl<'d> Window<'d> {
     ///
     /// As `element.tap`.
     pub fn tap_at(&mut self, at: LogicalPoint) -> Result<ActOutcome> {
-        compose::tap(
-            self.driver,
-            TapParams::new(Target::Point {
-                window: self.id,
-                at,
-            }),
-        )
+        let params = TapParams::new(Target::Point {
+            window: self.id,
+            at,
+        });
+        self.driver
+            .command(method::ElementTap::NAME, params, compose::tap)
     }
 
     /// Release every contact and key the agent holds for this window.
@@ -280,7 +266,7 @@ macro_rules! gestures {
         pub fn tap(&mut self) -> Result<ActOutcome> {
             let mut params = TapParams::new(self.target());
             params.options = self.options;
-            compose::tap(self.driver, params)
+            self.driver.command(method::ElementTap::NAME, params, compose::tap)
         }
 
         /// Tap it twice, as one double tap.
@@ -291,7 +277,7 @@ macro_rules! gestures {
         pub fn double_tap(&mut self) -> Result<ActOutcome> {
             let mut params = TapParams::new(self.target());
             params.options = self.options;
-            compose::double_tap(self.driver, params)
+            self.driver.command(method::ElementDoubleTap::NAME, params, compose::double_tap)
         }
 
         /// Press and hold it, `hold` long or the long-press delay and a margin.
@@ -305,7 +291,7 @@ macro_rules! gestures {
                 "duration_ms": hold.map(|hold| u64::try_from(hold.as_millis()).unwrap_or(u64::MAX)),
             });
             let params: LongPressParams = with_options(params, self.options)?;
-            compose::long_press(self.driver, params)
+            self.driver.command(method::ElementLongPress::NAME, params, compose::long_press)
         }
 
         /// Press it, move to `to`, release.
@@ -316,7 +302,7 @@ macro_rules! gestures {
         pub fn drag_to(&mut self, to: impl Into<Target>) -> Result<ActOutcome> {
             let params = serde_json::json!({ "target": self.target(), "to": to.into() });
             let params: DragParams = with_options(params, self.options)?;
-            compose::drag_to(self.driver, params)
+            self.driver.command(method::ElementDragTo::NAME, params, compose::drag_to)
         }
 
         /// A stroke from it towards `direction` that ends below the fling velocity.
@@ -327,7 +313,7 @@ macro_rules! gestures {
         pub fn swipe(&mut self, direction: Direction) -> Result<ActOutcome> {
             let params = serde_json::json!({ "target": self.target(), "direction": direction });
             let params: SwipeParams = with_options(params, self.options)?;
-            compose::swipe(self.driver, params, false)
+            self.driver.command(method::ElementSwipe::NAME, params, |driver, params| compose::swipe(driver, params, false))
         }
 
         /// A stroke from it towards `direction` that ends above the fling velocity.
@@ -338,7 +324,7 @@ macro_rules! gestures {
         pub fn fling(&mut self, direction: Direction) -> Result<ActOutcome> {
             let params = serde_json::json!({ "target": self.target(), "direction": direction });
             let params: SwipeParams = with_options(params, self.options)?;
-            compose::swipe(self.driver, params, true)
+            self.driver.command(method::ElementFling::NAME, params, |driver, params| compose::swipe(driver, params, true))
         }
 
         /// Two contacts around its centre, spreading (`scale` above 1) or closing.
@@ -349,7 +335,7 @@ macro_rules! gestures {
         pub fn pinch(&mut self, scale: f64) -> Result<ActOutcome> {
             let params = serde_json::json!({ "target": self.target(), "scale": scale });
             let params: PinchParams = with_options(params, self.options)?;
-            compose::pinch(self.driver, params)
+            self.driver.command(method::ElementPinch::NAME, params, compose::pinch)
         }
 
         /// Scroll each scrollable ancestor until it is visible.
@@ -360,7 +346,7 @@ macro_rules! gestures {
         pub fn scroll_into_view(&mut self) -> Result<ActOutcome> {
             let params = serde_json::json!({ "target": self.target() });
             let params: ScrollIntoViewParams = with_options(params, self.options)?;
-            compose::scroll_into_view(self.driver, params)
+            self.driver.command(method::ElementScrollIntoView::NAME, params, compose::scroll_into_view)
         }
 
         /// Focus it, then commit `text` into it.
@@ -371,7 +357,7 @@ macro_rules! gestures {
         pub fn type_text(&mut self, text: &str) -> Result<ActOutcome> {
             let params = serde_json::json!({ "target": self.target(), "text": text });
             let params: TypeTextParams = with_options(params, self.options)?;
-            compose::type_text(self.driver, params)
+            self.driver.command(method::ElementTypeText::NAME, params, compose::type_text)
         }
 
         /// Focus it, then press each chord in turn (`"Control+a"`, `"Enter"`).
@@ -382,7 +368,7 @@ macro_rules! gestures {
         pub fn press_keys(&mut self, chords: &[&str]) -> Result<ActOutcome> {
             let params = serde_json::json!({ "target": self.target(), "keys": chords });
             let params: PressKeysParams = with_options(params, self.options)?;
-            compose::press_keys(self.driver, params)
+            self.driver.command(method::ElementPressKeys::NAME, params, compose::press_keys)
         }
     };
 }

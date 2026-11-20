@@ -31,7 +31,9 @@ wayland = ["dep:reis"]
 
 [dependencies]
 # The wire: the method table, its parameters and outputs, the envelope and the launch contract.
-flui-protocol = { workspace = true, features = ["serde"] }
+# With its schemas, which tell a replay where each method's parameters and output hold a handle.
+flui-protocol = { workspace = true, features = ["serde", "schemars"] }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -46,6 +48,14 @@ flui-view = { workspace = true, optional = true }
 flui-foundation = { workspace = true }
 # The instants the in-process agent's conversation is polled at (std's on native targets).
 web-time = { workspace = true, optional = true }
+# Baselines and a trace's captured evidence are PNG files: the codec `image` already brings into
+# the workspace, without `image`'s other formats. The Android lane decodes a `screencap` PNG with
+# it too.
+png = "0.18"
+# A trace's evidence is named by the SHA-256 of its bytes, so a capture taken twice is kept once.
+sha2 = { workspace = true }
+# The Android lane, which runs on every host: the window `uiautomator dump` describes.
+roxmltree = { workspace = true }
 
 # Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.
 [target.'cfg(any(unix, windows))'.dependencies]
@@ -183,7 +193,12 @@ objc2-core-graphics = { workspace = true, features = [
 
 # The Windows tests' own foreign input.
 [target.'cfg(windows)'.dev-dependencies]
-windows = { workspace = true, features = ["Win32_UI_Input_KeyboardAndMouse"] }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 # The X11 lane's runs start an X server of their own (`flui-native`'s Xvfb launcher, which picks a
 # free display); the X11 tests' own foreign input is a second XTEST client. The Wayland lane's

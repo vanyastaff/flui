@@ -11,8 +11,9 @@
 //! - [`roles`]: each role of the role table publishes the wire role UI Automation folds it to,
 //!   and through an OS lane reads back as the native role of the accessibility API the lane reads
 //!   through (UI Automation's control type, the `AXRole`, the AT-SPI role);
-//! - [`input`] and [`macos_input`]: the pointers, the wheel and keys reach the app, read back from
-//!   its journal, and a press beside a control leaves it alone;
+//! - [`input`], [`macos_input`] and [`android_input`]: the pointers, the wheel and keys reach the
+//!   app, read back from its journal, and a press beside a control leaves it alone; on Android a
+//!   touchpad's pinch too (`android_device` runs it through the Android lane);
 //! - [`notes`] and [`macos_notes`]: text, a select-all chord and an input-method composition in a
 //!   text field;
 //! - [`conformance`]: a button's name, role and identifier, its activation and the effect read
@@ -25,7 +26,7 @@ use flui_driver::lane::windows::roles::{ROLES, expected_wire_role};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
     ActionSequence, DeviceClass, ImeAction, InputKind, InputSource, PointerAction, PointerButton,
-    PointerDevice, ScrollUnit, WheelAction,
+    PointerDevice, ScrollUnit, TrackpadAction, WheelAction,
 };
 use flui_driver::protocol::semantics::SemanticsRole;
 use flui_driver::protocol::tree::Node;
@@ -352,7 +353,56 @@ pub fn input(driver: &mut Driver, report: &mut Report) -> Result<()> {
             (PointerDevice::Touch, DeviceClass::Touch),
             (PointerDevice::Pen, DeviceClass::Pen),
         ],
+        corner(),
     )
+}
+
+/// A point beside the controls: near the bottom right corner of the scenarios' window.
+fn corner() -> LogicalPoint {
+    LogicalPoint::new(f64::from(WINDOW.0) - 20.0, f64::from(WINDOW.1) - 20.0)
+}
+
+/// `android_input`: [`input`] with the touch screen first, as a phone takes it, and a touchpad's
+/// pinch. The press beside the controls lands below them, halfway across the window: a phone's
+/// window is its screen, whose corners are the system's gestures. Through the Android lane a pen
+/// goes through a `uinput` device, so on a device whose shell may not register one the pen row
+/// is `cannot_verify` naming `uinput_device`; a touchpad's gesture goes through no OS lane, so
+/// that row is `cannot_verify` there whatever the device.
+///
+/// # Errors
+///
+/// When the app cannot be reached; each check's failure is recorded in `report`.
+pub fn android_input(driver: &mut Driver, report: &mut Report) -> Result<()> {
+    let size = driver.main_window()?.placement()?.size;
+    input_with(
+        driver,
+        report,
+        &[
+            (PointerDevice::Touch, DeviceClass::Touch),
+            (PointerDevice::Mouse, DeviceClass::Mouse),
+            (PointerDevice::Pen, DeviceClass::Pen),
+        ],
+        LogicalPoint::new(size.width / 2.0, size.height * 0.9),
+    )?;
+    let pad = point_of(driver, "pad")?;
+    let _ = report.check("a touchpad's pinch over the pad reaches the app", || {
+        let since = last_seq(driver)?;
+        driver
+            .main_window()?
+            .perform(ActionSequence::new(vec![InputSource::Trackpad {
+                id: "scenario.touchpad".to_owned(),
+                actions: vec![
+                    TrackpadAction::Begin { at: pad },
+                    TrackpadAction::Pinch { scale: 1.25 },
+                    TrackpadAction::End,
+                ],
+            }]))?;
+        saw(
+            &journal_since(driver, since)?,
+            &[(DeviceClass::Trackpad, InputKind::Gesture)],
+        )
+    });
+    Ok(())
 }
 
 /// `macos_input`: [`input`] with the mouse, the one pointer a macOS app reads as itself: Quartz
@@ -367,14 +417,17 @@ pub fn macos_input(driver: &mut Driver, report: &mut Report) -> Result<()> {
         driver,
         report,
         &[(PointerDevice::Mouse, DeviceClass::Mouse)],
+        corner(),
     )
 }
 
-/// [`input`] with the pointers `devices`, each read back from the journal as its class.
+/// [`input`] with the pointers `devices`, each read back from the journal as its class, and the
+/// press beside the controls at `beside`.
 fn input_with(
     driver: &mut Driver,
     report: &mut Report,
     devices: &[(PointerDevice, DeviceClass)],
+    beside: LogicalPoint,
 ) -> Result<()> {
     let pad = point_of(driver, "pad")?;
     let mut presses = 0;
@@ -398,7 +451,6 @@ fn input_with(
         presses += u32::from(checked.is_ok());
     }
     let _ = report.check("a press beside the controls leaves the pad's count", || {
-        let beside = LogicalPoint::new(f64::from(WINDOW.0) - 20.0, f64::from(WINDOW.1) - 20.0);
         driver
             .main_window()?
             .perform(press(PointerDevice::Mouse, beside))?;
@@ -620,6 +672,36 @@ fn the_macos_notes_scenario_passes_with_the_macos_conventions_on_the_headless_ta
         headless(|| PlatformConvention::new(TargetPlatform::MacOS, Notes)),
         macos_notes,
     ));
+}
+
+/// The Android input scenario on the headless target, whose windows take no injected touchpad
+/// gesture yet: that row alone is `cannot_verify`, naming what is missing. Through the Android
+/// lane it runs on a device or an emulator
+/// (`android_device::the_android_input_scenario_runs_through_the_os_lane`).
+#[test]
+fn the_android_input_scenario_passes_on_the_headless_target_but_its_touchpad_row() {
+    let report = run("android-input", headless(|| Controls), android_input);
+    let (touchpad, rest): (Vec<&Check>, Vec<&Check>) = report
+        .checks()
+        .iter()
+        .partition(|check| check.name.contains("touchpad"));
+    let failed: Vec<&&Check> = rest
+        .iter()
+        .filter(|check| check.outcome != Outcome::Passed)
+        .collect();
+    assert_eq!(failed, Vec::<&&Check>::new());
+    assert!(rest.len() > 5, "the scenario made its checks: {rest:#?}");
+    match touchpad.as_slice() {
+        [check] => assert!(
+            matches!(
+                &check.outcome,
+                Outcome::CannotVerify { capability: Some(capability), .. }
+                    if capability == "input.inject"
+            ),
+            "{check:?}"
+        ),
+        other => panic!("one touchpad row: {other:#?}"),
+    }
 }
 
 /// The conformance row a platform's run reports: here on the headless target, through the OS lane

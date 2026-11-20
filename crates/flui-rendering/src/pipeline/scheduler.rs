@@ -20,14 +20,12 @@
 //!
 //! # Why a subsystem
 //!
-//! The Phase-1 wake-on-mark bug lived exactly at the boundary of dirty-queue
-//! membership and wake dispatch — a bug with its own regression test cluster
-//! is a subsystem with a contract, not a field group. Moving it here makes the
-//! invariant auditable in one place and allows a `(DirtyTracker, RenderTree)`
-//! pair to be constructed in tests without a full `PipelineOwner`, channel, or
-//! `Arc<RwLock>` setup.
-//!
-//! See the chief-architect design document §1a for the full rationale.
+//! Dirty-queue membership and wake dispatch must change together: a node
+//! enters the queue and the wake fires in one step, and a duplicate mark fires
+//! none. That contract is a subsystem of its own rather than a field group,
+//! so the invariant is auditable in one place and a `(DirtyTracker,
+//! RenderTree)` pair can be constructed in tests without a full
+//! `PipelineOwner`, channel, or `Arc<RwLock>` setup.
 
 use flui_foundation::RenderId;
 use rustc_hash::FxHashSet;
@@ -1062,6 +1060,7 @@ impl DirtyTracker {
     // =========================================================================
 
     /// Returns the nodes needing layout.
+    #[cfg(any(test, feature = "testing"))]
     #[inline]
     pub(super) fn nodes_needing_layout(&self) -> &[DirtyNode] {
         self.dirty.needs_layout.as_slice()
@@ -1074,6 +1073,7 @@ impl DirtyTracker {
     }
 
     /// Returns the nodes needing compositing bits update.
+    #[cfg(any(test, feature = "testing"))]
     #[inline]
     pub(super) fn nodes_needing_compositing_bits_update(&self) -> &[DirtyNode] {
         self.dirty.needs_compositing.as_slice()
@@ -1231,7 +1231,7 @@ mod tests {
     // =========================================================================
 
     // =========================================================================
-    // Wake-on-mark invariant tests (Phase-1 fix regression cluster)
+    // Wake-on-mark invariant tests: queue membership and wake dispatch agree
     //
     // These tests exercise DirtyTracker directly via the (tracker, tree) pair
     // — no PipelineOwner, channel, or full Arc<RwLock> construction needed.

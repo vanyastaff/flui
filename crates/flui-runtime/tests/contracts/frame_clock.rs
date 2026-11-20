@@ -292,7 +292,7 @@ impl tracing::Subscriber for LateFontDiagnostic {
 
         let mut message = FontChangeMessage(false);
         event.record(&mut message);
-        if event.metadata().target() == "flui_rendering::pipeline::owner::accessors"
+        if event.metadata().target() == "flui_rendering::pipeline::owner::invalidation"
             && message.0
             && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
         {

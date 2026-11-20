@@ -328,7 +328,7 @@ that drew beside the chunks that draw, and options no row honoured: the readout 
 Three variants have no production producer today: `Picture`, `ColorFilter` and `ImageFilter`.
 The other twelve are written into the retained scene as effect entries of a boundary's content
 (`ContentBuilder::push_effect`), by `flui-rendering`'s paint composer
-(`crates/flui-rendering/src/pipeline/owner/paint.rs`, `push_layer`) and, for the performance
+(`crates/flui-rendering/src/pipeline/owner/paint/composer.rs`, `push_layer`) and, for the performance
 overlay, by `flui-runtime`:
 
 - `scope_layer` and `clip_layer` turn a recorded `FragmentScope` or `PaintClip` into `Opacity`,

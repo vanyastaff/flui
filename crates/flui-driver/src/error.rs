@@ -3,6 +3,7 @@
 //! taking the desktop back, an expectation that never held).
 
 use std::io;
+use std::path::{Path, PathBuf};
 
 use flui_protocol::act::{ActionabilityCheck, Effect, EffectKind};
 use flui_protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
@@ -240,6 +241,11 @@ pub enum Error {
     /// [`Error::InputHeld`], which is someone else's input in the way and worth waiting out; this
     /// is the lane's own failure, which a retry of the call does not cure. A lane gathers it from
     /// its parts with [`lane::release_outcome`](crate::lane::release_outcome).
+    ///
+    /// After a run that failed first ([`lane::send_guarded`](crate::lane::send_guarded)), that
+    /// failure is `first`, and the run's effect and verdict are read from it rather than from the
+    /// release: a run the person interrupted is cannot-verify, since it did not complete because
+    /// of a person, and the input it left down is still named here.
     #[error("the {lane} lane left {} held: {message}", held.join(", "))]
     ReleaseFailed {
         /// The lane.
@@ -248,6 +254,9 @@ pub enum Error {
         held: Vec<String>,
         /// The first release each part could not make, in the order the parts ran, for people.
         message: String,
+        /// The failure that ended the run before the release, when one did: what the run's
+        /// effect and verdict are read from ([`Error::effect`], [`Error::is_cannot_verify`]).
+        first: Option<Box<Error>>,
     },
     /// The conversation with the app broke its protocol: a line that is not one, an answer to
     /// nothing asked.
@@ -263,6 +272,17 @@ pub enum Error {
         expected: String,
         /// What was last seen.
         actual: String,
+    },
+    /// A file the driver reads (a trace, a baseline image, a native recording) is not what it
+    /// should be: past a bound, of a newer format, or malformed.
+    #[error("{}{}: {message}", path.display(), line.map_or_default(|line| format!(", line {line}")))]
+    Unreadable {
+        /// The file.
+        path: PathBuf,
+        /// The 1-based line that is not, when the file is read by lines.
+        line: Option<u64>,
+        /// What is wrong, for people.
+        message: String,
     },
     /// The driver's own input or output failed: starting the app, its endpoint, a file.
     #[error(transparent)]
@@ -419,6 +439,24 @@ impl Error {
         }
     }
 
+    /// The file at `path` is not what the driver reads.
+    pub(crate) fn unreadable(path: &Path, message: impl Into<String>) -> Self {
+        Self::Unreadable {
+            path: path.to_owned(),
+            line: None,
+            message: message.into(),
+        }
+    }
+
+    /// Line `line` of the file at `path` is not what the driver reads.
+    pub(crate) fn unreadable_line(path: &Path, line: u64, message: impl Into<String>) -> Self {
+        Self::Unreadable {
+            path: path.to_owned(),
+            line: Some(line),
+            message: message.into(),
+        }
+    }
+
     /// The app's process went: `exit` is its exit code when the OS reported one.
     pub(crate) fn process_gone(message: impl Into<String>, exit: Option<i32>) -> Self {
         Self::gone(HandleKind::Process, None, exit, message)
@@ -453,6 +491,7 @@ impl Error {
             | Self::ReleaseFailed { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
+            | Self::Unreadable { .. }
             | Self::Io(_) => return None,
         })
     }
@@ -487,17 +526,22 @@ impl Error {
             | Self::ReleaseFailed { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
+            | Self::Unreadable { .. }
             | Self::Io(_) => Retry::Never,
         }
     }
 
-    /// How much of an acting call reached the app, when the failure says.
+    /// How much of an acting call reached the app, when the failure says; for a release that
+    /// failed after the run did, what that first failure says.
     #[must_use]
     pub fn effect(&self) -> Option<&Effect> {
         match self {
             Self::Timeout { effect, .. }
             | Self::Platform { effect, .. }
             | Self::Gone { effect, .. } => effect.as_ref(),
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.effect(),
             _ => None,
         }
     }
@@ -511,25 +555,34 @@ impl Error {
 
     /// Whether this failure means the check could not be made rather than that it failed: a
     /// capability the target lacks, a lane the host cannot run, or the user taking the desktop
-    /// back during an OS-input run. A report turns such a check into `cannot_verify`, never a
-    /// failure and never a pass.
+    /// back during an OS-input run; for a release that failed after the run did, whether that
+    /// first failure means so. A report turns such a check into `cannot_verify`, never a failure
+    /// and never a pass.
     #[must_use]
     pub fn is_cannot_verify(&self) -> bool {
-        matches!(
-            self,
-            Self::NotSupported { .. }
-                | Self::InterruptedByUser { .. }
-                | Self::Lane {
-                    unavailable: true,
-                    ..
-                }
-        )
+        match self {
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.is_cannot_verify(),
+            _ => matches!(
+                self,
+                Self::NotSupported { .. }
+                    | Self::InterruptedByUser { .. }
+                    | Self::Lane {
+                        unavailable: true,
+                        ..
+                    }
+            ),
+        }
     }
 
     /// The capability a cannot-verify failure names, for a report's list.
     #[must_use]
     pub fn missing_capability(&self) -> Option<String> {
         match self {
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.missing_capability(),
             Self::NotSupported { capability, .. } => {
                 Some(capability.clone().unwrap_or_else(|| "unnamed".to_owned()))
             }

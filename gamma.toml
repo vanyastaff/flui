@@ -46,4 +46,9 @@ cargo-test-args = [
     "plugin_factory_requires_the_canonical_scene",
     "--skip",
     "plugin_teardown_requires_unsafe",
+    # flui-driver's live Windows tests: they open windows and may send input, libtest starts
+    # them on the person's own desktop, and their setup refuses to run there (a panic that
+    # would redden the baseline); nextest, which gives each a desktop of its own, runs them
+    "--skip",
+    "windows_desktop::",
 ]

@@ -45,12 +45,14 @@ mod expect;
 pub mod lane;
 mod launch;
 pub mod os_input;
+pub mod pixels;
 pub mod projection;
 pub mod report;
 pub mod scenario;
 pub mod steps;
 #[cfg(all(feature = "testing", any(unix, windows)))]
 pub mod testing;
+pub mod trace;
 mod window;
 
 #[cfg(any(unix, windows))]

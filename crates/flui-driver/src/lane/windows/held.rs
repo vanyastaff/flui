@@ -267,6 +267,7 @@ impl HeldKeys {
                     .map(|&code| keys::name_of(code))
                     .collect::<Vec<String>>(),
                 message: first.to_string(),
+                first: None,
             }),
         }
     }
@@ -355,6 +356,7 @@ impl HeldButtons {
                     .map(|button| Self::name_of(button).to_owned())
                     .collect::<Vec<String>>(),
                 message: first.to_string(),
+                first: None,
             }),
         }
     }

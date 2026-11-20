@@ -1265,7 +1265,7 @@ pub(crate) fn retiring_scroll_curves_preserves_newer_reentrant_commands() {
 // recurses into it, but (before the fix this section pins down) never pushed
 // the paint offset it consumed onto the `HitTestResult` transform stack --
 // unlike the box-side walk, which does for `RenderBox` ancestors
-// (`crates/flui-rendering/src/pipeline/owner/accessors.rs`). A `Listener`
+// (`crates/flui-rendering/src/pipeline/owner/hit_test.rs`). A `Listener`
 // living anywhere below a sliver therefore received the raw, un-localized
 // GLOBAL dispatch position instead of one local to its own box -- wrong for
 // any sliver whose child paints at a nonzero offset, the common case for a

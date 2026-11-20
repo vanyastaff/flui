@@ -246,6 +246,13 @@ fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
         ),
         ("shared, guarded", Isolation::Shared, true, None),
         ("an emulator, unguarded", Isolation::Emulator, false, None),
+        (
+            "a device in someone's hands, unguarded",
+            Isolation::Device,
+            false,
+            Some("user_activity_guard"),
+        ),
+        ("a device, guarded", Isolation::Device, true, None),
     ];
     for (row, isolation, guarded, refused) in rows {
         let (lane, log) = ScriptedLane::new(isolation);
@@ -266,6 +273,36 @@ fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
             (expected, sent) => panic!("{row}: expected refusal {expected:?}, got {sent:?}"),
         }
     }
+}
+
+/// A run that ends early and then cannot release what it pressed answers with what stays held,
+/// keeping why it ended as the first failure its verdict comes from: the person hears of the key
+/// left down, and a run they interrupted stays cannot-verify.
+#[test]
+fn input_left_held_is_named_whatever_ended_the_run() {
+    let an_event = || OsEvent::Pause(Duration::from_millis(1));
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane
+        .foreign_input_after(1, "a mouse move")
+        .failing_releases(1);
+    match lane::send_guarded(&mut lane, &[an_event(), an_event()]) {
+        Err(error @ Error::ReleaseFailed { .. }) => {
+            assert!(error.is_cannot_verify(), "{error}");
+            let Error::ReleaseFailed { held, message, .. } = error else {
+                unreachable!("matched above");
+            };
+            assert_eq!(held, vec!["Control".to_owned()]);
+            assert!(message.contains("a mouse move"), "{message}");
+        }
+        other => panic!("expected what stays held, got {other:?}"),
+    }
+    // A run that ends early and releases everything still answers why it ended.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(1, "a mouse move");
+    assert!(matches!(
+        lane::send_guarded(&mut lane, &[an_event(), an_event()]),
+        Err(Error::InterruptedByUser { .. })
+    ));
 }
 
 #[test]
@@ -347,51 +384,4 @@ fn a_sequence_the_lane_cannot_send_is_refused_before_any_event() {
     assert!(log.sent().is_empty(), "nothing was sent");
     assert_eq!(log.arms(), 0, "the guard never armed");
     assert_eq!(log.releases(), 0, "nothing was pressed to release");
-}
-
-/// After a failed send, whose error stays the answer, a release that fails is tried once more and
-/// what stays held is logged at error level; after a send that went through, the release's
-/// failure is the answer and nothing is logged.
-#[test]
-fn a_release_that_fails_after_a_failed_send_is_tried_again_and_logged() {
-    let events = [
-        OsEvent::Pause(Duration::from_millis(1)),
-        OsEvent::Pause(Duration::from_millis(1)),
-    ];
-    let logged_held = |captured: &flui_testing::log_capture::CapturedLog| {
-        captured
-            .at_level(tracing::Level::ERROR)
-            .filter(|record| record.contains("input stays held") && record.contains("Control"))
-            .count()
-    };
-    // Releases refused, interrupted or not, the releases made, the error lines naming Control.
-    let rows = [
-        ("interrupted, refused once", 1, true, 2, 0),
-        ("interrupted, refused twice", 2, true, 2, 1),
-        ("went through, refused once", 1, false, 1, 0),
-    ];
-    for (row, failing, interrupted, releases, logged) in rows {
-        let (lane, log) = ScriptedLane::new(Isolation::Shared);
-        let lane = if interrupted {
-            lane.foreign_input_after(1, "a click")
-        } else {
-            lane.guarded()
-        };
-        let mut lane = lane.failing_releases(failing);
-        let (sent, captured) =
-            flui_testing::log_capture::capture(|| lane::send_guarded(&mut lane, &events));
-        if interrupted {
-            assert!(
-                matches!(&sent, Err(Error::InterruptedByUser { event, .. }) if event == "a click"),
-                "{row}: the send's error is the answer: {sent:?}"
-            );
-        } else {
-            assert!(
-                matches!(&sent, Err(Error::ReleaseFailed { held, .. }) if held == &["Control"]),
-                "{row}: the release's failure is the answer: {sent:?}"
-            );
-        }
-        assert_eq!(log.releases(), releases, "{row}");
-        assert_eq!(logged_held(&captured), logged, "{row}: {captured}");
-    }
 }

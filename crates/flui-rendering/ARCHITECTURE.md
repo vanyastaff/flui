@@ -220,7 +220,7 @@ E0277 for `Default` construction and downstream phase implementations, and
 E0599 for painting from idle/layout or running a frame from layout. A passing
 caller runs the complete phase sequence and returns to idle for `run_frame`.
 
-This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
+This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format: state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
 ### Scroll caches preserve materialized descendant reveal
 
@@ -261,7 +261,7 @@ and the reveal of the row past the edge.
 
 Dropping a render entry drops its render object, then its parent data; a
 render tree drops its entries in slot order, and a `VisualUpdateNotifier` its
-references to the visual-update, created, then disposed callbacks. If one of
+reference to the visual-update callback. If one of
 those destructors panics the rest are still dropped and the first panic
 propagates; one that panics while the thread is already unwinding aborts, as
 in std (ADR-0281, which supersedes ADR-0127). Framework-owned entry state
@@ -286,9 +286,9 @@ propagates and leaves the new callback installed. Pinned by
 
 `set_semantics_enabled` commits the transition (the flag, the owner, the
 root's semantics seed, and on disable the owner's teardown) before the
-lifecycle callback and the visual-update wake run. Each of them runs even when
-an earlier one panics, and the first panic is resumed at the end. Pinned by
-`a_failing_semantics_lifecycle_hook_keeps_the_transition`.
+visual-update wake runs. The wake runs even when the teardown panics, and the
+first panic is resumed at the end. Pinned by
+`a_failing_semantics_transition_keeps_it`.
 
 ### Caught hit-test panics do not change sibling coordinates
 
@@ -394,10 +394,10 @@ each child's parent data out of the child's node into that child's walk state (`
 ends, on success, on an error and on an unwind alike. What the parent wrote (a lazy list's
 `layout_offset`, a default its typed bridge created on first access) is what the child keeps.
 
-**Why lent rather than copied:** the walk used to clone each child's parent data into the walk
-state, one heap allocation per child per laid-out parent, and dropped the copy with the state, so
-a parent's writes never reached the child. The node cannot keep the data in place for the parent
-to borrow, because laying out the child takes a `&mut` to the child's node. Moving the box out and
+**Why lent rather than copied:** copying each child's parent data into the walk state costs one heap
+allocation per child per laid-out parent, and a parent's writes would never reach the child. The
+node cannot keep the data in place for the parent to borrow, because laying out the child takes a
+`&mut` to the child's node. Moving the box out and
 back is two pointer writes and no allocation.
 
 **What makes it sound:** the lease holds the `&mut RenderTree` for the whole walk and child builds
@@ -427,17 +427,17 @@ walk skip any child carrying a different value. Every multi-child object gets th
 whether or not it remembered to ask for one.
 
 **Why it cannot live in the render object:** `PaintContext` exposes neither parent data nor a child's
-logical index, so an object cannot tell paint which of its children this pass placed. That is why
-the now-deleted eager grid carried a `laid_out_band` field of its own, and why the lazy slivers
-used to rely on the frame evicting out-of-band residents before paint runs (ADR-0017's amendment)
-— each a per-object workaround for a property the pipeline can hold once.
+logical index, so an object cannot tell paint which of its children this pass placed. A per-object
+band field or reliance on the frame evicting out-of-band
+residents before paint runs (ADR-0017) would each be a workaround for a property the pipeline can
+hold once.
 
-That eviction is no longer a backstop for every out-of-band child. Keep-alive (ADR-0056) makes a
-held child stay attached and unlaid indefinitely, so this stamp is the **sole** mechanism keeping
-it off screen, out of hit-test, and out of the semantics tree — defence-in-depth promoted to
-load-bearing. That promotion is why the semantics gate had to land before keep-alive could.
+Eviction is not a backstop for every out-of-band child. Keep-alive (ADR-0056) makes a held child
+stay attached and unlaid indefinitely, so this stamp is the **sole** mechanism keeping it off
+screen, out of hit-test, and out of the semantics tree. The semantics gate therefore ships with
+keep-alive.
 
-**Three constraints the implementation found, each of which broke a real test:**
+**Three constraints on the implementation:**
 
 1. The stamp keys on `layout_child`, **not** `position_child`. Twelve single-child proxies
    (`Opacity`, `RepaintBoundary`, `Transform`, …) lay their child out and never position it,
@@ -482,7 +482,7 @@ asymmetry is not removable *at the stamp* — requiring one instead of accepting
 regresses `harness_merge_semantics_collapses_descendant_boundaries` (verified: the descendant's
 `is_button` is lost), which is the same objection that deferred this gate in the first place.
 
-It is removable one layer up, and now is: `RenderBox::visits_child_for_semantics(child_slot, size)` lets
+It is removable one layer up: `RenderBox::visits_child_for_semantics(child_slot, size)` lets
 a parent drop a child it structurally does not present, independently of layout history. The stamp
 answers "did this pass place you"; the visitor answers "do I present you at all". `RenderTheater`
 was the reachable case and overrides it from `skip_count` — see
@@ -494,9 +494,8 @@ detached subtrees — and this gate makes a third case reach it: a child that re
 update while unplaced. Clearing the flag while keeping the boundary's record is what makes
 that lossy, because a child placed again under unchanged constraints short-circuits its own layout
 and requeues nothing, so the stale content is kept as it is and the update is gone for good. The
-scan now marks the record stale alongside clearing the flag, so the next frame that reaches the
-boundary repaints it into the same scene node; this also closes the detached-subtree case it had
-only been warning about.
+scan marks the record stale alongside clearing the flag, so the next frame that reaches the
+boundary repaints it into the same scene node; this also covers the detached-subtree case.
 
 **Pinned:** the hit-test gate by
 `harness_placed_generation_gate_excludes_a_dropped_child_from_hits` and the semantics gate by
@@ -538,11 +537,10 @@ never whether the frame is correct.
    `paint` has no update-only path.** `RenderClip<S>`
    (`crates/flui-objects/src/proxy/clip.rs` — `paint_effects`/
    `clip_descriptor`) and `RenderFlow` (`crates/flui-objects/src/layout/flow.rs`
-   — `paint_effects`) used to be in this bucket and now report their clip
-   through the value instead, so this trade-off has narrowed to whatever a
-   producer still pushes from `paint`. Rather than a list this entry would
-   have to keep in sync by hand every time a producer moves, enumerate the
-   producers directly: `rg -n
+   — `paint_effects`) report their clip through the value instead, so this
+   trade-off covers whatever a producer still pushes from `paint`. Rather
+   than a list this entry would have to keep in sync by hand every time a
+   producer moves, enumerate the producers directly: `rg -n
    "with_clip_rect\(|with_clip_rrect\(|with_clip_path\(|with_shader_mask\(|with_backdrop_filter\("
    crates/flui-objects/src`. Today that returns the overflow-gated clip
    family (`RenderStack`, `RenderIndexedStack`, `RenderWrap`,
@@ -593,8 +591,8 @@ declares `alwaysNeedsCompositing` but is never a repaint boundary, so a setter
 that only marks paint would cost a full subtree repaint on every alpha tick.
 
 `RenderSliverOpacity::set_opacity` reports `COMPOSITED_LAYER_UPDATE` instead.
-Promoting the node to a boundary is exactly what this design removed: a flat
-content makes any node's effect layers addressable inside the ENCLOSING
+Promoting the node to a boundary is unnecessary: a flat content makes any node's effect layers
+addressable inside the ENCLOSING
 boundary, so the sliver needs no boundary of its own to be served.
 
 The structural transitions still repaint (`skip_paint` crossings and
@@ -634,10 +632,9 @@ or a failing wake, when no later animation sample can retry.
 
 **`RenderTransform`.** A transform change is also served as a layer update.
 The transitions (`SlideTransition`, `ScaleTransition`, `RotationTransition`)
-no longer build a `RenderTransform`: they drive `RenderAnimatedTransform`
-(`flui-objects`), which takes the same layer-update path from its tick
-listener and, unlike `RenderTransform`, gives a moving pure translation a
-layer too (see that crate's `## Mapping decisions`).
+build `RenderAnimatedTransform`, not a `RenderTransform`: it takes the same layer-update path from its tick
+listener and, unlike `RenderTransform`, gives a moving pure translation a layer too
+(`flui-objects`; see that crate's `## Mapping decisions`).
 
 FLUI reports `COMPOSITED_LAYER_UPDATE` for a matrix change that stays within the
 layered range, on the same flat-content argument as the opacity cases: the
@@ -843,7 +840,7 @@ this.
 | `ClipSuperellipse` | no render object, widget, or variant (its layer debug-asserts against `Clip::None`, unlike rect/rrect/path, which only skip the push) | its port | a `PaintClip` variant; note the per-layer `Clip::None` difference |
 | `blend` on `PaintOpacity` | zero producers | the first advanced-blend producer | additive field on the `#[non_exhaustive]` struct |
 
-The market survey behind this shape ([`AGENTS.md`](../../AGENTS.md) Design stance, "Look around before settling") covered
+The market survey behind this shape (`AGENTS.md`, "Design stance": other frameworks are a checklist of edge cases) covered
 Compose, SwiftUI, Slint, GPUI, and Masonry/Xilem; Compose's
 [`Modifier.graphicsLayer`](https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/graphicsLayer.modifier)
 is the closest market analogue — one declarative value per layer (`alpha`,
@@ -1133,7 +1130,7 @@ with the change reverted.
 
 ### The hit-test path is driver-owned; the protocol carries no result accumulator
 
-**Choice:** `HitTestCapability::Result` and `::Entry` are vocabulary only. There is no
+**Choice:** `Protocol::HitResult` and `Protocol::HitEntry` are vocabulary only. There is no
 `ctx.result()`, `result_mut()`, `add_hit(entry)` or `add_self(id)`: the driver
 (`PipelineOwner`'s hit-test walk) owns the path and builds each entry from the node's own
 `RenderId`. A render object says it was hit by returning `true`, or calls
@@ -1166,8 +1163,8 @@ adds its own entry.
 **Replacement coverage:** `register_self_hit_entry` is exercised end-to-end by
 `mouse_region_cursor_reaches_the_window_through_the_ui_runtime` (`crates/flui-testing/tests/runtime_driver.rs`):
 `RenderMouseRegion` enters the hit path only through it, and the test asserts the hovered region's
-cursor reaches the window. The deleted tests asserted a write landed in a structure nobody read, so
-they were removed rather than adapted: they could not fail for a reason a user would notice.
+cursor reaches the window. A test that asserted a write landed in a structure nobody read could not fail
+for a reason a user would notice, so none exists.
 
 ### Lazy-sliver scroll correction keeps the first visible item stationary
 
@@ -1204,19 +1201,17 @@ differently by hand.
 
 ### Render-tree storage uses a `NodeSlab` with generational `RenderId` keys
 
-**Amended by [ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md):** the tree stores nodes in its own `NodeSlab` (`storage/node_slab.rs`), a `Vec` of slots with a free list. Each slot carries its generation, an in-flight bit and the parent link, its only copy, outside the `UnsafeCell` that holds the node, and a layout walk takes one `TreeLease` and acquires nodes on demand. The slab mints every `RenderId`: emptying a slot advances its generation, and a slot that runs out of generations retires instead of issuing one again. Removal takes the nodes out before any destructor runs, so a destructor that panics finds the tree and the owner already committed. The paragraphs below describe the original `Slab<RenderNode>` choice; the reasons for an arena with generational ids still stand.
+**Rule:** state only the owner thread touches is not shared through `Arc<Mutex<_>>` trees (`AGENTS.md`, "Current forms"); a tree is an arena addressed by generational ids ([ADR-0252](../../docs/adr/ADR-0252-layout-walk-leases-nodes-on-demand.md); ID offset and generation rules in [`docs/architecture.md`](../../docs/architecture.md)).
 
-**Rule:** strategy clause "Behavior as floor, everything else designed for Rust"; constitution Anti-Patterns list ("`Arc<Mutex<>>` for tree structures — use arena/slotmap"); the ID-offset pattern documented in [`docs/architecture.md`](../../docs/architecture.md).
+**Choice:** `RenderTree` stores its nodes in a `NodeSlab` (`storage/node_slab.rs`), a `Vec` of slots with a free list. Each slot carries its generation, an in-flight bit and the parent link, its only copy, outside the `UnsafeCell` that holds the node; a layout walk takes one `TreeLease` and acquires nodes on demand. The slab mints every `RenderId`: emptying a slot advances its generation, and a slot that runs out of generations retires instead of issuing one again, so a stale id misses instead of naming a later occupant. Removal takes the nodes out before any destructor runs, so a destructor that panics finds the tree and the owner already committed. The slab is reached from one strong root (`PipelineOwner::root_id`) and every other node is reached by walking child IDs in `NodeLinks`.
 
-**Choice:** `RenderTree` stores `Slab<RenderNode>`. `RenderId` is a `NonZeroUsize` newtype that adds `+1` to the slab index, so `Option<RenderId>` niche-optimises to 8 bytes for parent / child references. The slab is reached from one strong root (`PipelineOwner::root_id`) and every other node is reached by walking child IDs in `NodeLinks`.
+**Alternatives:** a graph of references with direct child pointers on every render object would need `Arc<RwLock<RenderObject>>` or `Rc<RefCell<RenderObject>>` for parent/child cycles. `typed-arena::Arena` cannot delete individual entries, which the element reconciler needs.
 
-**Alternatives:** a graph of references with direct child pointers on every render object would require `Arc<RwLock<RenderObject>>` or `Rc<RefCell<RenderObject>>` for parent/child cycles, which the constitution forbids for tree structures. `typed-arena::Arena` was considered but cannot delete individual entries, which the element reconciler needs.
-
-**Accepted trade-off:** one extra indirection (slab lookup) on the tree-walk hot path, paid back by O(1) insert/delete, deterministic ID stability across mutations, and elimination of `Arc<Mutex<>>` cycles. The same pattern is used by `flui-view`'s `ElementTree`.
+**Accepted trade-off:** one extra indirection (slab lookup) on the tree-walk hot path, paid back by O(1) insert/delete, deterministic ID stability across mutations, and no `Arc<Mutex<>>` cycles. The same pattern is used by `flui-view`'s `ElementTree`.
 
 ### `RenderEntry<P>` owns the render object by value (no lock, no interior mutability)
 
-**Rule:** strategy clause "sync hot path, async на краях" (lock contention on the hot path is functionally async-flavoured); no lock on per-node render storage touched during `perform_layout` / `paint` (no `RwLock<Box<dyn RenderObject<P>>>`).
+**Rule:** the frame path is synchronous: no lock on per-node render state touched in `perform_layout` / `paint` (`AGENTS.md`, "Design stance"), so no `RwLock<Box<dyn RenderObject<P>>>`.
 
 **Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which only the owner obtains, from the `RenderTree` it holds; code outside the crate edits a node through the owner's operations (`PipelineOwner::update_render_object`, `update_parent_data`), which apply the impact the edit reports. Re-entrant access from a parent to a child during layout goes through the `SubtreeArena` disjoint-borrow substrate (the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). Debug-build re-entrancy checks live in `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
 
@@ -1224,40 +1219,41 @@ differently by hand.
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
 - Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Inspect> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
 - `RenderObjectId` indirection (render object lives in a separate slab keyed by ID) — considered. Adds one extra indirection per access and doubles the lifecycle invariants (insert/delete across two slabs). Equivalent soundness-wise but more moving parts than necessary.
-- Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `flui-objects` to be refactored. Filed as future work.
+- Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `flui-objects` to be refactored.
 
-**Accepted trade-off:** the layout and update paths must hold `&mut RenderTree` for the duration of the phase. Multi-child layout requires the `get_many_mut` primitive. The borrow checker, not a lock, enforces single-writer-per-frame — single-threaded with debug asserts, in place of the previous `RwLock`-based shape.
+**Accepted trade-off:** the layout and update paths must hold `&mut RenderTree` for the duration of the phase. Multi-child layout requires the `get_many_mut` primitive. The borrow checker, not a lock, enforces single-writer-per-frame — single-threaded with debug asserts.
 
-### `set_was_repaint_boundary` removed from the trait surface; bit lives on `RenderState::flags`
+### A render object cannot set its own repaint-boundary bit; it lives on `RenderState::flags`
 
-**Rule:** no lock on per-node render storage touched during paint (the previous shape required a write lock on the trait object during paint to flip a single bool); strategy clause "Compile-time over runtime" (state bits belong on the bookkeeping layer, not the user-implementable trait surface).
+**Rule:** no lock on per-node render storage touched during paint; the bookkeeping layer (`RenderState<P>`), not the user-implementable trait surface, holds state bits ("compile-time over runtime").
 
-**Choice:** added `RenderFlags::WAS_REPAINT_BOUNDARY` (bit 10 — see [`src/storage/flags.rs`](src/storage/flags.rs)) with the crate-private `RenderNode::set_was_repaint_boundary` writer and the `RenderState<P>::was_repaint_boundary` reader. The paint phase at [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) (`paint_subtree`) writes the bit through `state().flags()`, a `RenderFlagsCell`, rather than locking the trait object. The trait method `RenderObject::set_was_repaint_boundary` is deleted (see [`src/traits/render_object.rs`](src/traits/render_object.rs)).
+**Choice:** `RenderFlags::WAS_REPAINT_BOUNDARY` (bit 10, [`src/storage/flags.rs`](src/storage/flags.rs)) records whether the node was a repaint boundary in its last paint. The crate-private `RenderNode::set_was_repaint_boundary` writes it, and `RenderState<P>::was_repaint_boundary` reads it. The paint phase (`paint_subtree` in [`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)) writes the bit through `state().flags()`, a `RenderFlagsCell`, so it never takes the trait object. `RenderObject` has no `set_was_repaint_boundary` method.
 
-**Alternatives:** keep the trait method and live with the per-paint write lock — rejected, this is the canonical refusal-trigger violation. Move the bit to a per-tree side table — rejected, would add a second source-of-truth for state already structured around `RenderState<P>`.
+**Alternatives:** a trait method needs `&mut` access to the trait object during paint to flip one bool — rejected. A per-tree side table — rejected, it would be a second source of truth for state already kept on `RenderState<P>`.
 
-**Accepted trade-off:** subclasses that wanted to override `set_was_repaint_boundary` (none currently do) lose the hook. The flag's owner is now framework code, not user code.
-### `unsafe impl Send + Sync for RenderTree` removed
+**Accepted trade-off:** a render object cannot override how the bit is written. The flag's owner is framework code, not user code.
 
-**Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-native`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
+### `RenderTree` is `!Sync` without an `unsafe impl`
 
-**Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). `RenderTree` is now `!Send + !Sync` by auto-derivation: `RenderEntry<P>` holds `Box<dyn RenderObject<P>>`, and `RenderObject` carries no `Send` or `Sync` supertrait (ADR-0027 §9), so a tree stays on its presentation's thread. `assert_not_impl_any!(RenderTree: Send, Sync)` in `src/storage/tree.rs` pins it.
+**Rule:** a value crosses a thread because the compiler proves it may; no new `unsafe impl Send` or `Sync` is written (ADR-0323 §3; `AGENTS.md`, "Rules a reader holds").
 
-**Alternatives:** keep the unsafe impl as defensive cruft — rejected, the safety justification was load-bearing only because of `RwLock`'s interior mutability; with that gone, no unsafe carve-out is needed.
+**Choice:** `RenderTree` has no `unsafe impl Send` or `Sync` ([`src/storage/tree.rs`](src/storage/tree.rs)). It is `!Send + !Sync` by auto-derivation: `RenderEntry<P>` holds `Box<dyn RenderObject<P>>`, and `RenderObject` carries no `Send` or `Sync` supertrait (ADR-0027 §9), so a tree stays on its presentation's thread. `assert_not_impl_any!(RenderTree: Send, Sync)` in `src/storage/tree.rs` pins it.
 
-**Accepted trade-off:** net unsafe deletion, one fewer place where the carry-cost of a soundness comment exists.
+**Alternatives:** an `unsafe impl` asserting the tree may move across threads — rejected: with no lock inside the nodes there is nothing for it to protect, and the soundness comment would be a cost carried for no use.
+
+**Accepted trade-off:** a tree cannot be handed to another thread; cross-thread requests go through `RenderInvalidationHandle`.
 
 ### Third-party trait calls wrapped in `catch_unwind`; phases return `RenderResult<()>`
 
-**Rule:** design verdict Section 7 ("Partial failure recovery: A render object that panics inside `perform_layout` or `paint` poisons that node only. The pipeline catches via `std::panic::catch_unwind`, marks the node as `RenderError::Poisoned`, drops the in-flight frame, and lets the caller decide.") and Section 10 (the `Poisoned { render_object, phase }` error variant).
+**Rule:** a render object that panics inside `perform_layout` or `paint` poisons that node only. The pipeline catches the panic, reports the node as `RenderError::Poisoned { render_object, phase }`, drops the in-flight frame, and lets the caller decide.
 
 **Choice:** every third-party trait call site has its call wrapped in `std::panic::catch_unwind(AssertUnwindSafe(|| ...))`. A panicking render object surfaces as `RenderError::Poisoned { render_object, phase }` rather than aborting the process. Specifically:
 
-- `RenderEntry::layout` ([`src/storage/entry.rs`](src/storage/entry.rs)) wraps `render_object.perform_layout_raw(...)` and returns `RenderResult<ProtocolGeometry<P>>`. On the panic path, state is left untouched (`NEEDS_LAYOUT` stays set) so the next frame can retry. The retry is not unbounded: the pipeline counts consecutive layout failures per node and poisons nodes that fail structurally or exhaust the budget ([`src/pipeline/owner/poison.rs`](src/pipeline/owner/poison.rs)); a poisoned node is skipped in later walks until `mark_needs_layout` freshly invalidates it. A dirty root that fails ends its pass, not its batch: the relayout roots after it go back to the queue, and so does the root itself while it has budget left, so the retry of the failed frame lays them out and attempts the root again (`a_failed_dirty_root_keeps_the_rest_of_its_batch`). What a reader can tell apart afterwards, and where: a poisoned node that once committed keeps that geometry — `RenderNode::geometry_box()` is `Some(last committed)` — while one that never succeeded reads `None` and is served as `Size::ZERO`; the parent that consumed the stand-in carries `RenderNode::geometry_degraded()`; and the node's own layout-call counter shows the poison skipped the re-attempt. Pinned by `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero` (`tests/layout_poison.rs`), whose doc states the two mutations that turn it red. The never-committed half (`None`, served as `Size::ZERO`): **Unasserted:** no test pins this.
+- `RenderEntry::layout` ([`src/storage/entry.rs`](src/storage/entry.rs)) wraps `render_object.perform_layout_raw(...)` and returns `RenderResult<P::Geometry>`. On the panic path, state is left untouched (`NEEDS_LAYOUT` stays set) so the next frame can retry. The retry is not unbounded: the pipeline counts consecutive layout failures per node and poisons nodes that fail structurally or exhaust the budget ([`src/pipeline/owner/poison.rs`](src/pipeline/owner/poison.rs)); a poisoned node is skipped in later walks until `mark_needs_layout` freshly invalidates it. A dirty root that fails ends its pass, not its batch: the relayout roots after it go back to the queue, and so does the root itself while it has budget left, so the retry of the failed frame lays them out and attempts the root again (`a_failed_dirty_root_keeps_the_rest_of_its_batch`). What a reader can tell apart afterwards, and where: a poisoned node that once committed keeps that geometry — `RenderNode::geometry_box()` is `Some(last committed)` — while one that never succeeded reads `None` and is served as `Size::ZERO`; the parent that consumed the stand-in carries `RenderNode::geometry_degraded()`; and the node's own layout-call counter shows the poison skipped the re-attempt. Pinned by `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero` (`tests/layout_poison.rs`), whose doc states the two mutations that turn it red. The never-committed half (`None`, served as `Size::ZERO`): **Unasserted:** no test pins this.
 - `PipelineOwner::<PaintPhase>::paint_subtree_impl` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)) wraps `render_node.paint_raw(&mut recorder, ...)` (the fragment recorder) together with the node's own effect-layer build, `own_effect_layers(render_node.paint_effects(), origin)`, in ONE `catch_unwind`. Both run only after the walk's three return gates (`skip_paint`, `needs_layout`, the sliver visibility cull): a gated-out node never builds a `PaintEffects` descriptor it will not use. Building it there matters: reached outside those gates, a node whose `needs_layout` flag is still set carries stale geometry — its last committed size, or `Size::ZERO` if it has never been laid out — so its descriptor would be built against a size this pass never computed. A panic in either half — the node's own `paint_effects`, or the walk's resolution of a `PaintClip::PathTarget` inside `own_effect_layers`'s clip arm — surfaces as `Poisoned { phase: PoisonPhase::Paint, .. }`, one poison point per node rather than two.
 - `PipelineOwner::<PaintPhase>::layer_patches_for` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)), the composited-layer-update patch arm, wraps the same `own_effect_layers(node.paint_effects(), slots.origin)` rebuild — run once per target being patched into a published boundary's content — in its own `catch_unwind`. A panic surfaces as `Poisoned { phase: PoisonPhase::LayerUpdate, .. }` and the function returns `Err` instead of `Ok(None)`: the whole frame is discarded and the queued composited-layer-update request survives on the node for the retry. Falling back to a repaint instead (the way a structural shape mismatch does, via `Ok(None)`) was rejected — the repaint would call the same panicking `paint_effects` on the same node and panic a second time.
 
-The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) now return `RenderResult<()>`. `run_frame` takes the frame's `SceneWriter` and returns the owner at Idle with a result -- on an error the owner comes back at Idle with the result. A caller that keeps the owner in a slot runs `run_frame_in_place` (or `PipelineCell::run_frame` / `PipelineCell::run_layout`), which leaves the same owner in the slot on every exit, a panic included; see the next rule.
+The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_semantics`) return `RenderResult<()>`. `run_frame` takes the frame's `SceneWriter` and returns the owner at Idle with a result -- on an error the owner comes back at Idle with the result. A caller that keeps the owner in a slot runs `run_frame_in_place` (or `PipelineCell::run_frame` / `PipelineCell::run_layout`), which leaves the same owner in the slot on every exit, a panic included; see the next rule.
 
 `Poisoned`'s `phase` is a [`PoisonPhase`](src/error.rs) (`Layout` | `Paint` | `LayerUpdate`, rendered `"layout"` / `"paint"` / `"layer-update"` by its `Display` impl) — the enum itself is the authoritative, closed set; nothing today produces a fourth variant.
 
@@ -1269,7 +1265,7 @@ Isolation is deliberately strict: a panic in `paint_effects` (`PoisonPhase::Pain
 
 - **Process-wide `panic::set_hook`** -- rejected, leaks pipeline concerns into global process state and can't differentiate phase-of-origin.
 - **Cache `kind` on `RenderEntry<P>` at insertion** -- considered. Would avoid one vtable dispatch per error case. Not adopted because the dispatch happens only on the failure path (cold by definition), and the cache adds a `&'static str` field that pollutes every `RenderEntry<P>` in the common case.
-- **Return `(PipelineOwner<Idle>, RenderError)` tuple on error** (shape (a) in the original design) -- rejected, awkward to compose; pattern-matching on `(_, Result<_>)` is cleaner than splitting the success and error tuples.
+- **Return `(PipelineOwner<Idle>, RenderError)` tuple on error** -- rejected, awkward to compose; pattern-matching on `(_, Result<_>)` is cleaner than splitting the success and error tuples.
 
 **Accepted trade-off:** `AssertUnwindSafe` is documented inline at each wrapper. The render object's internal state may be torn after a panic; the pipeline treats the node as poisoned and lets the caller drop or replace it. Process-level safety is preserved; the render tree itself is not corrupted.
 
@@ -1283,9 +1279,9 @@ Isolation is deliberately strict: a panic in `paint_effects` (`PoisonPhase::Pain
 
 The phases commit before they call out (ADR-0287, by hand on the frame path): a relayout batch and the compositing walk commit their paint and semantics marks with `commit_needs_paint` / `commit_node_needing_semantics` and announce them with one wake at the end. The wake goes out on every exit, an error or a panic included; when the pass already failed, that failure is the first one and a wake that panics after it is discarded (ADR-0281 §2). The poison reports of a walk run under `FirstPanic`, so a first transition is never left unreported, and a report's panic goes on only after the dirty root's own success is recorded and its paint committed. Pinned by `a_frame_that_unwinds_leaves_the_pipeline_its_owner`, `a_layout_pass_announces_its_paint_on_every_exit` and `a_poison_report_that_panics_comes_after_the_dirty_roots_success` (`tests/frame_unwind.rs`; each row fails with its part of the containment reverted) and `a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry` (`flui-runtime`'s `frame_failure_containment_matrix`).
 
-**Alternatives:** `take_idle`, which moved the owner out and left an empty placeholder in the slot, made an unwind lose the render tree: the retry ran on the placeholder and invalidation handles answered `OwnerGone`. It is gone; the placeholder now lives only inside `run_frame_in_place` while the owner is out, and nothing can observe it.
+**Alternatives:** moving the owner out of its slot and leaving an empty placeholder would make an unwind lose the render tree: the retry would run on the placeholder and invalidation handles would answer `OwnerGone`. The placeholder lives only inside `run_frame_in_place` while the owner is out, and nothing can observe it.
 
-Hit testing runs outside the frame pipeline and isolates per node instead: `PipelineOwner::hit_test` visits every node inside one `catch_unwind` (`contain_node` in [`src/pipeline/owner/accessors.rs`](src/pipeline/owner/accessors.rs)) covering all of its user hooks — `hit_test_transform`, the expanded area, `hit_test` itself (path clippers, flow delegates), the entry's targets. A node that panics is a miss: what its subtree added is dropped, it blocks nothing below, and its siblings and ancestors still decide. The first payload is held until the path is complete, then resumed from `hit_test`, so `result` already holds every other hit; later payloads are retained. `RenderingBinding::hit_test` (`flui-runtime`) catches that resume and returns it in `ViewHitTest::Answered`, and the runtime delivers the event to the path before reporting it. A tree whose layout is withdrawn or checked out answers `ViewHitTest::TreeBusy` rather than an empty path. Pinned by `a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path` (`hit_test_matrix`) and `a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic` (`flui-runtime`'s `owner_input_contract`). A pointer Down that finds the tree busy is still admitted with an empty route; refusing it belongs to the gesture binding's contact admission.
+Hit testing runs outside the frame pipeline and isolates per node instead: `PipelineOwner::hit_test` visits every node inside one `catch_unwind` (`contain_node` in [`src/pipeline/owner/hit_test.rs`](src/pipeline/owner/hit_test.rs)) covering all of its user hooks — `hit_test_transform`, the expanded area, `hit_test` itself (path clippers, flow delegates), the entry's targets. A node that panics is a miss: what its subtree added is dropped, it blocks nothing below, and its siblings and ancestors still decide. The first payload is held until the path is complete, then resumed from `hit_test`, so `result` already holds every other hit; later payloads are retained. `RenderingBinding::hit_test` (`flui-runtime`) catches that resume and returns it in `ViewHitTest::Answered`, and the runtime delivers the event to the path before reporting it. A tree whose layout is withdrawn or checked out answers `ViewHitTest::TreeBusy` rather than an empty path. Pinned by `a_panicking_hit_test_is_a_miss_and_the_first_panic_resumes_after_the_path` (`hit_test_matrix`) and `a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic` (`flui-runtime`'s `owner_input_contract`). A pointer Down that finds the tree busy is still admitted with an empty route; refusing it belongs to the gesture binding's contact admission.
 
 ### Phase ORDERING lives in the type system; one runtime COMPLETENESS gate remains
 
@@ -1302,15 +1298,15 @@ No other phase-misuse variant exists. The typestate machine leaves no site that 
 - **Hardening `into_compositing` to prove layout ran** (draining or asserting the queue in the transition) — rejected: it refuses the legitimate empty-queue chain the benches rely on, and the transition is a pure `rebind_phase` by design; completeness is the phase entry's obligation, not the transition's.
 - **A per-node `PaintBeforeLayout` carrying the node's `RenderId`** — rejected: the paint walk already skips needs-layout nodes (stale-geometry gate) and the residue scan reports unreached nodes; a paint `Err` aborts the whole frame, so a per-node variant shape would suggest recovery granularity the pipeline does not have.
 
-**Accepted trade-off:** the variant name predates the wiring and reads per-node ("paint performed before layout"); its semantics is frame-level, which the variant's Display string ("paint phase began with layout work still pending") and doc state. Renaming the variant would be a breaking change to a public error enum for a cosmetic gain.
+**Accepted trade-off:** the variant name reads per-node ("paint performed before layout") but its semantics is frame-level, as the variant's Display string ("paint phase began with layout work still pending") and doc state.
 
 ### Multi-source design references in this crate
 
-The structural shape of individual components in this crate is designed for Rust and has been informed by multiple Rust-side audited references as recorded in prior plans:
+The structural shape of individual components in this crate is designed for Rust and informed by several Rust-side references:
 
 - `slab::Slab` storage pattern with `+1/-1` ID offset — internal precedent in [`src/storage/tree.rs`](src/storage/tree.rs); the offset rationale lives in [`docs/architecture.md`](../../docs/architecture.md).
 - Dirty and boundary flags in a `RenderFlagsCell` (`Cell<RenderFlags>`) and the offset in an `OffsetCell` (`Cell<Offset>`, two `f64` components; the tree is `!Send + !Sync`); geometry and constraints in the protocol's `LayoutRecord`, mutated via `&mut RenderState`: inline for a box, behind one allocation made on first write for a sliver, so a render-slab slot is sized by the box entry, pinned by `render_node_slot_stays_within_its_budget`) — documented in [`src/storage/state/mod.rs`](src/storage/state/mod.rs) module docstring.
-- Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases when the structural pattern fits Rust idioms better.
+- Reference codebases (GPUI, Iced, Makepad, Vello, Skia) are cited where the structural pattern fits Rust idioms better than the alternative.
 
 ---
 
@@ -1713,6 +1709,31 @@ huge leading offset lies beyond them; neither wraps into an unrelated row.
 `sliver_grid_golden_geometry` runs both public layout cases and an ordinary band
 control, checking published extents and the cached items' committed geometry.
 
+### Layout enters a node through `layout_dirty_root` or `layout_leaf_only`
+
+**Rule:** the pipeline lays a node out through one of two entries, chosen by whether the object can have children.
+
+**Choice:** [`PipelineOwner::layout_dirty_root`](src/pipeline/owner/layout.rs) is the pipeline's dispatcher for a node that can have children: it enters each node through `SubtreeArena` ([`layout_subtree_borrowed`](src/pipeline/owner/subtree_arena.rs)), builds a typed `RawBoxLayoutContext` with the children and the child-layout callback, and calls `perform_layout_raw` through the erased view. `RenderEntry::layout_leaf_only` ([`src/storage/entry.rs`](src/storage/entry.rs)) lays out a leaf from its constraints, the text context and `has_parent`; the pipeline uses it for pure-leaf objects and the test harness drives it directly. `RenderEntry` has no `clear_needs_*` forwarders: a caller clears a dirty flag through `entry.state().clear_needs_*()`, so `RenderState` is the one surface that writes the flags.
+
+### `PipelineOwner::counters` are monotonic totals; a frame driver differences them
+
+`PipelineOwner::counters()` returns work totals since the owner was constructed. They are monotonic because a frame is not one call on the owner: the layout↔build fixpoint runs `run_layout` several times before the frame's `run_frame`, and the owner has no frame-begin hook. A frame driver reads the counters before and after its frame and takes `after.since(before)`. `flui-testing`'s `LaidOut::pump_report` is that driver headlessly, over a frame of the UI runtime.
+
+| Counter | Counted where | What it counts |
+|---|---|---|
+| `layout_passes` | `run_layout`, after `take_layout_batch_shallow_first` | non-empty layout batches; a pass with no dirty entry adds nothing |
+| `layout_roots` | the scheduler's `layout_drained_total` | dirty layout entries drained, including ones skipped as already clean |
+| `layout_mark_steps` | `DirtyTracker::commit_needs_layout`, per node it marks | nodes the layout-invalidation walks marked; a walk stops where an earlier one settled the path, so N sibling marks cost N + depth (`sibling_layout_marks_share_one_ancestor_walk`, `tests/layout_dirty_root.rs`) |
+| `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
+| `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a boundary kept as it is is not a paint |
+| `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `refresh_boundary`'s patched effects | layers created fresh this pass, including a layer a composited-layer update patches into a kept boundary's content |
+| `layers_reused` | `FragmentComposer::seal_picture` and `refresh_boundary`'s unpatched entries | chunks a repaint kept for the render objects that owed no paint, and entries a composited-layer update shares unchanged with the content it replaces |
+| `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
+| `frames_produced` | `run_frame` | frames that committed a layer tree |
+
+The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (`crates/flui-widgets/tests/perf.rs`) pins that every counter but `layers_reused` moves on a full frame (not that each of a counter's
+increment sites does), and `perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band` bounds `nodes_laid_out` by the band; the exact per-counter rules above are unasserted.
+
 ## Thread safety
 
 `flui-rendering` runs in the render pipeline, on one thread per presentation. Per-node state changed through `&self` is a `Cell` (ADR-0323 §1); the only value that leaves the owner thread is `RenderInvalidationHandle`. No lock sits inside `perform_layout` or `paint`.
@@ -1731,107 +1752,13 @@ control, checking published extents and the cached items' committed geometry.
 | `PipelineOwner::frame_arena` (`src/pipeline/owner/mod.rs`) | `flui_foundation::arena::FrameArena` (`Cell` bump cursor) | Owner-thread scratch | ADR-0328. The semantics pass resets it as it begins and takes its fragment lists, conflict marks and reading-order scratch from it, and the nodes it builds (their child lists, the rebuilt root, the graft list) from `PipelineOwner::built_arena`, a second `FrameArena` reset with it, so a built list never sits above scratch the walk frees after it; each list borrows the arena, so none outlives the reset. `!Send`, like the owner. |
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The UI runtime's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the UI runtime's text context". |
 
-Two rows left this table because their sites left the crate: the mouse tracker
-lives in `flui-interaction` (`crates/flui-interaction/src/pointer/mouse_tracker.rs`) and
-the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
-owning crate.
-
 The layout walk reaches a node only through an `EnteredNode` (`src/storage/node_slab.rs`), which holds the slot's in-flight bit while it lives and wraps the one pointer into the slot; `src/pipeline/owner/subtree_arena.rs` has no `unsafe`. The entry and the walk types holding it are `!Send + !Sync` by the language default, with no manual impl, pinned by `static_assertions::assert_not_impl_any!` on `EnteredNode`, `SubtreeArena` and `LayoutFrame`; confinement to the constructing thread is structural, with no runtime thread check.
-
----
-
-## Friction log
-
-Known sites that do not yet match the intended design but do not break a current rule. Each entry names the site and the next planned step.
-
-- **`PipelineOwner` paint-loop downcasts to `Box<dyn ContainerLayer>`** ([`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)) — the paint phase uses `Box<dyn ContainerLayer>` returned from `RenderObject::paint`. This is correct for compositing-layer heterogeneity but worth periodic audit to ensure the cost stays at the boundary, not in the per-frame inner loop.
-- **`docs/LAYOUT_SYSTEM.md`, `docs/HIT_TEST_SYSTEM.md`** — subsystem-level deep-dives. Not part of the template surface. Stay as companion documents.
-
----
-
-## Shipped infrastructure (formerly "Outstanding refactors")
-
-These items were listed as pending in earlier drafts; all are now shipped.
-
-### `layout_dirty_root` + `layout_subtree_borrowed` — SHIPPED
-
-**Files:** [`src/pipeline/owner/layout.rs`](src/pipeline/owner/layout.rs) (`layout_dirty_root`), [`src/pipeline/owner/subtree_arena.rs`](src/pipeline/owner/subtree_arena.rs) (`layout_subtree_borrowed`).
-
-`layout_dirty_root` is the dispatcher: it enters each node through `SubtreeArena`, constructs a typed `RawBoxLayoutContext` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
-
-### `layout_leaf_only` — SHIPPED
-
-**File:** [`src/storage/entry.rs:296`](src/storage/entry.rs).
-
-The leaf-only layout method is implemented and exercised through the test harness and the pipeline path for pure-leaf objects.
-
-### Move `RenderEntry<P>::clear_needs_paint` / `clear_needs_layout` to `RenderState<P>` — DONE
-
-**File:** [`src/storage/entry.rs`](src/storage/entry.rs).
-
-The forwarding wrappers left over from the previous lock-based API are deleted; every call site clears the flags through `entry.state().clear_needs_*()` directly, so the only API surface is `RenderState`.
-
-### Phase counters — SHIPPED
-
-**Files:** [`src/pipeline/owner/counters.rs`](src/pipeline/owner/counters.rs) (`PipelineCounters`), `PipelineOwner::counters` in [`src/pipeline/owner/accessors.rs`](src/pipeline/owner/accessors.rs).
-
-`PipelineOwner::counters()` returns work totals since the owner was constructed. They are monotonic because a frame is not one call on the owner: the layout↔build fixpoint runs `run_layout` several times before the frame's `run_frame`, and the owner has no frame-begin hook. A frame driver reads the counters before and after its frame and takes `after.since(before)`, the same way `layout_roots_total` has always been used. `flui-testing`'s `LaidOut::pump_report` is that driver headlessly, over a frame of the UI runtime.
-
-| Counter | Counted where | What it counts |
-|---|---|---|
-| `layout_passes` | `run_layout`, after `take_layout_batch_shallow_first` | non-empty layout batches; a pass with no dirty entry adds nothing |
-| `layout_roots` | the scheduler's `layout_drained_total` | dirty layout entries drained, including ones skipped as already clean |
-| `layout_mark_steps` | `DirtyTracker::commit_needs_layout`, per node it marks | nodes the layout-invalidation walks marked; a walk stops where an earlier one settled the path, so N sibling marks cost N + depth (`sibling_layout_marks_share_one_ancestor_walk`, `tests/layout_dirty_root.rs`) |
-| `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
-| `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a boundary kept as it is is not a paint |
-| `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `refresh_boundary`'s patched effects | layers created fresh this pass, including a layer a composited-layer update patches into a kept boundary's content |
-| `layers_reused` | `FragmentComposer::seal_picture` and `refresh_boundary`'s unpatched entries | chunks a repaint kept for the render objects that owed no paint, and entries a composited-layer update shares unchanged with the content it replaces |
-| `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
-| `frames_produced` | `run_frame` | frames that committed a layer tree |
-
-The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (`crates/flui-widgets/tests/perf.rs`) pins that every counter but `layers_reused` moves on a full frame (not that each of a counter's
-increment sites does), and `perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band` bounds `nodes_laid_out` by the band; the exact per-counter rules above are unasserted.
-
-### Criterion frame benchmarks (deferred -- needs workload generator)
-
-**Files:** new `crates/flui-rendering/benches/frame_throughput.rs`.
-
-**Goal:** profile a 1000-node and a 10,000-node frame to verify (a) no `Arc::clone` in the paint loop, (b) cache layout of `RenderEntry<P>`, (c) regressions vs pre-refactor numbers. Today the static memory-footprint assertions landed in `pipeline/dirty.rs` and `storage/state/tests.rs`; the runtime benchmarks did not.
-
-**Shape:** add a `benches/frame_throughput.rs` Criterion benchmark that:
-- Builds a synthetic render tree of N nodes (parametric, e.g. N ∈ {100, 1000, 10000}).
-- Marks the root dirty and runs one full `run_frame`.
-- Measures wall-clock time, peak memory, and (with `cargo flamegraph`) hot-loop hot spots.
-
-Criterion is already in `flui-rendering` dev-dependencies. The bench harness needs a workload generator (`fn build_flex_tree(depth: u32, children: u32) -> ...`) that produces realistic structures from the `flui-objects` catalog.
-
-**Why deferred:** the workload generator + benchmark is its own scope of work and is best landed when there are real performance questions to answer (a frame is dropping, a particular operation feels slow, etc.). Premature optimisation guidance landed without observed evidence wastes effort.
-
-**Dependencies:** none beyond existing dev-deps.
-
-### Loom test coverage (deferred — miri and proptest already shipped)
-
-**Files:** new `crates/flui-rendering/tests/loom_handle.rs`.
-
-**Note:** `proptest` is already a dev-dependency and is used in `src/virtualization/tests.rs`. The miri half is LANDED: CI's advisory `miri` job runs `cargo +nightly miri test -p flui-rendering --lib pipeline::owner`, interpreting every unit test under `pipeline::owner` — the raw-pointer `SubtreeArena` substrate and the disjoint-borrow layout walks over it. Loom coverage remains open. The remaining deferred test class:
-
-- **Loom tests** for the private dirty-channel send/recv sequencing across attachment epochs. Needs the `loom` crate gated on `#[cfg(loom)]`.
-
-**Shape:** a new file under `crates/flui-rendering/tests/` plus a dev-dependency.
-
-**Dependencies:** none beyond crate dev-deps.
-
-### Migrate `docs/` companion architecture docs onto template-adjacent shape — DONE
-
-**File:** [`docs/LAYOUT_SYSTEM.md`](docs/LAYOUT_SYSTEM.md), [`docs/HIT_TEST_SYSTEM.md`](docs/HIT_TEST_SYSTEM.md).
-
-These deep-dives stay as companion documents (not under the per-crate template directly); each now opens with a "See also" header line pointing back to this file, linking them into the methodology index.
 
 ---
 
 ## Notes
 
-- **No lint yet for a lock on per-node render storage.** The clippy lint vocabulary cannot today express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`", so the rule is held by the storage shape and review; promoting it to a lint waits for ecosystem expressivity (`dylint` plugin or a future clippy feature).
+- **No lint covers a lock on per-node render storage.** Clippy cannot express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`", so the storage shape and review hold the rule.
 
 ### Hit traversal refuses transforms without a computed finite inverse
 

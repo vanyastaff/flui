@@ -34,13 +34,22 @@
 //! An empty or unusable extent ignores movement and settles by position without
 //! dividing velocity by that extent.
 //!
+//! ## Start and end are reading edges
+//!
+//! `DrawerController::build` resolves its [`DrawerAlignment`] against the
+//! ambient [`flui_sdk::widgets::Directionality`] (left-to-right without one)
+//! into the physical side the drawer is flush with. That side, not the
+//! alignment, places the panel and its closed edge strip, picks the safe-area
+//! inset the strip widens by, signs drag and fling movement, and tells
+//! [`Drawer`] which corners to round. A direction change while the drawer is
+//! open or mid-drag moves it to the other side at the same progress: the
+//! controller's value is the fraction open, which no side changes.
+//!
 //! ## Deferred, and named
 //!
 //! `DrawerTheme` (no such theme-extension slot exists yet in this crate — see
-//! `theme_data.rs`'s scope note), the `AppBar` auto-hamburger, `RTL`
-//! (`DrawerAlignment`'s outer/inner `Alignment` mapping is LTR-only —
-//! `flui_sdk::widgets::Directionality` is not read, matching `crate::Scaffold`'s
-//! own documented RTL gap), `BlockSemantics`/`ExcludeSemantics`/modal-barrier
+//! `theme_data.rs`'s scope note), the `AppBar` auto-hamburger,
+//! `BlockSemantics`/`ExcludeSemantics`/modal-barrier
 //! semantics labeling, `FocusScope` (no focus trap inside an open drawer
 //! yet), and local-history back-dismissal (`LocalHistoryEntry` — this
 //! substrate has no `ModalRoute`-integrated history-entry mechanism to hang
@@ -56,8 +65,8 @@ use flui_sdk::animation::Animatable;
 use flui_sdk::animation::{Animation, AnimationController, DrivenController, Tween};
 use flui_sdk::geometry::Radius;
 use flui_sdk::interaction::GestureEndReason;
-use flui_sdk::painting::{Alignment, Clip};
 use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
+use flui_sdk::painting::{Clip, TextDirection};
 use flui_sdk::rendering::objects::TranslationFraction;
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
 use flui_sdk::view::environment::MediaQuery;
@@ -65,10 +74,11 @@ use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, impl_inherited_view};
 use flui_sdk::widgets::{
-    Align, ColoredBox, ConstrainedBox, DragSlot, FadeTransition, GestureDetector, LayoutBuilder,
-    SizedBox, SlideTransition, Stack,
+    Align, ColoredBox, ConstrainedBox, Directionality, DragSlot, FadeTransition, GestureDetector,
+    LayoutBuilder, SizedBox, SlideTransition, Stack,
 };
 
+use crate::horizontal_side::HorizontalSide;
 use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
@@ -89,38 +99,48 @@ const CORNER_RADIUS: f64 = 16.0;
 /// `Colors.black54` (`material/colors.dart`) — the default drawer scrim.
 const BLACK54: Color = Color::rgba(0, 0, 0, 0x8A);
 
-/// Which edge of the [`crate::Scaffold`] a drawer slides in from.
+/// Which reading edge of the [`crate::Scaffold`] a drawer slides in from.
 ///
-/// RTL mirroring is a named deferral — see the module docs — so
-/// `Start`/`End` map directly to left/right rather than resolving against
-/// `Directionality`.
+/// The edge resolves against the ambient
+/// [`Directionality`]: `Start` is the left
+/// side left-to-right and the right side right-to-left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
     clippy::exhaustive_enums,
     reason = "a drawer opens from one of a bar's two edges"
 )]
 pub enum DrawerAlignment {
-    /// The start (left, under the LTR-only mapping this substrate uses) edge.
+    /// The edge the reading direction starts from.
     Start,
-    /// The end (right, under the LTR-only mapping this substrate uses) edge.
+    /// The edge the reading direction ends at.
     End,
 }
 
-/// Publishes the enclosing [`DrawerController`]'s [`DrawerAlignment`] to its
-/// mounted content, so a [`Drawer`] can pick the correctly-mirrored rounded
-/// corner. Private: `DrawerController` is the only publisher, `Drawer` the
-/// only reader.
+impl DrawerAlignment {
+    /// The side of the screen this edge is under `direction`.
+    fn side(self, direction: TextDirection) -> HorizontalSide {
+        match self {
+            Self::Start => HorizontalSide::start(direction),
+            Self::End => HorizontalSide::end(direction),
+        }
+    }
+}
+
+/// Publishes the side of the screen the enclosing [`DrawerController`] is
+/// flush with to its mounted content, so a [`Drawer`] can round the corners
+/// facing the interior. Private: `DrawerController` is the only publisher,
+/// `Drawer` the only reader.
 #[derive(Clone)]
-struct DrawerAlignmentScope {
-    alignment: DrawerAlignment,
+struct DrawerSideScope {
+    side: HorizontalSide,
     child: BoxedView,
 }
 
-impl InheritedView for DrawerAlignmentScope {
-    type Data = DrawerAlignment;
+impl InheritedView for DrawerSideScope {
+    type Data = HorizontalSide;
 
     fn data(&self) -> &Self::Data {
-        &self.alignment
+        &self.side
     }
 
     fn child(&self) -> &dyn View {
@@ -128,24 +148,24 @@ impl InheritedView for DrawerAlignmentScope {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        self.alignment != old.alignment
+        self.side != old.side
     }
 }
 
-impl_inherited_view!(DrawerAlignmentScope);
+impl_inherited_view!(DrawerSideScope);
 
-/// The end-rounded [`MaterialShape`] for `alignment` — 16dp on the edge
-/// facing the scaffold's interior, sharp on the edge flush with the screen.
-/// LTR-only, matching [`DrawerAlignment`]'s own documented scope.
-fn end_rounded_shape(alignment: DrawerAlignment) -> MaterialShape {
+/// The end-rounded [`MaterialShape`] for a drawer flush with `side` — 16dp on
+/// the edge facing the scaffold's interior, sharp on the edge flush with the
+/// screen.
+fn end_rounded_shape(side: HorizontalSide) -> MaterialShape {
     let rounded = Radius::circular(CORNER_RADIUS);
     let square = Radius::ZERO;
-    match alignment {
+    match side {
         // top_left, top_right, bottom_right, bottom_left.
-        DrawerAlignment::Start => {
+        HorizontalSide::Left => {
             MaterialShape::RoundedRect(BorderRadius::only(square, rounded, rounded, square))
         }
-        DrawerAlignment::End => {
+        HorizontalSide::Right => {
             MaterialShape::RoundedRect(BorderRadius::only(rounded, square, square, rounded))
         }
     }
@@ -156,8 +176,8 @@ fn end_rounded_shape(alignment: DrawerAlignment) -> MaterialShape {
 ///
 /// M3 styling:
 /// [`ColorScheme::surface_container_low`](crate::ColorScheme::surface_container_low)
-/// background, elevation `1.0`, a 16dp end-rounded shape (mirrored for
-/// [`DrawerAlignment::End`]), width [`DEFAULT_DRAWER_WIDTH`] (304.0) by
+/// background, elevation `1.0`, a 16dp shape rounded on the corners facing
+/// the scaffold's interior, width [`DEFAULT_DRAWER_WIDTH`] (304.0) by
 /// default. [`crate::theme_data::ThemeData`] has no `DrawerTheme` extension
 /// slot yet — see the module docs.
 ///
@@ -251,12 +271,13 @@ impl std::fmt::Debug for Drawer {
 impl StatelessView for Drawer {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
-        // No dependency needed: alignment is fixed for the controller's
-        // whole life, same reasoning `GestureArenaScope`'s ambient lookup
-        // documents.
-        let alignment = ctx
-            .get::<DrawerAlignmentScope, _>(|scope| *scope.data())
-            .unwrap_or(DrawerAlignment::Start);
+        // A dependency: the side flips with the ambient direction. Outside a
+        // controller the drawer is a start drawer, flush with the reading start.
+        let side = ctx
+            .depend_on::<DrawerSideScope, _>(|scope| *scope.data())
+            .unwrap_or_else(|| {
+                HorizontalSide::start(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr))
+            });
 
         let background_color = self
             .background_color
@@ -264,7 +285,7 @@ impl StatelessView for Drawer {
 
         let mut material = Material::new(background_color)
             .elevation(self.elevation)
-            .shape(end_rounded_shape(alignment))
+            .shape(end_rounded_shape(side))
             .clip_behavior(Clip::AntiAlias);
         if let Some(child) = &self.child {
             material = material.child(child.clone());
@@ -551,7 +572,10 @@ struct DrawerControllerCore {
     /// time its value is nudged, since nothing has "previously" been
     /// recorded as opened yet).
     previously_opened: Cell<bool>,
-    alignment: Cell<DrawerAlignment>,
+    /// The side the drawer is flush with, resolved in every `build` from the
+    /// view's alignment and the ambient direction, so a gesture signs its
+    /// movement by the side the panel is painted on.
+    side: Cell<HorizontalSide>,
     panel_width: Cell<f64>,
     on_open_changed: RefCell<Option<BoundDrawerCallback>>,
     /// Rebuilds the drawer, for a drag that ends on a closed panel: no run
@@ -587,12 +611,10 @@ impl DrawerControllerCore {
         }
     }
 
-    /// The slide direction, LTR-only — see the module docs.
+    /// The horizontal sign that opens the drawer: into the screen from its
+    /// side.
     fn direction_factor(&self) -> f64 {
-        match self.alignment.get() {
-            DrawerAlignment::Start => 1.0,
-            DrawerAlignment::End => -1.0,
-        }
+        self.side.get().inward()
     }
 
     /// Fires `on_open_changed` the instant the value crosses `0.5`,
@@ -712,7 +734,9 @@ impl StatefulView for DrawerController {
             core: Rc::new(DrawerControllerCore {
                 controller: controller.controller().clone(),
                 previously_opened: Cell::new(false),
-                alignment: Cell::new(self.alignment),
+                // `build` resolves the ambient direction before the first
+                // gesture can reach the core.
+                side: Cell::new(self.alignment.side(TextDirection::Ltr)),
                 panel_width: Cell::new(self.panel_width),
                 on_open_changed: RefCell::new(None),
                 rebuild: ctx.rebuild_handle(),
@@ -762,18 +786,16 @@ impl ViewState<DrawerController> for DrawerControllerState {
 
     fn build(&self, view: &DrawerController, ctx: &dyn BuildContext) -> impl IntoView {
         self.core.panel_width.set(view.panel_width);
-        self.core.alignment.set(view.alignment);
+        let direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        let side = view.alignment.side(direction);
+        self.core.side.set(side);
         let writer = self.writer.clone();
         let callback = view.on_open_changed.clone().map(|callback| {
             Rc::new(move |opened| writer.write(|ctx| callback(ctx, opened))) as Rc<dyn Fn(bool)>
         });
         self.core.replace_callback(callback);
 
-        let media_query = MediaQuery::of(ctx);
-        let side_inset = match view.alignment {
-            DrawerAlignment::Start => media_query.padding().left,
-            DrawerAlignment::End => media_query.padding().right,
-        };
+        let side_inset = side.inset(&MediaQuery::of(ctx).padding());
         let drag_area_width = view.edge_drag_width.unwrap_or(EDGE_DRAG_WIDTH + side_inset);
 
         let core = Rc::clone(&self.core);
@@ -781,7 +803,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
         LayoutBuilder::new(move |_ctx, constraints| {
             core.panel_width
                 .set(view.panel_width.min(constraints.max_width));
-            drawer_surface(&core, &view, drag_area_width)
+            drawer_surface(&core, &view, side, drag_area_width)
         })
     }
 
@@ -796,6 +818,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
 fn drawer_surface(
     core: &Rc<DrawerControllerCore>,
     view: &DrawerController,
+    side: HorizontalSide,
     drag_area_width: f64,
 ) -> impl IntoView + use<> {
     let closed = core.is_closed();
@@ -807,7 +830,7 @@ fn drawer_surface(
         };
         SizedBox::new(width, f64::INFINITY).into_view().boxed()
     } else {
-        open_panel(core, view).into_view().boxed()
+        open_panel(core, view, side).into_view().boxed()
     };
     let down_core = Rc::clone(core);
     let move_core = Rc::clone(core);
@@ -823,7 +846,7 @@ fn drawer_surface(
     // unbounded) — a `SizedBox(height: f64::INFINITY)`; the
     // unbounded-height guard is skipped as a named
     // simplification (see the type docs).
-    Align::new(outer_alignment(view.alignment)).child(
+    Align::new(side.center_alignment()).child(
         GestureDetector::new()
             .drag(
                 DragSlot::horizontal()
@@ -851,7 +874,11 @@ fn drawer_surface(
 }
 
 /// The open-state scrim and panel below the retained contact owner.
-fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl IntoView {
+fn open_panel(
+    core: &Rc<DrawerControllerCore>,
+    view: &DrawerController,
+    side: HorizontalSide,
+) -> impl IntoView {
     let animation: Rc<dyn Animation<f64>> = Rc::new(core.controller.clone());
     let mut scrim_detector = GestureDetector::new();
     if view.barrier_dismissible {
@@ -869,22 +896,15 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
             .child(SizedBox::expand().child(ColoredBox::new(view.scrim_color.unwrap_or(BLACK54)))),
     );
     let position = Tween::new(
-        TranslationFraction::new(-core.direction_factor(), 0.0),
+        TranslationFraction::new(-side.inward(), 0.0),
         TranslationFraction::ZERO,
     )
     .animate(animation);
-    let panel = Align::new(outer_alignment(view.alignment))
+    let panel = Align::new(side.center_alignment())
         .child(SlideTransition::new(Rc::new(position)).child(view.child.clone()));
 
-    DrawerAlignmentScope {
-        alignment: view.alignment,
+    DrawerSideScope {
+        side,
         child: Stack::new(vec![scrim.boxed(), panel.boxed()]).boxed(),
-    }
-}
-
-fn outer_alignment(alignment: DrawerAlignment) -> Alignment {
-    match alignment {
-        DrawerAlignment::Start => Alignment::CENTER_LEFT,
-        DrawerAlignment::End => Alignment::CENTER_RIGHT,
     }
 }

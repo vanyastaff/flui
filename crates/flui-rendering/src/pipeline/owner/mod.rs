@@ -1,23 +1,26 @@
 //! PipelineOwner manages the rendering pipeline.
 //!
-//! As finalized on 2026-05-20, the four pipeline phases own their work
-//! as `run_*` methods on the phase-specific impls. The
-//! legacy `flush_*` aliases on `PipelineOwner<Idle>` are gone. Calling
-//! `run_paint` on `<Idle>` is a compile error -- see the `compile_fail`
-//! doctest at the end of `pipeline/phase.rs`.
+//! The four pipeline phases own their work as `run_*` methods on the
+//! phase-specific impls. Calling `run_paint` on `<Idle>` is a compile error --
+//! see the `compile_fail` doctest at the end of `pipeline/phase.rs`.
 
 mod subtree_arena;
 
-mod accessors;
 mod actions;
 mod buffer_pool;
 mod cell;
 mod compositing;
 mod construction;
 mod counters;
+mod dirty_marks;
+mod geometry;
 mod hit_slop;
+mod hit_test;
 mod input_regions;
+mod insertion;
+mod invalidation;
 mod layout;
+mod layout_inputs;
 mod leader_watch;
 mod paint;
 mod placement;
@@ -25,9 +28,12 @@ mod poison;
 #[cfg(any(test, feature = "testing"))]
 mod presented;
 mod query;
+#[cfg(any(test, feature = "testing"))]
+mod queues_for_testing;
 mod reassemble;
 mod relocation;
 mod semantics;
+mod semantics_enablement;
 mod tree_edit;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
@@ -158,7 +164,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
 
-    /// The visual-update and semantics-owner-lifecycle callbacks
+    /// The visual-update callback
     /// ([`crate::pipeline::VisualUpdateNotifier`]), shared through
     /// [`SharedNotifier`]: callers take owned snapshots and deliver them with
     /// no guard held.
@@ -200,9 +206,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     semantics_enabled: bool,
 
     /// The semantics tree owner (flui-semantics ARCHITECTURE.md, semantics assembly). `None` until semantics is enabled via
-    /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
-    /// then delivers the semantics-owner-created callback; disposed on the
-    /// next `false` transition, which then delivers the disposed callback.
+    /// [`Self::set_semantics_enabled`]`(true)`, which
+    /// lazily creates it; disposed on the next `false` transition.
     /// `Semantics::run_semantics` (`pipeline/owner/semantics.rs`) is the
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,
@@ -258,7 +263,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// draws by. Present ⟹ the follower is visible this frame under the
     /// resolved transform; absent ⟹ either not a follower, or a hidden one
     /// (see `last_hidden_follower_ids`). Consulted generically by the
-    /// hit-test walk (`accessors.rs`) so a visually-displaced
+    /// hit-test walk (`hit_test.rs`) so a visually-displaced
     /// `RenderFollowerLayer` hit-tests at its RESOLVED on-screen position,
     /// not its plain tree-relative position — cached from the last
     /// composite, one frame stale by design.
@@ -943,9 +948,7 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
-        ) -> crate::error::RenderResult<
-            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        > {
+        ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
             Ok(self.size)
         }
 
@@ -960,12 +963,12 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _position: flui_foundation::geometry::Offset,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
-                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+                Option<flui_foundation::geometry::Offset>,
                 Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
@@ -1003,9 +1006,7 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
-        ) -> crate::error::RenderResult<
-            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        > {
+        ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
             // Intentional unstructured panic — exercises the catch_unwind →
             // Poisoned path in `RenderEntry::layout_leaf_only`. This test
             // fixture is one explicit way to produce
@@ -1031,12 +1032,12 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _position: flui_foundation::geometry::Offset,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
-                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+                Option<flui_foundation::geometry::Offset>,
                 Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {

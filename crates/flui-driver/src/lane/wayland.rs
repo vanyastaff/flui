@@ -50,11 +50,9 @@ mod lane {
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::atspi::client::{A11yBus, WindowTarget};
-    use crate::lane::windows::screen;
+    use crate::lane::screen;
     use crate::lane::x11::keys::{self, Keysym};
-    use crate::lane::{
-        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
-    };
+    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
     use crate::steps::OsEvent;
 
     /// Where the lane's EIS socket comes from.
@@ -279,27 +277,6 @@ mod lane {
                 )
             })
         }
-
-        fn window_target(&self, placement: &Placement) -> WindowTarget {
-            let device = |logical: f64| {
-                let device = (logical * placement.scale).round();
-                if device.is_finite() && device >= 0.0 && device <= f64::from(u32::MAX) {
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        clippy::cast_sign_loss,
-                        reason = "a whole, finite, non-negative number checked inside u32's range"
-                    )]
-                    let device = device as u32;
-                    device
-                } else {
-                    0
-                }
-            };
-            WindowTarget {
-                pid: self.pid,
-                size: (device(placement.size.width), device(placement.size.height)),
-            }
-        }
     }
 
     impl Lane for WaylandLane {
@@ -419,13 +396,14 @@ mod lane {
                         )
                         .collect::<Vec<String>>(),
                     message: first.to_string(),
+                    first: None,
                 }),
             }
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
             let bus = A11yBus::connect(self.session_bus.as_deref(), LANE)?;
-            let mut tree = bus.read(self.window_target(placement))?;
+            let mut tree = bus.read(WindowTarget::of(self.pid, placement))?;
             if let Some(root) = tree.roots.first_mut() {
                 root.window = Some(placement.window);
             }
@@ -434,10 +412,10 @@ mod lane {
 
         fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
             let bus = A11yBus::connect(self.session_bus.as_deref(), LANE)?;
-            bus.invoke(self.window_target(placement), identifier)
+            bus.invoke(WindowTarget::of(self.pid, placement), identifier)
         }
 
-        fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+        fn capture_window(&mut self, placement: &Placement) -> Result<crate::pixels::Image> {
             let _ = placement;
             Err(Error::not_supported(
                 "os_capture",

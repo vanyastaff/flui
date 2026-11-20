@@ -176,6 +176,11 @@ impl Events {
         self.queue.push_back(event);
     }
 
+    /// Count `dropped` events lost before they reached this queue.
+    pub(crate) fn count_dropped(&mut self, dropped: u64) {
+        self.dropped = self.dropped.saturating_add(dropped);
+    }
+
     pub(crate) fn take(&mut self) -> (Vec<Event>, u64) {
         (
             self.queue.drain(..).collect(),

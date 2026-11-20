@@ -335,6 +335,7 @@ impl Contacts {
                 lane: LANE.to_owned(),
                 held: self.held(),
                 message: first.to_string(),
+                first: None,
             }),
         }
     }

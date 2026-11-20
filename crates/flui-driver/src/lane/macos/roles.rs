@@ -6,9 +6,9 @@
 //! composed with FLUI's role mapping (ADR-0203): for each [`SemanticsRole`], the `AXRole` and
 //! `AXSubrole` the adapter gives it. [`wire_role`] reads an element the other way, the subroles
 //! that tell an `AXRole`'s kinds apart first. The fold is the one UI Automation's is held to
-//! (`lane::windows::roles`) wherever the accessibility API keeps the distinction; where it does
-//! not (a list box option is static text, a grid is a table), VoiceOver cannot tell the roles
-//! apart either, and the fold says so by reading what macOS reports.
+//! (the Windows lane's role table) wherever the accessibility API keeps the distinction; where
+//! it does not (a list box option is static text, a grid is a table), VoiceOver cannot tell the
+//! roles apart either, and the fold says so by reading what macOS reports.
 
 use flui_protocol::semantics::SemanticsRole;
 use flui_protocol::wire::Role;

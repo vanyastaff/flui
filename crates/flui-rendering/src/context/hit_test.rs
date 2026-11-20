@@ -1,7 +1,7 @@
 //! Rich HitTestContext with ergonomic API for hit testing operations.
 //!
-//! This module provides `HitTestContext`, a high-level wrapper around the hit
-//! test capability traits that offers ergonomic APIs for common hit testing
+//! This module provides `HitTestContext`, a high-level wrapper around a protocol's
+//! typed hit-test context that offers ergonomic APIs for common hit testing
 //! patterns.
 //!
 //! # Features
@@ -13,24 +13,44 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! fn hit_test(&self, ctx: &mut HitTestContext<BoxProtocol, Single, BoxParentData>) -> bool {
-//!     // Quick bounds check
-//!     if !ctx.is_within_bounds(self.size.as_rect()) {
+//! ```
+//! # use flui_foundation::Variable;
+//! # use flui_foundation::geometry::{Offset, Size};
+//! # use flui_rendering::context::{BoxHitTestContext, BoxLayoutContext};
+//! # use flui_rendering::parent_data::BoxParentData;
+//! # use flui_rendering::traits::RenderBox;
+//! # use flui_rendering::{PaintContext, RenderResult};
+//! # #[derive(Debug, Default)]
+//! # struct Column;
+//! # impl flui_foundation::inspect::Inspect for Column {
+//! #     fn kind(&self) -> &'static str { "Column" }
+//! #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+//! # }
+//! # impl RenderBox for Column {
+//! #     type Arity = Variable;
+//! #     type ParentData = BoxParentData;
+//! #     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> RenderResult<Size> {
+//! #         Ok(ctx.constraints().biggest())
+//! #     }
+//! #     fn paint(&self, _ctx: &mut PaintContext<'_, Variable>) {}
+//! fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+//!     // Quick bounds check against the size committed by layout.
+//!     if !ctx.is_within_own_size() {
 //!         return false;
 //!     }
 //!
-//!     // Test children first (reverse paint order)
+//!     // Test children first (reverse paint order), each at its laid-out offset.
 //!     for i in (0..ctx.child_count()).rev() {
-//!         if ctx.hit_test_child_at_offset(i, child_offsets[i]) {
+//!         if ctx.hit_test_child_at_layout_offset(i) {
 //!             return true;
 //!         }
 //!     }
 //!
-//!     // Add ourselves as a hit target
+//!     // Add ourselves as a hit target.
 //!     ctx.register_self_hit_entry();
 //!     true
 //! }
+//! # }
 //! ```
 
 use flui_foundation::Arity;
@@ -38,9 +58,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 
 use crate::{
     parent_data::ParentData,
-    protocol::{
-        BoxHitTest, HitTestCapability, HitTestContextApi, MainAxisPosition, Protocol, SliverHitTest,
-    },
+    protocol::{HitTestContextApi, MainAxisPosition, Protocol},
 };
 use flui_interaction::pointer::{CursorRequest, PointerTarget};
 
@@ -50,13 +68,13 @@ use flui_interaction::pointer::{CursorRequest, PointerTarget};
 
 /// Rich hit test context with ergonomic API for common hit testing patterns.
 ///
-/// This context wraps the underlying capability context and provides:
+/// This context wraps the protocol's typed hit-test context ([`Protocol::HitTestContext`]) and provides:
 /// - Easy position access and bounds checking
 /// - Child hit testing with automatic transforms
 /// - Result management helpers
 pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
-    /// The underlying hit test context from the capability
-    inner: <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>,
+    /// The protocol's typed hit-test context.
+    inner: P::HitTestContext<'ctx, A, PD>,
     /// The node's laid-out size in local pixels, resolved by the driver
     /// from [`RenderState`](crate::storage::RenderState) (geometry's sole
     /// owner). The box protocol uses it for the default bounds gate
@@ -76,19 +94,11 @@ pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
 }
 
 /// Owns the matching pop while lending the context to a scoped callback.
-struct HitTestTransformGuard<'scope, 'ctx, P: Protocol, A: Arity, PD: ParentData>
-where
-    <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>:
-        HitTestContextApi<'ctx, P::HitTest, A, PD>,
-{
+struct HitTestTransformGuard<'scope, 'ctx, P: Protocol, A: Arity, PD: ParentData> {
     context: &'scope mut HitTestContext<'ctx, P, A, PD>,
 }
 
-impl<'ctx, P: Protocol, A: Arity, PD: ParentData> Drop for HitTestTransformGuard<'_, 'ctx, P, A, PD>
-where
-    <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>:
-        HitTestContextApi<'ctx, P::HitTest, A, PD>,
-{
+impl<P: Protocol, A: Arity, PD: ParentData> Drop for HitTestTransformGuard<'_, '_, P, A, PD> {
     fn drop(&mut self) {
         self.context.inner.pop_transform();
     }
@@ -96,7 +106,7 @@ where
 
 impl<P: Protocol, A: Arity, PD: ParentData> std::fmt::Debug for HitTestContext<'_, P, A, PD> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `inner` is a capability-GAT context (may hold live driver callbacks);
+        // `inner` is the protocol's typed context (may hold live driver callbacks);
         // report only the driver-resolved scalars.
         f.debug_struct("HitTestContext")
             .field("own_size", &self.own_size)
@@ -105,20 +115,13 @@ impl<P: Protocol, A: Arity, PD: ParentData> std::fmt::Debug for HitTestContext<'
     }
 }
 
-impl<'ctx, P: Protocol, A: Arity, PD: ParentData> HitTestContext<'ctx, P, A, PD>
-where
-    <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>:
-        HitTestContextApi<'ctx, P::HitTest, A, PD>,
-{
-    /// Creates a new hit test context wrapping the capability context.
+impl<'ctx, P: Protocol, A: Arity, PD: ParentData> HitTestContext<'ctx, P, A, PD> {
+    /// Creates a new hit test context wrapping the protocol's typed context.
     ///
     /// `own_size` is the node's laid-out size from `RenderState`; the
     /// box bounds gate (`is_within_own_size`) reads it. Sliver callers
     /// pass `Size::ZERO` (unused — the driver owns the sliver gate).
-    pub fn new(
-        inner: <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>,
-        own_size: Size,
-    ) -> Self {
+    pub fn new(inner: P::HitTestContext<'ctx, A, PD>, own_size: Size) -> Self {
         Self {
             inner,
             own_size,
@@ -149,7 +152,7 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the hit test position in local coordinates.
-    pub fn position(&self) -> &<P::HitTest as HitTestCapability>::Position {
+    pub fn position(&self) -> &P::Position {
         self.inner.position()
     }
 
@@ -237,11 +240,7 @@ where
     /// protocol does this — `BoxHitTestContext`'s ctx-level stack reaches
     /// the driver; the sliver protocol's ctx-level stack stays a no-op
     /// (main-axis position covers its needs).
-    pub fn hit_test_child(
-        &mut self,
-        index: usize,
-        position: <P::HitTest as HitTestCapability>::Position,
-    ) -> bool {
+    pub fn hit_test_child(&mut self, index: usize, position: P::Position) -> bool {
         self.inner.hit_test_child(index, position)
     }
 
@@ -325,12 +324,12 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the underlying context for advanced operations.
-    pub fn inner(&self) -> &<P::HitTest as HitTestCapability>::Context<'ctx, A, PD> {
+    pub fn inner(&self) -> &P::HitTestContext<'ctx, A, PD> {
         &self.inner
     }
 
     /// Gets mutable access to the underlying context.
-    pub fn inner_mut(&mut self) -> &mut <P::HitTest as HitTestCapability>::Context<'ctx, A, PD> {
+    pub fn inner_mut(&mut self) -> &mut P::HitTestContext<'ctx, A, PD> {
         &mut self.inner
     }
 }
@@ -341,11 +340,7 @@ where
 
 use crate::protocol::BoxProtocol;
 
-impl<'ctx, A: Arity, PD: ParentData> HitTestContext<'ctx, BoxProtocol, A, PD>
-where
-    <BoxHitTest as HitTestCapability>::Context<'ctx, A, PD>:
-        HitTestContextApi<'ctx, BoxHitTest, A, PD>,
-{
+impl<A: Arity, PD: ParentData> HitTestContext<'_, BoxProtocol, A, PD> {
     // ════════════════════════════════════════════════════════════════════════
     // BOX POSITION HELPERS
     // ════════════════════════════════════════════════════════════════════════
@@ -455,11 +450,7 @@ where
 
 use crate::protocol::SliverProtocol;
 
-impl<'ctx, A: Arity, PD: ParentData> HitTestContext<'ctx, SliverProtocol, A, PD>
-where
-    <SliverHitTest as HitTestCapability>::Context<'ctx, A, PD>:
-        HitTestContextApi<'ctx, SliverHitTest, A, PD>,
-{
+impl<A: Arity, PD: ParentData> HitTestContext<'_, SliverProtocol, A, PD> {
     // ════════════════════════════════════════════════════════════════════════
     // SLIVER POSITION HELPERS
     // ════════════════════════════════════════════════════════════════════════

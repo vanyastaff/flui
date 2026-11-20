@@ -105,11 +105,10 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     );
 }
 
-/// A semantics lifecycle hook, the wake after it, or the owner's teardown
+/// The wake after enabling semantics, or the owner's teardown on disabling,
 /// panics: the transition is already committed, so the root's first assembly
-/// is queued and announced, the disposed event still goes out, and the first
-/// panic reaches the caller.
-pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
+/// is queued and announced, and the panic reaches the caller.
+pub(crate) fn a_failing_semantics_transition_keeps_it() {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -201,20 +200,22 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
         let mut scene = SceneHost::new();
         let (mut owner, published) = painted(&Arc::new(AtomicBool::new(false)), &mut scene);
         let wakes = counter(&mut owner, wake_panics.then_some("wake failed"));
-        owner.set_on_semantics_owner_created(|| std::panic::panic_any("created hook failed"));
-        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let enabled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             owner.set_semantics_enabled(true);
-        }))
-        .expect_err("the hook's panic reaches the caller");
-        assert_eq!(
-            flui_foundation::panic::payload_text(payload.as_ref()),
-            Some("created hook failed"),
-            "the first panic is the one that goes on"
-        );
+        }));
+        match (enabled, wake_panics) {
+            (Ok(()), false) => {}
+            (Err(payload), true) => assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("wake failed"),
+                "the wake's panic reaches the caller"
+            ),
+            _ => panic!("the wake's panic reaches the caller exactly when the wake panics"),
+        }
         assert!(owner.semantics_enabled(), "semantics stays enabled");
         assert!(
             owner.has_dirty_nodes(),
-            "the root's first assembly is queued before the hook runs"
+            "the root's first assembly is queued before the wake runs"
         );
         assert_eq!(
             wakes.load(Ordering::SeqCst),
@@ -241,11 +242,6 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
     owner.set_semantics_enabled(true);
     let (mut owner, frame) = scene.run_frame(owner);
     frame.expect("the frame assembles semantics");
-    let disposed = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&disposed);
-    owner.set_on_semantics_owner_disposed(move || {
-        counted.fetch_add(1, Ordering::SeqCst);
-    });
     teardown.store(true, Ordering::SeqCst);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner.set_semantics_enabled(false);
@@ -256,11 +252,6 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
         Some("teardown failed")
     );
     assert!(!owner.semantics_enabled(), "semantics stays disabled");
-    assert_eq!(
-        disposed.load(Ordering::SeqCst),
-        1,
-        "the disposed event goes out after a teardown that panicked"
-    );
 }
 
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.

@@ -39,15 +39,29 @@ use crate::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// # use flui_foundation::Variable;
+/// # use flui_rendering::constraints::SliverGeometry;
+/// # use flui_rendering::context::SliverLayoutContext;
+/// # use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
+/// # use flui_rendering::traits::RenderSliver;
+/// # #[derive(Debug, Default)]
+/// # struct MySliverList;
+/// # impl flui_foundation::inspect::Inspect for MySliverList {
+/// #     fn kind(&self) -> &'static str { "MySliverList" }
+/// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+/// # }
 /// impl RenderSliver for MySliverList {
 ///     type Arity = Variable;
 ///     type ParentData = SliverMultiBoxAdaptorParentData;
 ///
-///     fn perform_layout(&mut self, ctx: &mut SliverLayoutContext<Variable, Self::ParentData>) -> RenderResult<SliverGeometry> {
-///         let scroll_offset = ctx.constraints().scroll_offset;
-///         // ... compute visible items ...
-///         Ok(SliverGeometry { ... })
+///     fn perform_layout(
+///         &mut self,
+///         ctx: &mut SliverLayoutContext<'_, Variable, SliverMultiBoxAdaptorParentData>,
+///     ) -> flui_rendering::RenderResult<SliverGeometry> {
+///         let remaining = ctx.constraints().remaining_paint_extent;
+///         // Lay out the visible children, then report what they consumed.
+///         Ok(SliverGeometry::new(1000.0, remaining.min(1000.0), 0.0))
 ///     }
 /// }
 /// ```
@@ -520,7 +534,7 @@ where
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <SliverProtocol as crate::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<SliverProtocol>> {
+    ) -> crate::error::RenderResult<SliverGeometry> {
         // Core.2 W3 — live bridge, mirroring the Box analog in
         // `render_box.rs`.
         //
@@ -560,12 +574,12 @@ where
 
     fn hit_test_raw(
         &self,
-        position: crate::protocol::ProtocolPosition<SliverProtocol>,
+        position: crate::protocol::MainAxisPosition,
         child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
-            Option<crate::protocol::ProtocolPosition<SliverProtocol>>,
+            Option<crate::protocol::MainAxisPosition>,
             Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {

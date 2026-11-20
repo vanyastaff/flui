@@ -4,7 +4,9 @@
 - **Date:** 2026-10-17
 - **Related:** [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the input
   recording it embeds; its privacy rule and completeness rule are reused),
-  [ADR-0238](ADR-0238-flui-driver-protocol.md)
+  [ADR-0238](ADR-0238-flui-driver-protocol.md),
+  [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) (§11: the recording a
+  trace holds, its input layer and its native streams)
 - **Spec:** [flui-driver](../plans/specs/flui-driver/design.md), "Trace"
 
 ## Context
@@ -21,7 +23,9 @@ versioned header (ADR-0215 §3).
 1. A trace is a directory `<name>.flui-trace/` with:
    - `trace.jsonl`;
    - `input.jsonl`, an ADR-0215 recording verbatim, when recorded;
-   - `native/<backend>.jsonl`, in the native recording codec, when captured;
+   - `native/<n>.jsonl`, one native recording per stream the backend journals (ADR-0288 §11),
+     in the native recording codec, with `native/index.json` naming each file's backend and
+     stream, when captured;
    - `evidence/<sha256>.<ext>`, content-addressed captures and tree snapshots.
 
    `flui drive trace pack` zips it for transport; readers accept both.
@@ -37,7 +41,9 @@ versioned header (ADR-0215 §3).
    Unknown fields are ignored and an unknown row tag is an error, as in ADR-0215.
 3. A trace is complete only when it ends with `end`. A writer that fails mid-run leaves an
    incomplete trace that readers report as incomplete. A full disk fails the write and never
-   rewrites earlier rows. Evidence over the trace's budget (default 256 MiB) becomes a `gap` row.
+   rewrites earlier rows. Evidence over the trace's budget (default 256 MiB) becomes a `gap` row,
+   and events lost before the trace took them become a `gap` row and a `gap` in each recording
+   file they may have touched.
 4. Privacy follows ADR-0215 §5: typed text and text-bearing tree fields are redacted unless the
    session sets `keep_text`, recorded in the header. Captures cover the target's windows only.
 5. The format version is `flui_trace`. A change that is not additive bumps it and names its ADR. A
@@ -45,8 +51,9 @@ versioned header (ADR-0215 §3).
 6. Replay re-issues commands and compares results modulo volatile fields (handles renumbered by
    first appearance, times, frame ids). It compares input positions only when the header's
    `fidelity.positions` is `exact`, and otherwise only order and kinds. It refuses a target whose
-   window size differs from the header's. An exploration trace carries its `seed`. Codegen emits a Rust test from commands and results.
-   Neither reads raw coordinates when a locator is present.
+   window size differs from the header's, and it never sends redacted text: a redacted row ends
+   the replay, refused at that row. An exploration trace carries its `seed`. Codegen emits a Rust
+   test from commands and results. Neither reads raw coordinates when a locator is present.
 
 ## Consequences
 
@@ -63,12 +70,12 @@ versioned header (ADR-0215 §3).
 
 ## Verification
 
-The new driver crate's `trace` tests:
+The driver crate's `trace` and `trace_bounds` tests:
 
 - the header and row golden;
 - an incomplete trace detected;
-- the budget producing a `gap`;
-- redaction by default;
+- the budget producing a `gap`, and lost events a `gap` in every recording file;
+- redaction by default, and a replay refusing a redacted row;
 - replay of a recorded headless session reporting no divergence, and a deliberately changed app
   diverging at the expected `seq`;
 - codegen output compiling and passing.

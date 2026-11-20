@@ -194,10 +194,6 @@ impl<'a> IntoIterator for &'a DirtySet {
 /// orderings all reduce to the same entry, instead of each needing its own
 /// guard.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "the paint pass handles each kind, and a `_` arm would skip a repaint"
-)]
 pub enum PaintKind {
     /// Repaint the boundary's subtree.
     Repaint,
@@ -235,12 +231,6 @@ pub struct PaintQueue {
 }
 
 impl PaintQueue {
-    /// Creates an empty queue.
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Queues `id`, or raises an existing entry's kind. Returns `true` when a
     /// NEW entry was pushed.
     ///
@@ -283,12 +273,6 @@ impl PaintQueue {
         self.index.insert(id, self.entries.len());
         self.entries.push(PaintEntry { id, depth, kind });
         true
-    }
-
-    /// Why `id` is queued, or `None` when it is not.
-    #[inline]
-    pub fn kind_of(&self, id: RenderId) -> Option<&PaintKind> {
-        self.position(id).map(|i| &self.entries[i].kind)
     }
 
     /// Whether `id` is queued at all.
@@ -362,7 +346,7 @@ impl PaintQueue {
     /// second way to answer a question that already has one.
     #[cfg(test)]
     pub(crate) fn kind_for_test(&self, id: RenderId) -> Option<PaintKind> {
-        self.kind_of(id).cloned()
+        self.position(id).map(|i| self.entries[i].kind.clone())
     }
 
     #[inline]
@@ -386,6 +370,10 @@ impl PaintQueue {
 /// non-shrinking on purpose -- once they grow to the peak working set,
 /// they keep that capacity for the next frame.
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "each field is the queue of one phase, named for the work it queues"
+)]
 pub struct DirtySets {
     /// Nodes needing layout (sorted shallow-first during flush).
     pub needs_layout: DirtySet,
@@ -439,6 +427,7 @@ impl DirtySets {
     }
 
     /// Returns `true` when any phase has at least one dirty entry.
+    #[cfg(test)]
     #[inline]
     pub fn any(&self) -> bool {
         self.total() > 0

@@ -16,10 +16,15 @@
 //! the window ([`Lane::capture_window`]).
 //!
 //! The lanes: [`windows`], [`macos`], [`x11`] and [`wayland`] (its OS half with the `wayland`
-//! feature); both Linux lanes read the app through [`atspi`].
+//! feature); both Linux lanes read the app through [`atspi`]. [`android`] drives a device or an
+//! emulator from any host, through `adb`.
 
+pub mod android;
 pub mod atspi;
 pub mod macos;
+pub mod pacing;
+pub mod screen;
+pub mod walk;
 pub mod wayland;
 pub mod windows;
 pub mod x11;
@@ -37,6 +42,7 @@ use flui_protocol::tree::Tree;
 
 use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
+use crate::pixels::Image;
 use crate::steps::OsEvent;
 
 /// Which positions a lane reproduces exactly: what replay and golden holds compare.
@@ -231,7 +237,7 @@ pub trait Lane: Send {
     ///
     /// [`Error::NotSupported`] naming `os_capture` for a lane that captures nothing, which is the
     /// default.
-    fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+    fn capture_window(&mut self, placement: &Placement) -> Result<Image> {
         let _ = placement;
         Err(Error::not_supported(
             "os_capture",
@@ -287,6 +293,7 @@ pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()
         lane,
         held,
         message,
+        first: None,
     })
 }
 
@@ -315,60 +322,6 @@ pub(crate) fn release_settled<const N: usize>(
     outcome
 }
 
-/// The OS's capture of a window's surface: tightly packed RGBA rows, top row first.
-#[derive(Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct OsCapture {
-    /// Width in device pixels.
-    pub width: u32,
-    /// Height in device pixels.
-    pub height: u32,
-    /// Four bytes a pixel, red first, `width * 4` bytes a row.
-    pub rgba: Vec<u8>,
-}
-
-impl OsCapture {
-    /// A `width` by `height` capture of `rgba`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidArgument`] when `rgba` is not four bytes for each of its pixels.
-    pub fn try_new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self> {
-        let expected = u64::from(width) * u64::from(height) * 4;
-        if u64::try_from(rgba.len()).ok() != Some(expected) {
-            return Err(Error::invalid_argument(format!(
-                "a {width} x {height} capture holds {expected} bytes, not {}",
-                rgba.len()
-            )));
-        }
-        Ok(Self {
-            width,
-            height,
-            rgba,
-        })
-    }
-
-    /// The pixel at (`x`, `y`) as red, green, blue and alpha; `None` past the capture.
-    #[must_use]
-    pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
-        if x >= self.width || y >= self.height {
-            return None;
-        }
-        let at = usize::try_from((u64::from(y) * u64::from(self.width) + u64::from(x)) * 4).ok()?;
-        let bytes = self.rgba.get(at..at + 4)?;
-        Some([bytes[0], bytes[1], bytes[2], bytes[3]])
-    }
-}
-
-impl fmt::Debug for OsCapture {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OsCapture")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Whether `lane` may send OS input: [`os_input::admit`](crate::os_input::admit) over where its
 /// input lands and whether it has a guard, the one source of which is [`Lane::guard`].
 ///
@@ -383,18 +336,17 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 }
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
-/// next event, release everything and fail with [`Error::InterruptedByUser`]. What the lane
-/// pressed is released after the send, whether it went through or failed; a send that panics
-/// leaves the release to the lane's worker, which releases after a panicked job.
-///
-/// After a send that went through, the release's failure is the answer. After a failed send, the
-/// send's error is the answer, so a release that fails then is no caller's to retry: it is tried
-/// once more, and what stays held is logged at error level, as the worker does when it ends.
+/// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
+/// pressed is released on every exit, a failed send included. When the release leaves input
+/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
+/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
+/// ([`Error::effect`], [`Error::is_cannot_verify`]).
 ///
 /// # Errors
 ///
-/// As [`admit`] and [`Lane::check`], before any event; [`Error::InterruptedByUser`]; the lane's
-/// own failure; after a send that went through, the release's failure.
+/// As [`admit`] and [`Lane::check`], before any event; [`Error::ReleaseFailed`] naming what stays
+/// held, with the run's own failure as its `first` when there was one;
+/// [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
     lane.check(events)?;
@@ -406,12 +358,26 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     if let Some(guard) = lane.guard() {
         guard.disarm();
     }
-    match sent {
-        Ok(()) => lane.release_all(),
-        Err(error) => {
-            release_at_end(lane);
-            Err(error)
-        }
+    let released = lane.release_all();
+    match (sent, released) {
+        // The error names what stays down whatever ended the run, and keeps that first failure,
+        // which the verdict is read from: a run the person interrupted stays cannot-verify, since
+        // it did not complete because of a person, while the key left down is named all the same.
+        (
+            Err(failure),
+            Err(Error::ReleaseFailed {
+                lane,
+                held,
+                message,
+                ..
+            }),
+        ) => Err(Error::ReleaseFailed {
+            lane,
+            held,
+            message: format!("{message}; the run had failed first: {failure}"),
+            first: Some(Box::new(failure)),
+        }),
+        (sent, released) => sent.and(released),
     }
 }
 
@@ -437,7 +403,7 @@ fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> 
 }
 
 /// Release what `lane` holds where no caller is left to retry (the worker ending, a job that
-/// panicked, a guarded send whose own error is the answer): once, and once more if that failed. What a second failure leaves held is logged at
+/// panicked): once, and once more if that failed. What a second failure leaves held is logged at
 /// error level with the lane's error, which names it; nothing waits.
 fn release_at_end(lane: &mut dyn Lane) {
     let Err(first) = lane.release_all() else {

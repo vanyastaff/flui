@@ -141,6 +141,131 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 }
 
+impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+    /// Removes the subtree rooted at `id` — THE dispose site.
+    ///
+    /// Removal is where owner-side state dies (the inversion of the
+    /// "Drop will handle it" idea): a `Drop` impl has no
+    /// `&PipelineOwner`, so it cannot evict dirty-queue entries — only
+    /// this method can. Order:
+    ///
+    /// 1. collect the subtree's ids;
+    /// 2. call [`RenderObject::detach`](crate::traits::RenderObject::detach)
+    ///    on every id in the subtree (ADR-0013) — the tree-lifecycle
+    ///    counterpart of `attach`, and the only place a render object can
+    ///    tear down an `attach`-time subscription;
+    /// 3. evict every id from ALL dirty queues (live + mid-phase) so
+    ///    no phase walks a freed slot's stale entry;
+    /// 4. take the subtree out of the tree, children first (each slot
+    ///    advances its generation or retires, so outstanding ids go stale);
+    /// 5. clear `root_id` when the root itself was removed, and invalidate
+    ///    the former parent;
+    /// 6. drop the removed nodes, last: a render object's destructor runs
+    ///    against a committed tree and owner, so one that panics loses no
+    ///    bookkeeping.
+    ///
+    /// `Drop` on render objects remains strictly node-local (decoded
+    /// images, shaped text, GPU handles).
+    ///
+    /// Returns the number of nodes removed. Must not run mid-phase —
+    /// the layout/paint walks hold raw borrows into the slab.
+    pub fn remove_render_object(&mut self, id: RenderId) -> usize {
+        debug_assert!(
+            !self.scheduler.debug_doing_layout() && !self.scheduler.debug_doing_paint(),
+            "remove_render_object during an active layout/paint phase — \
+             the walks hold borrows into the slab; defer removal to \
+             between-frame work",
+        );
+
+        let former_parent = self.render_tree.parent(id);
+        let subtree = self.render_tree.collect_subtree(id);
+        if subtree.ids().is_empty() {
+            return 0;
+        }
+
+        // Withdraw the entire subtree before any user-owned parent data or
+        // detach hook can submit through a saved peer handle (ADR-0190).
+        for &subtree_id in subtree.ids() {
+            if let Some(node) = self.render_tree.get_mut(subtree_id) {
+                let _ = node.begin_detachment();
+            }
+        }
+
+        // ADR-0013: detach every node before eviction so attach-time
+        // subscriptions can unsubscribe while their storage still exists.
+        for &subtree_id in subtree.ids() {
+            if let Some(node) = self.render_tree.get_mut(subtree_id) {
+                let _ = node.clear_parent_data();
+                let _ = node.detach();
+            }
+        }
+
+        self.scheduler.evict(subtree.members());
+        // Layout-poison records for the removed subtree die here too, so
+        // the map does not accumulate entries for nodes that no longer
+        // exist.
+        self.layout_poison.evict(subtree.members());
+        // So do boundary records. A stale entry can never be SERVED to a
+        // different node — `RenderId` is generational, so a recycled slab slot
+        // misses the map — but without this the map grows for the lifetime of
+        // the owner as boundaries come and go. Their nodes are retired by the
+        // paint that republishes the parent naming them.
+        for id in subtree.members() {
+            if let Some(record) = self.boundary_records.remove(id) {
+                self.follower_boundaries.remove(id);
+                self.orphaned_nodes.push(record.node());
+            }
+        }
+
+        let removed_nodes = self.render_tree.take_subtree(subtree);
+        let count = removed_nodes.len();
+        if self.root_id == Some(id) {
+            self.root_id = None;
+        }
+        if let Some(parent_id) = former_parent {
+            self.note_render_child_membership_changed(parent_id);
+        }
+        tracing::debug!(?id, count, "remove_render_object: subtree disposed");
+        // Destructors run last, against a committed tree and owner (ADR-0252,
+        // ADR-0287): one that panics leaves nothing half-removed.
+        drop(removed_nodes);
+        count
+    }
+
+    /// Adopt an existing render node and invalidate every parent phase whose
+    /// output depends on child membership.
+    pub fn adopt_render_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        let former_parent = self.render_tree.parent(child_id);
+        if former_parent == Some(parent_id) {
+            return;
+        }
+        if let Some(former_parent_id) = former_parent {
+            self.render_tree.drop_child(former_parent_id, child_id);
+        }
+        self.render_tree.adopt_child(parent_id, child_id);
+        if let Some(former_parent_id) = former_parent.filter(|id| *id != parent_id) {
+            self.note_render_child_membership_changed(former_parent_id);
+        }
+        self.note_render_child_membership_changed(parent_id);
+    }
+
+    /// Invalidates every parent phase whose output depends on child membership.
+    pub(crate) fn note_render_child_membership_changed(&mut self, parent_id: RenderId) {
+        self.apply_render_update_impact(
+            parent_id,
+            RenderUpdateImpact::LAYOUT
+                | RenderUpdateImpact::COMPOSITING_BITS
+                | RenderUpdateImpact::SEMANTICS,
+        );
+    }
+
+    /// Record a pure sibling-order change. Membership and semantics content
+    /// are unchanged, but the parent must lay its children out again.
+    pub fn note_render_children_reordered(&mut self, parent_id: RenderId) {
+        self.apply_render_update_impact(parent_id, RenderUpdateImpact::LAYOUT);
+    }
+}
+
 /// A batch of child-list edits, lent by
 /// [`PipelineOwner::edit_render_children`], which marks the parents it
 /// changed once the batch ends.

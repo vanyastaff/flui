@@ -17,7 +17,7 @@ use super::base::ParentData;
 ///
 /// # Usage
 ///
-/// ```ignore
+/// ```
 /// use flui_rendering::parent_data::BoxParentData;
 /// use flui_foundation::geometry::Offset;
 ///
