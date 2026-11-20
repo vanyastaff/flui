@@ -878,6 +878,115 @@ fn every_text_field_of_the_wire_is_redacted_or_named_as_kept() {
 }
 
 #[test]
+fn no_alternative_types_a_field_two_ways() {
+    // A replay follows every alternative of a choice (an optional value, a tagged enum) when it
+    // looks for handles, which finds the right positions only while no two alternatives of one
+    // choice type a field of the same name as a handle in one and as something else in another.
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../flui-protocol/tests/schema/protocol-{}.json",
+        flui_driver::protocol::version::PROTOCOL_VERSION
+    ));
+    let schema: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&schema_path).expect("the schema golden"))
+            .expect("JSON");
+    let definitions = schema["$defs"].as_object().expect("definitions").clone();
+    let resolve = |start: &serde_json::Value| -> serde_json::Value {
+        let mut node = start.clone();
+        for _ in 0..64 {
+            let Some(name) = node
+                .get("$ref")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|reference| reference.strip_prefix("#/$defs/"))
+            else {
+                break;
+            };
+            if ["WindowId", "ElementId", "ElementRef"].contains(&name) {
+                break;
+            }
+            match definitions.get(name) {
+                Some(definition) => node = definition.clone(),
+                None => break,
+            }
+        }
+        node
+    };
+    let mut conflicts = Vec::new();
+    let mut choices = Vec::new();
+    collect_choices(&schema, &mut choices);
+    for options in choices {
+        let mut typed: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+        for option in &options {
+            let option = resolve(option);
+            let Some(properties) = option
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+            else {
+                continue;
+            };
+            for (name, property) in properties {
+                let handle = is_handle_schema(property);
+                if let Some(earlier) = typed.insert(name.clone(), handle)
+                    && earlier != handle
+                {
+                    conflicts.push(name.clone());
+                }
+            }
+        }
+    }
+    assert!(
+        conflicts.is_empty(),
+        "fields a handle in one alternative and not in another: {conflicts:?}"
+    );
+}
+
+/// Every `anyOf` and `oneOf` list anywhere in `schema`.
+fn collect_choices(schema: &serde_json::Value, found: &mut Vec<Vec<serde_json::Value>>) {
+    match schema {
+        serde_json::Value::Object(fields) => {
+            for key in ["anyOf", "oneOf"] {
+                if let Some(serde_json::Value::Array(options)) = fields.get(key) {
+                    found.push(options.clone());
+                }
+            }
+            for value in fields.values() {
+                collect_choices(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_choices(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether a property's schema is a handle, alone, optional or in a list.
+fn is_handle_schema(schema: &serde_json::Value) -> bool {
+    let reference = |schema: &serde_json::Value| {
+        schema
+            .get("$ref")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|reference| {
+                [
+                    "#/$defs/WindowId",
+                    "#/$defs/ElementId",
+                    "#/$defs/ElementRef",
+                ]
+                .contains(&reference)
+            })
+    };
+    reference(schema)
+        || schema.get("items").is_some_and(reference)
+        || ["anyOf", "oneOf"].iter().any(|key| {
+            schema
+                .get(*key)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|options| options.iter().any(&reference))
+        })
+}
+
+#[test]
 fn no_field_the_trace_redacts_holds_a_handle() {
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
         "../flui-protocol/tests/schema/protocol-{}.json",

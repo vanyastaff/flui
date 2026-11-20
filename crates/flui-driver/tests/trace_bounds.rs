@@ -261,6 +261,30 @@ fn native_streams_past_their_total_budget_are_refused_before_any_is_read() {
         refused.contains("bytes a trace's native layer may"),
         "{refused}"
     );
+
+    // Streams adding up to the budget exactly pass it, and are then read (and refused for what
+    // they hold, which is no recording).
+    let streams: Vec<String> = (0..4)
+        .map(|stream| format!("{{\"stream\":{stream},\"file\":\"{stream}.jsonl\"}}"))
+        .collect();
+    let dir = native_trace(
+        root.path(),
+        "at_budget",
+        &format!("{{\"streams\":[{}]}}", streams.join(",")),
+        &[],
+    );
+    for stream in 0..4 {
+        let file = std::fs::File::create(dir.join("native").join(format!("{stream}.jsonl")))
+            .expect("a stream");
+        file.set_len(trace::MAX_NATIVE_TOTAL_BYTES / 4)
+            .expect("its length");
+    }
+    let read = refusal(
+        Trace::open(&dir)
+            .expect("the trace reads")
+            .native_recordings(),
+    );
+    assert!(!read.contains("native layer may"), "{read}");
 }
 
 #[test]
@@ -598,9 +622,10 @@ mod scripted {
         let taken = root.path().join("taken.flui-trace");
         std::fs::create_dir_all(&taken).expect("a directory");
         std::fs::write(taken.join("trace.jsonl"), "another trace").expect("a trace there");
-        driver
+        let error = driver
             .start_trace(TraceOptions::new(&taken))
             .expect_err("a trace is there");
+        assert!(matches!(error, Error::InvalidArgument { .. }), "{error:?}");
         assert_eq!(starts.load(Ordering::SeqCst), 0);
         drop(driver);
         agent
@@ -643,9 +668,10 @@ mod scripted {
         let kept = root.path().join("kept.flui-trace");
         std::fs::create_dir_all(&kept).expect("a directory");
         std::fs::write(kept.join("input.jsonl"), "someone's recording").expect("a file there");
-        driver
+        let error = driver
             .start_trace(TraceOptions::new(&kept))
             .expect_err("the recording's file is there");
+        assert!(matches!(error, Error::InvalidArgument { .. }), "{error:?}");
         assert_eq!(
             std::fs::read_to_string(kept.join("input.jsonl")).expect("still there"),
             "someone's recording"
@@ -710,11 +736,17 @@ mod scripted {
             json!({ "command": { "seq": 3, "t_ms": 0, "method": "input.inject", "params": inject } })
                 .to_string(),
             json!({ "result": { "seq": 3, "t_ms": 0, "ok": { "done": true } } }).to_string(),
-            json!({ "command": { "seq": 4, "t_ms": 0, "method": "semantics.locate", "params": {
+            // An element no result named, in a window one did: its window is the replay's.
+            json!({ "command": { "seq": 4, "t_ms": 0, "method": "semantics.act", "params": {
+                "target": { "element": "w1/e3" }, "action": "focus",
+            } } })
+            .to_string(),
+            json!({ "result": { "seq": 4, "t_ms": 0, "ok": { "done": true } } }).to_string(),
+            json!({ "command": { "seq": 5, "t_ms": 0, "method": "semantics.locate", "params": {
                 "locator": { "window": "w1" },
             } } })
             .to_string(),
-            json!({ "result": { "seq": 4, "t_ms": 0, "ok": { "matches": [], "note": "w1" } } })
+            json!({ "result": { "seq": 5, "t_ms": 0, "ok": { "matches": [], "note": "w1" } } })
                 .to_string(),
             json!({ "end": {} }).to_string(),
         ];
@@ -724,7 +756,12 @@ mod scripted {
         let seen = Arc::clone(&sent);
         let mut located = 0;
         let agent = ScriptedAgent::start(
-            &["windows.list", "semantics.locate", "input.inject"],
+            &[
+                "windows.list",
+                "semantics.locate",
+                "input.inject",
+                "semantics.act",
+            ],
             Box::new(move |method, params| {
                 seen.lock().expect("the record").push(params.clone());
                 match method {
@@ -738,7 +775,7 @@ mod scripted {
                             Reply::Result(json!({ "matches": [], "note": "w7" }))
                         }
                     }
-                    "input.inject" => Reply::Result(json!({ "done": true })),
+                    "input.inject" | "semantics.act" => Reply::Result(json!({ "done": true })),
                     _ => Reply::Close,
                 }
             }),
@@ -763,8 +800,9 @@ mod scripted {
             injected["actions"]["sources"][0]["id"], "e1",
             "an input source's id is the caller's name for it, though `e1` is paired with `e9`"
         );
+        assert_eq!(sent[3]["target"]["element"], "w7/e3");
         let divergence = report.divergence.expect("a text that differs diverges");
-        assert_eq!((divergence.seq, divergence.at.as_str()), (4, "/note"));
+        assert_eq!((divergence.seq, divergence.at.as_str()), (5, "/note"));
         drop(driver);
         agent
             .join(Duration::from_secs(5))
