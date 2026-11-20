@@ -149,35 +149,137 @@ fn native_recordings_are_read_from_the_index_under_their_one_name() {
     assert!(unfinished.contains("no index"), "{unfinished}");
 }
 
-#[cfg(unix)]
-#[test]
-fn a_native_stream_through_a_symbolic_link_is_refused() {
-    let root = tempfile::tempdir().expect("a temporary directory");
-    let elsewhere = root.path().join("elsewhere.jsonl");
-    std::fs::write(&elsewhere, ONE_ROW).expect("a file outside the trace");
-    let index = r#"{"streams":[{"stream":0,"file":"0.jsonl"}]}"#;
-    let dir = native_trace(root.path(), "linked_file", index, &[]);
-    std::os::unix::fs::symlink(&elsewhere, dir.join("native").join("0.jsonl")).expect("a link");
-    let linked = refusal(
-        Trace::open(&dir)
-            .expect("the trace reads")
-            .native_recordings(),
-    );
-    assert!(linked.contains("symbolic link"), "{linked}");
+/// A link at `link` to the directory `target`: a symbolic link on Unix, a junction on Windows,
+/// which needs no privilege to make (std makes none, so `mklink /J` does).
+fn link_dir(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("a link");
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("cmd runs");
+        assert!(made.status.success(), "a junction: {made:?}");
+    }
+}
 
+#[test]
+fn a_native_stream_through_a_link_is_refused() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let index = r#"{"streams":[{"stream":0,"file":"0.jsonl"}]}"#;
     let outside = root.path().join("outside");
     std::fs::create_dir_all(&outside).expect("a directory outside the trace");
     std::fs::write(outside.join("index.json"), index).expect("an index");
     std::fs::write(outside.join("0.jsonl"), ONE_ROW).expect("a stream");
     let dir = native_trace(root.path(), "linked_dir", index, &[]);
     std::fs::remove_dir_all(dir.join("native")).expect("the native directory");
-    std::os::unix::fs::symlink(&outside, dir.join("native")).expect("a link");
+    link_dir(&outside, &dir.join("native"));
     let linked = refusal(
         Trace::open(&dir)
             .expect("the trace reads")
             .native_recordings(),
     );
-    assert!(linked.contains("symbolic link"), "{linked}");
+    assert!(linked.contains("symbolic link or a junction"), "{linked}");
+
+    // A file link needs a privilege on Windows; on Unix any user makes one.
+    #[cfg(unix)]
+    {
+        let elsewhere = root.path().join("elsewhere.jsonl");
+        std::fs::write(&elsewhere, ONE_ROW).expect("a file outside the trace");
+        let dir = native_trace(root.path(), "linked_file", index, &[]);
+        std::os::unix::fs::symlink(&elsewhere, dir.join("native").join("0.jsonl")).expect("a link");
+        let linked = refusal(
+            Trace::open(&dir)
+                .expect("the trace reads")
+                .native_recordings(),
+        );
+        assert!(linked.contains("symbolic link"), "{linked}");
+    }
+}
+
+#[test]
+fn evidence_through_a_link_is_refused() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let name = format!("evidence/{}.png", "a".repeat(64));
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("a directory outside the trace");
+    std::fs::write(outside.join(format!("{}.png", "a".repeat(64))), b"png").expect("a file");
+    let dir = native_trace(root.path(), "evidence", r#"{"streams":[]}"#, &[]);
+    link_dir(&outside, &dir.join("evidence"));
+    let trace = Trace::open(&dir).expect("the trace reads");
+    let refused = trace
+        .evidence(&name)
+        .expect_err("a linked evidence directory");
+    let Error::Unreadable { message, .. } = &refused else {
+        panic!("{refused:?}");
+    };
+    assert!(message.contains("junction"), "{message}");
+
+    let dir = native_trace(root.path(), "evidence_kept", r#"{"streams":[]}"#, &[]);
+    std::fs::create_dir_all(dir.join("evidence")).expect("the evidence directory");
+    std::fs::write(
+        dir.join("evidence").join(format!("{}.png", "a".repeat(64))),
+        b"png",
+    )
+    .expect("a file");
+    let trace = Trace::open(&dir).expect("the trace reads");
+    assert!(trace.evidence(&name).expect("its own file").is_file());
+}
+
+#[test]
+fn native_streams_past_their_total_budget_are_refused_before_any_is_read() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    // Each file under the format's own bound, together past the trace's: their lengths are read
+    // from the file system, so they hold nothing a reader would take.
+    let each = flui_driver::protocol::native_recording::MAX_RECORDING_BYTES as u64 - 1;
+    let count = trace::MAX_NATIVE_TOTAL_BYTES / each + 1;
+    let streams: Vec<String> = (0..count)
+        .map(|stream| format!("{{\"stream\":{stream},\"file\":\"{stream}.jsonl\"}}"))
+        .collect();
+    let dir = native_trace(
+        root.path(),
+        "heavy",
+        &format!("{{\"streams\":[{}]}}", streams.join(",")),
+        &[],
+    );
+    for stream in 0..count {
+        let file = std::fs::File::create(dir.join("native").join(format!("{stream}.jsonl")))
+            .expect("a stream");
+        file.set_len(each).expect("its length");
+    }
+    let refused = refusal(
+        Trace::open(&dir)
+            .expect("the trace reads")
+            .native_recordings(),
+    );
+    assert!(
+        refused.contains("bytes a trace's native layer may"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_command_numbered_twice_is_refused() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("twice.flui-trace");
+    std::fs::create_dir_all(&dir).expect("the directory");
+    let command = r#"{"command":{"seq":1,"t_ms":0,"method":"windows.list","params":{}}}"#;
+    std::fs::write(
+        dir.join("trace.jsonl"),
+        format!("{NATIVE_HEADER}\n{command}\n{command}\n"),
+    )
+    .expect("the rows");
+    let refused = Trace::open(&dir).expect_err("two commands numbered 1");
+    let Error::Unreadable { message, line, .. } = &refused else {
+        panic!("{refused:?}");
+    };
+    assert!(message.contains("second command numbered 1"), "{message}");
+    assert_eq!(*line, Some(3));
 }
 
 #[test]
@@ -443,8 +545,9 @@ mod scripted {
         assert_eq!(native[0].rows().count(), 1);
         assert_eq!(
             native[0].lost_rows(),
-            2 * lost,
-            "the native stream, which has no end of its own, is marked at both losses"
+            lost,
+            "the native stream is marked at the loss before the recording ended, and not after: \
+             no line of an ended recording is left to lose"
         );
         drop(driver);
         agent
@@ -515,6 +618,18 @@ mod scripted {
         assert!(matches!(error, Error::Busy { .. }), "{error:?}");
         assert_eq!(starts.load(Ordering::SeqCst), 1);
         assert!(!refused.join("trace.jsonl").exists(), "no trace is left");
+        assert!(
+            !refused.exists(),
+            "the directory the trace made goes with it"
+        );
+        // A directory the caller made, empty, stays.
+        let given = root.path().join("given.flui-trace");
+        std::fs::create_dir_all(&given).expect("the caller's directory");
+        driver
+            .start_trace(TraceOptions::new(&given))
+            .expect_err("the app refuses");
+        assert!(!given.join("trace.jsonl").exists(), "no trace is left");
+        assert!(given.is_dir(), "the caller's directory stays");
         drop(driver);
         agent
             .join(Duration::from_secs(5))
@@ -568,11 +683,20 @@ mod scripted {
     }
 
     #[test]
-    fn a_replay_maps_handles_in_handle_fields_only() {
+    fn a_replay_maps_handles_where_the_schema_has_them_only() {
         let root = tempfile::tempdir().expect("a temporary directory");
         let dir = root.path().join("handles.flui-trace");
         std::fs::create_dir_all(&dir).expect("the directory");
         let header = r#"{"flui_trace":1,"protocol":"0.28","target":{"kind":"attached","os":"any"},"isolation":"shared","fidelity":{"positions":"exact"},"started_unix_ms":0,"privacy":"keep_text"}"#;
+        let found = |element: &str, id: &str| {
+            json!({ "matches": [{ "element": element, "revision": 1, "node": {
+                "id": id, "role": "button", "native_role": "Button",
+            } }] })
+        };
+        let inject = json!({ "window": "w1", "actions": { "sources": [{
+            "type": "pointer", "id": "e1", "device": "mouse",
+            "actions": [{ "type": "pause", "duration_ms": 1 }],
+        }] } });
         let rows = [
             header.to_owned(),
             json!({ "command": { "seq": 1, "t_ms": 0, "method": "windows.list", "params": {} } })
@@ -580,56 +704,67 @@ mod scripted {
             json!({ "result": { "seq": 1, "t_ms": 0, "ok": { "windows": ["w1"] } } }).to_string(),
             json!({ "command": { "seq": 2, "t_ms": 0, "method": "semantics.locate", "params": {
                 "locator": { "window": "w1", "name": { "match": "exact", "text": "w1" } },
-                "windows": ["w1"],
             } } })
             .to_string(),
-            json!({ "result": { "seq": 2, "t_ms": 0, "ok": { "matches": [] } } }).to_string(),
-            json!({ "command": { "seq": 3, "t_ms": 0, "method": "semantics.locate", "params": {
+            json!({ "result": { "seq": 2, "t_ms": 0, "ok": found("w1/e1", "e1") } }).to_string(),
+            json!({ "command": { "seq": 3, "t_ms": 0, "method": "input.inject", "params": inject } })
+                .to_string(),
+            json!({ "result": { "seq": 3, "t_ms": 0, "ok": { "done": true } } }).to_string(),
+            json!({ "command": { "seq": 4, "t_ms": 0, "method": "semantics.locate", "params": {
                 "locator": { "window": "w1" },
             } } })
             .to_string(),
-            json!({ "result": { "seq": 3, "t_ms": 0, "ok": { "matches": [], "note": "w1" } } })
+            json!({ "result": { "seq": 4, "t_ms": 0, "ok": { "matches": [], "note": "w1" } } })
                 .to_string(),
             json!({ "end": {} }).to_string(),
         ];
         std::fs::write(dir.join("trace.jsonl"), rows.join("\n") + "\n").expect("the rows");
 
-        let sent = Arc::new(Mutex::new(Value::Null));
+        let sent = Arc::new(Mutex::new(Vec::<Value>::new()));
         let seen = Arc::clone(&sent);
         let mut located = 0;
         let agent = ScriptedAgent::start(
-            &["windows.list", "semantics.locate"],
-            Box::new(move |method, params| match method {
-                "windows.list" => Reply::Result(json!({ "windows": ["w7"] })),
-                "semantics.locate" => {
-                    located += 1;
-                    if located == 1 {
-                        *seen.lock().expect("the record") = params.clone();
-                        Reply::Result(json!({ "matches": [] }))
-                    } else {
-                        // A text that differs, shaped like the handle the replay paired: text.
-                        Reply::Result(json!({ "matches": [], "note": "w7" }))
+            &["windows.list", "semantics.locate", "input.inject"],
+            Box::new(move |method, params| {
+                seen.lock().expect("the record").push(params.clone());
+                match method {
+                    "windows.list" => Reply::Result(json!({ "windows": ["w7"] })),
+                    "semantics.locate" => {
+                        located += 1;
+                        if located == 1 {
+                            Reply::Result(found("w7/e9", "e9"))
+                        } else {
+                            // A text that differs, shaped like a handle the replay paired: text.
+                            Reply::Result(json!({ "matches": [], "note": "w7" }))
+                        }
                     }
+                    "input.inject" => Reply::Result(json!({ "done": true })),
+                    _ => Reply::Close,
                 }
-                _ => Reply::Close,
             }),
         )
         .expect("the stand-in starts");
         let mut driver = attach(&agent);
         let report = trace::replay(&Trace::open(&dir).expect("it reads"), &mut driver)
             .expect("the replay runs");
-        let params = sent.lock().expect("the record").clone();
+        let sent = sent.lock().expect("the record").clone();
+        let locate = &sent[1];
         assert_eq!(
-            params["locator"]["window"], "w7",
+            locate["locator"]["window"], "w7",
             "the window handle is the replay's"
         );
-        assert_eq!(params["windows"], json!(["w7"]), "a list of handles too");
         assert_eq!(
-            params["locator"]["name"]["text"], "w1",
+            locate["locator"]["name"]["text"], "w1",
             "a name that looks like a handle is text"
         );
+        let injected = &sent[2];
+        assert_eq!(injected["window"], "w7");
+        assert_eq!(
+            injected["actions"]["sources"][0]["id"], "e1",
+            "an input source's id is the caller's name for it, though `e1` is paired with `e9`"
+        );
         let divergence = report.divergence.expect("a text that differs diverges");
-        assert_eq!((divergence.seq, divergence.at.as_str()), (3, "/note"));
+        assert_eq!((divergence.seq, divergence.at.as_str()), (4, "/note"));
         drop(driver);
         agent
             .join(Duration::from_secs(5))

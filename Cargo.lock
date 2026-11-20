@@ -1959,6 +1959,7 @@ dependencies = [
  "png",
  "reis",
  "rustix 1.1.6",
+ "schemars",
  "serde",
  "serde_json",
  "sha2",

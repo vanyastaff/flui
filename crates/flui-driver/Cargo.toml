@@ -31,7 +31,9 @@ wayland = ["dep:reis"]
 
 [dependencies]
 # The wire: the method table, its parameters and outputs, the envelope and the launch contract.
-flui-protocol = { workspace = true, features = ["serde"] }
+# With its schemas, which tell a replay where each method's parameters and output hold a handle.
+flui-protocol = { workspace = true, features = ["serde", "schemars"] }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

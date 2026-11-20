@@ -3,9 +3,10 @@
 //!
 //! - **Handles** are renumbered by first appearance: the first element or window handle a result
 //!   names stands for the one the replay's result names in its place, and a later command's
-//!   parameters are sent with the replay's handle. Only the fields of the protocol that hold a
-//!   handle ([`HANDLE_FIELDS`]) are read as handles: a text or a locator's name that looks like
-//!   one (`e1`) is text. Locators are sent as written, so the replay resolves them again.
+//!   parameters are sent with the replay's handle. Only the positions the method's own schema
+//!   types as a handle are read as handles (`handles`): a text, a locator's name or an input
+//!   source's id that looks like one (`e1`) is text. Locators are sent as written, so the replay
+//!   resolves them again.
 //! - **Redacted text** is never sent: a command of a redacted trace whose parameters hold the
 //!   redaction mark ends the replay there, refused (ADR-0215 §5, ADR-0241 §4); the trace does not
 //!   hold what was typed. A trace recorded with `keep_text` replays it.
@@ -20,12 +21,13 @@
 //! not in the protocol's table (a pixel check, whose row joins the table with the front ends) is
 //! listed as skipped, never compared.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use flui_protocol::method;
 use serde_json::Value;
 
 use super::format::{Positions, Privacy, TraceError};
+use super::handles::WireSchema;
 use super::reader::Trace;
 use super::redact;
 use crate::driver::Driver;
@@ -37,13 +39,6 @@ const VOLATILE: &[&str] = &["t_ms", "frame", "frames"];
 
 /// Fields a replay compares only at exact fidelity: where things were.
 const POSITIONS: &[&str] = &["rect", "surface_rect", "point", "at", "x", "y"];
-
-/// The fields of the protocol that hold a window or element handle (`w3`, `e12`, `w3/e12`), alone
-/// or in a list: the only strings a replay renumbers. The protocol's schema test holds this list
-/// to every field whose schema is a handle.
-pub const HANDLE_FIELDS: &[&str] = &[
-    "element", "elements", "gone", "id", "node", "parent", "root", "window", "windows",
-];
 
 /// What a replay came to.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -108,6 +103,7 @@ pub fn replay(trace: &Trace, driver: &mut Driver) -> Result<ReplayReport> {
         let placement = driver.main_window()?.placement()?;
         WindowSpec::new(window.width, window.height, window.scale).check(&placement)?;
     }
+    let schema = WireSchema::of_the_protocol();
     let mut handles = Handles::default();
     let mut report = ReplayReport::default();
     let positions = header.fidelity.positions == Positions::Exact;
@@ -143,7 +139,10 @@ pub fn replay(trace: &Trace, driver: &mut Driver) -> Result<ReplayReport> {
             break;
         }
         let mut params = command.params.clone();
-        handles.substitute(&mut params, false);
+        handles.substitute(
+            &mut params,
+            &schema.handles(row.name, false, &command.params),
+        );
         let answered = driver.call_value(row.name, params);
         report.replayed += 1;
         let Some(recorded) = step.result else {
@@ -153,6 +152,10 @@ pub fn replay(trace: &Trace, driver: &mut Driver) -> Result<ReplayReport> {
         let compare = Compare {
             positions,
             handles: &mut handles,
+            handle_positions: recorded
+                .ok
+                .as_ref()
+                .map_or_default(|ok| schema.handles(row.name, true, ok)),
         };
         let divergence = match (&recorded.ok, &recorded.error, answered) {
             (Some(expected), _, Ok(mut actual)) => {
@@ -234,32 +237,25 @@ impl Handles {
         }
     }
 
-    /// Replace each recorded handle in `params` with the replay's: the strings of
-    /// [`HANDLE_FIELDS`] only, `in_handle` saying whether `params` is the value of one.
-    fn substitute(&self, params: &mut Value, in_handle: bool) {
-        match params {
-            Value::String(text) if in_handle && is_handle(text) => {
-                if let Some(actual) = self.recorded_to_actual.get(text.as_str()) {
-                    actual.clone_into(text);
-                } else if let Some((window, element)) = text.split_once('/') {
-                    let window = self
-                        .recorded_to_actual
-                        .get(window)
-                        .map_or(window, String::as_str);
-                    *text = format!("{window}/{element}");
-                }
+    /// Replace each recorded handle at `positions` (JSON pointers) in `params` with the
+    /// replay's.
+    fn substitute(&self, params: &mut Value, positions: &BTreeSet<String>) {
+        for position in positions {
+            let Some(Value::String(text)) = params.pointer_mut(position) else {
+                continue;
+            };
+            if !is_handle(text) {
+                continue;
             }
-            Value::Array(items) => {
-                for item in items {
-                    self.substitute(item, in_handle);
-                }
+            if let Some(actual) = self.recorded_to_actual.get(text.as_str()) {
+                actual.clone_into(text);
+            } else if let Some((window, element)) = text.split_once('/') {
+                let window = self
+                    .recorded_to_actual
+                    .get(window)
+                    .map_or(window, String::as_str);
+                *text = format!("{window}/{element}");
             }
-            Value::Object(fields) => {
-                for (key, value) in fields.iter_mut() {
-                    self.substitute(value, HANDLE_FIELDS.contains(&key.as_str()));
-                }
-            }
-            _ => {}
         }
     }
 }
@@ -298,22 +294,18 @@ struct Mismatch {
 struct Compare<'a> {
     positions: bool,
     handles: &'a mut Handles,
+    /// Where the recorded result holds handles, as JSON pointers.
+    handle_positions: BTreeSet<String>,
 }
 
 impl Compare<'_> {
     fn values(mut self, expected: &Value, actual: &Value) -> Option<Mismatch> {
-        self.walk(String::new(), expected, actual, false)
+        self.walk(String::new(), expected, actual)
     }
 
-    /// The first place `expected` and `actual` differ under `at`; `in_handle` says whether they
-    /// are the value of one of [`HANDLE_FIELDS`], where handles pair.
-    fn walk(
-        &mut self,
-        at: String,
-        expected: &Value,
-        actual: &Value,
-        in_handle: bool,
-    ) -> Option<Mismatch> {
+    /// The first place `expected` and `actual` differ under `at`; a pair of handles at one of
+    /// the result's handle positions pairs instead of comparing.
+    fn walk(&mut self, at: String, expected: &Value, actual: &Value) -> Option<Mismatch> {
         let differ = |at: String| Mismatch {
             at,
             expected: expected.clone(),
@@ -332,8 +324,7 @@ impl Compare<'_> {
                     let child = format!("{at}/{}", key.replace('~', "~0").replace('/', "~1"));
                     match (left.get(key), right.get(key)) {
                         (Some(left), Some(right)) => {
-                            let handle = HANDLE_FIELDS.contains(&key.as_str());
-                            if let Some(mismatch) = self.walk(child, left, right, handle) {
+                            if let Some(mismatch) = self.walk(child, left, right) {
                                 return Some(mismatch);
                             }
                         }
@@ -356,11 +347,11 @@ impl Compare<'_> {
                     .zip(right)
                     .enumerate()
                     .find_map(|(index, (left, right))| {
-                        self.walk(format!("{at}/{index}"), left, right, in_handle)
+                        self.walk(format!("{at}/{index}"), left, right)
                     })
             }
             (Value::String(left), Value::String(right))
-                if in_handle && is_handle(left) && is_handle(right) =>
+                if self.handle_positions.contains(&at) && is_handle(left) && is_handle(right) =>
             {
                 let same_kind = left.contains('/') == right.contains('/')
                     && left.chars().next() == right.chars().next();

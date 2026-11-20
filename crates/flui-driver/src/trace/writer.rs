@@ -142,6 +142,9 @@ pub(crate) struct TraceWriter {
     failure: Option<io::Error>,
     /// The recording's files this writer made, removed if the trace never starts.
     created: Vec<PathBuf>,
+    /// Whether this writer made the trace's directory, which it then removes if the trace
+    /// never starts.
+    made_dir: bool,
 }
 
 impl TraceWriter {
@@ -153,14 +156,18 @@ impl TraceWriter {
     /// it cannot be made or the header written.
     pub(crate) fn create(options: &TraceOptions, header: &Header, now: Duration) -> Result<Self> {
         let rows_path = options.dir.join(ROWS_FILE);
-        if rows_path.exists() {
-            return Err(Error::invalid_argument(format!(
-                "{} already holds a trace; a trace never writes over another",
-                options.dir.display()
-            )));
-        }
+        let made_dir = fs::symlink_metadata(&options.dir).is_err();
         fs::create_dir_all(&options.dir)?;
-        let mut rows = File::create(&rows_path)?;
+        let mut rows = create_new(&rows_path).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                Error::invalid_argument(format!(
+                    "{} already holds a trace; a trace never writes over another",
+                    options.dir.display()
+                ))
+            } else {
+                error.into()
+            }
+        })?;
         rows.write_all(&line(header)?)?;
         Ok(Self {
             dir: options.dir.clone(),
@@ -178,6 +185,7 @@ impl TraceWriter {
             recorder: None,
             failure: None,
             created: Vec::new(),
+            made_dir,
         })
     }
 
@@ -193,23 +201,17 @@ impl TraceWriter {
         header: &input_recording::Header,
         native: bool,
     ) -> Result<()> {
+        // Each is made new, never opened: a file or a directory of the name that is there already
+        // is another's, and is refused rather than written over.
         let input_path = self.dir.join(INPUT_FILE);
-        let native_path = self.dir.join(NATIVE_DIR);
-        for path in [&input_path, &native_path] {
-            if fs::symlink_metadata(path).is_ok() {
-                return Err(Error::invalid_argument(format!(
-                    "{} is there already; a trace never writes over another's files",
-                    path.display()
-                )));
-            }
-        }
-        let mut input = File::create(&input_path)?;
+        let mut input = create_new(&input_path).map_err(|error| refused(&input_path, error))?;
         self.created.push(input_path);
         input.write_all(&line(header)?)?;
         let native = if native {
-            let files = NativeFiles::create(&native_path)?;
-            self.created.push(native_path);
-            Some(files)
+            let native_path = self.dir.join(NATIVE_DIR);
+            fs::create_dir(&native_path).map_err(|error| refused(&native_path, error))?;
+            self.created.push(native_path.clone());
+            Some(NativeFiles::create(&native_path)?)
         } else {
             None
         };
@@ -223,11 +225,15 @@ impl TraceWriter {
     }
 
     /// Remove what this writer made, the trace never started: its rows' file and the recording's
-    /// files, and the directory when it is left empty. Nothing it did not make is touched, and a
-    /// removal that fails leaves the file behind.
+    /// files, and the directory when this writer made it and it is left empty. Nothing it did
+    /// not make is touched, and a removal that fails leaves the file behind.
     pub(crate) fn abandon(self) {
         let Self {
-            dir, rows, created, ..
+            dir,
+            rows,
+            created,
+            made_dir,
+            ..
         } = self;
         drop(rows);
         for path in created.iter().rev() {
@@ -238,7 +244,9 @@ impl TraceWriter {
             };
         }
         let _ = fs::remove_file(dir.join(ROWS_FILE));
-        let _ = fs::remove_dir(&dir);
+        if made_dir {
+            let _ = fs::remove_dir(&dir);
+        }
     }
 
     /// The app's recording the trace holds, by its number.
@@ -330,15 +338,13 @@ impl TraceWriter {
             // The rows of the recording may be among them, of its input layer and of any of its
             // native streams: each file says so where a replay reads it, rather than running
             // past the hole. Which events were lost is not known, so every stream the loss may
-            // have touched gets the gap.
-            if let Some(recorder) = self.recorder.as_mut() {
-                let input = if recorder.ended {
-                    Ok(())
-                } else {
-                    line(&input_recording::Row::Gap { rows: dropped })
-                        .map_err(io::Error::other)
-                        .and_then(|bytes| recorder.input.write_all(&bytes))
-                };
+            // have touched gets the gap. Once the recording ended, no line of it is left to lose.
+            if let Some(recorder) = self.recorder.as_mut()
+                && !recorder.ended
+            {
+                let input = line(&input_recording::Row::Gap { rows: dropped })
+                    .map_err(io::Error::other)
+                    .and_then(|bytes| recorder.input.write_all(&bytes));
                 let native = recorder
                     .native
                     .as_mut()
@@ -519,6 +525,27 @@ fn line(value: &impl Serialize) -> Result<Vec<u8>> {
     })?;
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+/// A file made at `path`, which must not be there: one that is (another's, or a link) fails with
+/// [`io::ErrorKind::AlreadyExists`], never opened.
+fn create_new(path: &Path) -> io::Result<File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+/// `error` of making `path`: a refusal when something of the name is there already.
+fn refused(path: &Path, error: io::Error) -> Error {
+    if error.kind() == io::ErrorKind::AlreadyExists {
+        Error::invalid_argument(format!(
+            "{} is there already; a trace never writes over another's files",
+            path.display()
+        ))
+    } else {
+        error.into()
+    }
 }
 
 /// The SHA-256 of `bytes`, in lowercase hex.

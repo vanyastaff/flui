@@ -44,6 +44,9 @@ pub const MAX_NATIVE_STREAMS: usize = 256;
 /// The longest `native/index.json` read.
 pub const MAX_NATIVE_INDEX_BYTES: u64 = 1 << 20;
 
+/// The most bytes a trace's native streams may hold together: four streams at their own bound.
+pub const MAX_NATIVE_TOTAL_BYTES: u64 = 256 << 20;
+
 /// What `native/index.json` says of each stream, as far as a reader needs it.
 #[derive(serde::Deserialize)]
 struct NativeIndex {
@@ -57,19 +60,13 @@ struct NativeIndexEntry {
     file: Option<String>,
 }
 
-/// Whether `path` is no symbolic link and resolves inside `root`, the trace's own directory
-/// resolved: a trace from elsewhere names no file outside itself.
-fn inside(root: &Path, path: &Path) -> Result<()> {
+/// Whether `path` is no symbolic link or junction. A trace's files have fixed names under its own
+/// directory, each checked from the top down, so a path that passes resolves inside the trace.
+fn no_link(path: &Path) -> Result<()> {
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(Error::unreadable(
             path,
-            "a symbolic link, which a trace never holds",
-        ));
-    }
-    if !fs::canonicalize(path)?.starts_with(root) {
-        return Err(Error::unreadable(
-            path,
-            "it resolves outside the trace's directory",
+            "a symbolic link or a junction, which a trace never holds",
         ));
     }
     Ok(())
@@ -172,6 +169,7 @@ impl Trace {
         let mut rows = Vec::new();
         let mut complete = false;
         let mut open: BTreeSet<u64> = BTreeSet::new();
+        let mut sent: BTreeSet<u64> = BTreeSet::new();
         let mut number: u64 = 1;
         loop {
             number += 1;
@@ -211,6 +209,12 @@ impl Trace {
                 .map_err(|error| bad(number, format!("not a row: {error}")))?;
             match &row {
                 Row::Command(command) => {
+                    if !sent.insert(command.seq) {
+                        return Err(bad(
+                            number,
+                            format!("a second command numbered {}", command.seq),
+                        ));
+                    }
                     open.insert(command.seq);
                 }
                 Row::Result(result) => {
@@ -306,13 +310,13 @@ impl Trace {
     /// [`Error::Unreadable`] for a trace whose header holds the native layer and has no index
     /// (the run ended before the trace did), an index past [`MAX_NATIVE_INDEX_BYTES`] or
     /// [`MAX_NATIVE_STREAMS`] or naming a stream twice or a file by another name, and a symbolic
-    /// link or a path that resolves outside the trace; as [`native::read`] for the first stream
+    /// link or junction, and streams past [`MAX_NATIVE_TOTAL_BYTES`] together; as
+    /// [`native::read`] for the first stream
     /// that does not read.
     pub fn native_recordings(&self) -> Result<Vec<NativeRecording>> {
         if !self.header.layers.contains(&RecordLayer::Native) {
             return Ok(Vec::new());
         }
-        let root = fs::canonicalize(&self.dir)?;
         let dir = self.dir.join(NATIVE_DIR);
         let index_path = dir.join(NATIVE_INDEX);
         if fs::symlink_metadata(&index_path).is_err() {
@@ -322,8 +326,8 @@ impl Trace {
                  before the trace was finished, so the streams were never written",
             ));
         }
-        inside(&root, &dir)?;
-        inside(&root, &index_path)?;
+        no_link(&dir)?;
+        no_link(&index_path)?;
         let index = fs::File::open(&index_path)?;
         let length = index.metadata()?.len();
         let mut text = Vec::new();
@@ -349,8 +353,10 @@ impl Trace {
                 ),
             ));
         }
+        // Every file the index names is checked, and their sizes added up, before any is read.
         let mut seen = BTreeSet::new();
-        let mut recordings = Vec::new();
+        let mut paths = Vec::new();
+        let mut total: u64 = 0;
         for entry in &index.streams {
             if !seen.insert(entry.stream) {
                 return Err(Error::unreadable(
@@ -370,18 +376,30 @@ impl Trace {
                 ));
             }
             let path = dir.join(&canonical);
-            inside(&root, &path)?;
-            recordings.push(native::read(&path)?);
+            no_link(&path)?;
+            total = total.saturating_add(fs::metadata(&path)?.len());
+            if total > MAX_NATIVE_TOTAL_BYTES {
+                return Err(Error::unreadable(
+                    &dir,
+                    format!(
+                        "the streams hold more than the {MAX_NATIVE_TOTAL_BYTES} bytes a trace's \
+                         native layer may"
+                    ),
+                ));
+            }
+            paths.push(path);
         }
-        Ok(recordings)
+        paths.iter().map(|path| native::read(path)).collect()
     }
 
     /// The file of the evidence `name` a result names.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidArgument`] for a name that is not `evidence/<sha256>.png`, so a
-    /// trace from elsewhere names no file outside its directory.
+    /// [`Error::InvalidArgument`] for a name that is not `evidence/<sha256>.png`, and
+    /// [`Error::Unreadable`] for an `evidence/` directory or a file that is a symbolic link or a
+    /// junction, so a trace from elsewhere names no file outside its directory; [`Error::Io`]
+    /// when the file is not there.
     pub fn evidence(&self, name: &str) -> Result<PathBuf> {
         let file = name
             .strip_prefix("evidence/")
@@ -396,6 +414,10 @@ impl Trace {
             .ok_or_else(|| {
                 Error::invalid_argument(format!("`{name}` is not evidence/<sha256>.png"))
             })?;
-        Ok(self.dir.join(EVIDENCE_DIR).join(file))
+        let folder = self.dir.join(EVIDENCE_DIR);
+        no_link(&folder)?;
+        let path = folder.join(file);
+        no_link(&path)?;
+        Ok(path)
     }
 }

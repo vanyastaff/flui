@@ -878,7 +878,7 @@ fn every_text_field_of_the_wire_is_redacted_or_named_as_kept() {
 }
 
 #[test]
-fn the_fields_a_replay_maps_are_the_wires_handle_fields() {
+fn no_field_the_trace_redacts_holds_a_handle() {
     let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
         "../flui-protocol/tests/schema/protocol-{}.json",
         flui_driver::protocol::version::PROTOCOL_VERSION
@@ -886,15 +886,23 @@ fn the_fields_a_replay_maps_are_the_wires_handle_fields() {
     let schema: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&schema_path).expect("the schema golden"))
             .expect("JSON");
-    let mut found = std::collections::BTreeSet::new();
-    handle_properties(&schema, &mut found);
-    let listed: std::collections::BTreeSet<String> = trace::HANDLE_FIELDS
+    let mut handles = std::collections::BTreeSet::new();
+    handle_properties(&schema, &mut handles);
+    // A replay finds handles by each method's schema, so a name that is a handle in one type and
+    // text in another (`id`) is mapped where it is a handle and left alone where it is text. The
+    // redaction goes by name: a name it redacts must be text in every type, or it would destroy
+    // the handles a replay pairs.
+    let redacted: Vec<&String> = handles
         .iter()
-        .map(|name| (*name).to_owned())
+        .filter(|name| trace::TEXT_FIELDS.contains(&name.as_str()))
         .collect();
-    assert_eq!(
-        listed, found,
-        "trace::HANDLE_FIELDS is every property whose schema is a window or element handle"
+    assert!(
+        redacted.is_empty(),
+        "fields both redacted and holding a handle somewhere: {redacted:?}"
+    );
+    assert!(
+        handles.contains("id") && handles.contains("window"),
+        "{handles:?}"
     );
 }
 
