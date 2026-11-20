@@ -745,6 +745,117 @@ pub(crate) fn a_raw_button_presses_after_its_gesture_policy_changes() {
     );
 }
 
+/// An intent no button binds, which a binding above the button answers.
+#[derive(Clone, Copy, Debug)]
+struct Archive;
+impl flui_widgets::interaction::Intent for Archive {}
+
+/// Logs `name` when it answers `Archive`.
+struct Archiving {
+    log: PressLog,
+    name: &'static str,
+}
+
+impl IntentAction<Archive> for Archiving {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &Archive) -> ActionOutcome {
+        self.log.borrow_mut().push(self.name);
+        ActionOutcome::Performed
+    }
+}
+
+/// A button under an `Actions` whose binding for `Archive` the test
+/// switches, under a shortcut that sends `Archive` from the focus.
+#[derive(Clone, StatefulView)]
+struct UnderSwitchedBinding {
+    second: flui_testing::widgets::SharedSignal<bool>,
+    log: PressLog,
+}
+
+struct UnderSwitchedBindingState {
+    second: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for UnderSwitchedBinding {
+    type State = UnderSwitchedBindingState;
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        UnderSwitchedBindingState {
+            second: self.second.clone(),
+        }
+    }
+}
+
+impl ViewState<UnderSwitchedBinding> for UnderSwitchedBindingState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.second.bind(ctx);
+    }
+
+    fn build(&self, view: &UnderSwitchedBinding, ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_widgets::interaction::{Shortcuts, SingleActivator};
+
+        let name = if self.second.get(ctx) {
+            "second"
+        } else {
+            "first"
+        };
+        Shortcuts::new(
+            Actions::new(button(
+                Made::Raw,
+                Some(logging(&view.log, "press")),
+                flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")),
+            ))
+            .action::<Archive>(Archiving {
+                log: Rc::clone(&view.log),
+                name,
+            }),
+        )
+        .shortcut(SingleActivator::character("a"), Archive)
+    }
+}
+
+/// A focused button that binds its own intents hangs them under the chain
+/// above it, and follows that chain when it changes: an intent the button
+/// does not bind, sent from its focus, reaches the binding above as it is
+/// now, not the one the button mounted under.
+///
+/// Red-check: keep the old enclosing chain when the button's shared link
+/// is rehung (`ActionChain::rehang`), and the shortcut after the switch
+/// reaches the first binding.
+pub(crate) fn a_focused_raw_button_follows_the_bindings_above_it() {
+    use flui_platform::input::keyboard::Key;
+
+    use crate::keyboard_focus::{press as press_key, tab};
+
+    let second = flui_testing::widgets::SharedSignal::new(false);
+    let log = PressLog::default();
+    let mut app = lay_out(
+        UnderSwitchedBinding {
+            second: second.clone(),
+            log: Rc::clone(&log),
+        },
+        loose(400.0),
+    );
+    let manager = app.focus_manager();
+    assert!(
+        app.enter_owner_scope(|| tab(&manager)),
+        "the button is a Tab stop"
+    );
+    let archive = |app: &LaidOut| {
+        let manager = app.focus_manager();
+        app.enter_owner_scope(|| press_key(&manager, &Key::character("a")))
+    };
+    assert!(archive(&app), "the shortcut is handled");
+    assert_eq!(*log.borrow(), ["first"]);
+
+    second.set(true);
+    app.pump();
+    assert!(archive(&app), "the shortcut is handled after the switch");
+    assert_eq!(
+        *log.borrow(),
+        ["first", "second"],
+        "the intent reaches the binding above the button as it is now"
+    );
+}
+
 /// A button given a states controller, with the switches the test turns.
 #[derive(Clone, StatefulView)]
 struct Stated {
