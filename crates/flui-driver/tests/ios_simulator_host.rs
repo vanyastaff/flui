@@ -1,8 +1,9 @@
 //! The host's `xcrun` door (`HostXcrun`) against a stand-in program: what a command printed, the
 //! launch values in `simctl`'s environment and nowhere else, a screenshot read back from the file
-//! `simctl` wrote, the bound on output, the deadline, and a host without Xcode. The stand-in is a
-//! shell script that answers by the words `xcrun` would pass on.
+//! `simctl` wrote and refused past its bound, the bound on output, the deadline, and a host
+//! without Xcode. The stand-in is a shell script that answers by the words `xcrun` would pass on.
 
+use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -17,16 +18,31 @@ use crate::ios_simulator_lane::{BUNDLE, UDID};
 /// The UDID the stand-in knows no simulator by.
 const GONE: &str = "FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF";
 
-/// A stand-in for `xcrun`: `simctl launch` prints the launch values it was handed, `simctl io`
-/// copies the PNG beside it to the path it is given, `xcodebuild` floods, `simctl terminate`
-/// hangs, and the UDID `GONE` names no simulator.
+/// The UDID whose screenshot is one byte past the bound.
+const LONG: &str = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
+
+/// The UDID whose screenshot grows past the bound as it is read: a named pipe, whose length reads
+/// as nothing, fed one byte past the bound once the stand-in has exited.
+const GROWING: &str = "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB";
+
+/// A stand-in for `xcrun`: `simctl launch` prints the launch values it was handed and a stray
+/// one, `simctl io` copies the PNG beside it to the path it is given (or writes the screenshots
+/// `LONG` and `GROWING` name), `xcodebuild` floods, `simctl terminate` hangs, and the UDID `GONE`
+/// names no simulator. The bound is 64 MiB, so one byte past it is 67108865.
 const STAND_IN: &str = r#"#!/bin/sh
 here="$(dirname "$0")"
-if [ "$3" = "FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF" ]; then
-  echo "Invalid device: $3" >&2; exit 164
-fi
+case "$3" in
+  FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF) echo "Invalid device: $3" >&2; exit 164 ;;
+  AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA) head -c 67108865 /dev/zero > "$6"; exit 0 ;;
+  BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB)
+    mkfifo "$6"
+    # The writer lets go of the stand-in's output before it blocks opening the pipe, which it
+    # does until the lane reads the screenshot.
+    ( exec >/dev/null 2>&1 </dev/null; exec head -c 67108865 /dev/zero > "$6" ) &
+    exit 0 ;;
+esac
 case "$1 $2" in
-  "simctl launch") printf '%s: 12\n%s\n%s\n' "$5" "$SIMCTL_CHILD_FLUI_AGENT_TOKEN" "${FLUI_AGENT_TOKEN:-unset}" ;;
+  "simctl launch") printf '%s: 12\n%s\n%s\n%s\n' "$5" "$SIMCTL_CHILD_FLUI_AGENT_TOKEN" "${FLUI_AGENT_TOKEN:-unset}" "${SIMCTL_CHILD_STRAY:-unset}" ;;
   "simctl io") cp "$here/screen.png" "$6" ;;
   "simctl terminate") exec sleep 30 ;;
   "xcodebuild -version") head -c 200000 /dev/zero ;;
@@ -49,10 +65,16 @@ fn udid(udid: &str) -> Udid {
     Udid::try_new(udid).expect("a UDID")
 }
 
+/// The launch values reach `simctl` in its children's spelling alone, and a `SIMCTL_CHILD_`
+/// variable the driver's own environment carries does not reach it at all.
 #[test]
 fn the_launch_values_reach_simctl_as_its_childrens_and_nowhere_else() {
     let (_dir, program) = stand_in(&[]);
-    let mut xcrun = HostXcrun::at(program);
+    let inherited = std::env::vars_os().chain([(
+        OsString::from("SIMCTL_CHILD_STRAY"),
+        OsString::from("a value the lane did not set"),
+    )]);
+    let mut xcrun = HostXcrun::at(program).environment(inherited);
     let launch = XcrunCommand::Launch {
         udid: udid(UDID),
         bundle: BUNDLE.to_owned(),
@@ -64,10 +86,32 @@ fn the_launch_values_reach_simctl_as_its_childrens_and_nowhere_else() {
     assert_eq!(reply.failure(), None, "{reply:?}");
     assert_eq!(
         reply.text(),
-        format!("{BUNDLE}: 12\nsecret-token\nunset\n"),
-        "the value goes in `SIMCTL_CHILD_`'s spelling alone"
+        format!("{BUNDLE}: 12\nsecret-token\nunset\nunset\n"),
+        "the value goes in `SIMCTL_CHILD_`'s spelling alone, and no stray one goes"
     );
     assert!(!launch.to_string().contains("secret-token"), "{launch}");
+}
+
+/// A screenshot file past the bound is refused by its length before it is read, and one that
+/// grows past the bound while it is read is refused once it passed it.
+#[test]
+fn a_screenshot_past_its_bound_is_refused_however_it_got_there() {
+    let (_dir, program) = stand_in(&[]);
+    let mut xcrun = HostXcrun::at(program);
+    let error = xcrun
+        .screenshot(&udid(LONG), Duration::from_secs(30))
+        .expect_err("past its bound");
+    assert!(
+        matches!(&error, Error::Lane { message, .. } if message.contains("67108865 bytes")),
+        "{error:?}"
+    );
+    let error = xcrun
+        .screenshot(&udid(GROWING), Duration::from_secs(30))
+        .expect_err("grew past its bound");
+    assert!(
+        matches!(&error, Error::Lane { message, .. } if message.contains("grew past the bound")),
+        "{error:?}"
+    );
 }
 
 #[test]

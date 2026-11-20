@@ -40,8 +40,8 @@ use flui_driver::{
     Driver, Error, InputPath, Launch, Locator, Outcome, Report, Result, Verdict, expect,
 };
 use flui_foundation::geometry::EdgeInsets;
-use flui_platform::TargetPlatform;
-use flui_view::environment::{MediaQuery, MediaQueryData, PlatformConvention};
+use flui_platform::{TargetPlatform, WindowInsets};
+use flui_view::environment::PlatformConvention;
 
 use crate::apps::{Controls, Insets, Notes, Roles, role_label};
 
@@ -445,10 +445,12 @@ pub fn ios_input(driver: &mut Driver, report: &mut Report) -> Result<()> {
     )
 }
 
-/// `safe_area`: the child of a `SafeArea` sits inset from the window's top left by exactly the
-/// safe-area padding the app reads, where the marker outside it does not move, which on iOS is
-/// UIKit's `safeAreaInsets` reaching the window's `MediaQuery` and `SafeArea` (the iOS safe-area
-/// device check).
+/// `safe_area`: the window reports a safe area (a top inset in portrait, where a phone's status
+/// bar or notch takes the top, and some inset in landscape), and the child of a `SafeArea` sits
+/// inset from the window's top left by exactly that padding, where the marker outside it does not
+/// move. On iOS that is UIKit's `safeAreaInsets` reaching the window's `MediaQuery` and
+/// `SafeArea` (the iOS safe-area device check): a window that reports no inset fails, since a
+/// padding that never arrived and a `SafeArea` that ignored it would both read as zero.
 ///
 /// # Errors
 ///
@@ -458,6 +460,7 @@ pub fn safe_area(driver: &mut Driver, report: &mut Report) -> Result<()> {
     let _ = report.check(
         "a SafeArea insets its child by the padding the window reports",
         || {
+            let size = driver.main_window()?.placement()?.size;
             let tree = driver.main_window()?.read()?;
             let label = find(&tree.roots, "insets")
                 .and_then(|node| node.name.clone())
@@ -466,12 +469,28 @@ pub fn safe_area(driver: &mut Driver, report: &mut Report) -> Result<()> {
                 .split(' ')
                 .filter_map(|side| side.parse::<f64>().ok())
                 .collect();
-            let &[top, _right, _bottom, left] = padding.as_slice() else {
+            let &[top, right, bottom, left] = padding.as_slice() else {
                 return Err(Error::Expectation {
                     expected: "the padding as four numbers".to_owned(),
                     actual: format!("{label:?}"),
                 });
             };
+            let portrait = size.height > size.width;
+            let reported = if portrait {
+                top > 0.0
+            } else {
+                [top, right, bottom, left].iter().any(|side| *side > 0.0)
+            };
+            if !reported {
+                return Err(Error::Expectation {
+                    expected: if portrait {
+                        "a top inset in a portrait window".to_owned()
+                    } else {
+                        "an inset on some side".to_owned()
+                    },
+                    actual: format!("the padding {label:?}"),
+                });
+            }
             let origin = |driver: &mut Driver, identifier: &str| -> Result<(f64, f64)> {
                 let rect = driver
                     .main_window()?
@@ -827,20 +846,26 @@ fn the_ios_input_scenario_passes_on_the_headless_target() {
     passed(&run("ios-input", headless(|| Controls), ios_input));
 }
 
-/// The safe-area scenario in a window padded as an iPhone's notch and home indicator pad it, so
-/// the offset it measures is the padding and not zero; on a simulator it reads the padding UIKit
-/// gives (`ios_simulator`).
+/// A portrait iPhone's window, 393 by 852, with `top` and `bottom` safe-area insets as its host
+/// reports them.
+fn phone(top: f64, bottom: f64) -> Driver {
+    let insets = WindowInsets::ZERO
+        .try_with_safe_area(EdgeInsets::new(top, 0.0, bottom, 0.0))
+        .expect("finite insets");
+    Driver::launch(
+        Launch::headless(|| Insets)
+            .window_size(393, 852)
+            .window_insets(insets),
+    )
+    .expect("the headless app starts")
+}
+
+/// The safe-area scenario in a window whose host reports an iPhone's notch and home indicator,
+/// so the offset it measures is the padding and not zero; on a simulator it reads the padding
+/// UIKit gives (`ios_simulator`).
 #[test]
 fn the_safe_area_scenario_measures_a_padded_window_on_the_headless_target() {
-    let mut driver = headless(|| {
-        MediaQuery::new(
-            MediaQueryData {
-                view_padding: EdgeInsets::new(59.0, 0.0, 34.0, 0.0),
-                ..MediaQueryData::default()
-            },
-            Insets,
-        )
-    });
+    let mut driver = phone(59.0, 34.0);
     let tree = driver
         .main_window()
         .and_then(|mut window| window.read())
@@ -860,6 +885,16 @@ fn the_safe_area_scenario_measures_a_padded_window_on_the_headless_target() {
         "{:#?}",
         report.checks()
     );
+}
+
+/// A portrait window that reports no safe area fails the scenario: a padding that never arrived
+/// reads as zero, as does a `SafeArea` that ignored it.
+#[test]
+fn the_safe_area_scenario_fails_a_portrait_window_that_reports_no_inset() {
+    let report = run("ios-safe-area", phone(0.0, 34.0), safe_area);
+    assert_eq!(report.verdict(), Verdict::Fail, "{:#?}", report.checks());
+    let report = run("ios-safe-area", phone(0.0, 0.0), safe_area);
+    assert_eq!(report.verdict(), Verdict::Fail, "{:#?}", report.checks());
 }
 
 /// The conformance row a platform's run reports: here on the headless target, through the OS lane

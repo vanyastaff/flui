@@ -12,7 +12,7 @@ use flui_driver::lane::ios_simulator::device::{self, DeviceState, Simulator, Udi
 use flui_driver::lane::ios_simulator::screenshot;
 use flui_driver::lane::ios_simulator::xcode::{self, HID_CAPABILITY};
 use flui_driver::lane::ios_simulator::xcrun::{XcrunCommand, XcrunReply};
-use flui_driver::lane::ios_simulator::{IosSimulatorLane, LANE, SimulatorApp};
+use flui_driver::lane::ios_simulator::{IosSimulatorLane, LANE, SimulatorApp, SimulatorLock};
 use flui_driver::lane::{self, Lane as _, PositionFidelity};
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::input::{PointerButton, PointerDevice};
@@ -67,8 +67,26 @@ fn udid() -> Udid {
     Udid::try_new(UDID).expect("a UDID")
 }
 
-fn connect(xcrun: &ScriptedXcrun) -> IosSimulatorLane {
-    IosSimulatorLane::connect(xcrun.simulator(), &udid(), BUNDLE).expect("the lane connects")
+/// A hold on the test's simulator, its lock file in a directory of its own, which goes after the
+/// hold: the directory first in the pair, so a binding of both drops the hold first.
+pub(crate) fn held() -> (tempfile::TempDir, SimulatorLock) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let lock = SimulatorLock::acquire_in(dir.path(), &udid()).expect("the simulator is free");
+    (dir, lock)
+}
+
+/// The lane on the test's simulator, and the directory its hold lives in.
+pub(crate) fn connect(xcrun: &ScriptedXcrun) -> (tempfile::TempDir, IosSimulatorLane) {
+    let (dir, lock) = held();
+    let lane =
+        IosSimulatorLane::connect(xcrun.simulator(), lock, BUNDLE).expect("the lane connects");
+    (dir, lane)
+}
+
+/// The lane on the test's simulator through `xcrun`, or why it did not connect.
+fn try_connect(xcrun: &ScriptedXcrun, bundle: &str) -> Result<IosSimulatorLane, Error> {
+    let (_dir, lock) = held();
+    IosSimulatorLane::connect(xcrun.simulator(), lock, bundle)
 }
 
 fn window() -> WindowId {
@@ -272,6 +290,75 @@ fn the_launch_line_gives_the_apps_process() {
 }
 
 #[test]
+fn the_services_listing_gives_the_apps_running_processes() {
+    let printed = "PID\tStatus\tLabel\n\
+                   -\t0\tUIKitApplication:dev.flui.scenario[0a0b][rb-legacy]\n\
+                   812\t0\tUIKitApplication:dev.flui.scenario[a1b2][rb-legacy]\n\
+                   813\t0\tUIKitApplication:dev.flui.scenario.other[c3d4][rb-legacy]\n\
+                   814\t0\tcom.apple.dev.flui.scenario\n\
+                   0\t0\tUIKitApplication:dev.flui.scenario[e5f6]\n\
+                   815 0 UIKitApplication:dev.flui.scenario[0001]\n\
+                   816\n";
+    assert_eq!(device::parse_running(printed, BUNDLE), [812, 815]);
+    assert_eq!(device::parse_running("", BUNDLE), Vec::<u32>::new());
+}
+
+/// One session holds a simulator at a time: the second is refused as busy until the first lets
+/// go, and another simulator is free meanwhile.
+#[test]
+fn a_second_session_on_a_simulator_is_refused_while_the_first_holds_it() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let first = SimulatorLock::acquire_in(dir.path(), &udid()).expect("a free simulator");
+    let error = SimulatorLock::acquire_in(dir.path(), &udid()).expect_err("held");
+    assert!(
+        matches!(&error, Error::Busy { message, .. } if message.contains(UDID)),
+        "{error:?}"
+    );
+    let other = Udid::try_new("0A1B2C3D-4E5F-4061-8728-394A5B6C7D8E").expect("a UDID");
+    let _other = SimulatorLock::acquire_in(dir.path(), &other).expect("another simulator");
+    assert_eq!(first.udid(), &udid());
+    drop(first);
+    let _again = SimulatorLock::acquire_in(dir.path(), &udid()).expect("free once let go");
+}
+
+/// A path goes to `xcrun` as it is, and a relative one that starts with `-` as `./` and it; a
+/// command's debug form, like its text, names a launch value's key and never its value.
+#[test]
+fn a_commands_arguments_keep_its_paths_and_its_forms_keep_its_values_out() {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    let install = |app: &str| XcrunCommand::Install {
+        udid: udid(),
+        app: PathBuf::from(app),
+    };
+    let last = |command: XcrunCommand| command.args().last().cloned().expect("a path");
+    assert_eq!(
+        last(install("-Scenario.app")),
+        OsString::from(format!(".{}-Scenario.app", std::path::MAIN_SEPARATOR))
+    );
+    assert_eq!(
+        last(install("Scenario.app")),
+        OsString::from("Scenario.app")
+    );
+    assert_eq!(
+        last(install("/tmp/-Scenario.app")),
+        OsString::from("/tmp/-Scenario.app")
+    );
+    let launch = XcrunCommand::Launch {
+        udid: udid(),
+        bundle: BUNDLE.to_owned(),
+        env: vec![("FLUI_AGENT_TOKEN".to_owned(), "secret-token".to_owned())],
+    };
+    for shown in [launch.to_string(), format!("{launch:?}")] {
+        assert!(
+            shown.contains("FLUI_AGENT_TOKEN") && !shown.contains("secret-token"),
+            "{shown}"
+        );
+    }
+}
+
+#[test]
 fn the_xcode_version_is_read_from_xcodebuild() {
     let read = xcode::parse_version(&xcodebuild("27.1", "27A9269")).expect("a version");
     assert_eq!(read.version, "27.1");
@@ -357,7 +444,7 @@ fn every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_se
                 XcrunReply::new(0, listing("Booted", true)),
             )
             .reply("xcodebuild -version", reply);
-        let mut lane = connect(&xcrun);
+        let (_dir, mut lane) = connect(&xcrun);
         let before = xcrun.log();
         for events in &inputs {
             let error = lane::send_guarded(&mut lane, events).expect_err("input is refused");
@@ -394,7 +481,7 @@ fn every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_se
 
 #[test]
 fn the_lane_is_the_simulator_and_has_no_guard() {
-    let mut lane = connect(&scripted());
+    let (_dir, mut lane) = connect(&scripted());
     assert_eq!(lane.name(), LANE);
     let capabilities = lane.capabilities();
     assert_eq!(capabilities.isolation, Isolation::Simulator);
@@ -423,16 +510,14 @@ fn the_lane_refuses_a_simulator_it_cannot_drive() {
         "simctl list devices",
         XcrunReply::new(0, listing("Shutdown", true)),
     );
-    let error = IosSimulatorLane::connect(shut.simulator(), &udid(), BUNDLE)
-        .expect_err("a shut-down simulator");
+    let error = try_connect(&shut, BUNDLE).expect_err("a shut-down simulator");
     assert!(error.is_cannot_verify(), "{error:?}");
     assert_eq!(shut.log(), ["simctl list devices --json"]);
     let no_xcode = ScriptedXcrun::new().reply(
         "simctl list devices",
         XcrunReply::new(72, "").stderr("xcrun: error: unable to find utility \"simctl\""),
     );
-    let error =
-        IosSimulatorLane::connect(no_xcode.simulator(), &udid(), BUNDLE).expect_err("no simctl");
+    let error = try_connect(&no_xcode, BUNDLE).expect_err("no simctl");
     assert!(
         matches!(
             &error,
@@ -443,8 +528,7 @@ fn the_lane_refuses_a_simulator_it_cannot_drive() {
         ),
         "{error:?}"
     );
-    let error = IosSimulatorLane::connect(scripted().simulator(), &udid(), "-bad")
-        .expect_err("no bundle identifier");
+    let error = try_connect(&scripted(), "-bad").expect_err("no bundle identifier");
     assert!(matches!(error, Error::InvalidArgument { .. }), "{error:?}");
 }
 
@@ -455,7 +539,7 @@ fn the_lane_refuses_a_simulator_it_cannot_drive() {
 fn a_failure_the_host_causes_is_cannot_verify_and_any_other_fails_the_run() {
     let connect_with = |reply: XcrunReply| {
         let xcrun = ScriptedXcrun::new().reply("simctl list devices", reply);
-        IosSimulatorLane::connect(xcrun.simulator(), &udid(), BUNDLE).expect_err("refused")
+        try_connect(&xcrun, BUNDLE).expect_err("refused")
     };
     for said in [
         "xcrun: error: invalid active developer path",
@@ -526,26 +610,22 @@ fn what_simctl_and_xcodebuild_print_is_read_within_its_bound() {
             )
     };
     let small = 64 * 1024;
-    let lane =
-        IosSimulatorLane::connect(at(device::MAX_LISTING, small).simulator(), &udid(), BUNDLE)
-            .expect("a listing and a version at their bounds");
+    let (_dir, lane) = connect(&at(device::MAX_LISTING, small));
     assert_eq!(
         lane.xcode().map(|xcode| xcode.version.as_str()),
-        Some("27.1")
+        Some("27.1"),
+        "a listing and a version at their bounds"
     );
-    let lane = IosSimulatorLane::connect(
-        at(device::MAX_LISTING, small + 1).simulator(),
-        &udid(),
-        BUNDLE,
-    )
-    .expect("a version past its bound leaves the Xcode unnamed");
-    assert_eq!(lane.xcode(), None);
-    let error = IosSimulatorLane::connect(
-        at(device::MAX_LISTING + 1, small).simulator(),
-        &udid(),
-        BUNDLE,
-    )
-    .expect_err("a listing past its bound");
+    drop(lane);
+    let (_dir, lane) = connect(&at(device::MAX_LISTING, small + 1));
+    assert_eq!(
+        lane.xcode(),
+        None,
+        "a version past its bound leaves the Xcode unnamed"
+    );
+    drop(lane);
+    let error = try_connect(&at(device::MAX_LISTING + 1, small), BUNDLE)
+        .expect_err("a listing past its bound");
     assert!(matches!(error, Error::Lane { .. }), "{error:?}");
 }
 
@@ -559,7 +639,7 @@ fn a_capture_is_the_screen_when_the_window_fills_it() {
     let xcrun = scripted()
         .screenshot(turned)
         .screenshot(png_of(width, height, &rgba));
-    let mut lane = connect(&xcrun);
+    let (_dir, mut lane) = connect(&xcrun);
     let error = lane.capture_window(&placement()).expect_err("turned");
     assert_eq!(
         error.missing_capability().as_deref(),
@@ -595,7 +675,7 @@ fn a_screen_of_another_size_than_the_window_is_refused_before_it_is_decoded() {
             height,
             &vec![0; (width * height * 4) as usize],
         ));
-        let mut lane = connect(&xcrun);
+        let (_dir, mut lane) = connect(&xcrun);
         let error = lane
             .capture_window(&placement())
             .expect_err("not the window");
@@ -713,6 +793,14 @@ mod start {
 
     use super::{BUNDLE, connect, scripted, udid};
 
+    /// What `launchctl list` prints inside a simulator where the scenario app runs as `pid`.
+    fn running(pid: u32) -> String {
+        format!(
+            "PID\tStatus\tLabel\n-\t0\tcom.apple.springboard.idle\n\
+             {pid}\t0\tUIKitApplication:{BUNDLE}[a1b2][rb-legacy]\n"
+        )
+    }
+
     fn launched(xcrun: &flui_driver::testing::ScriptedXcrun) -> Vec<XcrunCommand> {
         xcrun
             .commands()
@@ -729,16 +817,23 @@ mod start {
                 "simctl launch",
                 XcrunReply::new(0, format!("{BUNDLE}: 4321\n")),
             )
+            .reply("simctl spawn", XcrunReply::new(0, running(4321)))
             .reply("simctl terminate", XcrunReply::new(0, ""));
-        let mut lane = connect(&xcrun);
+        let (_dir, mut lane) = connect(&xcrun);
         let app = SimulatorApp::try_new(BUNDLE)
             .expect("a bundle")
             .app_bundle("/tmp/Scenario.app")
             .env("FLUI_DRIVER_SCENARIO_APP", "insets")
             .and_then(|app| app.env(TOKEN_ENV, "a token of the app's own"))
+            .and_then(|app| app.env(ENDPOINT_ENV, "/a/socket/of/the/apps/own"))
             .expect("environment variables");
         let started = lane.start(&app).expect("the app starts");
         assert_eq!(started.pid, Some(4321));
+        let shown = format!("{started:?}");
+        assert!(
+            !shown.contains(&started.token) && shown.contains("4321"),
+            "the token stays out of the debug form: {shown}"
+        );
         assert_eq!(
             started.token.len(),
             64,
@@ -790,15 +885,20 @@ mod start {
             "the token never reaches a command's text: {:?}",
             xcrun.log()
         );
+        assert!(
+            !format!("{launch:?}").contains(&started.token),
+            "nor its debug form: {launch:?}"
+        );
         drop(lane);
         let terminate = XcrunCommand::Terminate {
             udid: udid(),
             bundle: BUNDLE.to_owned(),
         };
+        let commands = xcrun.commands();
         assert_eq!(
-            xcrun.commands().last(),
-            Some(&terminate),
-            "the lane ends the app"
+            commands[commands.len() - 2..],
+            [XcrunCommand::ListServices { udid: udid() }, terminate],
+            "the lane ends the app it finds still running"
         );
         assert!(
             !directory.exists(),
@@ -811,7 +911,7 @@ mod start {
         let xcrun = scripted()
             .timeout_once("simctl launch")
             .reply("simctl terminate", XcrunReply::new(0, ""));
-        let mut lane = connect(&xcrun);
+        let (_dir, mut lane) = connect(&xcrun);
         let error = lane
             .start(&SimulatorApp::try_new(BUNDLE).expect("a bundle"))
             .expect_err("the launch timed out");
@@ -837,6 +937,72 @@ mod start {
         );
     }
 
+    /// When the lane ends, the app it started is ended only while its own process runs: one that
+    /// exited is neither ended nor reported, and neither is a copy someone else started since;
+    /// one the lane could not end is reported as still running.
+    #[test]
+    fn only_the_apps_own_running_process_is_ended_and_an_exited_one_is_no_failure() {
+        let ended = |services: &str, terminate: XcrunReply| {
+            let xcrun = scripted()
+                .reply(
+                    "simctl launch",
+                    XcrunReply::new(0, format!("{BUNDLE}: 4321\n")),
+                )
+                .reply("simctl spawn", XcrunReply::new(0, services))
+                .reply("simctl terminate", terminate);
+            let (_dir, mut lane) = connect(&xcrun);
+            lane.start(&SimulatorApp::try_new(BUNDLE).expect("a bundle"))
+                .expect("the app starts");
+            let ((), log) = flui_testing::log_capture::capture(|| drop(lane));
+            let terminated = xcrun
+                .commands()
+                .iter()
+                .any(|command| matches!(command, XcrunCommand::Terminate { .. }));
+            (terminated, log.contains("still runs"))
+        };
+        let ok = || XcrunReply::new(0, "");
+        assert_eq!(
+            ended(&running(4321), ok()),
+            (true, false),
+            "its own process"
+        );
+        assert_eq!(
+            ended("PID\tStatus\tLabel\n", ok()),
+            (false, false),
+            "it exited"
+        );
+        assert_eq!(
+            ended(&running(99), ok()),
+            (false, false),
+            "someone else's copy"
+        );
+        assert_eq!(
+            ended(
+                &running(4321),
+                XcrunReply::new(3, "").stderr("terminate failed")
+            ),
+            (true, true),
+            "a copy the lane could not end"
+        );
+    }
+
+    /// A path that is not UTF-8 reaches `xcrun` byte for byte.
+    #[test]
+    fn a_path_that_is_not_utf8_is_passed_as_it_is() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let app = PathBuf::from(OsStr::from_bytes(b"/tmp/Sc\xffenario.app"));
+        let install = XcrunCommand::Install {
+            udid: udid(),
+            app: app.clone(),
+        };
+        assert_eq!(
+            install.args().last().map(std::ffi::OsString::as_os_str),
+            Some(app.as_os_str())
+        );
+    }
+
     #[test]
     fn a_lane_that_started_nothing_ends_nothing() {
         let xcrun = scripted();
@@ -849,7 +1015,7 @@ mod start {
             "{:?}",
             xcrun.log()
         );
-        let mut lane = connect(&xcrun);
+        let (_dir, mut lane) = connect(&xcrun);
         let other = SimulatorApp::try_new("dev.flui.other").expect("a bundle");
         assert!(matches!(
             lane.start(&other),

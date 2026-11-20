@@ -4,7 +4,9 @@
 //!   no simulator nobody named ([`UDID_ENV`]).
 //! - `simctl list devices --json` is read within [`MAX_LISTING`] bytes ([`parse_devices`]); an
 //!   entry the lane cannot read is left out on its own, never the whole listing with it.
-//! - `simctl launch` prints `<bundle>: <pid>` for the process it started ([`parse_launched`]).
+//! - `simctl launch` prints `<bundle>: <pid>` for the process it started ([`parse_launched`]),
+//!   and `launchctl list` inside the simulator shows whether that process still runs
+//!   ([`parse_running`]).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -245,6 +247,31 @@ pub fn runtime_name(identifier: &str) -> Option<String> {
             .iter()
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
     numeric.then(|| format!("iOS {}", parts.join(".")))
+}
+
+/// The most bytes `simctl spawn <udid> launchctl list` may print: a line for each of a few
+/// hundred services.
+pub const MAX_SERVICES: usize = 1 << 20;
+
+/// The process ids of the copies of the app `bundle` that `printed`, what `launchctl list` prints
+/// inside a simulator, shows running: each line `<pid> <status> UIKitApplication:<bundle>[…]`
+/// whose pid is a number (a service that does not run shows `-`).
+#[must_use]
+pub fn parse_running(printed: &str, bundle: &str) -> Vec<u32> {
+    let label = format!("UIKitApplication:{bundle}[");
+    printed
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?;
+            let _status = fields.next()?;
+            let service = fields.next()?;
+            if !service.starts_with(&label) {
+                return None;
+            }
+            pid.parse::<u32>().ok().filter(|pid| *pid > 0)
+        })
+        .collect()
 }
 
 /// The process id `simctl launch` printed for the app `bundle`: its line `<bundle>: <pid>`.

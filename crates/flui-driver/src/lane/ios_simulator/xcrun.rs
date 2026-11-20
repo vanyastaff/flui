@@ -16,7 +16,8 @@
 //! [`HostXcrun`] runs the host's `xcrun`; a test scripts the Simulator with
 //! `testing::ScriptedXcrun`.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -34,8 +35,9 @@ use crate::lane::tool;
 /// the app it starts.
 pub const CHILD_PREFIX: &str = "SIMCTL_CHILD_";
 
-/// One `xcrun` command.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One `xcrun` command. Its [`Debug`] form, like its [`Display`](std::fmt::Display) form, names a
+/// launch value's key and never its value.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum XcrunCommand {
     /// `xcrun simctl list devices --json`: every simulator, by runtime.
@@ -73,21 +75,27 @@ pub enum XcrunCommand {
         /// Where the PNG is written.
         path: PathBuf,
     },
+    /// `xcrun simctl spawn <udid> launchctl list`: the services the simulator's launchd runs,
+    /// an app among them as `UIKitApplication:<bundle>[…]` with its process id.
+    ListServices {
+        /// The simulator.
+        udid: Udid,
+    },
 }
 
 impl XcrunCommand {
-    /// The arguments after `xcrun`.
+    /// The arguments after `xcrun`, each its own word: a path is passed as it is, never through
+    /// UTF-8, and a relative one that starts with `-` as `./` and it, so no tool reads it as an
+    /// option.
     #[must_use]
-    pub fn args(&self) -> Vec<String> {
-        let words = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
-        match self {
+    pub fn args(&self) -> Vec<OsString> {
+        let words = |words: &[&str]| -> Vec<OsString> {
+            words.iter().map(|word| OsString::from(*word)).collect()
+        };
+        let mut args = match self {
             Self::ListDevices => words(&["simctl", "list", "devices", "--json"]),
             Self::XcodeVersion => words(&["xcodebuild", "-version"]),
-            Self::Install { udid, app } => {
-                let mut args: Vec<String> = words(&["simctl", "install", udid.as_str()]);
-                args.push(app.to_string_lossy().into_owned());
-                args
-            }
+            Self::Install { udid, .. } => words(&["simctl", "install", udid.as_str()]),
             Self::Launch { udid, bundle, .. } => words(&[
                 "simctl",
                 "launch",
@@ -98,13 +106,17 @@ impl XcrunCommand {
             Self::Terminate { udid, bundle } => {
                 words(&["simctl", "terminate", udid.as_str(), bundle])
             }
-            Self::Screenshot { udid, path } => {
-                let mut args: Vec<String> =
-                    words(&["simctl", "io", udid.as_str(), "screenshot", "--type=png"]);
-                args.push(path.to_string_lossy().into_owned());
-                args
+            Self::Screenshot { udid, .. } => {
+                words(&["simctl", "io", udid.as_str(), "screenshot", "--type=png"])
             }
+            Self::ListServices { udid } => {
+                words(&["simctl", "spawn", udid.as_str(), "launchctl", "list"])
+            }
+        };
+        if let Self::Install { app: path, .. } | Self::Screenshot { path, .. } = self {
+            args.push(path_argument(path));
         }
+        args
     }
 
     /// The variables `simctl` runs with: each launch value's key with [`CHILD_PREFIX`] before it.
@@ -120,10 +132,27 @@ impl XcrunCommand {
     }
 }
 
+/// `path` as one argument: unchanged, or `./` and it when it is relative and starts with `-`.
+fn path_argument(path: &Path) -> OsString {
+    let option_like = path.as_os_str().as_encoded_bytes().first() == Some(&b'-');
+    if path.is_relative() && option_like {
+        Path::new(".").join(path).into_os_string()
+    } else {
+        path.as_os_str().to_owned()
+    }
+}
+
 impl std::fmt::Display for XcrunCommand {
     /// The arguments, and the keys of the launch values alone: a token never reaches a message.
+    /// A path that is not UTF-8 is shown with its other bytes replaced; the argument itself is
+    /// passed as it is.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.args().join(" "))?;
+        let words: Vec<String> = self
+            .args()
+            .iter()
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect();
+        f.write_str(&words.join(" "))?;
         if let Self::Launch { env, .. } = self
             && !env.is_empty()
         {
@@ -131,6 +160,14 @@ impl std::fmt::Display for XcrunCommand {
             write!(f, " (with {})", keys.join(", "))?;
         }
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for XcrunCommand {
+    /// The command's text, as [`Display`](std::fmt::Display) gives it: each launch value's key
+    /// and never its value.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "XcrunCommand({self})")
     }
 }
 
@@ -258,10 +295,13 @@ pub(crate) fn command_failed(command: &XcrunCommand, reply: &XcrunReply, failure
     }
 }
 
-/// `xcrun` on this host.
+/// `xcrun` on this host. It runs with the driver's environment (or the one
+/// [`environment`](Self::environment) names) less every `SIMCTL_CHILD_` variable, so the only
+/// values `simctl launch` hands an app are the lane's own.
 #[derive(Debug, Clone)]
 pub struct HostXcrun {
     program: PathBuf,
+    environment: Option<Vec<(OsString, OsString)>>,
 }
 
 impl Default for HostXcrun {
@@ -282,7 +322,32 @@ impl HostXcrun {
     pub fn at(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
+            environment: None,
         }
+    }
+
+    /// Run `xcrun` with `variables` in place of the driver's environment, its `SIMCTL_CHILD_`
+    /// variables still left out.
+    #[must_use]
+    pub fn environment(
+        mut self,
+        variables: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> Self {
+        self.environment = Some(variables.into_iter().collect());
+        self
+    }
+
+    /// The environment `xcrun` starts from: the driver's, or the one named, less every variable
+    /// `simctl launch` would hand an app.
+    fn inherited(&self) -> Vec<(OsString, OsString)> {
+        let variables: Vec<(OsString, OsString)> = match &self.environment {
+            Some(variables) => variables.clone(),
+            None => std::env::vars_os().collect(),
+        };
+        variables
+            .into_iter()
+            .filter(|(key, _)| !key.as_encoded_bytes().starts_with(CHILD_PREFIX.as_bytes()))
+            .collect()
     }
 
     fn started(&self, error: &std::io::Error) -> Error {
@@ -301,7 +366,11 @@ impl Xcrun for HostXcrun {
         timeout: Duration,
     ) -> Result<XcrunReply> {
         let mut process = Command::new(&self.program);
-        process.args(command.args()).envs(command.env());
+        process
+            .args(command.args())
+            .env_clear()
+            .envs(self.inherited())
+            .envs(command.env());
         let finished =
             tool::run(process, limit, timeout, "xcrun").map_err(|failure| match failure {
                 tool::Failure::Start(error) => self.started(&error),

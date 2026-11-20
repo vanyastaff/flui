@@ -13,11 +13,14 @@
 //!   reads.
 //! - **Process.** [`IosSimulatorLane::start`] installs the app when asked and starts it afresh
 //!   with a Unix socket in a private directory of the host as its endpoint, which the simulator
-//!   shares, and its token, both as `SIMCTL_CHILD_` launch values (ADR-0239); the lane ends the
-//!   app with `simctl terminate` when it ends, since an iOS app does not exit when its driver
-//!   goes, and removes the socket's directory after it.
+//!   shares, and its token, both as `SIMCTL_CHILD_` launch values (ADR-0239). When the lane ends
+//!   it ends the app with `simctl terminate`, since an iOS app does not exit when its driver goes,
+//!   once `launchctl list` inside the simulator shows the process `simctl launch` started still
+//!   running, and removes the socket's directory after it.
 //! - **Which simulator.** One named by its UDID ([`device::UDID_ENV`]), listed, available, booted
-//!   and running iOS ([`device::choose`]); the lane boots and creates none.
+//!   and running iOS ([`device::choose`]); the lane boots and creates none. A session holds its
+//!   simulator ([`SimulatorLock`]), since the launch and the terminate name the app by its bundle
+//!   identifier and would end another session's copy.
 //!
 //! Everything here is host code: it builds and its tables run on every host, against a scripted
 //! Simulator (`testing::ScriptedXcrun`) as well as the host's `xcrun` ([`xcrun::HostXcrun`]),
@@ -126,16 +129,106 @@ impl SimulatorApp {
     }
 }
 
-/// Where a started app's agent listens, the token it takes and its process.
+/// Where a started app's agent listens, the token it takes and its process. Its [`Debug`] form
+/// leaves the token out.
 #[cfg(unix)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Started {
     /// The Unix socket the app binds, on the host's file system.
     pub endpoint: crate::Endpoint,
     /// The launch token.
     pub token: String,
-    /// The app's process id in the simulator, when `simctl launch` printed it.
+    /// The app's process id, when `simctl launch` printed it.
     pub pid: Option<u32>,
+}
+
+#[cfg(unix)]
+impl std::fmt::Debug for Started {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Started")
+            .field("endpoint", &self.endpoint)
+            .field("token", &"<redacted>")
+            .field("pid", &self.pid)
+            .finish()
+    }
+}
+
+/// The lock file's name for the simulator `udid`.
+fn lock_name(udid: &Udid) -> String {
+    format!("flui-driver-simulator-{udid}.lock")
+}
+
+/// One session's hold on a simulator: an OS file lock named by its UDID, released when it is
+/// dropped or its process ends, however it ends.
+///
+/// A session starts its app with `simctl launch --terminate-running-process` and ends it with
+/// `simctl terminate`, both by bundle identifier, so two sessions on one simulator would end each
+/// other's copy: the second is refused instead.
+#[derive(Debug)]
+#[must_use = "the simulator is held only while the lock is"]
+pub struct SimulatorLock {
+    udid: Udid,
+    file: std::fs::File,
+}
+
+impl SimulatorLock {
+    /// Hold the simulator `udid`, its lock file in this user's private directory, the one the
+    /// OS-input lock lives in.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::acquire_in`]; [`Error::Io`] when the private directory cannot be made.
+    pub fn acquire(udid: &Udid) -> Result<Self> {
+        Self::acquire_in(&crate::os_input::private_lock_dir()?, udid)
+    }
+
+    /// Hold the simulator `udid`, its lock file in `dir`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Busy`] while another session holds it; [`Error::Io`] when the lock file cannot be
+    /// opened or the OS fails the lock.
+    pub fn acquire_in(dir: &std::path::Path, udid: &Udid) -> Result<Self> {
+        let path = dir.join(lock_name(udid));
+        let file = crate::os_input::lock_file(&path, || {
+            format!(
+                "another session drives simulator {udid} ({}); one runs on a simulator at a time",
+                path.display()
+            )
+        })?;
+        Ok(Self {
+            udid: udid.clone(),
+            file,
+        })
+    }
+
+    /// The simulator held.
+    #[must_use]
+    pub fn udid(&self) -> &Udid {
+        &self.udid
+    }
+}
+
+impl Drop for SimulatorLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+/// An app the lane started, as far as it knows its process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    expect(
+        dead_code,
+        reason = "only a Unix host starts an app, whose socket the simulator reaches"
+    )
+)]
+enum StartedApp {
+    /// The process `simctl launch` printed.
+    Process(u32),
+    /// A launch that printed no process, or timed out and may have started one.
+    Unnamed,
 }
 
 /// The iOS Simulator lane for one app on one simulator: see the [module docs](self).
@@ -144,16 +237,19 @@ pub struct IosSimulatorLane {
     simulator: Simulator,
     xcode: Option<XcodeVersion>,
     bundle: String,
-    /// Whether the lane started the app, which it ends at its end.
-    app_started: bool,
+    /// The app the lane started, which it ends at its end.
+    started: Option<StartedApp>,
     /// The private directory the app's socket lives in, removed once the app was ended.
     #[cfg(unix)]
     endpoint: Option<crate::launch::EndpointPlace>,
+    /// The hold on the simulator, released after the app was ended: the last field, so it drops
+    /// last.
+    _lock: SimulatorLock,
 }
 
 impl IosSimulatorLane {
-    /// The lane for the app `bundle` on the simulator `udid`, which `xcrun` reaches: the simulator
-    /// listed, available, booted and running iOS, and the Xcode it runs under read.
+    /// The lane for the app `bundle` on the simulator `lock` holds, which `xcrun` reaches: the
+    /// simulator listed, available, booted and running iOS, and the Xcode it runs under read.
     ///
     /// # Errors
     ///
@@ -161,7 +257,7 @@ impl IosSimulatorLane {
     /// Simulator's failure to list its devices, unavailable when the host has no Xcode.
     pub fn connect(
         mut xcrun: Box<dyn Xcrun>,
-        udid: &Udid,
+        lock: SimulatorLock,
         bundle: impl Into<String>,
     ) -> Result<Self> {
         let bundle = bundle.into();
@@ -173,7 +269,7 @@ impl IosSimulatorLane {
             SHORT,
         )?;
         let simulators = device::parse_devices(&listing.stdout).map_err(xcrun::lane_error)?;
-        let simulator = device::choose(&simulators, udid)?.clone();
+        let simulator = device::choose(&simulators, lock.udid())?.clone();
         // The version only names the Xcode in a refusal: a host that does not give it still runs
         // the lane, and its refusals say the version is unknown.
         let xcode = checked(xcrun.as_mut(), &XcrunCommand::XcodeVersion, SMALL, SHORT)
@@ -184,9 +280,10 @@ impl IosSimulatorLane {
             simulator,
             xcode,
             bundle,
-            app_started: false,
+            started: None,
             #[cfg(unix)]
             endpoint: None,
+            _lock: lock,
         })
     }
 
@@ -248,13 +345,54 @@ impl IosSimulatorLane {
         };
         // From here on the app may run, a launch that timed out included: the lane ends it at
         // its end whatever comes next.
-        self.app_started = true;
+        self.started = Some(StartedApp::Unnamed);
         let launched = checked(self.xcrun.as_mut(), &launch, SMALL, LAUNCH)?;
+        let pid = device::parse_launched(&launched.text(), &self.bundle);
+        if let Some(pid) = pid {
+            self.started = Some(StartedApp::Process(pid));
+        }
         Ok(Started {
             endpoint: crate::Endpoint::Local(address),
             token,
-            pid: device::parse_launched(&launched.text(), &self.bundle),
+            pid,
         })
+    }
+
+    /// End the app the lane started, when it still runs: its copy with the process id `simctl
+    /// launch` printed, or any copy when it printed none. An app that already exited is no
+    /// failure; one the lane could not end is logged, since no caller is left to tell.
+    fn end_app(&mut self, app: StartedApp) {
+        let udid = self.simulator.udid.clone();
+        let services = XcrunCommand::ListServices { udid: udid.clone() };
+        let running = checked(self.xcrun.as_mut(), &services, device::MAX_SERVICES, SHORT)
+            .map(|reply| device::parse_running(&reply.text(), &self.bundle));
+        let runs = match (&running, app) {
+            (Ok(pids), StartedApp::Process(pid)) => pids.contains(&pid),
+            (Ok(pids), StartedApp::Unnamed) => !pids.is_empty(),
+            // Unknown: ended all the same.
+            (Err(_), _) => true,
+        };
+        if !runs {
+            return;
+        }
+        let terminate = XcrunCommand::Terminate {
+            udid: udid.clone(),
+            bundle: self.bundle.clone(),
+        };
+        let Err(error) = checked(self.xcrun.as_mut(), &terminate, SMALL, SHORT) else {
+            return;
+        };
+        match running {
+            Ok(_) => tracing::error!(
+                lane = LANE,
+                "the app the lane started still runs on simulator {udid}: {error}"
+            ),
+            Err(listing) => tracing::error!(
+                lane = LANE,
+                "the app the lane started may still run on simulator {udid}: {error}; its \
+                 services could not be listed to tell: {listing}"
+            ),
+        }
     }
 
     /// The refusal of every input event: see [`xcode::hid_refusal`].
@@ -347,19 +485,9 @@ impl Lane for IosSimulatorLane {
 impl Drop for IosSimulatorLane {
     fn drop(&mut self) {
         // An iOS app does not exit when its driver's connection closes: the lane ends it, before
-        // its socket's directory goes with the lane's fields.
-        if self.app_started {
-            let terminate = XcrunCommand::Terminate {
-                udid: self.simulator.udid.clone(),
-                bundle: self.bundle.clone(),
-            };
-            if let Err(error) = checked(self.xcrun.as_mut(), &terminate, SMALL, SHORT) {
-                tracing::error!(
-                    lane = LANE,
-                    "the app the lane started may still run on simulator {}: {error}",
-                    self.simulator.udid
-                );
-            }
+        // its socket's directory and the hold on the simulator go with the lane's fields.
+        if let Some(pid) = self.started.take() {
+            self.end_app(pid);
         }
     }
 }
@@ -370,7 +498,7 @@ impl std::fmt::Debug for IosSimulatorLane {
             .field("simulator", &self.simulator)
             .field("xcode", &self.xcode)
             .field("bundle", &self.bundle)
-            .field("app_started", &self.app_started)
+            .field("started", &self.started)
             .finish_non_exhaustive()
     }
 }
@@ -390,14 +518,15 @@ pub fn host_simulator() -> Result<(xcrun::HostXcrun, Udid)> {
     Ok((xcrun::HostXcrun::new(), Udid::try_new(named.trim())?))
 }
 
-/// Start `app` on the simulator `udid` that `xcrun` reaches and drive it: the lane connected, the
-/// app started afresh, the driver attached to its socket within `connect_wait`, the lane attached
-/// to the driver. The app ends with the session.
+/// Start `app` on the simulator `udid` that `xcrun` reaches and drive it: the simulator held
+/// ([`SimulatorLock::acquire`]), the lane connected, the app started afresh, the driver attached
+/// to its socket within `connect_wait`, the lane attached to the driver. The app ends with the
+/// session.
 ///
 /// # Errors
 ///
-/// As [`IosSimulatorLane::connect`] and [`IosSimulatorLane::start`]; the app's agent not
-/// answering in time.
+/// As [`SimulatorLock::acquire`], [`IosSimulatorLane::connect`] and [`IosSimulatorLane::start`];
+/// the app's agent not answering in time.
 #[cfg(unix)]
 pub fn launch(
     xcrun: Box<dyn Xcrun>,
@@ -405,7 +534,8 @@ pub fn launch(
     app: &SimulatorApp,
     connect_wait: Duration,
 ) -> Result<crate::Driver> {
-    let mut lane = IosSimulatorLane::connect(xcrun, udid, app.bundle())?;
+    let lock = SimulatorLock::acquire(udid)?;
+    let mut lane = IosSimulatorLane::connect(xcrun, lock, app.bundle())?;
     let started = lane.start(app)?;
     let driver = crate::Driver::attach(&started.endpoint, &started.token, connect_wait)?;
     driver.with_lane(lane)
