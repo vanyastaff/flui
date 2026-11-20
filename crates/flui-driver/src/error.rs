@@ -3,6 +3,7 @@
 //! taking the desktop back, an expectation that never held).
 
 use std::io;
+use std::path::{Path, PathBuf};
 
 use flui_protocol::act::{ActionabilityCheck, Effect, EffectKind};
 use flui_protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
@@ -267,6 +268,17 @@ pub enum Error {
         /// What was last seen.
         actual: String,
     },
+    /// A file the driver reads (a trace, a baseline image, a native recording) is not what it
+    /// should be: past a bound, of a newer format, or malformed.
+    #[error("{}{}: {message}", path.display(), line.map_or_default(|line| format!(", line {line}")))]
+    Unreadable {
+        /// The file.
+        path: PathBuf,
+        /// The 1-based line that is not, when the file is read by lines.
+        line: Option<u64>,
+        /// What is wrong, for people.
+        message: String,
+    },
     /// The driver's own input or output failed: starting the app, its endpoint, a file.
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -422,6 +434,24 @@ impl Error {
         }
     }
 
+    /// The file at `path` is not what the driver reads.
+    pub(crate) fn unreadable(path: &Path, message: impl Into<String>) -> Self {
+        Self::Unreadable {
+            path: path.to_owned(),
+            line: None,
+            message: message.into(),
+        }
+    }
+
+    /// Line `line` of the file at `path` is not what the driver reads.
+    pub(crate) fn unreadable_line(path: &Path, line: u64, message: impl Into<String>) -> Self {
+        Self::Unreadable {
+            path: path.to_owned(),
+            line: Some(line),
+            message: message.into(),
+        }
+    }
+
     /// The app's process went: `exit` is its exit code when the OS reported one.
     pub(crate) fn process_gone(message: impl Into<String>, exit: Option<i32>) -> Self {
         Self::gone(HandleKind::Process, None, exit, message)
@@ -456,6 +486,7 @@ impl Error {
             | Self::ReleaseFailed { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
+            | Self::Unreadable { .. }
             | Self::Io(_) => return None,
         })
     }
@@ -490,6 +521,7 @@ impl Error {
             | Self::ReleaseFailed { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
+            | Self::Unreadable { .. }
             | Self::Io(_) => Retry::Never,
         }
     }

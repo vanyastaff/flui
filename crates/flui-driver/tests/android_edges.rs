@@ -25,7 +25,7 @@ use flui_driver::{Error, Isolation};
 
 use crate::android_lane::{
     FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOW, abilities, answer_syncs, capability,
-    connected, inputs, raw_capture, scripted, scripted_with, tap,
+    connected, inputs, png_of, raw_capture, scripted, scripted_with, tap,
 };
 
 const AT: DevicePoint = DevicePoint::new(300, 600);
@@ -141,25 +141,14 @@ fn a_raw_header_is_read_word_by_word_and_a_side_of_exactly_the_bound_is_taken() 
 }
 
 #[test]
-fn a_png_past_the_bound_is_refused_before_it_is_decoded() {
-    let mut at_bound = Vec::new();
-    image::RgbaImage::new(screencap::MAX_SIDE, 1)
-        .write_to(
-            &mut std::io::Cursor::new(&mut at_bound),
-            image::ImageFormat::Png,
-        )
-        .expect("a PNG");
+fn a_png_past_the_bound_is_refused() {
+    let line = |length: u32| vec![0_u8; length as usize * 4];
+    let at_bound = png_of(screencap::MAX_SIDE, 1, &line(screencap::MAX_SIDE));
     assert!(
         screencap::parse_png(&at_bound).is_ok(),
         "a side of exactly the bound"
     );
-    let mut tall_at_bound = Vec::new();
-    image::RgbaImage::new(1, screencap::MAX_SIDE)
-        .write_to(
-            &mut std::io::Cursor::new(&mut tall_at_bound),
-            image::ImageFormat::Png,
-        )
-        .expect("a PNG");
+    let tall_at_bound = png_of(1, screencap::MAX_SIDE, &line(screencap::MAX_SIDE));
     assert!(
         screencap::parse_png(&tall_at_bound).is_ok(),
         "a height of exactly the bound"
@@ -175,18 +164,9 @@ fn a_png_past_the_bound_is_refused_before_it_is_decoded() {
         screencap::parse_raw(header),
         Ok(Raw::OtherFormat(0x0001_0001))
     );
-    let mut png = Vec::new();
-    image::RgbaImage::new(screencap::MAX_SIDE + 1, 1)
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .expect("a PNG");
-    assert!(screencap::parse_png(&png).is_err());
-    let mut tall = Vec::new();
-    image::RgbaImage::new(1, screencap::MAX_SIDE + 1)
-        .write_to(
-            &mut std::io::Cursor::new(&mut tall),
-            image::ImageFormat::Png,
-        )
-        .expect("a PNG");
+    let wide = png_of(screencap::MAX_SIDE + 1, 1, &line(screencap::MAX_SIDE + 1));
+    assert!(screencap::parse_png(&wide).is_err());
+    let tall = png_of(1, screencap::MAX_SIDE + 1, &line(screencap::MAX_SIDE + 1));
     assert!(screencap::parse_png(&tall).is_err());
 }
 
@@ -204,12 +184,15 @@ fn a_window_is_cut_only_when_it_lies_inside_the_capture() {
     };
     let whole =
         screencap::crop(width, height, rgba.clone(), window(0, 0, 4, 3)).expect("the whole");
-    assert_eq!((whole.width, whole.height, whole.rgba.len()), (4, 3, 48));
+    assert_eq!(
+        (whole.width(), whole.height(), whole.rgba().len()),
+        (4, 3, 48)
+    );
     let inner = screencap::crop(width, height, rgba.clone(), window(0, 0, 2, 2)).expect("inside");
-    assert_eq!((inner.width, inner.height), (2, 2));
+    assert_eq!((inner.width(), inner.height()), (2, 2));
     let corner =
         screencap::crop(width, height, rgba.clone(), window(3, 2, 4, 3)).expect("a corner");
-    assert_eq!(corner.rgba, rgba[44..48].to_vec());
+    assert_eq!(corner.rgba(), &rgba[44..48]);
     for refused in [
         window(-1, 0, 2, 2),
         window(0, -1, 2, 2),

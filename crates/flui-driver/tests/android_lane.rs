@@ -460,6 +460,18 @@ fn the_dump_gives_the_rotation_and_the_apps_surface() {
 }
 
 /// A raw capture of `width` by `height` pixels in `format`, its header `header` bytes long.
+/// A `width` by `height` PNG of `rgba`, four bytes a pixel.
+pub(crate) fn png_of(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("a PNG header");
+    writer.write_image_data(rgba).expect("the PNG's pixels");
+    writer.finish().expect("a PNG");
+    bytes
+}
+
 pub(crate) fn raw_capture(width: u32, height: u32, format: u32, header: usize) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(width.to_le_bytes());
@@ -514,14 +526,10 @@ fn a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies() {
 
 #[test]
 fn a_png_capture_decodes_and_a_window_is_cut_from_it() {
-    let mut png = Vec::new();
     let pixels: Vec<u8> = (0..4 * 3)
         .flat_map(|index| [u8::try_from(index).expect("small"), 0, 0, 255])
         .collect();
-    image::RgbaImage::from_raw(4, 3, pixels.clone())
-        .expect("an image")
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .expect("a PNG");
+    let png = png_of(4, 3, &pixels);
     let (width, height, rgba) = screencap::parse_png(&png).expect("the PNG decodes");
     assert_eq!((width, height), (4, 3));
     assert_eq!(rgba, pixels);
@@ -533,7 +541,7 @@ fn a_png_capture_decodes_and_a_window_is_cut_from_it() {
         bottom: 3,
     };
     let cut = screencap::crop(width, height, rgba.clone(), window).expect("inside");
-    assert_eq!((cut.width, cut.height), (2, 2));
+    assert_eq!((cut.width(), cut.height()), (2, 2));
     assert_eq!(cut.pixel(0, 0), Some([5, 0, 0, 255]));
     assert_eq!(cut.pixel(1, 1), Some([10, 0, 0, 255]));
     let past = Bounds { right: 5, ..window };
@@ -1350,7 +1358,7 @@ fn the_window_is_captured_from_screencap_and_cut_to_the_surface() {
     let adb = scripted(true, true).reply("exec-out screencap", AdbReply::new(0, raw));
     let mut lane = connected(&adb);
     let capture = lane.capture_window(&placement()).expect("a capture");
-    assert_eq!((capture.width, capture.height), (1080, 2340));
+    assert_eq!((capture.width(), capture.height()), (1080, 2340));
     // Its top-left pixel is the display's pixel 60 rows down.
     let index = 60 * 1080;
     assert_eq!(
@@ -1362,10 +1370,7 @@ fn the_window_is_captured_from_screencap_and_cut_to_the_surface() {
 
 #[test]
 fn a_capture_in_another_pixel_format_is_taken_again_as_a_png() {
-    let mut png = Vec::new();
-    image::RgbaImage::from_pixel(1080, 2400, image::Rgba([9, 8, 7, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .expect("a PNG");
+    let png = png_of(1080, 2400, &[9, 8, 7, 255].repeat(1080 * 2400));
     let adb = scripted(true, true)
         .reply("exec-out screencap -p", AdbReply::new(0, png))
         .reply(

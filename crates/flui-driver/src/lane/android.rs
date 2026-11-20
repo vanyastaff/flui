@@ -56,7 +56,8 @@ use self::safety::{Display, Refusal};
 use self::uiautomator::{Bounds, UiDump};
 use crate::coordinates::{DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
-use crate::lane::{ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity};
+use crate::lane::{ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+use crate::pixels::Image;
 use crate::steps::OsEvent;
 
 /// The lane's name, which its refusals and failures carry.
@@ -666,7 +667,7 @@ impl Lane for AndroidLane {
         crate::lane::release_outcome([contact, pen, keys])
     }
 
-    fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+    fn capture_window(&mut self, placement: &Placement) -> Result<Image> {
         let screen = self.find(placement)?;
         let capture = Run {
             printed: Printed::Data,

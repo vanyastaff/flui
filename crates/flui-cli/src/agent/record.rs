@@ -11,10 +11,8 @@
 //! came to, since the app holds a recording that ended by itself until it is named.
 //!
 //! A recording that holds the native layer is also sent each backend stream's lines as
-//! `record_native` events; [`native::NativeFiles`] writes them, one native recording per
+//! `record_native` events; the driver's [`NativeFiles`] writes them, one native recording per
 //! stream.
-
-pub(crate) mod native;
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
@@ -27,7 +25,7 @@ use flui_protocol::{
     record::RecordSummary, record::Recording,
 };
 
-use self::native::NativeFiles;
+use flui_driver::trace::native::NativeFiles;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 

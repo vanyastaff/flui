@@ -4,7 +4,7 @@
 //! `flui mcp` that drives the app. The recording goes to the named file, or to stdout for `-`;
 //! what the command says goes to stderr either way. With `--native <dir>` the recording holds
 //! the native layer too, and each backend stream goes to `<dir>/<n>.jsonl` beside
-//! `<dir>/index.json` ([`crate::agent::record::native`]).
+//! `<dir>/index.json` ([`flui_driver::trace::native`]).
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -18,10 +18,10 @@ use flui_protocol::{record::RecordLayer, record::RecordParams, tree::WindowId};
 
 use crate::agent::Credentials;
 use crate::agent::client::{Connection, Failure};
-use crate::agent::record::native::{FullBound, NativeFiles, WrittenStream};
 use crate::agent::record::{Ending, RecordFailure, Recorded, record};
 use crate::error::{CliError, CliResult};
 use crate::ui;
+use flui_driver::trace::native::{FullBound, NativeFiles, WrittenStream};
 
 /// How long the command waits for the app to accept it: it may still be building.
 const CONNECT_WAIT: Duration = Duration::from_secs(10);

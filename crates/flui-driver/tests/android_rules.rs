@@ -208,8 +208,8 @@ fn a_capture_is_read_and_cut_in_the_buffer_it_came_in() {
         .flat_map(|&index| [index, 1, 2, 3])
         .collect();
     let cut = screencap::crop(width, height, rgba, window).expect("inside");
-    assert_eq!(cut.rgba.as_ptr(), address, "the window was cut in place");
-    assert_eq!(cut.rgba, expected);
+    assert_eq!(cut.rgba().as_ptr(), address, "the window was cut in place");
+    assert_eq!(cut.rgba(), expected.as_slice());
 }
 
 #[test]

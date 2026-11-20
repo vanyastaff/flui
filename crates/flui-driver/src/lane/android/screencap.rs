@@ -5,12 +5,13 @@
 //! (width, height, pixel format, and from Android 9 the colour space) and the pixels, four bytes
 //! each. The lane reads the raw form first, which needs no encoding on the device and no decoding
 //! here, and takes it only in a format it knows as four bytes red first (`RGBA_8888`,
-//! `RGBX_8888`); any other format is captured again as a PNG (`screencap -p`), decoded within the
-//! same bounds. The header is checked against [`MAX_SIDE`] and the bytes that came before any
-//! pixel is read.
+//! `RGBX_8888`); any other format is captured again as a PNG (`screencap -p`), decoded by the
+//! driver's own PNG reader (`pixels::codec`) within its byte bound and then held to [`MAX_SIDE`].
+//! The raw header is checked against [`MAX_SIDE`] and the bytes that came before any pixel is
+//! read.
 
 use super::uiautomator::Bounds;
-use crate::lane::OsCapture;
+use crate::pixels::Image;
 
 /// The longest side of a display the lane reads, in pixels.
 pub const MAX_SIDE: u32 = 8192;
@@ -101,19 +102,15 @@ pub fn parse_raw(mut bytes: Vec<u8>) -> Result<Raw, String> {
 ///
 /// Why it is none: no PNG, a side past [`MAX_SIDE`], a decoding failure.
 pub fn parse_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
-    let mut reader =
-        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_SIDE);
-    limits.max_image_height = Some(MAX_SIDE);
-    limits.max_alloc = Some(MAX_CAPTURE as u64 * 2);
-    reader.limits(limits);
-    let decoded = reader
-        .decode()
-        .map_err(|error| format!("the PNG capture does not decode: {error}"))?
-        .into_rgba8();
-    let (width, height) = decoded.dimensions();
-    Ok((width, height, decoded.into_raw()))
+    let decoded = crate::pixels::codec::decode(bytes)
+        .map_err(|why| format!("the PNG capture does not decode: {why}"))?;
+    let (width, height) = (decoded.width(), decoded.height());
+    if width > MAX_SIDE || height > MAX_SIDE {
+        return Err(format!(
+            "a PNG capture of {width} x {height} pixels is past {MAX_SIDE} on a side"
+        ));
+    }
+    Ok((width, height, decoded.into_rgba()))
 }
 
 /// The part of a `width` by `height` capture of `rgba` that `window` covers, cut in the same
@@ -122,12 +119,7 @@ pub fn parse_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 /// # Errors
 ///
 /// When the window is empty or reaches past the capture.
-pub fn crop(
-    width: u32,
-    height: u32,
-    mut rgba: Vec<u8>,
-    window: Bounds,
-) -> Result<OsCapture, String> {
+pub fn crop(width: u32, height: u32, mut rgba: Vec<u8>, window: Bounds) -> Result<Image, String> {
     let inside = window.left >= 0
         && window.top >= 0
         && window.width() > 0
@@ -155,7 +147,7 @@ pub fn crop(
         rgba.copy_within(start..start + line, index * line);
     }
     rgba.truncate(cut_height * line);
-    OsCapture::try_new(
+    Image::try_new(
         u32::try_from(cut_width).unwrap_or_default(),
         u32::try_from(cut_height).unwrap_or_default(),
         rgba,
