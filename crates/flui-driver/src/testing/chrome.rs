@@ -34,6 +34,19 @@ pub fn resolve_chromedriver(
     chromedriver::resolve(chrome, cache, named, fetcher.as_ref())
 }
 
+/// Put `bytes` at `dir/name` as a fetch puts a cache file, on a filesystem that refuses hard links
+/// (FAT32, exFAT, some SMB and FUSE mounts): created in place, never over another's.
+///
+/// # Errors
+///
+/// As a fetch's write of the cache: [`crate::Error::Lane`] marked as a host that cannot run the
+/// lane when the cache cannot be written or another fetch's file differs.
+pub fn place_without_links(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    chromedriver::place(dir, name, bytes, false, |_, _| {
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    })
+}
+
 /// The Chrome for Testing name of this host's platform, which a stand-in serves its archive under.
 #[must_use]
 pub fn platform() -> Option<&'static str> {

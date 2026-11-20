@@ -56,7 +56,7 @@ web-time = { workspace = true, optional = true }
 # codec `image` already brings into the workspace, without `image`'s other formats.
 png = "0.18"
 # A trace's evidence is named by the SHA-256 of its bytes, so a capture taken twice is kept once;
-# the Chrome lane records a fetched ChromeDriver's and its archive's, and checks a kept one's
+# the Chrome lane records a fetched ChromeDriver's, and checks a kept one's
 # before it runs.
 sha2 = { workspace = true }
 # The Chrome lane (`chrome`): the BiDi WebSocket to a ChromeDriver on the loopback, so the client

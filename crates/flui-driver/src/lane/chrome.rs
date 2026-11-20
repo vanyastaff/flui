@@ -509,9 +509,10 @@ pub enum ChromeDriverSource {
     Installed,
     /// This file, whatever the environment names.
     Path(PathBuf),
-    /// As [`Self::Installed`], and on a miss the ChromeDriver of the installed Chrome's exact
-    /// version fetched over HTTPS from Chrome for Testing into the cache, the archive's and the
-    /// binary's SHA-256 recorded beside it.
+    /// As [`Self::Installed`], and on a miss the ChromeDriver fetched over HTTPS from Chrome for
+    /// Testing into the cache: the installed Chrome's version when it is published, else the newest
+    /// release of the same build (`major.minor.build`), kept under the installed version, with the
+    /// binary's SHA-256 and the version fetched recorded beside it.
     FetchAllowed,
 }
 

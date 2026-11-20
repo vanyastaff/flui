@@ -51,6 +51,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
   `may_have_run`, never not run.
+- **A person's interruption followed by a failed release is cannot-verify, the held input
+  named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
+  that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
+  be read from it. A release that then fails does not turn that into a failure of the app, which
+  did nothing wrong; nor may it go unsaid, since input stays down on the person's desktop.
+  `send_guarded` answers `Error::ReleaseFailed` with the keys, buttons and contacts still held in
+  `held` and the interruption as `first`, from which `Error::is_cannot_verify` and
+  `Error::effect` answer: the report says cannot-verify, and the error says what to release by
+  hand. The same holds for any first failure: a timed-out act stays `may_have_run`.
 - **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
   `Lane::check` over the whole sequence before it arms the guard: a key a lane has no code for, a
   device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is

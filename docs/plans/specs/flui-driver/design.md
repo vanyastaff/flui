@@ -908,8 +908,10 @@ enforced, not just intended.
   fetch (`ChromeDriverSource::FetchAllowed`): by default a host without `CHROMEDRIVER` (or the
   directory `CHROMEWEBDRIVER` names) and without a cached copy cannot run the lane, with the
   install hint, which is what `--offline` means. A fetch is HTTPS alone, for the installed
-  Chrome's exact version, and records the archive's and the binary's SHA-256 beside the binary; a
-  cached copy runs only while its hash matches that record. A test in `flui-driver` lists the crate's resolved
+  Chrome's version, or the newest release of its build when that patch is not published, and
+  records the binary's SHA-256 and the version fetched beside the binary; a cached copy runs only
+  while its hash matches that record, which guards against a torn or replaced file, not against
+  someone who can write the cache. A test in `flui-driver` lists the crate's resolved
   dependencies and fails on any other network client (`reqwest`, `hyper` clients, telemetry SDKs).
   Sockets are opened only to loopback, to the `adb`-forwarded port and to the BiDi WebSocket of a
   local ChromeDriver.

@@ -996,9 +996,11 @@ graph LR
     directory `CHROMEWEBDRIVER` names (GitHub's runners), or a cached copy whose SHA-256 matches
     the record beside it; nothing else, and no network: a miss is a lane the host cannot run, with
     the install hint. `ChromeDriverSource::FetchAllowed` fetches on a miss, over HTTPS alone, for
-    Chrome's exact version, recording the archive's and the binary's SHA-256; each file is staged
-    in a file of its own and linked into place without replacing another fetch's, which a loser
-    takes once its bytes match. A port 0 in ChromeDriver's startup line is refused.
+    Chrome's version, or the newest release of its build when that patch is not published,
+    recording the binary's SHA-256 and the version fetched; each file is staged in a file of its
+    own and linked into place without replacing another fetch's (created in place where the
+    filesystem refuses links), which a loser takes once its bytes match; a cache that cannot be
+    written is a lane the host cannot run. A port 0 in ChromeDriver's startup line is refused.
   - Every event is one `input.performActions` command of one action of zero duration, so a move
     is a single step and a pause the lane's own wait; text is typed a grapheme cluster at a time,
     the unit WebDriver's key action takes.

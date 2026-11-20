@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use flui_driver::Error;
 use flui_driver::testing::chrome::{
     CONNECTION_DEADLINE, Chrome, MAX_HEAD, PageServer, archive_url, chrome_args, executable_name,
-    is_version, newest_version, page_file, platform, reported_port, resolve_chromedriver,
-    verify_kept,
+    is_version, newest_version, page_file, place_without_links, platform, reported_port,
+    resolve_chromedriver, verify_kept,
 };
 
 /// The address the server bound, as a `Host` names it.
@@ -313,6 +313,10 @@ fn a_chromedriver_is_fetched_with_its_hashes_and_an_unpublished_patch_takes_its_
             b"157.0.8103.79\n".to_vec(),
         ),
         (
+            "/latest/LATEST_RELEASE_157.0.8104".to_owned(),
+            b"157.0.8103.79\n".to_vec(),
+        ),
+        (
             format!(
                 "/archives/158.0.1.1/{}/chromedriver-{}.zip",
                 platform().expect("a platform"),
@@ -333,7 +337,7 @@ fn a_chromedriver_is_fetched_with_its_hashes_and_an_unpublished_patch_takes_its_
     )
     .expect("the hashes are recorded beside it");
     assert!(
-        record.starts_with("archive ") && record.contains("\nbinary "),
+        record.starts_with("version 157.0.8103.79\nbinary "),
         "{record}"
     );
     verify_kept(&cache.path().join("157.0.8103.79")).expect("the kept one matches its record");
@@ -342,6 +346,18 @@ fn a_chromedriver_is_fetched_with_its_hashes_and_an_unpublished_patch_takes_its_
     assert_eq!(
         std::fs::read(&fallback).expect("the executable"),
         b"driver 79"
+    );
+    let fallback_record = std::fs::read_to_string(fallback.with_file_name("chromedriver.sha256"))
+        .expect("its record");
+    assert!(
+        fallback_record.starts_with("version 157.0.8103.79\n"),
+        "the record names the version fetched, kept under the installed one: {fallback_record}"
+    );
+    let other_build =
+        resolve_chromedriver(&chrome("157.0.8104.5"), cache.path(), None, Some(&root));
+    assert!(
+        matches!(&other_build, Err(Error::Lane { unavailable: true, message, .. }) if message.contains("is named")),
+        "a newest release of another build is refused: {other_build:?}"
     );
     let staged: Vec<String> = std::fs::read_dir(fallback.parent().expect("its directory"))
         .expect("the cache")
@@ -464,4 +480,41 @@ fn parallel_fetches_leave_one_whole_chromedriver() {
         assert_eq!(std::fs::read(&kept).expect("the executable"), binary);
     }
     verify_kept(&cache.path().join("157.0.8103.79")).expect("the binary matches its record");
+}
+
+/// On a filesystem that refuses hard links, a cache file is created in place, never over the one
+/// another fetch put there, and a cache that cannot be written is a host that cannot run the lane,
+/// not an I/O failure.
+#[test]
+fn where_links_are_refused_a_cache_file_is_created_in_place() {
+    let cache = tempfile::tempdir().expect("a temporary directory");
+    place_without_links(cache.path(), "chromedriver.sha256", b"binary 1\n")
+        .expect("created in place");
+    assert_eq!(
+        std::fs::read(cache.path().join("chromedriver.sha256")).expect("the file"),
+        b"binary 1\n"
+    );
+    let staged: Vec<String> = std::fs::read_dir(cache.path())
+        .expect("the cache")
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".partial"))
+        .collect();
+    assert!(staged.is_empty(), "nothing staged is left: {staged:?}");
+    place_without_links(cache.path(), "chromedriver.sha256", b"binary 1\n")
+        .expect("the same bytes put first are taken");
+    let differs = place_without_links(cache.path(), "chromedriver.sha256", b"binary 2\n");
+    assert!(
+        matches!(&differs, Err(Error::Lane { unavailable: true, message, .. }) if message.contains("differs")),
+        "{differs:?}"
+    );
+    assert_eq!(
+        std::fs::read(cache.path().join("chromedriver.sha256")).expect("the file"),
+        b"binary 1\n",
+        "the file put first is never overwritten"
+    );
+    let unusable = place_without_links(&cache.path().join("missing"), "chromedriver", b"x");
+    assert!(
+        matches!(&unusable, Err(Error::Lane { unavailable: true, message, .. }) if message.contains("unusable")),
+        "{unusable:?}"
+    );
 }

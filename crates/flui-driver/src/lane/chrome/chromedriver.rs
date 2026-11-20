@@ -7,13 +7,22 @@
 //! else the one a fetch kept in the cache for the installed Chrome's version, its SHA-256 checked
 //! against the one recorded beside it before it runs. Only a launch that allows it
 //! (`ChromeDriverSource::FetchAllowed`) fetches on a miss, over HTTPS alone, from the Chrome for
-//! Testing archives of Chrome's exact version, recording the archive's and the binary's SHA-256.
-//! Otherwise a miss is a lane the host cannot run, with the install hint. `FLUI_CHROME` names a
-//! Chrome other than the one installed in the usual place.
+//! Testing archives: the archive of the installed Chrome's version when it is published, else, as
+//! not every patch release is, the archive of the newest release of the same build
+//! (`major.minor.build`, which speaks the same protocol), kept under the installed version. The
+//! record beside it names the binary's SHA-256 and the version fetched. Otherwise a miss is a lane
+//! the host cannot run, with the install hint. `FLUI_CHROME` names a Chrome other than the one
+//! installed in the usual place.
+//!
+//! The hash record guards against a kept binary that is torn, truncated or replaced by mistake (an
+//! interrupted fetch, a disk fault, another tool's file of the same name): such a binary is never
+//! run. It does not guard against someone who can write the cache, who can rewrite the record
+//! with the binary; the cache is the user's own directory, as trusted as the user's other tools.
 //!
 //! The cache is written so that parallel fetches never tear it: each file is staged in a file of
-//! its own beside its place and linked there without replacing what another fetch put first,
-//! which the loser checks against its own hash and takes.
+//! its own beside its place and linked there without replacing what another fetch put first; where
+//! the filesystem refuses links, the file is created in place, never over another's. A fetch that
+//! finds a file put first takes it once it holds the same bytes.
 //!
 //! What ChromeDriver and the archives answer is untrusted: every body is read within a bound
 //! ([`MAX_ARCHIVE`], [`MAX_ANSWER`]), every request within a deadline, and the session's
@@ -314,46 +323,53 @@ pub fn archive_url(archives: &str, version: &str, platform: &str) -> String {
 }
 
 /// Fetch ChromeDriver for Chrome `version` on `platform` into `dir`, beside the record of the
-/// archive's and the binary's hashes. Not every patch release is published; the newest of the
-/// same build speaks the same protocol to it.
+/// binary's hash and the version fetched. The archive of `version` itself is taken when it is
+/// published; not every patch release is, and then the archive of the newest release of the same
+/// build (`major.minor.build`, which speaks the same protocol) is taken, kept under `version`.
 fn fetch_into(fetcher: &Fetcher, version: &str, platform: &str, dir: &Path) -> Result<()> {
     let agent = &fetcher.agent;
-    let archive = match get(
+    let (fetched, archive) = match get(
         agent,
         &archive_url(&fetcher.archives, version, platform),
         MAX_ARCHIVE,
     ) {
-        Ok(archive) => archive,
+        Ok(archive) => (version.to_owned(), archive),
         Err(Fetched::NotFound) => {
             let build = version.rsplit_once('.').map_or(version, |(build, _)| build);
             let latest = get(agent, &format!("{}_{build}", fetcher.latest_of_build), 64)
                 .map_err(|failure| fetch_failed(version, &failure.to_string()))?;
             let latest = String::from_utf8_lossy(&latest).trim().to_owned();
-            if !is_version(&latest) {
+            let same_build = latest
+                .rsplit_once('.')
+                .is_some_and(|(latest_build, _)| latest_build == build);
+            if !is_version(&latest) || !same_build {
                 return Err(fetch_failed(
                     version,
                     &format!("the newest release of build {build} is named {latest:?}"),
                 ));
             }
-            get(
+            let archive = get(
                 agent,
                 &archive_url(&fetcher.archives, &latest, platform),
                 MAX_ARCHIVE,
             )
-            .map_err(|failure| fetch_failed(version, &failure.to_string()))?
+            .map_err(|failure| fetch_failed(version, &failure.to_string()))?;
+            (latest, archive)
         }
         Err(failure) => return Err(fetch_failed(version, &failure.to_string())),
     };
     let binary = extract(&archive)?;
-    let record = format!(
-        "archive {}\nbinary {}\n",
-        sha256_hex(&archive),
-        sha256_hex(&binary)
-    );
-    std::fs::create_dir_all(dir)?;
+    let record = format!("version {fetched}\nbinary {}\n", sha256_hex(&binary));
+    let unusable = |error: std::io::Error| {
+        unavailable(format!(
+            "the ChromeDriver cache at {} is unusable: {error}; set CHROMEDRIVER",
+            dir.display()
+        ))
+    };
+    std::fs::create_dir_all(dir).map_err(unusable)?;
     // The record first: a binary is taken only beside a record that names its hash.
-    place(dir, RECORD, record.as_bytes(), false)?;
-    place(dir, executable_name(), &binary, true)?;
+    place(dir, RECORD, record.as_bytes(), false, hard_link)?;
+    place(dir, executable_name(), &binary, true, hard_link)?;
     verify_kept(dir)
 }
 
@@ -387,8 +403,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// # Errors
 ///
 /// [`Error::Lane`] marked as a host that cannot run the lane when the record is missing or
-/// malformed, or the binary's hash is not the one it names: a file torn, replaced or tampered
-/// with is never run.
+/// malformed, or the binary's hash is not the one it names: a file torn, truncated or replaced
+/// is never run.
 pub fn verify_kept(dir: &Path) -> Result<()> {
     let refused = |why: &str| {
         unavailable(format!(
@@ -427,54 +443,95 @@ fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// How a staged file is put in place: a hard link, which never replaces what is there.
+pub(crate) type Link = fn(&Path, &Path) -> std::io::Result<()>;
+
+fn hard_link(staged: &Path, target: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(staged, target)
+}
+
+/// How long a fetch waits for the file another fetch is writing in place, where links are refused.
+const WRITER_WAIT: Duration = Duration::from_secs(2);
+
 /// Put `bytes` at `dir/name` without replacing what is there: staged in a file of its own beside
-/// it, then linked into place. When another fetch put the file first, it is taken only if it holds
-/// the same bytes.
+/// it, then linked into place with `link`. Where the filesystem refuses links (FAT32, exFAT, some
+/// SMB and FUSE mounts), the file is created in place instead (`create_new`). When another fetch
+/// put the file first, it is taken only once it holds the same bytes.
 ///
 /// # Errors
 ///
-/// The write's failure; [`Error::Lane`] marked as a host that cannot run the lane when the file
-/// another fetch put there differs.
-fn place(dir: &Path, name: &str, bytes: &[u8], executable: bool) -> Result<()> {
+/// [`Error::Lane`] marked as a host that cannot run the lane when the cache cannot be written, or
+/// the file another fetch put there differs.
+pub(crate) fn place(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    executable: bool,
+    link: Link,
+) -> Result<()> {
     let target = dir.join(name);
+    let unusable = |error: std::io::Error| {
+        unavailable(format!(
+            "the ChromeDriver cache at {} is unusable: {error}; set CHROMEDRIVER",
+            dir.display()
+        ))
+    };
     let staged = dir.join(format!(
         ".{name}.{}-{}.partial",
         std::process::id(),
         crate::launch::random_hex(8)?
     ));
-    let written = (|| -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&staged)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        #[cfg(unix)]
-        if executable {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
-        }
-        #[cfg(not(unix))]
-        let _ = executable;
-        Ok(())
-    })();
-    let linked = written.and_then(|()| std::fs::hard_link(&staged, &target));
+    let written = write_new(&staged, bytes, executable);
+    let linked = written.and_then(|()| link(&staged, &target));
     let _ = std::fs::remove_file(&staged);
-    match linked {
+    let placed = match linked {
+        Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
+            // No link here: the file is written in place, never over another fetch's.
+            write_new(&target, bytes, executable)
+        }
+        other => other,
+    };
+    match placed {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let there = read_bounded(&target)?;
-            if there == bytes {
-                Ok(())
-            } else {
-                Err(unavailable(format!(
-                    "{} differs from what this fetch wrote; delete {}",
-                    target.display(),
-                    dir.display()
-                )))
-            }
+            same_bytes(&target, bytes, dir)
         }
-        Err(error) => Err(error.into()),
+        Err(error) => Err(unusable(error)),
+    }
+}
+
+/// Write `bytes` to a new file at `path` and sync it, executable when asked; an error when a file
+/// is there already.
+fn write_new(path: &Path, bytes: &[u8], executable: bool) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    if executable {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    #[cfg(not(unix))]
+    let _ = executable;
+    Ok(())
+}
+
+/// Whether the file another fetch put at `target` holds `bytes`, waiting up to [`WRITER_WAIT`]
+/// for one still being written in place.
+fn same_bytes(target: &Path, bytes: &[u8], dir: &Path) -> Result<()> {
+    let deadline = std::time::Instant::now() + WRITER_WAIT;
+    loop {
+        if read_bounded(target).is_ok_and(|there| there == bytes) {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(unavailable(format!(
+                "{} differs from what this fetch wrote; delete {}",
+                target.display(),
+                dir.display()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
