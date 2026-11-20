@@ -841,7 +841,7 @@ fn drawer_surface(
     // `SizedBox::width` (height passed through) would collapse to zero
     // height under that looseness. Forcing `f64::INFINITY` clamps to
     // whatever height Align's loose upper bound actually is (the slot's
-    // full, bounded height — Scaffold's own `get_size` already requires
+    // full, bounded height — Scaffold's own `size` already requires
     // bounded constraints from ITS parent, so this is never truly
     // unbounded) — a `SizedBox(height: f64::INFINITY)`; the
     // unbounded-height guard is skipped as a named

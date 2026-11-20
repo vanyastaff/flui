@@ -857,7 +857,7 @@ impl ChildOutcomes<'_, '_> {
 /// Logs a panic `perform_layout` raised and turns it into [`crate::error::RenderError::Poisoned`]
 /// for the node. The report runs tracing subscribers, so it is contained too.
 fn poisoned_by_panic(
-    debug_name: &'static str,
+    kind: &'static str,
     payload: Box<dyn std::any::Any + Send>,
     report: &'static str,
 ) -> crate::error::RenderError {
@@ -867,13 +867,13 @@ fn poisoned_by_panic(
         reason = "ADR-0287: a panic report runs tracing subscribers, contained"
     )]
     if let Err(reporting_payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tracing::error!(render_object = debug_name, panic_msg = msg, "{report}");
+        tracing::error!(render_object = kind, panic_msg = msg, "{report}");
     })) {
         // Reporting is secondary; do not retire its opaque failure or report it again.
         flui_foundation::panic::discard_payload(reporting_payload);
     }
     flui_foundation::panic::discard_payload(payload);
-    crate::error::RenderError::poisoned(debug_name, crate::error::PoisonPhase::Layout)
+    crate::error::RenderError::poisoned(kind, crate::error::PoisonPhase::Layout)
 }
 
 // ============================================================================
@@ -1252,7 +1252,7 @@ fn layout_subtree_borrowed_impl(
         // `perform_layout_raw` runs inside `catch_unwind` (symmetric with the leaf path's
         // `layout_leaf_only`), so a third-party panic surfaces as `RenderError::Poisoned` instead
         // of unwinding out of `layout_dirty_root`.
-        let debug_name = entry.render_object().debug_name();
+        let kind = entry.render_object().kind();
         // Every degradation counted from here to the end of this node's own
         // `perform_layout` happened inside this node's subtree (the walk is
         // depth-first and synchronous), which is what the flag below records.
@@ -1269,7 +1269,7 @@ fn layout_subtree_borrowed_impl(
             Ok(inner) => inner?,
             Err(payload) => {
                 return Err(poisoned_by_panic(
-                    debug_name,
+                    kind,
                     payload,
                     "perform_layout panicked in non-leaf path — surfacing as \
                      RenderError::Poisoned (symmetric with leaf-path \
@@ -1284,7 +1284,7 @@ fn layout_subtree_borrowed_impl(
         // Same protocol-generic geometry guards as layout_leaf_only.  Runtime
         // validation happens before state commit; the debug assertions are
         // debug-only contract checks.
-        <BoxProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
+        <BoxProtocol as Protocol>::validate_layout_output(kind, &constraints, &geometry)?;
         <BoxProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
         // Record whether this node's own pass read a stand-in, so a later
@@ -1647,7 +1647,7 @@ fn layout_sliver_subtree_borrowed_impl(
         );
         let erased: &mut dyn ErasedSliverLayoutContext = &mut ctx;
 
-        let debug_name = entry.render_object().debug_name();
+        let kind = entry.render_object().kind();
         // See the box twin: the delta over this call is this subtree's.
         let events_before = arena.degradation_count();
         let render_object = entry.render_object_mut();
@@ -1662,7 +1662,7 @@ fn layout_sliver_subtree_borrowed_impl(
             Ok(inner) => inner?,
             Err(payload) => {
                 return Err(poisoned_by_panic(
-                    debug_name,
+                    kind,
                     payload,
                     "perform_layout panicked in non-leaf sliver path — surfacing as \
                      RenderError::Poisoned",
@@ -1670,7 +1670,7 @@ fn layout_sliver_subtree_borrowed_impl(
             }
         };
 
-        <SliverProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
+        <SliverProtocol as Protocol>::validate_layout_output(kind, &constraints, &geometry)?;
         <SliverProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
         // See the box twin.

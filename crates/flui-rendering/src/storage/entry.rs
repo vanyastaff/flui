@@ -462,11 +462,11 @@ impl<P: Protocol> RenderEntry<P> {
         ProtocolGeometry<P>: Clone,
         ProtocolConstraints<P>: Clone,
     {
-        // Capture the debug name BEFORE the &mut reborrow -- a shared
+        // Capture the kind BEFORE the &mut reborrow -- a shared
         // borrow against `&*self.render_object` cannot coexist with the
         // &mut needed inside the unwind closure, so we read the name
         // upfront and let it outlive the closure.
-        let debug_name = self.render_object().debug_name();
+        let kind = self.render_object().kind();
 
         // SAFETY of AssertUnwindSafe: the render object's internal state
         // is opaque to us. If it panics, we treat the state as torn and
@@ -542,7 +542,7 @@ impl<P: Protocol> RenderEntry<P> {
                         if let Err(reporting_payload) =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 tracing::error!(
-                                    render_object = debug_name,
+                                    render_object = kind,
                                     panic_msg = msg,
                                     "perform_layout panicked — surfacing as RenderError::Poisoned",
                                 );
@@ -554,7 +554,7 @@ impl<P: Protocol> RenderEntry<P> {
                         // The reporting borrow has ended (ADR-0281 §2).
                         flui_foundation::panic::discard_payload(payload);
                         Err(crate::error::RenderError::poisoned(
-                            debug_name,
+                            kind,
                             crate::error::PoisonPhase::Layout,
                         ))
                     }
@@ -564,11 +564,7 @@ impl<P: Protocol> RenderEntry<P> {
 
         // Update state -- only on the success path. On panic, state remains
         // untouched and NEEDS_LAYOUT stays set so a retry is possible.
-        <P as crate::protocol::Protocol>::validate_layout_output(
-            debug_name,
-            &constraints,
-            &geometry,
-        )?;
+        <P as crate::protocol::Protocol>::validate_layout_output(kind, &constraints, &geometry)?;
         <P as crate::protocol::Protocol>::debug_assert_layout_output(&constraints, &geometry);
         self.state.set_geometry(geometry.clone());
         self.state.set_constraints(constraints);

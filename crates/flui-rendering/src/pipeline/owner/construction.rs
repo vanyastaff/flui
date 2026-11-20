@@ -385,7 +385,7 @@ type Unwind = Box<dyn std::any::Any + Send>;
 type FrameAnswer = Result<bool, flui_foundation::TreeError<crate::error::RenderError>>;
 
 /// Runs one phase under containment: its error is placed in the tree (the
-/// path to the node it names, whose `debug_name` is user code, so inside the
+/// path to the node it names, whose `kind` is user code, so inside the
 /// containment too), and a panic that unwinds out of it is caught and handed
 /// back for the caller to resume once the owner is safe.
 ///

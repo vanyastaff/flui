@@ -15,10 +15,14 @@
 //! tree assistive technology reads, projected onto the wire's nodes, and the OS's own capture of
 //! the window ([`Lane::capture_window`]).
 //!
-//! The lanes: [`windows`], [`macos`].
+//! The lanes: [`windows`], [`macos`], [`x11`] and [`wayland`] (its OS half with the `wayland`
+//! feature); both Linux lanes read the app through [`atspi`].
 
+pub mod atspi;
 pub mod macos;
+pub mod wayland;
 pub mod windows;
+pub mod x11;
 
 use std::fmt;
 use std::sync::Arc;
@@ -45,6 +49,19 @@ pub enum PositionFidelity {
     OrderOnly,
 }
 
+/// The OS accessibility API a lane reads an app through ([`Lane::read_tree`]), which decides the
+/// vocabulary of the native roles it reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AccessibilityApi {
+    /// UI Automation, on Windows: native roles are control types.
+    UiAutomation,
+    /// AT-SPI, on Linux: native roles are AT-SPI role names.
+    AtSpi,
+    /// The macOS Accessibility API (AX): native roles are `AX` role strings.
+    Ax,
+}
+
 /// What a lane can do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -57,6 +74,8 @@ pub struct LaneCapabilities {
     pub isolation: Isolation,
     /// What replay compares of its runs.
     pub fidelity: PositionFidelity,
+    /// The accessibility API it reads the app through; `None` for a lane that reads none.
+    pub accessibility: Option<AccessibilityApi>,
 }
 
 impl LaneCapabilities {
@@ -74,7 +93,15 @@ impl LaneCapabilities {
             keys,
             isolation,
             fidelity,
+            accessibility: None,
         }
+    }
+
+    /// The lane reads the app through `api`.
+    #[must_use]
+    pub fn accessibility(mut self, api: AccessibilityApi) -> Self {
+        self.accessibility = Some(api);
+        self
     }
 }
 
@@ -285,6 +312,45 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
     let isolation = lane.capabilities().isolation;
     let guarded = lane.guard().is_some();
     crate::os_input::admit(isolation, guarded)
+}
+
+/// What a lane's release of everything came to, from the release of its keys and then of its
+/// pointer, each answering [`Error::ReleaseFailed`] when it leaves anything held and its own error
+/// only when it leaves nothing: the first failure, as one release failure naming what both still
+/// hold when either does.
+///
+/// # Errors
+///
+/// [`Error::ReleaseFailed`] naming what both halves still hold, with the first failure's message,
+/// when either half left anything held; the first half's error when neither did.
+pub fn release_outcome(keys: Result<()>, pointer: Result<()>) -> Result<()> {
+    let (first, second) = match (keys, pointer) {
+        (Ok(()), outcome) | (outcome, Ok(())) => return outcome,
+        (Err(first), Err(second)) => (first, second),
+    };
+    match (first, second) {
+        (
+            Error::ReleaseFailed {
+                lane,
+                mut held,
+                message,
+            },
+            Error::ReleaseFailed { held: more, .. },
+        ) => {
+            held.extend(more);
+            Err(Error::ReleaseFailed {
+                lane,
+                held,
+                message,
+            })
+        }
+        (first, Error::ReleaseFailed { lane, held, .. }) => Err(Error::ReleaseFailed {
+            lane,
+            held,
+            message: first.to_string(),
+        }),
+        (first, _) => Err(first),
+    }
 }
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the

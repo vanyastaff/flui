@@ -66,7 +66,7 @@
 //!    FloatingPinned variants even though nothing inside this render object
 //!    consumes it: it feeds `RenderViewport::max_scroll_obstruction_extent_before`
 //!    (`crates/flui-objects/src/sliver/viewport.rs:190-200`), which
-//!    `RenderViewport::get_offset_to_reveal`-style scroll-into-view machinery
+//!    `RenderViewport::offset_to_reveal`-style scroll-into-view machinery
 //!    would use. It does **not** feed the *next sibling's*
 //!    `SliverConstraints.overlap`: the viewport computes `overlap` from an
 //!    accumulated paint offset built from `paint_extent`

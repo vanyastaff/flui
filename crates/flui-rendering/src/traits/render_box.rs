@@ -288,14 +288,6 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     // Baseline
     // ========================================================================
 
-    /// Returns the distance from the top of the box to the first baseline.
-    fn get_distance_to_baseline(
-        &self,
-        baseline: TextBaseline,
-    ) -> crate::error::RenderResult<Option<f64>> {
-        self.compute_distance_to_actual_baseline(baseline)
-    }
-
     /// Computes the distance from the top of the box to its first baseline.
     fn compute_distance_to_actual_baseline(
         &self,
@@ -681,16 +673,6 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// Default: no-op. See
     /// [`RenderObject::detach`].
     fn detach(&mut self) {}
-
-    /// Short human-readable name for diagnostics and error messages.
-    ///
-    /// Default: [`core::any::type_name::<Self>()`] (the fully-qualified Rust
-    /// type name). Override to return a stable short name (e.g.
-    /// `"RenderPadding"`) that is independent of crate layout.
-    /// See [`RenderObject::debug_name`].
-    fn debug_name(&self) -> &'static str {
-        core::any::type_name::<Self>()
-    }
 }
 
 /// Text baseline types for baseline alignment.
@@ -1022,10 +1004,6 @@ where
 
     fn detach(&mut self) {
         <T as RenderBox>::detach(self);
-    }
-
-    fn debug_name(&self) -> &'static str {
-        <T as RenderBox>::debug_name(self)
     }
 
     fn child_parent_data_type_id(&self) -> std::any::TypeId {

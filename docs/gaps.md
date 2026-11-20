@@ -624,6 +624,30 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The check is the counter scenario passing on a Simulator, then on a device.
 - The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
 
+### The driver's Wayland lane captures no window and is told no window position
+
+> **Environments:** Linux (Wayland) · **Who it hurts:** Tests and agents that check pixels or aim OS input at a FLUI app on Wayland · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `flui-driver`'s Wayland lane answers `capture_window` with `not_supported` naming `os_capture`: the ScreenCast portal hands its capture over as a PipeWire stream, and PipeWire is a C library none of the workspace's Linux builds link (CI's included), as `tools/desktop-mcp` keeps `xcap` off Linux for the same reason. The X11 lane captures through `GetImage`.
+- A Wayland client is told nothing of where its window is, so the lane maps OS input from the origin its owner gives it (`WaylandLane::window_origin`, a kiosk shell's fullscreen window at the origin) and otherwise refuses naming `window_position`.
+- The capture closes with a PipeWire consumer the Linux CI image builds (the `pipewire` crate and `libpipewire-0.3-dev`) and a run against a GNOME session's portal; the position closes with a compositor protocol that tells a client where its toplevel is (none is in wide use) or a portal that maps a window to its stream's region.
+
+### The driver's X11 lane leaves three keyboard behaviours unmodelled
+
+> **Environments:** Linux (X11) · **Who it hurts:** Tests and agents that type long text or hold keys through the X11 lane · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- **Text with many distinct characters off the keymap.** Each character the server's keymap carries on no key takes a spare keycode of its own for the text (`lane::x11::held::HeldInput::plan`); a text with more distinct such characters than spare keys (a paragraph of CJK text on a US keymap) is refused before any event as `not_supported` naming `os_key`, not typed in pieces.
+- **SlowKeys.** Where the server's AccessX keyboard controls are on, holding Shift for eight seconds turns SlowKeys on; the lane counts the five-tap StickyKeys shortcut and masks it on the release of everything, but does not refuse or break a Shift held that long.
+- **Autorepeat.** XTEST presses go through the server's own key handling, so a key the lane holds past the autorepeat delay repeats, as a held key does on the person's keyboard, where Windows' `SendInput` does not repeat. Whether the repeats reach the guard as raw events (which would count past the lane's own and end the run) is not measured; the lane neither turns autorepeat off (a setting of the whole server) nor holds a key that long in any scenario.
+- Each closes with its behaviour modelled and a row of `x11_lane` or `x11_desktop` holding it: text typed in pieces as spare keys free up, the Shift hold refused or broken, autorepeat turned off for the lane's keys and restored.
+
+### The driver's macOS and Linux lanes reach platform-neutral pieces through the Windows lane's module
+
+> **Environments:** macOS, Linux · **Who it hurts:** Contributors, who find the macOS and Linux lanes importing `lane::windows` · **Parity:** none (module graph)
+
+- `flui-driver`'s AT-SPI client and the macOS lane's AX reader walk through `lane::windows::walk`, the X11 and Wayland lanes map with `lane::windows::screen::window_geometry`, and the macOS, X11 and Wayland lanes wait in `lane::windows::activity`'s slices: platform-neutral code still under the Windows lane's module, and each Linux lane computes its window's device size (`window_target`) for itself.
+- The entry closes when those pieces move to lane-level modules and no lane imports another's (`rg 'lane::windows::(walk|screen|activity)' crates/flui-driver/src/lane/{macos,x11,wayland,atspi}` and `rg 'lane::windows::' crates/flui-driver/src/lane/macos.rs` find nothing).
+
 ### The CLI speaks to the driver agent through a client of its own
 
 > **Environments:** all · **Who it hurts:** Contributors, who keep two clients of one conversation in step · **Parity:** none (a tool's internals)
@@ -778,7 +802,8 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** Linux · **Who it hurts:** Every Linux application, which compiles both D-Bus stacks · **Parity:** none (build graph)
 
 - `flui-native` and `flui-system` speak D-Bus through zbus 6, while `accesskit_unix` 0.24.1, the newest release, reaches zbus 5 through `atspi`, so the default graph on Linux carries both with their `zvariant`, `zbus_names` and macro crates (`cargo tree -p flui -i zbus@5.19.0`). Moving FLUI's own D-Bus code back to zbus 5 would trade a current API for an unmaintained one (RUSTSEC-2026-0370 to -0372 in `deny.toml`).
-- The entry closes when `accesskit_unix` moves to zbus 6: then the workspace resolves one zbus, the three advisories leave `deny.toml`, and `crates_linux` in `perf/size.toml` falls.
+- `flui-driver`'s Linux lanes read AT-SPI through `atspi`'s proxies on zbus 5, the version `accesskit_unix` serves the app's tree with, and the Wayland lane asks the RemoteDesktop portal over the same zbus 5 rather than build both stacks into the driver.
+- The entry closes when `accesskit_unix` moves to zbus 6: then the workspace resolves one zbus, the three advisories leave `deny.toml`, `flui-driver`'s AT-SPI client and portal move with it, and `crates_linux` in `perf/size.toml` falls.
 
 ### Shaders are parsed from WGSL on every launch
 
@@ -799,7 +824,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** Linux, Windows · **Who it hurts:** Applications whose process reads what another process sends: an input method's replies, clipboard and drag payloads, a compositor's arrays · **Parity:** none (robustness)
 
-- `cargo xtask fuzz` runs two targets, `image_decode` and `agent_wire` ([testing.md](testing.md#fuzzing)). The parsers inside `flui-native` (the XIM codec, clipboard text, drag offer kinds, the Windows drag crossing, Wayland configure arrays) have property tests that draw their bytes at random and no coverage-guided run: they are `pub(crate)`, and a fuzz target is an example, which sees only its crate's public API.
+- The nightly fuzz workflow runs two targets, `image_decode` and `agent_wire` ([testing.md](testing.md#fuzzing)). The parsers inside `flui-native` (the XIM codec, clipboard text, drag offer kinds, the Windows drag crossing, Wayland configure arrays) have property tests that draw their bytes at random and no coverage-guided run: they are `pub(crate)`, and a fuzz target is an example, which sees only its crate's public API.
 - The entry closes when each has a target, reached through an item the crate's `testing` feature exports.
 
 ### JNI calls are hand-written signature strings

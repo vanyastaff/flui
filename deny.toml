@@ -45,10 +45,12 @@ ignore = [
     # RUSTSEC-2026-0370 / -0371 / -0372: zvariant, zbus_names and
     # zvariant_derive are unmaintained, merged into zbus 6 as its `wire` and
     # `names` modules and derives. flui-native's own D-Bus code is on zbus 6;
-    # the remaining source is zbus 5 ← atspi ← accesskit_unix ← flui-native
-    # (Linux accessibility). No safe upgrade exists while atspi pins zbus 5,
+    # the remaining source is zbus 5 ← atspi, which two crates reach:
+    # accesskit_unix ← flui-native (Linux accessibility), and flui-driver's
+    # Linux lanes (its AT-SPI client and the Wayland lane's portal, on the same
+    # zbus 5 as the proxies). No safe upgrade exists while atspi pins zbus 5,
     # and the crates are D-Bus marshalling of local session-bus messages.
-    # Remove all three when accesskit_unix moves to zbus 6.
+    # Remove all three when accesskit_unix and atspi move to zbus 6.
     { id = "RUSTSEC-2026-0370" },
     { id = "RUSTSEC-2026-0371" },
     { id = "RUSTSEC-2026-0372" },
@@ -110,7 +112,7 @@ allow = ["CDLA-Permissive-2.0"]
 
 # libfuzzer-sys carries LLVM's libFuzzer runtime, which is under NCSA, a
 # permissive license of the BSD family. Only the fuzz targets link it
-# (`cfg(fuzzing)`, `cargo xtask fuzz`); no application and no published crate
+# (`cfg(fuzzing)`, `.cargo/fuzz.toml`); no application and no published crate
 # does.
 [[licenses.exceptions]]
 crate = "libfuzzer-sys"

@@ -152,7 +152,7 @@ pub(crate) fn sliver_direction_matrix_eight_by_three() {
             "effective axis: axis={axis:?}, growth={growth:?}",
         );
         assert_eq!(
-            probe.get_absolute_size_relative_to_origin(&probe.constraints, 25.0),
+            probe.absolute_size_relative_to_origin(&probe.constraints, 25.0),
             expected_size,
             "absolute size: axis={axis:?}, growth={growth:?}",
         );

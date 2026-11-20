@@ -500,7 +500,8 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
    - macOS: a listen-only session `CGEventTap`; an event is the lane's only with the private source
      state, the lane's tag as its user data and the driver's `kCGEventSourceUnixProcessID`, and a
      tap the system turned off ends the run;
-   - X11: XInput2 raw events from devices other than the XTEST virtual devices;
+   - X11: XInput2 raw events from devices other than the XTEST virtual devices, and from them
+     past the count of events the lane faked (another program's XTEST input);
    - Wayland: none available, so OS input there requires an isolated session;
    - Android: on a physical device, `getevent` on input devices other than the lane's `uinput`
      device (`adb shell input` events come from no device node and are told apart by that); an
@@ -558,8 +559,8 @@ event is sent.
 |---|---|---|---|---|
 | windows | `SendInput` (mouse, keys, `VK_PACKET` text); `InjectSyntheticPointerInput` (touch, pen); TSF IME through the target's text store is out of the lane's reach, so IME uses `input.inject`. The safety checks are ported from desktop-mcp (`input/{mod,device}.rs`): the input desktop, foreground, window under each point, physical state, shell hotkeys and Sticky Keys, held-input recovery | UIA through the `windows` crate, the role table from `tools/xtask/src/device/uia_role_table.rs` (`lane::windows::roles`) | Windows Graphics Capture through the `windows` crate, window-scoped | `CreateProcess` in a kill-on-close job |
 | macos | `CGEventPostToPid` from a private, tagged event source (mouse, keys, scroll in points) via `objc2-core-graphics`; a pen is refused while the AppKit host reads tablet events as the mouse | AX via `objc2-application-services` (`AXUIElement`), replacing `macos-ax-client.swift` | ScreenCaptureKit window capture from macOS 14, the framework loaded by name through the Objective-C runtime since FLUI runs on releases without it, replacing `screencapture -l` | a process group of its own (`process_group(0)`, on every Unix host), killed whole with the session |
-| x11 | XTEST (`x11rb`), ported from `tools/live-smoke` | AT-SPI (`atspi`) | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG` |
-| wayland | libei through the RemoteDesktop portal (`reis`, `ashpd`); portal refusal is cannot-verify | AT-SPI | ScreenCast portal (`ashpd`, PipeWire), window-scoped | same as x11 |
+| x11 | XTEST (`x11rb`): keys by the server's keymap, a character on no key through a spare key mapped for the text; touch and pen refused | AT-SPI (`atspi`), the role table `lane::atspi::roles` | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG`, from a thread the session keeps |
+| wayland | libei (`reis`) from a compositor's EIS socket or the RemoteDesktop portal (asked over zbus); keys and text through EI's text interface; portal refusal is cannot-verify | AT-SPI | none: the ScreenCast portal's PipeWire stream needs a C library no Linux build links (`docs/gaps.md`) | same as x11 |
 | android | `adb shell input` (tap, swipe, keyevent, text, stylus, mouse) and `uinput` JSON-line scripts for stylus and touchpad, ported from `android_input.rs`. `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers and removes a test device once per session, and stylus and touchpad answer `not_supported` where it fails; system UI such as the soft keyboard located by `uiautomator dump` | `uiautomator dump` for system UI only: FLUI publishes no Android accessibility tree, so FLUI nodes are `not_supported` until an adapter lands (recorded in `docs/gaps.md`) | `screencap -p` via `exec-out` | `adb install`, `am start` with extras, `am force-stop` |
 | ios_sim | Simulator HID: `SimDeviceLegacyHIDClient` from `SimulatorKit.framework` through `objc2` dynamic loading, the channel `idb` uses. A runtime probe checks the selectors on first use and answers `not_supported` with the Xcode version when they are missing | none (FLUI's iOS backend publishes no AX tree; recorded in gaps) | `simctl io <udid> screenshot` | `simctl install/launch/terminate` |
 | chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys); IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, ported from `bidi.rs` | none: the canvas exposes no DOM accessibility tree for FLUI nodes today (recorded in gaps); `browsingContext.locateNodes` with `accessibility` reads it once a DOM mirror exists | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from Chrome for Testing (`chrome.rs`), page served by `tiny_http` |
@@ -951,7 +952,7 @@ enforced, not just intended.
 | `android-input` (adb, uinput, F-key probe, `status.txt`) | scenario on the android target: lane input, journal verification, `record` events replace F12 flush, and `dumpsys` reads stay as lane helpers (`AndroidLane::shell`) |
 | `macos-*` (Python, Swift, `screencapture`) | scenarios on the macos target; `tools/device-checks/` is deleted |
 | `ios-*` (Swift XCUITest, Python) | scenarios on the ios_sim target |
-| `live-smoke` (X11 XTEST) | scenarios on the x11 and wayland targets |
+| `live-smoke` (X11 XTEST; deleted with the probes, #1827) | the device-check scenarios on the x11 target (its press and wheel checks); its occlusion and close checks wait for driver operations that occlude and close a window |
 
 `plan.rs` keeps only build and package steps, and only until `flui-cli`'s build pipeline covers them.
 The bespoke probes `android_input_probe` and `web_input_probe` are deleted, and so are their command

@@ -140,7 +140,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             id,
             parent: inherited.parent,
             slot: inherited.slot,
-            name: short_name(node.debug_name()),
+            name: node.kind(),
             kind,
             rect,
             visible,
@@ -177,13 +177,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             );
         }
     }
-}
-
-/// `std::any::type_name` without its module path or generic arguments' paths.
-fn short_name(name: &'static str) -> &'static str {
-    let base = name.split('<').next().unwrap_or(name);
-    let start = base.rfind("::").map_or(0, |at| at + 2);
-    &name[start..]
 }
 
 fn drawn_transform(node: &RenderNode, size: flui_foundation::geometry::Size) -> Option<Matrix4> {

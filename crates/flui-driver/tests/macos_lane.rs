@@ -18,7 +18,8 @@ use flui_driver::lane::macos::safety::{
 };
 use flui_driver::lane::macos::screen::{self, PointRect, WindowInfo};
 use flui_driver::lane::macos::version::MacosVersion;
-use flui_driver::lane::macos::{callback, frame, release_outcome};
+use flui_driver::lane::macos::{callback, frame};
+use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows;
 use flui_driver::projection::Projection;
 use flui_driver::protocol::error::{ErrorCode, HandleKind};

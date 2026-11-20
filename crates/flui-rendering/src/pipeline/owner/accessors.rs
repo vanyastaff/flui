@@ -454,7 +454,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let path = std::iter::successors(Some(id), |&at| tree.parent(at)).filter_map(|at| {
             tree.get(at).map(|node| {
                 flui_foundation::PathEntry::new(
-                    node.debug_name(),
+                    node.kind(),
                     flui_foundation::inspect::InspectId::from(at),
                 )
             })

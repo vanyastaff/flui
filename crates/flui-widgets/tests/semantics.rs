@@ -613,10 +613,10 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         notifier: Rc<ChangeNotifier>,
     }
     impl FlowDelegate for Delegate {
-        fn get_size(&self, constraints: BoxConstraints) -> Size {
+        fn size(&self, constraints: BoxConstraints) -> Size {
             constraints.biggest()
         }
-        fn get_constraints_for_child(
+        fn constraints_for_child(
             &self,
             _index: usize,
             constraints: BoxConstraints,

@@ -68,7 +68,7 @@ serde_json = { workspace = true }
 flui-painting = { path = ".", features = ["testing", "decode"] }
 
 # libFuzzer's runtime, for the fuzz target below. Named under `cfg(fuzzing)`,
-# which only `cargo xtask fuzz` sets, so no other build compiles it.
+# which only `.cargo/fuzz.toml` sets, so no other build compiles it.
 [target.'cfg(fuzzing)'.dev-dependencies]
 libfuzzer-sys = { workspace = true }
 
@@ -100,7 +100,7 @@ testing = ["dep:icu_properties"]
 name = "painting_it"
 path = "tests/main.rs"
 
-# The fuzz target of `Image::decode` (`cargo xtask fuzz image_decode`): an
+# The fuzz target of `Image::decode` (fuzz.yml's `image_decode`): an
 # example, so it shares this manifest's lock and dev-dependencies and builds on
 # stable as a replayer of crash inputs.
 [[example]]

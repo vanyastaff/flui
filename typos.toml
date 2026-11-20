@@ -34,6 +34,22 @@ extend-ignore-identifiers-re = [
     # The shell's file operation flags (`FOF_ALLOWUNDO`, `FOF_WANTNUKEWARNING`),
     # which flui-system's Windows trash sets: Win32's names, not a typo of "for".
     "FOF_[A-Z_]+",
+    # libei's Emulated Input Server in identifiers: `reis`'s `EisHandshaker`, `EisRequest`,
+    # flui-driver's `EisSource`, and the RemoteDesktop portal's `ConnectToEIS` method.
+    "Eis[A-Z][A-Za-z]*",
+    "ConnectToEIS",
+]
+# Text ignored where it stands, not the word everywhere.
+extend-ignore-re = [
+    # libei spells an EI region's height `hight` (`ei_device.region`, reis's
+    # `Event::Region`); the Wayland lane binds that field to `height` where it destructures it.
+    "hight: height",
+    # libei's Emulated Input Server, the compositor half of the protocol: its acronym, and the
+    # server module of `reis` (`reis::eis`, `eis::Context`), which flui-driver's Wayland lane and
+    # its tests name. Not the word "eis" anywhere else.
+    "\\bEIS\\b",
+    "\\breis::eis\\b",
+    "\\beis::[A-Za-z]",
 ]
 
 [default.extend-words]
