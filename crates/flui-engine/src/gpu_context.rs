@@ -1584,7 +1584,6 @@ impl GpuContext {
                 Arc::clone(&self.domain),
                 &mut self.pipelines,
                 size,
-                crate::frame_protocol::FontSource::Ordinary,
             ));
         }
         let painter = self

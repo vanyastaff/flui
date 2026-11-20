@@ -265,6 +265,7 @@ pub(crate) struct FrameProtocol {
     /// frame for one frame), and after a frame rendered outside the damage
     /// protocol ([`Self::end_unmanaged`]).
     force_full_next_frame: bool,
+    /// The font namespace this presentation's last frame drew with.
     font_source: FontSource,
     /// Whether damage applied since the last frame that ran was switched off
     /// (`Full(DamageOff)`): that frame records every chunk.
@@ -299,16 +300,21 @@ impl FrameProtocol {
     }
 
     /// Selects a font namespace before damage planning or frame recording.
-    /// Reloaded images can reuse blob ids, so both faces and atlas entries
-    /// must retire together. A transition also invalidates unchanged pixels.
+    /// The painter replaces its faces and atlas when it serves another
+    /// namespace ([`WgpuPainter::select_font_source`]); a change of the
+    /// namespace this presentation's last frame drew with, or a reset,
+    /// also owes a full repaint, since the pixels left on screen came from a
+    /// scene of another namespace or an earlier load.
+    ///
+    /// [`WgpuPainter::select_font_source`]: crate::painter::WgpuPainter::select_font_source
     pub(crate) fn select_font_source(
         &mut self,
         painter: &mut crate::painter::WgpuPainter,
         source: FontSource,
         reset_fonts: bool,
     ) {
+        painter.select_font_source(source, reset_fonts);
         if self.font_source != source || reset_fonts {
-            painter.reset_scene_fonts(source);
             self.font_source = source;
             self.damage.mark_full_repaint();
         }

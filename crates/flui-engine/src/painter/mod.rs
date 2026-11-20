@@ -74,6 +74,9 @@ pub struct WgpuPainter {
     /// The rasterised-glyph cache paragraphs are recorded against and the
     /// glyph pipeline samples. One per painter whatever formats it draws to.
     glyph_atlas: TextAtlas,
+    /// The namespace of font blob ids the atlas's rasterizer serves
+    /// ([`Self::select_font_source`]).
+    font_source: crate::frame_protocol::FontSource,
 
     // ===== GPU Draw-State Stack =====
     /// Owns the four parallel transform/scissor/SDF-clip stacks and their
@@ -233,35 +236,21 @@ impl WgpuPainter {
         surface_format: wgpu::TextureFormat,
         size: (u32, u32),
     ) -> Self {
-        Self::with_domain_and_font_source(
-            domain,
-            surface_format,
-            size,
-            crate::frame_protocol::FontSource::Ordinary,
-        )
-    }
-
-    pub(crate) fn with_domain_and_font_source(
-        domain: Arc<crate::device_domain::DeviceDomain>,
-        surface_format: wgpu::TextureFormat,
-        size: (u32, u32),
-        source: crate::frame_protocol::FontSource,
-    ) -> Self {
-        // `PipelineSet::new` creates the viewport bind-group layout internally
-        // and exposes it via `viewport_bind_group_layout()`.
         // A painter of its own keeps no pipeline cache: only a `GpuContext`
         // saves one between runs.
         let pipelines = PipelineLibrary::new(
             crate::pipeline_device::PipelineDevice::uncached(domain.device()),
             surface_format,
         );
-        Self::with_pipelines(domain, &mut Some(pipelines), size, source)
+        Self::with_pipelines(domain, &mut Some(pipelines), size)
     }
 
     /// A painter over the library in `pipelines`, one an earlier painter on
     /// the same device built, drawing into targets of the library's selected
     /// format. Everything else (the glyph atlas, the image and path caches,
-    /// the scratch pools) starts empty.
+    /// the scratch pools) starts empty, the atlas serving
+    /// [`FontSource::Ordinary`](crate::frame_protocol::FontSource::Ordinary)
+    /// until [`Self::select_font_source`] names another.
     ///
     /// The library is taken out of `pipelines` only once everything that can
     /// fail is built, so a panic here (a tracing subscriber, wgpu's error
@@ -275,7 +264,6 @@ impl WgpuPainter {
         domain: Arc<crate::device_domain::DeviceDomain>,
         pipelines: &mut Option<PipelineLibrary>,
         size: (u32, u32),
-        source: crate::frame_protocol::FontSource,
     ) -> Self {
         let device = Arc::clone(domain.device());
         let queue = Arc::clone(domain.queue());
@@ -300,11 +288,12 @@ impl WgpuPainter {
         // Glyph bitmaps come from swash over the faces each paragraph's
         // runs carry (ADR-0092 §5): the atlas owns its rasterizer and the
         // registry of faces it has drawn, and shares no font state.
+        let font_source = crate::frame_protocol::FontSource::Ordinary;
         let glyph_atlas = GlyphAtlas::new(
             Arc::clone(&device),
             Arc::clone(&queue),
             &library.current().glyph_atlas_bind_group_layout,
-            source.rasterizer(),
+            font_source.rasterizer(),
         );
 
         // ===== Resource managers =====
@@ -325,6 +314,7 @@ impl WgpuPainter {
             replay,
             batcher: crate::batches::DrawBatcher::new(),
             glyph_atlas,
+            font_source,
             state: GpuStateStack::new(),
             compositor: LayerCompositor::new(),
             suppressed_layer_depth: 0,
@@ -337,16 +327,33 @@ impl WgpuPainter {
         }
     }
 
-    /// Replaces font faces and cached glyph bitmaps between scene sources.
-    /// Called before recording a frame, after the previous frame's commands
-    /// have been submitted or discarded. Submitted GPU work owns its resources.
-    pub(crate) fn reset_scene_fonts(&mut self, source: crate::frame_protocol::FontSource) {
+    /// Serve scenes whose font blob ids belong to `source` from now on: when
+    /// the atlas serves another namespace, or `reset_fonts` retires the
+    /// faces an earlier scene of the same one registered, the font faces and
+    /// cached glyph bitmaps are replaced. Called before recording a frame,
+    /// after the previous frame's commands have been submitted or discarded;
+    /// submitted GPU work owns its resources.
+    ///
+    /// The painter holds the namespace because every window of a
+    /// `GpuContext` draws through one painter, and a rebuilt painter starts
+    /// on [`FontSource::Ordinary`](crate::frame_protocol::FontSource::Ordinary):
+    /// a window's record of the source its last frame used says nothing of
+    /// the atlas another window or a rebuild left.
+    pub(crate) fn select_font_source(
+        &mut self,
+        source: crate::frame_protocol::FontSource,
+        reset_fonts: bool,
+    ) {
+        if self.font_source == source && !reset_fonts {
+            return;
+        }
         self.glyph_atlas = GlyphAtlas::new(
             Arc::clone(&self.device),
             Arc::clone(&self.queue),
             &self.pipelines.current().glyph_atlas_bind_group_layout,
             source.rasterizer(),
         );
+        self.font_source = source;
         // A new atlas packs from its first texel: a kept recording names
         // texels of the old one.
         self.recording_cache.advance_epoch();
