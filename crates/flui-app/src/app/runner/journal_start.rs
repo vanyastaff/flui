@@ -13,7 +13,13 @@ use flui_protocol::native_recording::Backend;
 #[derive(Debug)]
 #[must_use = "dropping it ends the native journal"]
 pub(super) struct JournalStart {
-    /// A journal was begun: the build journals and named a backend.
+    /// A journal was begun: the build journals and named a backend. Read only by the loops that
+    /// read the launch where they start their platform (Android, the web).
+    #[cfg(any(
+        target_arch = "wasm32",
+        target_os = "android",
+        all(test, native_journal)
+    ))]
     begun: bool,
     /// The journal was settled, or handed to the loop that settles it: the guard lets go.
     released: bool,
@@ -30,33 +36,40 @@ impl JournalStart {
             let _ = backend;
             false
         };
+        #[cfg(not(any(
+            target_arch = "wasm32",
+            target_os = "android",
+            all(test, native_journal)
+        )))]
+        let _ = begun;
         Self {
+            #[cfg(any(
+                target_arch = "wasm32",
+                target_os = "android",
+                all(test, native_journal)
+            ))]
             begun,
             released: false,
         }
     }
 
     /// Whether the loop journals its backend, so the agent's hello lists the `native` layer.
-    #[cfg_attr(
-        not(any(target_arch = "wasm32", target_os = "android", test)),
-        expect(
-            dead_code,
-            reason = "a loop that reads its launch later asks `journals_native`"
-        )
-    )]
+    #[cfg(any(
+        target_arch = "wasm32",
+        target_os = "android",
+        all(test, native_journal)
+    ))]
     pub(super) fn journals(&self) -> bool {
         self.begun && super::journals_native()
     }
 
     /// The launch was read: keep the journal when the driver agent is `served`, end it
     /// otherwise, so an app nobody drives pays nothing for it.
-    #[cfg_attr(
-        not(any(target_arch = "wasm32", target_os = "android", test)),
-        expect(
-            dead_code,
-            reason = "a loop that reads its launch later settles it there"
-        )
-    )]
+    #[cfg(any(
+        target_arch = "wasm32",
+        target_os = "android",
+        all(test, native_journal)
+    ))]
     pub(super) fn settle(mut self, served: bool) {
         self.released = true;
         super::keep_native_journal(served);
@@ -92,10 +105,7 @@ impl Drop for JournalStart {
 /// # Errors
 ///
 /// What `start` returns.
-#[cfg_attr(
-    not(any(target_arch = "wasm32", test)),
-    expect(dead_code, reason = "the web runner starts its loop through it")
-)]
+#[cfg(any(target_arch = "wasm32", all(test, native_journal)))]
 pub(super) fn start_journaled<P, E>(
     backend: Backend,
     start: impl FnOnce() -> Result<P, E>,
