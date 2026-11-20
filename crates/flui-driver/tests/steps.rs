@@ -390,6 +390,14 @@ fn a_lane_sent_a_composition_directly_refuses_it() {
             lane.name()
         );
     };
+    // The Android lane runs on every host, against a scripted device: refused before any command.
+    let adb = crate::android_lane::scripted(true, true);
+    let mut android = flui_driver::lane::android::AndroidLane::connect(
+        adb.device(),
+        crate::android_lane::PACKAGE,
+    )
+    .expect("the Android lane connects to the scripted device");
+    refused(&mut android);
     let (mut scripted, log) = ScriptedLane::new(Isolation::Xvfb);
     refused(&mut scripted);
     assert!(log.sent().is_empty(), "the scripted lane recorded nothing");

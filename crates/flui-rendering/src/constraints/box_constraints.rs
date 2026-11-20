@@ -23,9 +23,15 @@ use super::Constraints;
 /// Implements `Hash` and `Eq` for use as cache keys. Use `round_for_cache()` before
 /// caching to ensure consistent floating-point comparisons:
 ///
-/// ```ignore
-/// let key = constraints.round_for_cache();
-/// layout_cache.insert(key, computed_size);
+/// ```
+/// use std::collections::HashMap;
+/// use flui_foundation::geometry::Size;
+/// use flui_rendering::constraints::BoxConstraints;
+///
+/// let mut layout_cache = HashMap::new();
+/// let key = BoxConstraints::loose(Size::new(100.004, 50.0)).round_for_cache();
+/// layout_cache.insert(key, Size::new(80.0, 40.0));
+/// assert!(layout_cache.contains_key(&BoxConstraints::loose(Size::new(100.0, 50.0))));
 /// ```
 ///
 /// # Cache Rounding
@@ -451,15 +457,13 @@ impl BoxConstraints {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let constraints = BoxConstraints {
-    ///     min_width: 0,
-    ///     max_width: 100,
-    ///     min_height: 0,
-    ///     max_height: 100,
-    /// };
-    /// let tight = constraints.tighten(Some(500), None);
-    /// // Result: min_width=100, max_width=100 (clamped to existing max)
+    /// ```
+    /// use flui_rendering::constraints::BoxConstraints;
+    ///
+    /// let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+    /// let tight = constraints.tighten(Some(500.0), None);
+    /// // min_width and max_width are both 100 (clamped to the existing max).
+    /// assert_eq!((tight.min_width, tight.max_width), (100.0, 100.0));
     /// ```
     #[inline]
     #[must_use]

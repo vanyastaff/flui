@@ -19,7 +19,8 @@ use crate::constraints::BoxConstraints;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::any::Any;
 /// use flui_rendering::constraints::BoxConstraints;
 /// use flui_rendering::delegates::SingleChildLayoutDelegate;
 /// use flui_foundation::geometry::{Offset, Size};

@@ -6,9 +6,10 @@
   flui-driver); открытые — неотмеченные записи раздела «Ход исполнения». Прогоны на устройствах,
   которых ждут закрытые задачи, — строки `crates/flui-native/platform-parity.toml`. Открытые
   задачи и код, которого они ждут:
-  - LY96 и LY99 — Windows- и macOS-lane драйвера есть; ждут прогонов на рабочем столе,
-    принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane), и lane
-    остальных ОС спеки flui-driver;
+  - LY96 и LY99 — Windows-, macOS-, X11- и Android-lane драйвера есть; ждут прогонов на рабочем
+    столе, принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane),
+    сеанса TalkBack и идентификатора узла в `accesskit_android`, и lane остальных ОС спеки
+    flui-driver;
   - LY97 — запись драйвером есть (трасса держит слои `input` и `native`); ждёт прогонов на
     Windows, macOS и Linux, lane Android (FD13) и прогона Chrome-lane (FD12, есть, с настоящим
     браузером не прогонялся) спеки flui-driver.
@@ -5037,13 +5038,13 @@ GPU-память простаивающего или невидимого окн
   (LY98). Запись драйвером есть (FD10 спеки [flui-driver](../flui-driver/tasks.md)): трасса
   (`Driver::start_trace`) держит слои `input` и `native` приложения, запущенного или
   присоединённого через любой lane, — запись идёт от агента приложения, не от lane, поэтому
-  Windows-, macOS-, X11- и Wayland-lane ничего своего для неё не требуют. Остаётся: прогон
-  записи `os`-lane на Windows, macOS и Linux с отладочной сборкой приложения (`native-capture`) —
-  строка parity «Recorded native input replays deterministically on the headless host»;
-  Android ждёт своего lane (FD13 спеки flui-driver); Web — Chrome-lane (FD12) есть: агент
-  страницы достигается через её экспорт в headless Chrome, но с настоящим браузером запись ещё
-  не снималась.
-  Захват настоящего метода ввода на устройствах — та же строка parity.
+  Windows-, macOS-, X11-, Wayland- и Android-lane ничего своего для неё не требуют; Android-lane
+  (FD13) запускает приложение и присоединяет драйвер через проброшенный порт
+  (`lane::android::launch`), Chrome-lane (FD12) — через экспорт страницы в headless Chrome.
+  Остаётся: прогон записи `os`-lane на Windows, macOS, Linux и Android с отладочной сборкой
+  приложения (`native-capture`) и в настоящем браузере — строка parity «Recorded native input
+  replays deterministically on the headless host». Захват настоящего метода ввода на
+  устройствах — та же строка parity.
 
 - [ ] **LY96** (Windows и macOS начаты, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
   драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
@@ -5060,6 +5061,12 @@ GPU-память простаивающего или невидимого окн
   `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
   Chrome-lane (FD12) вводит в web-сборку через WebDriver BiDi, но дерева доступности не читает:
   ARIA-зеркало канваса есть, его чтение через дерево доступности Chrome не построено.
+  Android-lane (FD13) вводит через `adb`, но дерево TalkBack не читает: `accesskit_android` не
+  ставит `viewIdResourceName`, и идентификатор узла до UI Automator не доходит (`docs/gaps.md`);
+  проекция и нажатие через accessibility на Android ждут этого поля в AccessKit. `uiautomator
+  dump`, которым lane находит окно, на время дампа приостанавливает службы accessibility, и
+  TalkBack тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает
+  `uiautomator` (`docs/gaps.md`).
   Долг: сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
   строка качества parity «Conformance executed with assistive technology on each OS».
 

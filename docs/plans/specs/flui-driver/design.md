@@ -503,9 +503,11 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
    - X11: XInput2 raw events from devices other than the XTEST virtual devices, and from them
      past the count of events the lane faked (another program's XTEST input);
    - Wayland: none available, so OS input there requires an isolated session;
-   - Android: on a physical device, `getevent` on input devices other than the lane's `uinput`
-     device (`adb shell input` events come from no device node and are told apart by that); an
-     emulator is isolated;
+   - Android: on a physical device, `getevent -l` (on a terminal, so each line comes as printed)
+     on input devices other than the lane's `uinput` devices (`adb shell input` events come from
+     no device node and are told apart by that); a key press or release, a multi-touch axis or a
+     relative motion counts, a sensor's axes and a switch do not; an emulator is isolated. A
+     device is admitted only guarded, as the shared desktop is (`os_input::admit`);
    - iOS Simulator and Chrome headless: isolated, no guard needed.
 
    The first foreign event makes the lane stop before its next event, `release_all`, and end the
@@ -561,7 +563,7 @@ event is sent.
 | macos | `CGEventPostToPid` from a private, tagged event source (mouse, keys, scroll in points) via `objc2-core-graphics`; a pen is refused while the AppKit host reads tablet events as the mouse | AX via `objc2-application-services` (`AXUIElement`), replacing `macos-ax-client.swift` | ScreenCaptureKit window capture from macOS 14, the framework loaded by name through the Objective-C runtime since FLUI runs on releases without it, replacing `screencapture -l` | a process group of its own (`process_group(0)`, on every Unix host), killed whole with the session |
 | x11 | XTEST (`x11rb`): keys by the server's keymap, a character on no key through a spare key mapped for the text; touch and pen refused | AT-SPI (`atspi`), the role table `lane::atspi::roles` | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG`, from a thread the session keeps |
 | wayland | libei (`reis`) from a compositor's EIS socket or the RemoteDesktop portal (asked over zbus); keys and text through EI's text interface; portal refusal is cannot-verify | AT-SPI | none: the ScreenCast portal's PipeWire stream needs a C library no Linux build links (`docs/gaps.md`) | same as x11 |
-| android | `adb shell input` (tap, swipe, keyevent, text, stylus, mouse) and `uinput` JSON-line scripts for stylus and touchpad, ported from `android_input.rs`. `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers and removes a test device once per session, and stylus and touchpad answer `not_supported` where it fails; system UI such as the soft keyboard located by `uiautomator dump` | `uiautomator dump` for system UI only: FLUI publishes no Android accessibility tree, so FLUI nodes are `not_supported` until an adapter lands (recorded in `docs/gaps.md`) | `screencap -p` via `exec-out` | `adb install`, `am start` with extras, `am force-stop` |
+| android | `adb shell input`: a contact held between events through `motionevent` on the touch screen or the mouse (primary button only), keys sent at their release as `keyevent` or `keycombination`, printable ASCII as `input text`, a scroll as `input mouse scroll` in detents; one pointer and no hover, so a second contact is refused. A pen goes through a `uinput` device the lane registers and syncs with (`uinput -` reading JSON lines). `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers, syncs and removes a test device once per session, and the pen answers `not_supported` where it fails; a touchpad's gesture goes through no OS lane (`steps::os_events` refuses it). Which `input` commands exist is read from the device's usage. The app's window and the display's rotation come from `uiautomator dump` | none for FLUI nodes: `accesskit_android` serves them but sets no `viewIdResourceName`, so the identifier a projection and an activation need never reaches UI Automator (recorded in `docs/gaps.md`) | `exec-out screencap` raw, cut to the window; a pixel format other than RGBA or RGBX is captured again with `-p` and decoded | `adb install`, `am start -W` with extras, `adb forward tcp:0 localabstract:…`, `am force-stop` and the forward removed when the lane ends |
 | ios_sim | Simulator HID: `SimDeviceLegacyHIDClient` from `SimulatorKit.framework` through `objc2` dynamic loading, the channel `idb` uses. A runtime probe checks the selectors on first use and answers `not_supported` with the Xcode version when they are missing | none (FLUI's iOS backend publishes no AX tree; recorded in gaps) | `simctl io <udid> screenshot` | `simctl install/launch/terminate` |
 | chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys), one command of one instant action an event; IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, the one lane that composes | none yet: the canvas mirrors its tree as an ARIA DOM, which the lane does not read; Chrome's accessibility tree over it (`Accessibility.getFullAXTree` through `goog:cdp`) is where it would | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from `CHROMEDRIVER` (or `CHROMEWEBDRIVER`'s directory) or a cached copy whose SHA-256 matches its record, fetched from Chrome for Testing only when the launch allows it; Chrome always headless; the page served by a loopback server of the lane's own |
 
@@ -1083,8 +1085,10 @@ fixture, with an identifier on every interactive widget.
   restore token reduces it). Headless Wayland CI (weston) has no portal, so x11 stays the CI lane.
 - **Presented-frame copy costs a copy per armed frame.** It is one-shot and never runs unrequested.
   The fallback is labelled `rendered`.
-- **Android, iOS and web have no OS accessibility tree for FLUI nodes.** R17's cross-check runs on
-  desktop only, and the gaps entries say so. The selector still works there through the agent.
+- **Android, iOS and web have no OS accessibility tree for FLUI nodes the driver can read.**
+  Android serves one (`accesskit_android`) without the identifier, so UI Automator cannot find a
+  node by it. R17's cross-check runs on desktop only, and the gaps entries say so. The selector
+  still works there through the agent.
 - **Tier H publishing.** `flui-driver` is the first published tier-H crate besides the facade. If
   `cargo xtask workspace` refuses an Evolving kind in tier H, the task amends ADR-0081's kind table
   in ADR-0238 rather than bending the crate.

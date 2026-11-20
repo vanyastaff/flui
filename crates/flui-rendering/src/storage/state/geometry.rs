@@ -36,12 +36,14 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// if let Some(size) = state.geometry() {
-    ///     // Use cached size
-    /// } else {
-    ///     // Need to perform layout first
-    /// }
+    /// ```
+    /// use flui_foundation::geometry::Size;
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// let mut state = BoxRenderState::new();
+    /// assert_eq!(state.geometry(), None); // layout has not run yet
+    /// state.set_geometry(Size::new(10.0, 10.0));
+    /// assert_eq!(state.geometry(), Some(Size::new(10.0, 10.0)));
     /// ```
     #[inline]
     pub fn geometry(&self) -> Option<P::Geometry>
@@ -55,16 +57,16 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// Idempotent — overwrites any prior value (straight assignment).
     ///
-    /// The prior `OnceCell`-backed implementation panicked on second
-    /// invocation, which made re-layout a crash. See module-level doc
-    /// for rationale.
-    ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let size = compute_size(constraints);
-    /// state.set_geometry(size); // first layout pass
-    /// state.set_geometry(new_size); // re-layout (no panic)
+    /// ```
+    /// use flui_foundation::geometry::Size;
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// let mut state = BoxRenderState::new();
+    /// state.set_geometry(Size::new(10.0, 10.0)); // first layout pass
+    /// state.set_geometry(Size::new(20.0, 10.0)); // re-layout replaces it
+    /// assert_eq!(state.geometry(), Some(Size::new(20.0, 10.0)));
     /// ```
     #[inline]
     pub fn set_geometry(&mut self, geometry: P::Geometry) {
@@ -73,15 +75,19 @@ impl<P: Protocol> RenderState<P> {
 
     /// Clears the geometry, signalling no prior layout has run.
     ///
-    /// Equivalent to `set_geometry` with no value; production re-layout no
-    /// longer requires an explicit clear (the `OnceCell`-era invariant is
-    /// gone). Useful in tests and eviction paths.
+    /// Equivalent to `set_geometry` with no value; re-layout does not require
+    /// an explicit clear. Useful in tests and eviction paths.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// // Reset state — useful in tests
+    /// ```
+    /// use flui_foundation::geometry::Size;
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// let mut state = BoxRenderState::new();
+    /// state.set_geometry(Size::new(10.0, 10.0));
     /// state.clear_geometry();
+    /// assert_eq!(state.geometry(), None);
     /// ```
     #[inline]
     pub fn clear_geometry(&mut self) {
@@ -136,23 +142,6 @@ impl RenderState<BoxProtocol> {
     /// - ✅ O(1) relayout instead of O(tree height)
     /// - ✅ Massive performance win for deep trees
     /// - ✅ Enables incremental layout updates
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // During layout, compute boundary status
-    /// state.compute_relayout_boundary(
-    ///     parent_uses_size,
-    ///     sized_by_parent,
-    ///     has_parent
-    /// );
-    ///
-    /// // Later, check if we're a boundary
-    /// if state.is_relayout_boundary() {
-    ///     // Don't propagate layout changes to parent
-    ///     owner.register_needs_layout(element_id);
-    /// }
-    /// ```
     pub fn compute_relayout_boundary(
         &self,
         parent_uses_size: bool,
@@ -180,8 +169,12 @@ impl RenderState<BoxProtocol> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let size = state.size(); // Never panics, returns ZERO if not laid out
+    /// ```
+    /// use flui_foundation::geometry::Size;
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// // Returns `Size::ZERO` until layout has committed a size.
+    /// assert_eq!(BoxRenderState::new().size(), Size::ZERO);
     /// ```
     #[inline]
     pub fn size(&self) -> flui_foundation::geometry::Size {
@@ -191,13 +184,17 @@ impl RenderState<BoxProtocol> {
 
     /// Convenience method for setting size (box protocol).
     ///
-    /// Signature takes `&mut self`, matching `set_geometry`'s move off
-    /// the panic-on-second-write `OnceCell` storage.
+    /// Takes `&mut self`, like `set_geometry`.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_foundation::geometry::Size;
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// let mut state = BoxRenderState::new();
     /// state.set_size(Size::new(100.0, 50.0));
+    /// assert_eq!(state.size(), Size::new(100.0, 50.0));
     /// ```
     #[inline]
     pub fn set_size(&mut self, size: flui_foundation::geometry::Size) {
@@ -210,11 +207,14 @@ impl RenderState<BoxProtocol> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// if !state.has_size(new_size) {
-    ///     state.clear_geometry();
-    ///     pipeline_owner.mark_needs_layout(element_id);
-    /// }
+    /// ```
+    /// use flui_foundation::geometry::Size;
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// let mut state = BoxRenderState::new();
+    /// assert!(!state.has_size(Size::new(10.0, 10.0)));
+    /// state.set_size(Size::new(10.0, 10.0));
+    /// assert!(state.has_size(Size::new(10.0, 10.0)));
     /// ```
     #[inline]
     pub fn has_size(&self, size: flui_foundation::geometry::Size) -> bool {
@@ -231,8 +231,10 @@ impl RenderState<SliverProtocol> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let total_scroll = state.scroll_extent();
+    /// ```
+    /// use flui_rendering::storage::SliverRenderState;
+    ///
+    /// assert_eq!(SliverRenderState::new().scroll_extent(), 0.0);
     /// ```
     #[inline]
     pub fn scroll_extent(&self) -> f64 {
@@ -243,11 +245,11 @@ impl RenderState<SliverProtocol> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let visible = state.paint_extent();
-    /// if visible > 0.0 {
-    ///     // Paint visible portion
-    /// }
+    /// ```
+    /// use flui_rendering::storage::SliverRenderState;
+    ///
+    /// // Without geometry the extent is zero.
+    /// assert_eq!(SliverRenderState::new().paint_extent(), 0.0);
     /// ```
     #[inline]
     pub fn paint_extent(&self) -> f64 {
@@ -268,18 +270,17 @@ impl RenderState<SliverProtocol> {
 
     /// Sets sliver geometry (convenience wrapper for `set_geometry()`).
     ///
-    /// Signature takes `&mut self`, matching `set_geometry`'s move off
-    /// the panic-on-second-write `OnceCell` storage.
+    /// Takes `&mut self`, like `set_geometry`.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let geom = SliverGeometry {
-    ///     scroll_extent: 1000.0,
-    ///     paint_extent: 500.0,
-    ///     ..Default::default()
-    /// };
-    /// state.set_sliver_geometry(geom);
+    /// ```
+    /// use flui_rendering::constraints::SliverGeometry;
+    /// use flui_rendering::storage::SliverRenderState;
+    ///
+    /// let mut state = SliverRenderState::new();
+    /// state.set_sliver_geometry(SliverGeometry::new(1000.0, 500.0, 0.0));
+    /// assert_eq!(state.scroll_extent(), 1000.0);
     /// ```
     #[inline]
     pub fn set_sliver_geometry(&mut self, geometry: SliverGeometry) {

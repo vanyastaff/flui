@@ -5,7 +5,7 @@
 - **Supersedes:** [ADR-0331](ADR-0331-a-pull-request-names-every-expectation-it-edits.md) whole (no
   check reads a pull request's body; the rule it held stays as a review question);
   [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md) §2 only
-  for `xtask-native.yml` on a pull request, and its Confirmation;
+  for the native-host workflow on a pull request, and its Confirmation;
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   its Confirmation (the `ci` job's rule is a shell step, not `cargo xtask ci-verify`);
   [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
@@ -41,7 +41,7 @@ project runs. What does CI need from xtask to pick a lane and judge a run?
 
 1. Keep `affected`, `ci-verify`, `expectations` and the two workflows on pull requests.
 2. Decide the lane and judge the run in shell inside `ci.yml`; drop the body check; run
-   `xtask-native.yml` and `fuzz.yml` on a schedule.
+   the native-host workflow (since removed, ADR-0383 §9) and `fuzz.yml` on a schedule.
 3. Drop the lanes too: every pull request runs the whole gate.
 
 ## Decision
@@ -76,7 +76,7 @@ check green is the defect the check was there to find, and the body says why eac
 
 ### §4. Two workflows leave pull requests
 
-`xtask-native.yml` runs weekly and by hand; `fuzz.yml` every night and by hand. `deps`' advisories
+The native-host workflow is gone (ADR-0383 §9); `fuzz.yml` every night and by hand. `deps`' advisories
 step blocks on main and reports on a pull request.
 
 ### Consequences

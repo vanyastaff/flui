@@ -1,5 +1,12 @@
 //! `flui-driver`'s integration tests, through its public API.
 
+#[cfg(any(unix, windows))]
+mod android_device;
+mod android_edges;
+#[cfg(unix)]
+mod android_host;
+mod android_lane;
+mod android_rules;
 mod apps;
 mod chrome_browser;
 mod chrome_host;

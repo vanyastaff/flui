@@ -48,10 +48,19 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use flui_rendering::{BoxLayoutContext, PaintContext, constraints::BoxConstraints, parent_data::BoxParentData, traits::RenderBox};
-//! use flui_foundation::{Leaf, geometry::{Rect, Size}};
+//! ```
+//! # use flui_painting::{paint::Paint, styling::Color};
+//! # impl flui_foundation::inspect::Inspect for MyColoredBox {
+//! #     fn kind(&self) -> &'static str { "MyColoredBox" }
+//! #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+//! # }
+//! use flui_foundation::{Leaf, geometry::{Point, Rect, Size}};
+//! use flui_rendering::context::{BoxHitTestContext, BoxLayoutContext, PaintContext};
+//! use flui_rendering::parent_data::BoxParentData;
+//! use flui_rendering::protocol::IntoRenderObject;
+//! use flui_rendering::traits::RenderBox;
 //!
+//! #[derive(Debug)]
 //! struct MyColoredBox {
 //!     color: Color,
 //!     size: Size,
@@ -61,26 +70,29 @@
 //!     type Arity = Leaf;
 //!     type ParentData = BoxParentData;
 //!
-//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) -> flui_rendering::RenderResult<Size> {
+//!     fn perform_layout(
+//!         &mut self,
+//!         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+//!     ) -> flui_rendering::RenderResult<Size> {
 //!         Ok(ctx.constraints().constrain(self.size))
 //!     }
 //!
 //!     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
 //!         // Local coordinates — the recorder pre-translates to the
 //!         // node's origin.
-//!         ctx.canvas().draw_rect(Rect::from_size(self.size), self.color);
+//!         ctx.canvas()
+//!             .draw_rect(Rect::from_origin_size(Point::ZERO, self.size), &Paint::fill(self.color));
 //!     }
 //!
-//!     fn hit_test(&self, ctx: &mut BoxHitTestContext<Leaf, BoxParentData>) -> bool {
+//!     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
 //!         ctx.is_within_size(self.size.width, self.size.height)
 //!     }
-//!
 //! }
 //!
-//! // Create and insert into tree
+//! // Convert into a storage-ready node.
 //! let my_box = MyColoredBox { color: Color::RED, size: Size::new(100.0, 50.0) };
 //! let node = my_box.into_render_node();
-//! let id = tree.insert(node);
+//! assert!(node.is_box());
 //! ```
 
 use crate::{

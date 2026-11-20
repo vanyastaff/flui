@@ -13,21 +13,41 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! fn perform_layout(&mut self, ctx: &mut LayoutContext<BoxProtocol, Variable, BoxParentData>) {
-//!     let constraints = ctx.constraints();
+//! ```
+//! # use flui_foundation::Variable;
+//! # use flui_foundation::geometry::{Offset, Size};
+//! # use flui_rendering::context::BoxLayoutContext;
+//! # use flui_rendering::parent_data::BoxParentData;
+//! # use flui_rendering::traits::RenderBox;
+//! # use flui_rendering::{PaintContext, RenderResult};
+//! # #[derive(Debug, Default)]
+//! # struct Column;
+//! # impl flui_foundation::inspect::Inspect for Column {
+//! #     fn kind(&self) -> &'static str { "Column" }
+//! #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+//! # }
+//! # impl RenderBox for Column {
+//! #     type Arity = Variable;
+//! #     type ParentData = BoxParentData;
+//! #     fn paint(&self, _ctx: &mut PaintContext<'_, Variable>) {}
+//! fn perform_layout(
+//!     &mut self,
+//!     ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+//! ) -> RenderResult<Size> {
+//!     let constraints = *ctx.constraints();
 //!
-//!     // Layout children with loose constraints
+//!     // Lay children out with loose constraints, stacked vertically.
 //!     let child_constraints = ctx.loosen();
+//!     let mut y_offset = 0.0;
 //!     for i in 0..ctx.child_count() {
-//!         let child_size = ctx.layout_child(i, child_constraints.clone());
+//!         let child_size = ctx.layout_child(i, child_constraints)?;
 //!         ctx.position_child(i, Offset::new(0.0, y_offset));
 //!         y_offset += child_size.height;
 //!     }
 //!
-//!     // Return the computed size
-//!     Size::new(constraints.max_width(), y_offset)
+//!     Ok(constraints.constrain(Size::new(constraints.max_width, y_offset)))
 //! }
+//! # }
 //! ```
 
 use flui_foundation::Arity;

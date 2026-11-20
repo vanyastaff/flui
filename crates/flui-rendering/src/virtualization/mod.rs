@@ -7,7 +7,7 @@
 //! the scroll anchor — by **item identity**, not raw pixel — when a measured
 //! extent differs from its estimate.
 //!
-//! # Agnostic by contract (the API-GATE invariant)
+//! # Agnostic by contract (no render or sliver types in the public surface)
 //!
 //! Nothing in this module's public surface names a render, sliver, or protocol
 //! type. The only types crossing the boundary are [`ScrollWindow`],

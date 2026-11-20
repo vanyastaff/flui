@@ -53,12 +53,15 @@ flui-foundation = { workspace = true }
 # The instants the in-process agent's conversation is polled at (std's on native targets).
 web-time = { workspace = true, optional = true }
 # Baselines, a trace's captured evidence and the Chrome lane's screenshots are PNG files: the
-# codec `image` already brings into the workspace, without `image`'s other formats.
+# codec `image` already brings into the workspace, without `image`'s other formats. The Android
+# lane decodes a `screencap` PNG with it too.
 png = "0.18"
 # A trace's evidence is named by the SHA-256 of its bytes, so a capture taken twice is kept once;
 # the Chrome lane records a fetched ChromeDriver's, and checks a kept one's
 # before it runs.
 sha2 = { workspace = true }
+# The Android lane, which runs on every host: the window `uiautomator dump` describes.
+roxmltree = { workspace = true }
 # The Chrome lane (`chrome`): the BiDi WebSocket to a ChromeDriver on the loopback, so the client
 # handshake alone and no TLS (the version `flui-cli`'s browser relay speaks); a screenshot's base64;
 # text typed a grapheme cluster at a time, the unit a WebDriver key action takes, as ICU4X segments

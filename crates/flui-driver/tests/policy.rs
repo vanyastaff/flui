@@ -246,6 +246,13 @@ fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
         ),
         ("shared, guarded", Isolation::Shared, true, None),
         ("an emulator, unguarded", Isolation::Emulator, false, None),
+        (
+            "a device in someone's hands, unguarded",
+            Isolation::Device,
+            false,
+            Some("user_activity_guard"),
+        ),
+        ("a device, guarded", Isolation::Device, true, None),
     ];
     for (row, isolation, guarded, refused) in rows {
         let (lane, log) = ScriptedLane::new(isolation);
@@ -266,6 +273,36 @@ fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
             (expected, sent) => panic!("{row}: expected refusal {expected:?}, got {sent:?}"),
         }
     }
+}
+
+/// A run that ends early and then cannot release what it pressed answers with what stays held,
+/// keeping why it ended as the first failure its verdict comes from: the person hears of the key
+/// left down, and a run they interrupted stays cannot-verify.
+#[test]
+fn input_left_held_is_named_whatever_ended_the_run() {
+    let an_event = || OsEvent::Pause(Duration::from_millis(1));
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane
+        .foreign_input_after(1, "a mouse move")
+        .failing_releases(1);
+    match lane::send_guarded(&mut lane, &[an_event(), an_event()]) {
+        Err(error @ Error::ReleaseFailed { .. }) => {
+            assert!(error.is_cannot_verify(), "{error}");
+            let Error::ReleaseFailed { held, message, .. } = error else {
+                unreachable!("matched above");
+            };
+            assert_eq!(held, vec!["Control".to_owned()]);
+            assert!(message.contains("a mouse move"), "{message}");
+        }
+        other => panic!("expected what stays held, got {other:?}"),
+    }
+    // A run that ends early and releases everything still answers why it ended.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(1, "a mouse move");
+    assert!(matches!(
+        lane::send_guarded(&mut lane, &[an_event(), an_event()]),
+        Err(Error::InterruptedByUser { .. })
+    ));
 }
 
 #[test]

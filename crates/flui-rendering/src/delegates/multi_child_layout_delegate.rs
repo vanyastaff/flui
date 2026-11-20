@@ -24,7 +24,8 @@ use crate::constraints::BoxConstraints;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::any::Any;
 /// use flui_rendering::constraints::BoxConstraints;
 /// use flui_rendering::delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate};
 /// use flui_foundation::geometry::{Offset, Size};

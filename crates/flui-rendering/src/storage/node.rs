@@ -34,20 +34,9 @@ macro_rules! with_entry {
 ///
 /// # Usage
 ///
-/// Most operations work through enum matching or convenience methods:
-///
-/// ```rust,ignore
-/// let node: &RenderNode = tree.get(id)?;
-///
-/// // Common operations work on any variant
-/// let parent = tree.parent(id);
-/// let needs_layout = node.needs_layout();
-///
-/// // Protocol-specific access
-/// if let Some(box_entry) = node.as_box() {
-///     let size = box_entry.state().geometry();
-/// }
-/// ```
+/// Operations common to both protocols (`needs_layout`, ...) work on any
+/// variant; protocol-specific access goes through `as_box` / `as_sliver` or a
+/// `match`.
 #[derive(Debug)]
 #[expect(
     clippy::exhaustive_enums,

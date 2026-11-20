@@ -18,7 +18,8 @@ use flui_semantics::SemanticsRegion;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::any::Any;
 /// use flui_rendering::delegates::CustomPainter;
 /// use flui_painting::Canvas;
 /// use flui_foundation::geometry::Size;

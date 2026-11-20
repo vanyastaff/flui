@@ -31,39 +31,30 @@
 //! Constraints can be used as cache keys to avoid redundant layout
 //! calculations:
 //!
-//! ```ignore
+//! ```
 //! use std::collections::HashMap;
+//! use flui_foundation::geometry::Size;
 //! use flui_rendering::constraints::BoxConstraints;
 //!
 //! let mut cache = HashMap::new();
 //!
 //! // Round constraints for stable cache keys
-//! let key = constraints.round_for_cache();
-//! cache.insert(key, computed_size);
-//! ```
-//!
-//! ## Batch Operations
-//!
-//! BoxConstraints supports SIMD-accelerated batch operations when the `simd`
-//! feature is enabled:
-//!
-//! ```ignore
-//! #[cfg(feature = "simd")]
-//! {
-//!     let sizes = vec![/* many sizes */];
-//!     let constrained = constraints.batch_constrain(&sizes);
-//! }
+//! let key = BoxConstraints::loose(Size::new(100.0, 50.0)).round_for_cache();
+//! cache.insert(key, Size::new(80.0, 40.0));
 //! ```
 //!
 //! # Builder Pattern
 //!
 //! All constraint types provide fluent builder APIs:
 //!
-//! ```ignore
-//! let constraints = BoxConstraints::UNCONSTRAINED
+//! ```
+//! use flui_rendering::constraints::BoxConstraints;
+//!
+//! let constraints = BoxConstraints::expand()
 //!     .with_min_width(10.0)
 //!     .with_max_width(100.0)
 //!     .with_tight_height(50.0);
+//! assert_eq!(constraints.max_width, 100.0);
 //! ```
 //!
 mod box_constraints;
@@ -132,7 +123,8 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use flui_foundation::geometry::Size;
 /// use flui_rendering::constraints::prelude::*;
 ///
 /// let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));

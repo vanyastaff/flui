@@ -17,9 +17,11 @@
 //!
 //! The lanes: [`windows`], [`macos`], [`x11`], [`wayland`] (its OS half with the `wayland`
 //! feature) and `chrome` (feature `chrome`); both Linux lanes read the app through [`atspi`].
-//! An input-method composition goes only to a lane that says it composes
-//! ([`LaneCapabilities::compositions`]), a rule [`send_guarded`] holds.
+//! [`android`] drives a device or an emulator from any host, through `adb`. An input-method
+//! composition goes only to a lane that says it composes ([`LaneCapabilities::compositions`]), a
+//! rule [`send_guarded`] holds.
 
+pub mod android;
 pub mod atspi;
 #[cfg(feature = "chrome")]
 pub mod chrome;
@@ -351,15 +353,17 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
-/// pressed is released on every exit, a failed send included; a release that leaves input held
-/// fails with [`Error::ReleaseFailed`] naming it, carrying the send's own failure as its `first`,
-/// so the call's effect and the check's verdict stay what that failure says.
+/// pressed is released on every exit, a failed send included. When the release leaves input
+/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
+/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
+/// ([`Error::effect`], [`Error::is_cannot_verify`]).
 ///
 /// # Errors
 ///
 /// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
 /// `os_ime_composition` for a composition a lane that does not compose was handed;
-/// [`Error::InterruptedByUser`]; the lane's own failure.
+/// [`Error::ReleaseFailed`] naming what stays held, with the run's own failure as its `first`
+/// when there was one; [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
     let composes = lane.capabilities().compositions;
@@ -381,9 +385,11 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     }
     let released = lane.release_all();
     match (sent, released) {
-        // What stays held is named, and why the send stopped is carried whole.
+        // The error names what stays down whatever ended the run, and keeps that first failure,
+        // which the verdict is read from: a run the person interrupted stays cannot-verify, since
+        // it did not complete because of a person, while the key left down is named all the same.
         (
-            Err(first),
+            Err(failure),
             Err(Error::ReleaseFailed {
                 lane,
                 held,
@@ -393,8 +399,8 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
         ) => Err(Error::ReleaseFailed {
             lane,
             held,
-            message: format!("{first}; then the release failed: {message}"),
-            first: Some(Box::new(first)),
+            message: format!("{message}; the run had failed first: {failure}"),
+            first: Some(Box::new(failure)),
         }),
         (sent, released) => sent.and(released),
     }

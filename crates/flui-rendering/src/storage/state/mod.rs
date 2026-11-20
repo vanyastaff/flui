@@ -164,7 +164,9 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
     /// let state = BoxRenderState::new();
     /// assert!(state.needs_layout());
     /// assert!(state.needs_paint());
@@ -190,8 +192,10 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// // Create state that doesn't need initial layout
+    /// ```
+    /// use flui_rendering::storage::{BoxRenderState, RenderFlags};
+    ///
+    /// // A state that does not need an initial layout.
     /// let state = BoxRenderState::with_flags(RenderFlags::empty());
     /// assert!(!state.needs_layout());
     /// ```

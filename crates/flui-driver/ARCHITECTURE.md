@@ -36,15 +36,16 @@ app's trees, frames and input, and this crate composes that with what only the O
   `may_have_run` for a method that acts; a late answer is passed over by its id.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
-  `Lane::guard`) refuses OS input in process and on the shared desktop without a guard, before the
-  run is announced and again at every `lane::send_guarded`, which asks the guard before every
-  event and releases everything on every exit, a release that leaves input held answering
-  `ReleaseFailed` that carries the send's own failure as its `first`, so the call's effect and the
-  check's verdict stay that failure's; an input-method composition reaches only a lane whose
-  capabilities say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused
-  before the desktop is locked or the run announced, at `send_guarded`, and by every other lane's
-  own `send`; `OsInputLock` holds one session per
-  user's desktop (a headless browser, the session's own, takes none), its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
+  `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
+  without a guard, before the run is announced and again at every `lane::send_guarded`, which
+  asks the guard before every event and releases everything on every exit, answering
+  `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
+  failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
+  `Error::is_cannot_verify`); an input-method composition reaches only a lane whose capabilities
+  say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused before the
+  desktop is locked or the run announced, at `send_guarded`, and by every other lane's own `send`;
+  `OsInputLock` holds one session per user's desktop (a headless browser, the session's own,
+  takes none), its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
   existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
   of mode 0700 in the temporary directory on Unix), `busy` only while another
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
@@ -75,9 +76,34 @@ app's trees, frames and input, and this crate composes that with what only the O
   pure, and `quartz`, `ax`, `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
   `lane::x11` keeps its keysyms, keymap and held input, safety rules, echo count and image layout
   pure, `lane::atspi::roles` and `lane::wayland::mapping` are pure, and the parts that reach an X
-  server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::chrome`
-  (feature `chrome`) is host code on every desktop: its keys, actions, input-method steps and
-  screenshot decoding are pure tables, and what reaches a browser goes through its session.
+  server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
+  host code that drives `adb`, so all of it builds on every host, and its tests script the device
+  (`testing::ScriptedAdb`). `lane::chrome` (feature `chrome`) is host code on every desktop: its
+  keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
+  browser goes through its session.
+- **The Android lane reaches the device through one door.** Every `adb` command runs through
+  `lane::android::adb::Adb` with a deadline and a bound on its output, a timed-out command being
+  `timeout` with `may_have_run`; a stream (`getevent`, `uinput`) hands over bounded records, at
+  most a fixed number waiting; a value from outside the lane enters a device shell line only
+  through `adb::quote`. What the device prints is read as untrusted input: sizes checked before
+  decoding (`screencap`, `uiautomator dump`), node, depth and device counts bounded.
+- **The Android lane holds what `input` holds, and records it once taken.** `input` holds no key
+  between commands, so `lane::android::held::HeldInput` sends a key at its release (alone, or as
+  one `keycombination` with the modifiers held) and holds only the one `motionevent` contact and
+  the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
+  device answered a sync); a timed-out press is held and cancelled at the release, and a key a
+  timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
+  It refuses a second contact, a sequence that ends with a key down (which would never be sent),
+  the keys and chords that leave the app or change the device (the fallbacks of AOSP's
+  `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
+  the mouse included, going down at the display's edge; before each press, key and text the
+  app's window must hold the focus.
+- **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
+  serial, so every command it runs names one; `lane::android::host_device` builds it from
+  `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
+  its own: a window dump at a path of the session's, and a forward from a loopback port the lane
+  picked, asked for with `--no-rebind` (a port another session holds is refused and another
+  picked) and removed by that port at its end once `adb` made it or may have.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

@@ -13,24 +13,44 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! fn hit_test(&self, ctx: &mut HitTestContext<BoxProtocol, Single, BoxParentData>) -> bool {
-//!     // Quick bounds check
-//!     if !ctx.is_within_bounds(self.size.as_rect()) {
+//! ```
+//! # use flui_foundation::Variable;
+//! # use flui_foundation::geometry::{Offset, Size};
+//! # use flui_rendering::context::{BoxHitTestContext, BoxLayoutContext};
+//! # use flui_rendering::parent_data::BoxParentData;
+//! # use flui_rendering::traits::RenderBox;
+//! # use flui_rendering::{PaintContext, RenderResult};
+//! # #[derive(Debug, Default)]
+//! # struct Column;
+//! # impl flui_foundation::inspect::Inspect for Column {
+//! #     fn kind(&self) -> &'static str { "Column" }
+//! #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+//! # }
+//! # impl RenderBox for Column {
+//! #     type Arity = Variable;
+//! #     type ParentData = BoxParentData;
+//! #     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>) -> RenderResult<Size> {
+//! #         Ok(ctx.constraints().biggest())
+//! #     }
+//! #     fn paint(&self, _ctx: &mut PaintContext<'_, Variable>) {}
+//! fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
+//!     // Quick bounds check against the size committed by layout.
+//!     if !ctx.is_within_own_size() {
 //!         return false;
 //!     }
 //!
-//!     // Test children first (reverse paint order)
+//!     // Test children first (reverse paint order), each at its laid-out offset.
 //!     for i in (0..ctx.child_count()).rev() {
-//!         if ctx.hit_test_child_at_offset(i, child_offsets[i]) {
+//!         if ctx.hit_test_child_at_layout_offset(i) {
 //!             return true;
 //!         }
 //!     }
 //!
-//!     // Add ourselves as a hit target
+//!     // Add ourselves as a hit target.
 //!     ctx.register_self_hit_entry();
 //!     true
 //! }
+//! # }
 //! ```
 
 use flui_foundation::Arity;

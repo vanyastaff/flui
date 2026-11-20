@@ -46,7 +46,7 @@ To create your own application against the checkout, follow the
 It installs the CLI from the same source and selects the toolchain for the
 generated project outside the checkout.
 
-Repository tasks beyond plain `cargo` (the CI gates, the change-scoped pre-PR check, the device checks) are `cargo xtask <command>` — `cargo xtask --help` lists them. There is no separate task runner to install; `cargo xtask doctor` names the tools the gates use (cargo-nextest, typos, taplo, lychee, Python 3.10+) and how to install each.
+Repository tasks beyond plain `cargo` (generators, the changelog, the pre-PR check) are `cargo xtask <command>` — `cargo xtask --help` lists them. There is no separate task runner to install; the tools a gate uses (cargo-nextest, typos, taplo, lychee) are installed by the job in `.github/workflows/ci.yml` that runs it.
 
 For a step-by-step setup including platform notes (Windows / macOS / Android NDK / WASM), see [`docs/getting-started.md`](docs/getting-started.md).
 
@@ -173,8 +173,8 @@ catalog, see the `flui-widgets` crate. More examples live under
 The MSRV is **Rust 1.100**, declared as `rust-version` in the workspace
 manifest (clippy reads it from there). `rust-toolchain.toml`'s `channel` is
 the *development* toolchain pin; under the policy below the two are the same
-release, so every CI job builds on the MSRV. `cargo xtask toolchain` (part of
-`cargo xtask checks`) checks that `Cargo.toml`, the `flui-cli` project
+release, so every CI job builds on the MSRV. The `checks` job in `ci.yml` (the step
+"The MSRV everywhere is the toolchain's") checks that `Cargo.toml`, the `flui-cli` project
 templates, this README's badge and `llms.txt` all agree with it.
 
 **Policy:** pre-1.0, the MSRV tracks the latest stable release and is bumped
