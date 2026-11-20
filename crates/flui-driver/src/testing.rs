@@ -25,6 +25,7 @@ use serde_json::Value;
 use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
 use crate::lane::{ActivityGuard, ForeignInput, Lane, LaneCapabilities, PositionFidelity};
+use crate::pixels::Image;
 use crate::steps::OsEvent;
 
 /// What a [`ScriptedLane`] was asked to do, read from the test's side.
@@ -95,8 +96,11 @@ impl ActivityGuard for ScriptedGuard {
     }
 }
 
+/// What a [`ScriptedLane`]'s OS shows of a window when it is captured: an image for each
+/// capture, made from the window's placement.
+pub type Screen = Box<dyn FnMut(&Placement) -> Result<Image> + Send>;
+
 /// An OS lane that sends nothing anywhere: see the [module docs](self).
-#[derive(Debug)]
 pub struct ScriptedLane {
     isolation: Isolation,
     guard: Option<ScriptedGuard>,
@@ -107,6 +111,20 @@ pub struct ScriptedLane {
     failing_releases: usize,
     /// Whether its releases panic, as a lane's code or a log subscriber can.
     panicking_releases: bool,
+    /// What its captures show; it captures nothing without one.
+    screen: Option<Screen>,
+}
+
+impl std::fmt::Debug for ScriptedLane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptedLane")
+            .field("isolation", &self.isolation)
+            .field("guard", &self.guard)
+            .field("log", &self.log)
+            .field("refuses", &self.refuses)
+            .field("captures", &self.screen.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ScriptedLane {
@@ -122,9 +140,20 @@ impl ScriptedLane {
                 refuses: None,
                 failing_releases: 0,
                 panicking_releases: false,
+                screen: None,
             },
             log,
         )
+    }
+
+    /// Whose captures of a window are what `screen` makes of its placement, each time.
+    #[must_use]
+    pub fn screen(
+        mut self,
+        screen: impl FnMut(&Placement) -> Result<Image> + Send + 'static,
+    ) -> Self {
+        self.screen = Some(Box::new(screen));
+        self
     }
 
     /// Whose releases panic, each still counted in the log.
@@ -222,6 +251,16 @@ impl Lane for ScriptedLane {
         Ok(())
     }
 
+    fn capture_window(&mut self, placement: &Placement) -> Result<Image> {
+        match self.screen.as_mut() {
+            Some(screen) => screen(placement),
+            None => Err(Error::not_supported(
+                "os_capture",
+                "the scripted lane was given no screen to capture",
+            )),
+        }
+    }
+
     fn release_all(&mut self) -> Result<()> {
         self.log.releases.fetch_add(1, Ordering::SeqCst);
         assert!(
@@ -311,18 +350,29 @@ impl ScriptedAgent {
     ///
     /// When the endpoint cannot be bound.
     pub fn start(methods: &[&str], script: Script) -> Result<Self> {
+        let mut capabilities = Capabilities::default();
+        capabilities.methods = methods.iter().map(|method| (*method).to_owned()).collect();
+        Self::start_with(capabilities, script)
+    }
+
+    /// As [`Self::start`], introducing itself with `capabilities`: the recording layers it
+    /// serves among them.
+    ///
+    /// # Errors
+    ///
+    /// When the endpoint cannot be bound.
+    pub fn start_with(capabilities: Capabilities, script: Script) -> Result<Self> {
         let place = crate::launch::EndpointPlace::new()?;
         let token = crate::launch::launch_token()?;
         let listener = listen(&place.address)?;
         let endpoint = place.address.clone();
         let served_token = token.clone();
-        let methods: Vec<String> = methods.iter().map(|method| (*method).to_owned()).collect();
         let written = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&written);
         let thread = thread::Builder::new()
             .name("flui-driver-scripted-agent".into())
             .spawn(move || {
-                let served = serve_one(&listener, &served_token, &methods, script, &counted);
+                let served = serve_one(&listener, &served_token, capabilities, script, &counted);
                 // The socket's directory (Unix) is removed once the connection was served.
                 drop(place);
                 served
@@ -406,7 +456,7 @@ fn listen(address: &str) -> io::Result<interprocess::local_socket::Listener> {
 fn serve_one(
     listener: &interprocess::local_socket::Listener,
     token: &str,
-    methods: &[String],
+    capabilities: Capabilities,
     mut script: Script,
     written: &AtomicUsize,
 ) -> io::Result<()> {
@@ -483,12 +533,10 @@ fn serve_one(
                 return Ok(());
             }
             greeted = true;
-            let mut capabilities = Capabilities::default();
-            capabilities.methods = methods.to_vec();
             ServerLine::hello(
                 HelloReply::new(PROTOCOL_VERSION)
                     .app(AppDescription::new("scripted", "scripted").with_pid(std::process::id()))
-                    .capabilities(capabilities),
+                    .capabilities(capabilities.clone()),
             )
         };
         let answer = serde_json::to_value(&answer).map_err(io::Error::other)?;

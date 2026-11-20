@@ -181,6 +181,36 @@ app's trees, frames and input, and this crate composes that with what only the O
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts
   again after its last frame, so an element that turns actionable on that frame is acted on, and
   a refusal reports what the app last showed.
+- **A capture names its source, and a source the driver cannot read is named, never faked.**
+  `pixels::Capture` carries its `CaptureSource`, backend, scale and frame. `os` comes from the
+  lane (`Lane::capture_window`, one `pixels::Image` type for every lane); `presented` and
+  `rendered` are `not_supported` naming the method while the app does not serve it, and naming
+  `capture_payload` while the connections read no binary frame.
+- **A baseline check passes only by matching.** `pixels::Baselines::compare` answers `Matched`
+  or a status that fails (`Missing`, `SizeDiffers`, `Differs`, `Written`): a baseline an update
+  wrote fails its check, and `FLUI_DRIVER_UPDATE_BASELINES` is refused under `CI`. A missing or
+  differing baseline leaves `.new.png` (and `.diff.png`) beside it; a match or a write removes
+  them. A stable capture compares masked images, so what a mask hides cannot keep it unstable,
+  and it ends after `MAX_STABLE_CAPTURES` captures whatever its clock does.
+- **Every image and trace the driver reads is bounded before it is decoded.** A PNG's file
+  length, then its declared size, then the decoder's allocations (`pixels::codec`); a trace's
+  file length, line length and row count (`trace::reader`); a native recording through the
+  format's own `Budget` (`trace::native::read`). An evidence name reaches no file outside its
+  trace.
+- **A trace records the caller's commands, once each.** `Driver::command` is the one place a
+  command becomes a row: the outermost call only (`command_depth`), its parameters as written
+  (locators, never only the handle they resolved to), written before it runs, its result after;
+  a panic out of the command restores the depth and writes no result. The rows of the trace's own
+  recording go to `input.jsonl` and `native/`; every other event is written and kept for
+  `take_events`. A write that fails is the trace's first failure, nothing is written after it,
+  and `finish_trace` answers it; a session that ends unfinished leaves no `end`, which readers
+  report as incomplete, and so does a last line torn mid-write.
+- **One writer of native recordings.** `trace::native::NativeFiles` writes a recording's native
+  layer for a trace and for `flui record --native` alike, and `trace::native::read` reads one
+  back through `flui-protocol`'s schema, without the core.
+- **Redaction is by field over the JSON a row carries** (`trace::TEXT_FIELDS`), a command's
+  `TextMatch` kept as the caller's own; `trace::every_text_field_of_the_wire_is_redacted_or_named_as_kept`
+  holds every free string field of the protocol's schema to one side of the list.
 - **The verdict rule is one function.** `Report::verdict`: `fail` when a check failed, else
   `cannot_verify` when a check could not be made or nothing was checked, else `pass`.
   `Error::is_cannot_verify` decides which failures cannot be verified.

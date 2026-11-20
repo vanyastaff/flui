@@ -18,7 +18,7 @@ use super::keys::{Keysym, NO_SYMBOL};
 use super::safety::{Keycode, LANE};
 use crate::coordinates::DevicePoint;
 use crate::error::{Error, Result};
-use crate::lane::OsCapture;
+use crate::pixels::Image;
 
 /// The most windows the search for the app's window visits.
 const MAX_WINDOWS: usize = 4096;
@@ -462,7 +462,7 @@ impl Server {
     }
 
     /// `window`'s pixels, through `GetImage`.
-    pub(super) fn capture(&self, window: Window) -> Result<OsCapture> {
+    pub(super) fn capture(&self, window: Window) -> Result<Image> {
         let geometry = self
             .connection
             .get_geometry(window)
@@ -518,6 +518,6 @@ impl Server {
             blue_mask: visual.blue_mask,
         };
         let rgba = image::rgba(&format, &reply.data)?;
-        OsCapture::try_new(format.width, format.height, rgba)
+        Image::try_new(format.width, format.height, rgba)
     }
 }

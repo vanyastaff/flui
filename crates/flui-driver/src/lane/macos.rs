@@ -89,9 +89,7 @@ mod lane {
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::windows::activity::slices;
-    use crate::lane::{
-        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
-    };
+    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
     use crate::steps::OsEvent;
 
     /// How long the lane waits for the app it brought to the front to be there.
@@ -526,7 +524,7 @@ mod lane {
             ax::press(self.pid, target.frame, target.scale, identifier)
         }
 
-        fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+        fn capture_window(&mut self, placement: &Placement) -> Result<crate::pixels::Image> {
             let target = self.find(placement)?;
             capture::capture(target.number, target.frame, target.size, target.scale)
         }

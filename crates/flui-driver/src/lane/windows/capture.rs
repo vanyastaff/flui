@@ -32,8 +32,8 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::core::Interface;
 
 use crate::error::Result;
-use crate::lane::OsCapture;
 use crate::lane::windows::win32::{Apartment, Hwnd, client_area, lane_error};
+use crate::pixels::Image;
 
 /// How long a capture waits for the compositor's first frame of the window.
 pub const FRAME_WITHIN: Duration = Duration::from_secs(3);
@@ -51,7 +51,7 @@ fn failed(what: &str) -> impl FnOnce(windows::core::Error) -> crate::error::Erro
 ///
 /// When Direct3D or Windows Graphics Capture is unavailable, the compositor sends no frame in
 /// time, or the window's client area is not inside the frame.
-pub(super) fn capture(window: Hwnd) -> Result<OsCapture> {
+pub(super) fn capture(window: Hwnd) -> Result<Image> {
     let _apartment = Apartment::enter()?;
     let (device, context) = device()?;
     let dxgi: IDXGIDevice = device.cast().map_err(failed("the DXGI device"))?;
@@ -156,7 +156,7 @@ fn read_client(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
     texture: &ID3D11Texture2D,
-) -> Result<OsCapture> {
+) -> Result<Image> {
     let (client, width, height, _) = client_area(window)?;
     let mut frame = RECT::default();
     // SAFETY: a window handle and a local `RECT` with its size.
@@ -245,5 +245,5 @@ fn read_client(
     }
     // SAFETY: the subresource mapped above.
     unsafe { context.Unmap(&destination, 0) };
-    OsCapture::try_new(width, height, rgba)
+    Image::try_new(width, height, rgba)
 }

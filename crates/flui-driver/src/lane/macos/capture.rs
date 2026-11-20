@@ -32,12 +32,12 @@ use objc2_core_graphics::{
 };
 
 use crate::error::{Error, Result};
-use crate::lane::OsCapture;
 use crate::lane::macos::callback;
 use crate::lane::macos::quartz::{granted, lane_error, os_version};
 use crate::lane::macos::safety::{self, Permission, Refusal};
 use crate::lane::macos::screen::{self, PointRect};
 use crate::lane::macos::version::{MacosVersion, WINDOW_SCREENSHOT};
+use crate::pixels::Image;
 
 /// How long the lane waits for ScreenCaptureKit's answer.
 pub const CAPTURE_WITHIN: Duration = Duration::from_secs(10);
@@ -139,7 +139,7 @@ fn device(logical: f64, scale: f64) -> Result<usize> {
 }
 
 /// `image` as tightly packed RGBA rows, top row first.
-fn rgba(image: &CGImage) -> Result<OsCapture> {
+fn rgba(image: &CGImage) -> Result<Image> {
     let width = CGImage::width(Some(image));
     let height = CGImage::height(Some(image));
     let (Ok(width32), Ok(height32)) = (u32::try_from(width), u32::try_from(height)) else {
@@ -180,7 +180,7 @@ fn rgba(image: &CGImage) -> Result<OsCapture> {
     );
     CGContext::draw_image(Some(&*context), bounds, Some(image));
     drop(context);
-    OsCapture::try_new(width32, height32, pixels)
+    Image::try_new(width32, height32, pixels)
 }
 
 /// The window server's capture of the window `number`, framed by `frame`, whose content is `size`
@@ -197,7 +197,7 @@ pub(super) fn capture(
     frame: PointRect,
     size: LogicalSize,
     scale: f64,
-) -> Result<OsCapture> {
+) -> Result<Image> {
     safety::permitted(
         Permission::ScreenRecording,
         granted(Permission::ScreenRecording),
@@ -211,7 +211,7 @@ pub(super) fn capture(
     }
     let classes = Classes::load()?;
     let (width, height) = (device(frame.width, scale)?, device(frame.height, scale)?);
-    let (answer, answered) = mpsc::channel::<Result<OsCapture>>();
+    let (answer, answered) = mpsc::channel::<Result<Image>>();
     let content_handler: RcBlock<dyn Fn(*mut AnyObject, *mut AnyObject)> =
         RcBlock::new(move |content: *mut AnyObject, error: *mut AnyObject| {
             // A panic never unwinds into ScreenCaptureKit's queue: the waiting side hears of it.
@@ -253,7 +253,7 @@ fn shoot(
     number: u32,
     width: usize,
     height: usize,
-    answer: &mpsc::Sender<Result<OsCapture>>,
+    answer: &mpsc::Sender<Result<Image>>,
 ) -> Result<()> {
     // SAFETY: the handler's content is an `SCShareableContent` or null, valid for the call.
     let Some(content) = (unsafe { content.as_ref() }) else {

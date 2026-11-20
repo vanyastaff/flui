@@ -52,9 +52,7 @@ mod lane {
     use crate::lane::atspi::client::{A11yBus, WindowTarget};
     use crate::lane::windows::screen;
     use crate::lane::x11::keys::{self, Keysym};
-    use crate::lane::{
-        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
-    };
+    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
     use crate::steps::OsEvent;
 
     /// Where the lane's EIS socket comes from.
@@ -437,7 +435,7 @@ mod lane {
             bus.invoke(self.window_target(placement), identifier)
         }
 
-        fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+        fn capture_window(&mut self, placement: &Placement) -> Result<crate::pixels::Image> {
             let _ = placement;
             Err(Error::not_supported(
                 "os_capture",

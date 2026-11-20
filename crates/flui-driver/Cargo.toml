@@ -46,6 +46,11 @@ flui-view = { workspace = true, optional = true }
 flui-foundation = { workspace = true }
 # The instants the in-process agent's conversation is polled at (std's on native targets).
 web-time = { workspace = true, optional = true }
+# Baselines and a trace's captured evidence are PNG files: the codec `image` already brings into
+# the workspace, without `image`'s other formats.
+png = "0.18"
+# A trace's evidence is named by the SHA-256 of its bytes, so a capture taken twice is kept once.
+sha2 = { workspace = true }
 
 # Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.
 [target.'cfg(any(unix, windows))'.dependencies]
