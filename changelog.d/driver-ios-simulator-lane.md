@@ -6,8 +6,8 @@
   ends it with `simctl terminate`; `Lane::capture_window` reads the simulator's screen through
   `simctl io screenshot`. The lane sends no input: every touch, key, text, scroll and button is
   refused before anything is sent as `not_supported` naming `ios_simulator_hid`, with the Xcode
-  and runtime, until a supported channel exists. A session holds its simulator (`SimulatorLock`), and the lane ends only its own
-  app's running process. `testing::ScriptedXcrun` scripts the Simulator for tests.
+  and runtime, until a supported channel exists. A session holds its simulator (`SimulatorLock`), so the app the lane ends is its
+  own. `testing::ScriptedXcrun` scripts the Simulator for tests.
 - `Launch::window_insets` opens the headless window with a safe area or a keyboard covering it, as
   a native host reports them.
 

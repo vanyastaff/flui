@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD15 is built and under review (its HID spike answered no-go, so the lane sends no input under D5's rule and an input channel is the owner's decision; neither Done-when item is met: the HID probe was not built and its runs on a Simulator are owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD15 is built and under review (its HID spike answered no-go, so the lane sends no input under D23's rule and an input channel is the owner's decision; neither Done-when item is met: the HID probe was not built and its runs on a Simulator are owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -1310,19 +1310,19 @@ graph LR
 - **Done when:** the scenarios run on S, and the probe answers `not_supported` with the Xcode
   version on a mismatched runtime (a test with a mocked selector table).
 - **Status (2026-11-20):** built; the pull request is under review. The spike answered no-go, and
-  D5 now states the rule: the lane sends no OS input, each input refused as `not_supported` naming
-  `ios_simulator_hid`, until a supported channel exists, which the owner chooses. Neither Done-when
-  item is met:
+  D23 (the session lead's change of 2026-11-20, for the owner to confirm) states the rule: the lane
+  sends no OS input, each input refused as `not_supported` naming `ios_simulator_hid`, until a
+  supported channel exists, which the owner chooses. Neither Done-when item is met:
   - **The HID probe on a mismatched runtime: not met.** It belongs to the go branch, which was not
     built: no HID channel is used, so there is no selector table to mock and no runtime to mismatch.
     What runs instead is the refusal of every input under every Xcode, naming the Xcode and the
     runtime (`every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_sent`),
-    which is the rule D5 states, not this item.
+    which is the rule D23 states, not this item.
   - **The scenarios on S: not met.** No Mac was at hand; the runs are owed (below).
 - **Spike (2026-11-20), no-go.** No Mac was at hand, so the spike read `idb`'s record rather than
-  run a prototype; D5 gives the evidence and its scope (Indigo suppressed from Xcode 27, DTUHID the
+  run a prototype; D23 gives the evidence and its scope (Indigo suppressed from Xcode 27, DTUHID the
   default there; no loss recorded before it, where the lane refuses all the same). Besides it:
-  `simctl io` has no input operation, and the channels still open are D5's (Quartz events on the
+  `simctl io` has no input operation, and the channels still open are D23's (Quartz events on the
   Simulator's window, an XCUITest runner D5 forbids).
 - **Evidence (2026-11-20):**
   - On every host (`driver_it`, against `ScriptedXcrun`; Windows 11 and WSL Ubuntu 24.04):
@@ -1336,11 +1336,11 @@ graph LR
     `the_launch_line_gives_the_apps_process`, `the_xcode_version_is_read_from_xcodebuild`,
     `a_capture_is_the_screen_when_the_window_fills_it`,
     `a_screen_of_another_size_than_the_window_is_refused_before_it_is_decoded`,
-    `a_pngs_size_is_read_from_its_header`, `the_services_listing_gives_the_apps_running_processes`,
+    `a_pngs_size_is_read_from_its_header`,
     `a_second_session_on_a_simulator_is_refused_while_the_first_holds_it`,
     `a_commands_arguments_keep_its_paths_and_its_forms_keep_its_values_out`; on every Unix host,
     `ios_simulator_lane::start::starting_the_app_hands_it_its_endpoint_and_token_as_launch_values`,
-    `only_the_apps_own_running_process_is_ended_and_an_exited_one_is_no_failure`,
+    `the_app_is_always_ended_and_one_that_already_exited_is_no_failure`,
     `a_launch_that_timed_out_still_ends_the_app`, `a_lane_that_started_nothing_ends_nothing`,
     `a_path_that_is_not_utf8_is_passed_as_it_is`, and `HostXcrun` against a stand-in `xcrun`
     (`ios_simulator_host::*`: the launch values in `simctl`'s environment alone and no inherited
@@ -1370,15 +1370,17 @@ graph LR
     `simctl launch --terminate-running-process`, its endpoint a Unix socket in a private directory
     of the host and its token as `SIMCTL_CHILD_` variables of `simctl`'s environment (ADR-0239),
     which no command's text or debug form carries, and no `SIMCTL_CHILD_` variable inherited from
-    the driver's environment reaches the app. When it ends, the lane ends the app with `simctl
-    terminate`, since the iOS runner does not exit on a disconnect, once `launchctl list` inside
-    the simulator shows the process `simctl launch` started still running (an app that exited is
-    neither ended nor reported), and removes the socket's directory after.
+    the driver's environment reaches the app. When it ends, the lane always ends the app with
+    `simctl terminate`, since the iOS runner does not exit on a disconnect; an answer of `found
+    nothing to terminate` is an app that already exited and is not reported, and any other failure
+    is logged. It then removes the socket's directory.
   - A session holds its simulator (`SimulatorLock`, an OS file lock named by the UDID): the launch
     and the terminate name the app by its bundle identifier, so a second session on a simulator is
     refused as busy rather than allowed to end the first one's copy. Ending by process id was the
     other option; `simctl` has no terminate by pid, and a pid read after the app exited may name
-    another process.
+    another process. Asking `launchctl list` in the simulator whether the app still runs was
+    tried and dropped: an output form the lane did not know skipped the terminate and leaked the
+    app.
   - The `adb` and `xcrun` doors run their tools through one bounded runner, `lane::tool`.
   - The `ios-*` scenarios are `ios_input` (the tap on the pad and the press beside it) and
     `safe_area` (a `SafeArea`'s child inset by the padding the window reports, the `Insets` app);
@@ -1543,7 +1545,7 @@ graph LR
     `tools/device-checks/`;
   - docs: `docs/testing.md` (a driver section replaces the live-test sections), `docs/crates.md`,
     `docs/platform-parity.md` and `docs/gaps.md` (no Android/iOS/web accessibility tree; no iOS
-    Simulator input, D5), and the AGENTS.md command table.
+    Simulator input, D23), and the AGENTS.md command table.
 - **Done when:**
   - the suite runs on every target the owner can reach;
   - each target has a parity row with the run date;

@@ -5,7 +5,7 @@
 //! simulator's input change with the Xcode release, so the version is what a reader needs to judge
 //! a refusal.
 //!
-//! **Why no input.** The rule is the flui-driver spec's decision D5: the lane sends no OS input
+//! **Why no input.** The rule, as the flui-driver spec records it: the lane sends no OS input
 //! until a supported channel exists, and every input event is refused as `not_supported` naming
 //! [`HID_CAPABILITY`] before anything is sent, on every Xcode; capture, the app's process and the
 //! agent's own trees and synthetic input still work. No public channel puts a touch, a key or a
@@ -21,9 +21,9 @@
 //!   daemon inside the simulator that can abort while a boot settles and then discard sends in
 //!   silence (`idb`'s `SimulatorDTUHIDConnection`).
 //!
-//! The channels still open are the owner's to choose (D5): Quartz events on the Simulator's own
-//! window through the macOS lane, on the shared desktop, and an XCUITest runner, which D5's "no
-//! Swift" forbids.
+//! The channels still open are the owner's to choose: Quartz events on the Simulator's own window
+//! through the macOS lane, on the shared desktop, and an XCUITest runner, which the spec's rule of
+//! no Swift forbids.
 
 use crate::error::Error;
 

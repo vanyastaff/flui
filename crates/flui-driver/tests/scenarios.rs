@@ -852,12 +852,21 @@ fn phone(top: f64, bottom: f64) -> Driver {
     let insets = WindowInsets::ZERO
         .try_with_safe_area(EdgeInsets::new(top, 0.0, bottom, 0.0))
         .expect("finite insets");
-    Driver::launch(
-        Launch::headless(|| Insets)
-            .window_size(393, 852)
-            .window_insets(insets),
-    )
-    .expect("the headless app starts")
+    let launch = Launch::headless(|| Insets)
+        .window_size(393, 852)
+        .window_insets(insets)
+        .expect("a headless window takes its insets");
+    Driver::launch(launch).expect("the headless app starts")
+}
+
+/// A native window's insets are its OS's: a launch of anything but a headless view refuses them.
+#[test]
+fn only_a_headless_launch_takes_window_insets() {
+    let refused = Launch::executable("app").window_insets(WindowInsets::ZERO);
+    assert!(
+        matches!(&refused, Err(Error::InvalidArgument { message, .. }) if message.contains("headless")),
+        "{refused:?}"
+    );
 }
 
 /// The safe-area scenario in a window whose host reports an iPhone's notch and home indicator,
@@ -891,10 +900,24 @@ fn the_safe_area_scenario_measures_a_padded_window_on_the_headless_target() {
 /// reads as zero, as does a `SafeArea` that ignored it.
 #[test]
 fn the_safe_area_scenario_fails_a_portrait_window_that_reports_no_inset() {
-    let report = run("ios-safe-area", phone(0.0, 34.0), safe_area);
-    assert_eq!(report.verdict(), Verdict::Fail, "{:#?}", report.checks());
-    let report = run("ios-safe-area", phone(0.0, 0.0), safe_area);
-    assert_eq!(report.verdict(), Verdict::Fail, "{:#?}", report.checks());
+    for (top, bottom) in [(0.0, 34.0), (0.0, 0.0)] {
+        let report = run("ios-safe-area", phone(top, bottom), safe_area);
+        assert_eq!(report.verdict(), Verdict::Fail, "{:#?}", report.checks());
+        let failed: Vec<&Check> = report
+            .checks()
+            .iter()
+            .filter(|check| matches!(check.outcome, Outcome::Failed { .. }))
+            .collect();
+        assert!(
+            matches!(
+                failed.as_slice(),
+                [check] if check.name == "a SafeArea insets its child by the padding the window reports"
+                    && matches!(&check.outcome, Outcome::Failed { reason }
+                        if reason.contains("a top inset in a portrait window"))
+            ),
+            "the safe-area check fails for the missing top inset: {failed:#?}"
+        );
+    }
 }
 
 /// The conformance row a platform's run reports: here on the headless target, through the OS lane

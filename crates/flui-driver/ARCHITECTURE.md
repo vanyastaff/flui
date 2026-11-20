@@ -109,14 +109,14 @@ app's trees, frames and input, and this crate composes that with what only the O
   picked, asked for with `--no-rebind` (a port another session holds is refused and another
   picked) and removed by that port at its end once `adb` made it or may have.
 - **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
-  spec's decision D5; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every
-  input event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before
-  anything is sent. It reads the screen through `simctl io screenshot`, whose file length and
-  declared size are checked against the window before a pixel is decoded, and takes no simulator
-  nobody named (`FLUI_IOS_SIMULATOR_UDID`). A session holds its simulator (`SimulatorLock`), since
-  the launch and the terminate name the app by its bundle identifier; it ends the app it started
-  with `simctl terminate`, since an iOS app does not exit when its driver goes, once `launchctl
-  list` in the simulator shows that process still running. The launch values reach the app as
+  spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input
+  event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything
+  is sent. It reads the screen through `simctl io screenshot`, whose file length and declared size
+  are checked against the window before a pixel is decoded, and takes no simulator nobody named
+  (`FLUI_IOS_SIMULATOR_UDID`). A session holds its simulator (`SimulatorLock`), since the launch
+  and the terminate name the app by its bundle identifier; it always ends the app it started with
+  `simctl terminate`, since an iOS app does not exit when its driver goes, reading an answer that
+  nothing runs as an app that already exited. The launch values reach the app as
   `SIMCTL_CHILD_` variables in `simctl`'s environment, never in a command's text or debug form,
   and no such variable inherited from the driver's environment reaches it.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:

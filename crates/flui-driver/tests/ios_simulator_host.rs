@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use flui_driver::Error;
 use flui_driver::lane::ios_simulator::device::Udid;
 use flui_driver::lane::ios_simulator::xcrun::{HostXcrun, Xcrun, XcrunCommand};
+use flui_driver::testing::host_xcrun_with;
 
 use crate::android_lane::png_of;
 use crate::ios_simulator_lane::{BUNDLE, UDID};
@@ -74,7 +75,12 @@ fn the_launch_values_reach_simctl_as_its_childrens_and_nowhere_else() {
         OsString::from("SIMCTL_CHILD_STRAY"),
         OsString::from("a value the lane did not set"),
     )]);
-    let mut xcrun = HostXcrun::at(program).environment(inherited);
+    let mut xcrun = host_xcrun_with(program, inherited);
+    let shown = format!("{xcrun:?}");
+    assert!(
+        shown.contains("SIMCTL_CHILD_STRAY") && !shown.contains("a value the lane did not set"),
+        "the debug form names keys, never values: {shown}"
+    );
     let launch = XcrunCommand::Launch {
         udid: udid(UDID),
         bundle: BUNDLE.to_owned(),

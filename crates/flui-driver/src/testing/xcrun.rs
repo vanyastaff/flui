@@ -1,6 +1,9 @@
-//! A Simulator scripted for the iOS Simulator lane: [`ScriptedXcrun`].
+//! A Simulator scripted for the iOS Simulator lane: [`ScriptedXcrun`]; and the host side's test
+//! hooks, [`host_xcrun_with`] and [`simulator_lock_in`].
 
 use std::collections::VecDeque;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -8,9 +11,30 @@ use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::error::ErrorCode;
 
 use crate::error::{Error, Result};
-use crate::lane::ios_simulator::LANE;
 use crate::lane::ios_simulator::device::Udid;
-use crate::lane::ios_simulator::xcrun::{Xcrun, XcrunCommand, XcrunReply};
+use crate::lane::ios_simulator::xcrun::{HostXcrun, Xcrun, XcrunCommand, XcrunReply};
+use crate::lane::ios_simulator::{LANE, SimulatorLock};
+
+/// The host's `xcrun` door to the program at `program`, run with `variables` in place of the
+/// test process's environment, its `SIMCTL_CHILD_` variables still left out, so a test plants a
+/// variable the driver's environment would carry without changing its own.
+#[must_use]
+pub fn host_xcrun_with(
+    program: impl Into<PathBuf>,
+    variables: impl IntoIterator<Item = (OsString, OsString)>,
+) -> HostXcrun {
+    HostXcrun::at(program).environment(variables)
+}
+
+/// A hold on the simulator `udid` whose lock file is in `dir`, a test's own directory, so tests
+/// that run at once each hold their simulator apart.
+///
+/// # Errors
+///
+/// As [`SimulatorLock::acquire`].
+pub fn simulator_lock_in(dir: &Path, udid: &Udid) -> Result<SimulatorLock> {
+    SimulatorLock::acquire_in(dir, udid)
+}
 
 /// How a rule answers.
 #[derive(Debug, Clone)]

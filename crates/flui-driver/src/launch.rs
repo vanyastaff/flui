@@ -557,11 +557,20 @@ impl Launch {
     /// Open the headless window with `insets` covering it (a safe area, a keyboard), as a native
     /// host reports them: they reach the window's `MediaQuery` as they do on a device. None when
     /// not named.
-    pub fn window_insets(mut self, insets: flui_platform::WindowInsets) -> Self {
-        if let Target::Headless(headless) = &mut self.target {
-            headless.insets = insets;
-        }
-        self
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a launch of anything but a headless view, whose window's
+    /// insets are its OS's, not the driver's to set.
+    pub fn window_insets(mut self, insets: flui_platform::WindowInsets) -> Result<Self> {
+        let Target::Headless(headless) = &mut self.target else {
+            return Err(Error::invalid_argument(
+                "only a headless window takes its insets from the launch; a native window's come \
+                 from its OS",
+            ));
+        };
+        headless.insets = insets;
+        Ok(self)
     }
 
     /// How long the headless app's agent waits for its window's answer, in virtual time, before

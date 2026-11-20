@@ -75,12 +75,6 @@ pub enum XcrunCommand {
         /// Where the PNG is written.
         path: PathBuf,
     },
-    /// `xcrun simctl spawn <udid> launchctl list`: the services the simulator's launchd runs,
-    /// an app among them as `UIKitApplication:<bundle>[…]` with its process id.
-    ListServices {
-        /// The simulator.
-        udid: Udid,
-    },
 }
 
 impl XcrunCommand {
@@ -108,9 +102,6 @@ impl XcrunCommand {
             }
             Self::Screenshot { udid, .. } => {
                 words(&["simctl", "io", udid.as_str(), "screenshot", "--type=png"])
-            }
-            Self::ListServices { udid } => {
-                words(&["simctl", "spawn", udid.as_str(), "launchctl", "list"])
             }
         };
         if let Self::Install { app: path, .. } | Self::Screenshot { path, .. } = self {
@@ -295,10 +286,10 @@ pub(crate) fn command_failed(command: &XcrunCommand, reply: &XcrunReply, failure
     }
 }
 
-/// `xcrun` on this host. It runs with the driver's environment (or the one
-/// [`environment`](Self::environment) names) less every `SIMCTL_CHILD_` variable, so the only
-/// values `simctl launch` hands an app are the lane's own.
-#[derive(Debug, Clone)]
+/// `xcrun` on this host. It runs with the driver's environment (a test's stand-in one under the
+/// test kit) less every `SIMCTL_CHILD_` variable, so the only values `simctl launch` hands an app
+/// are the lane's own. Its [`Debug`] form names the variables' keys, never their values.
+#[derive(Clone)]
 pub struct HostXcrun {
     program: PathBuf,
     environment: Option<Vec<(OsString, OsString)>>,
@@ -327,9 +318,16 @@ impl HostXcrun {
     }
 
     /// Run `xcrun` with `variables` in place of the driver's environment, its `SIMCTL_CHILD_`
-    /// variables still left out.
+    /// variables still left out: a test's stand-in environment (`testing::host_xcrun_with`).
+    #[cfg_attr(
+        not(all(feature = "testing", any(unix, windows))),
+        expect(
+            dead_code,
+            reason = "only the test kit runs xcrun in an environment of its own"
+        )
+    )]
     #[must_use]
-    pub fn environment(
+    pub(crate) fn environment(
         mut self,
         variables: impl IntoIterator<Item = (OsString, OsString)>,
     ) -> Self {
@@ -355,6 +353,22 @@ impl HostXcrun {
             "could not start `{}`: {error}; the iOS Simulator lane runs on a Mac with Xcode",
             self.program.display()
         ))
+    }
+}
+
+impl std::fmt::Debug for HostXcrun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let keys: Option<Vec<std::borrow::Cow<'_, str>>> =
+            self.environment.as_ref().map(|variables| {
+                variables
+                    .iter()
+                    .map(|(key, _)| key.to_string_lossy())
+                    .collect()
+            });
+        f.debug_struct("HostXcrun")
+            .field("program", &self.program)
+            .field("environment_keys", &keys)
+            .finish()
     }
 }
 

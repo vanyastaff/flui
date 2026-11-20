@@ -20,6 +20,7 @@ use flui_driver::protocol::session::{Isolation, Placement};
 use flui_driver::protocol::tree::WindowId;
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::ScriptedXcrun;
+use flui_driver::testing::simulator_lock_in;
 
 use crate::android_lane::png_of;
 
@@ -71,7 +72,7 @@ fn udid() -> Udid {
 /// hold: the directory first in the pair, so a binding of both drops the hold first.
 pub(crate) fn held() -> (tempfile::TempDir, SimulatorLock) {
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let lock = SimulatorLock::acquire_in(dir.path(), &udid()).expect("the simulator is free");
+    let lock = simulator_lock_in(dir.path(), &udid()).expect("the simulator is free");
     (dir, lock)
 }
 
@@ -289,36 +290,21 @@ fn the_launch_line_gives_the_apps_process() {
     }
 }
 
-#[test]
-fn the_services_listing_gives_the_apps_running_processes() {
-    let printed = "PID\tStatus\tLabel\n\
-                   -\t0\tUIKitApplication:dev.flui.scenario[0a0b][rb-legacy]\n\
-                   812\t0\tUIKitApplication:dev.flui.scenario[a1b2][rb-legacy]\n\
-                   813\t0\tUIKitApplication:dev.flui.scenario.other[c3d4][rb-legacy]\n\
-                   814\t0\tcom.apple.dev.flui.scenario\n\
-                   0\t0\tUIKitApplication:dev.flui.scenario[e5f6]\n\
-                   815 0 UIKitApplication:dev.flui.scenario[0001]\n\
-                   816\n";
-    assert_eq!(device::parse_running(printed, BUNDLE), [812, 815]);
-    assert_eq!(device::parse_running("", BUNDLE), Vec::<u32>::new());
-}
-
 /// One session holds a simulator at a time: the second is refused as busy until the first lets
 /// go, and another simulator is free meanwhile.
 #[test]
 fn a_second_session_on_a_simulator_is_refused_while_the_first_holds_it() {
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let first = SimulatorLock::acquire_in(dir.path(), &udid()).expect("a free simulator");
-    let error = SimulatorLock::acquire_in(dir.path(), &udid()).expect_err("held");
+    let first = simulator_lock_in(dir.path(), &udid()).expect("a free simulator");
+    let error = simulator_lock_in(dir.path(), &udid()).expect_err("held");
     assert!(
         matches!(&error, Error::Busy { message, .. } if message.contains(UDID)),
         "{error:?}"
     );
     let other = Udid::try_new("0A1B2C3D-4E5F-4061-8728-394A5B6C7D8E").expect("a UDID");
-    let _other = SimulatorLock::acquire_in(dir.path(), &other).expect("another simulator");
-    assert_eq!(first.udid(), &udid());
+    let _other = simulator_lock_in(dir.path(), &other).expect("another simulator");
     drop(first);
-    let _again = SimulatorLock::acquire_in(dir.path(), &udid()).expect("free once let go");
+    let _again = simulator_lock_in(dir.path(), &udid()).expect("free once let go");
 }
 
 /// A path goes to `xcrun` as it is, and a relative one that starts with `-` as `./` and it; a
@@ -404,9 +390,9 @@ fn the_xcode_version_is_read_from_xcodebuild() {
 /// Every input, under each Xcode the lane may meet, is refused before anything is sent, naming the
 /// capability, the Xcode and the runtime; a sequence of pauses alone goes through. Xcode 27.1 is
 /// one where the Simulator drops Indigo buttons and keys; Xcode 26.4 is one before that, where
-/// `idb` records no loss and still the lane refuses, since the rule (the spec's decision D5) is no
-/// OS input until a supported channel exists, not a split by Xcode version; the third gives no
-/// version at all.
+/// `idb` records no loss and still the lane refuses, since the rule the flui-driver spec records
+/// is no OS input until a supported channel exists, not a split by Xcode version; the third gives
+/// no version at all.
 #[test]
 fn every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_sent() {
     let versions = [
@@ -796,14 +782,6 @@ mod start {
 
     use super::{BUNDLE, connect, scripted, udid};
 
-    /// What `launchctl list` prints inside a simulator where the scenario app runs as `pid`.
-    fn running(pid: u32) -> String {
-        format!(
-            "PID\tStatus\tLabel\n-\t0\tcom.apple.springboard.idle\n\
-             {pid}\t0\tUIKitApplication:{BUNDLE}[a1b2][rb-legacy]\n"
-        )
-    }
-
     fn launched(xcrun: &flui_driver::testing::ScriptedXcrun) -> Vec<XcrunCommand> {
         xcrun
             .commands()
@@ -820,7 +798,6 @@ mod start {
                 "simctl launch",
                 XcrunReply::new(0, format!("{BUNDLE}: 4321\n")),
             )
-            .reply("simctl spawn", XcrunReply::new(0, running(4321)))
             .reply("simctl terminate", XcrunReply::new(0, ""));
         let (_dir, mut lane) = connect(&xcrun);
         let app = SimulatorApp::try_new(BUNDLE)
@@ -897,11 +874,10 @@ mod start {
             udid: udid(),
             bundle: BUNDLE.to_owned(),
         };
-        let commands = xcrun.commands();
         assert_eq!(
-            commands[commands.len() - 2..],
-            [XcrunCommand::ListServices { udid: udid() }, terminate],
-            "the lane ends the app it finds still running"
+            xcrun.commands().last(),
+            Some(&terminate),
+            "the lane ends the app it started"
         );
         assert!(
             !directory.exists(),
@@ -940,53 +916,59 @@ mod start {
         );
     }
 
-    /// When the lane ends, the app it started is ended only while its own process runs: one that
-    /// exited is neither ended nor reported, and neither is a copy someone else started since;
-    /// one the lane could not end is reported as still running.
+    /// What the lane did when it ended, the Simulator answering `simctl terminate` with
+    /// `terminate` and anything it is asked inside the simulator (`simctl spawn`) with `inside`:
+    /// whether it terminated, whether it asked anything inside, and whether it reported the app
+    /// as possibly still running.
+    fn ended(inside: &str, terminate: XcrunReply) -> (bool, bool, bool) {
+        let xcrun = scripted()
+            .reply(
+                "simctl launch",
+                XcrunReply::new(0, format!("{BUNDLE}: 4321\n")),
+            )
+            .reply("simctl spawn", XcrunReply::new(0, inside))
+            .reply("simctl terminate", terminate);
+        let (_dir, mut lane) = connect(&xcrun);
+        lane.start(&SimulatorApp::try_new(BUNDLE).expect("a bundle"))
+            .expect("the app starts");
+        let ((), log) = flui_testing::log_capture::capture(|| drop(lane));
+        let log_text = xcrun.log();
+        let terminated = log_text
+            .iter()
+            .any(|line| line.starts_with("simctl terminate"));
+        let asked_inside = log_text.iter().any(|line| line.starts_with("simctl spawn"));
+        (terminated, asked_inside, log.contains("may still run"))
+    }
+
+    /// When the lane ends, it always ends the app it started: the session holds the simulator,
+    /// so the copy `simctl terminate` names is its own. An answer that nothing runs is an app that
+    /// already exited and is not reported; any other failure is.
     #[test]
-    fn only_the_apps_own_running_process_is_ended_and_an_exited_one_is_no_failure() {
-        let ended = |services: &str, terminate: XcrunReply| {
-            let xcrun = scripted()
-                .reply(
-                    "simctl launch",
-                    XcrunReply::new(0, format!("{BUNDLE}: 4321\n")),
-                )
-                .reply("simctl spawn", XcrunReply::new(0, services))
-                .reply("simctl terminate", terminate);
-            let (_dir, mut lane) = connect(&xcrun);
-            lane.start(&SimulatorApp::try_new(BUNDLE).expect("a bundle"))
-                .expect("the app starts");
-            let ((), log) = flui_testing::log_capture::capture(|| drop(lane));
-            let terminated = xcrun
-                .commands()
-                .iter()
-                .any(|command| matches!(command, XcrunCommand::Terminate { .. }));
-            (terminated, log.contains("still runs"))
-        };
+    fn the_app_is_always_ended_and_one_that_already_exited_is_no_failure() {
         let ok = || XcrunReply::new(0, "");
-        assert_eq!(
-            ended(&running(4321), ok()),
-            (true, false),
-            "its own process"
+        assert_eq!(ended("", ok()), (true, false, false), "ended");
+        let exited = XcrunReply::new(164, "").stderr(
+            "An error was encountered processing the command \
+             (domain=com.apple.CoreSimulator.SimError, code=164): found nothing to terminate",
         );
+        assert_eq!(ended("", exited), (true, false, false), "it had exited");
+        let failed = XcrunReply::new(3, "").stderr("terminate failed");
         assert_eq!(
-            ended("PID\tStatus\tLabel\n", ok()),
-            (false, false),
-            "it exited"
+            ended("", failed),
+            (true, false, true),
+            "it could not be ended"
         );
-        assert_eq!(
-            ended(&running(99), ok()),
-            (false, false),
-            "someone else's copy"
-        );
-        assert_eq!(
-            ended(
-                &running(4321),
-                XcrunReply::new(3, "").stderr("terminate failed")
-            ),
-            (true, true),
-            "a copy the lane could not end"
-        );
+    }
+
+    /// Whatever the simulator would say of its services, in a form the lane has never seen (a
+    /// RunningBoard label, another pid column), the end of the lane is the same terminate: the
+    /// lane asks nothing inside the simulator before it, so no listing can skip it.
+    #[test]
+    fn a_listing_of_an_unknown_form_never_skips_the_terminate() {
+        let unknown = "PID\tStatus\tLabel\n\
+                       ?\t0\tapplication<dev.flui.scenario>[0x2a]\n\
+                       4321 running com.apple.runningboard.dev.flui.scenario\n";
+        assert_eq!(ended(unknown, XcrunReply::new(0, "")), (true, false, false));
     }
 
     /// A path that is not UTF-8 reaches `xcrun` byte for byte.

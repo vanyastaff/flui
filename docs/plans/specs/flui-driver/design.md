@@ -564,7 +564,7 @@ event is sent.
 | x11 | XTEST (`x11rb`): keys by the server's keymap, a character on no key through a spare key mapped for the text; touch and pen refused | AT-SPI (`atspi`), the role table `lane::atspi::roles` | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG`, from a thread the session keeps |
 | wayland | libei (`reis`) from a compositor's EIS socket or the RemoteDesktop portal (asked over zbus); keys and text through EI's text interface; portal refusal is cannot-verify | AT-SPI | none: the ScreenCast portal's PipeWire stream needs a C library no Linux build links (`docs/gaps.md`) | same as x11 |
 | android | `adb shell input`: a contact held between events through `motionevent` on the touch screen or the mouse (primary button only), keys sent at their release as `keyevent` or `keycombination`, printable ASCII as `input text`, a scroll as `input mouse scroll` in detents; one pointer and no hover, so a second contact is refused. A pen goes through a `uinput` device the lane registers and syncs with (`uinput -` reading JSON lines). `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers, syncs and removes a test device once per session, and the pen answers `not_supported` where it fails; a touchpad's gesture goes through no OS lane (`steps::os_events` refuses it). Which `input` commands exist is read from the device's usage. The app's window and the display's rotation come from `uiautomator dump` | none for FLUI nodes: `accesskit_android` serves them but sets no `viewIdResourceName`, so the identifier a projection and an activation need never reaches UI Automator (recorded in `docs/gaps.md`) | `exec-out screencap` raw, cut to the window; a pixel format other than RGBA or RGBX is captured again with `-p` and decoded | `adb install`, `am start -W` with extras, `adb forward tcp:0 localabstract:…`, `am force-stop` and the forward removed when the lane ends |
-| ios_simulator | none (D5): every input event is refused as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything is sent, until a supported channel exists | none: UIKit serves `accesskit_ios`'s tree inside the simulator, which no public host API reads (recorded in gaps) | `simctl io <udid> screenshot`, its file length and declared size checked against the window before decoding | `simctl install`, `simctl launch --terminate-running-process` with the endpoint and token as `SIMCTL_CHILD_` launch values, `simctl terminate` when the lane ends |
+| ios_simulator | none (D23): every input event is refused as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything is sent, until a supported channel exists | none: UIKit serves `accesskit_ios`'s tree inside the simulator, which no public host API reads (recorded in gaps) | `simctl io <udid> screenshot`, its file length and declared size checked against the window before decoding | `simctl install`, `simctl launch --terminate-running-process` with the endpoint and token as `SIMCTL_CHILD_` launch values, `simctl terminate` when the lane ends |
 | chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys), one command of one instant action an event; IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, the one lane that composes | none yet: the canvas mirrors its tree as an ARIA DOM, which the lane does not read; Chrome's accessibility tree over it (`Accessibility.getFullAXTree` through `goog:cdp`) is where it would | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from `CHROMEDRIVER` (or `CHROMEWEBDRIVER`'s directory) or a cached copy whose SHA-256 matches its record, fetched from Chrome for Testing only when the launch allows it; Chrome always headless; the page served by a loopback server of the lane's own |
 
 ### Determinism of OS lanes
@@ -594,9 +594,9 @@ Three rules come from what the interaction work measured.
 
 A lane's row changes only with a measurement on that platform, recorded in the lane's module docs.
 
-The iOS Simulator lane sends no OS input (D5): each input is refused as `not_supported` naming
-`ios_simulator_hid` until a supported channel exists, and the choice of that channel is the
-owner's. D5 states the evidence and its scope: from Xcode 27 the Simulator drops Indigo HID
+The iOS Simulator lane sends no OS input (D23, the session lead's change of 2026-11-20 to the
+owner's D5): each input is refused as `not_supported` naming `ios_simulator_hid` until a
+supported channel exists, and the choice of that channel is the owner's. D23 states the evidence and its scope: from Xcode 27 the Simulator drops Indigo HID
 buttons and keys and loses touch, DTUHID being `idb`'s default there; before Xcode 27 Indigo is
 `idb`'s default with no loss recorded, and the lane refuses there as well, since the rule is no
 private channel rather than a split by Xcode version.
@@ -1072,7 +1072,7 @@ fixture, with an identifier on every interactive widget.
 
 ## Risks and open questions
 
-- **No input reaches an iOS Simulator.** The open channels, for the owner (D5): Quartz events on
+- **No input reaches an iOS Simulator.** The open channels, for the owner (D23): Quartz events on
   the Simulator's window through the macOS lane, on the shared desktop and guarded as that lane
   is, with the screen's place in the window published by no API; and an XCUITest runner, which
   D5's "no Swift" forbids.

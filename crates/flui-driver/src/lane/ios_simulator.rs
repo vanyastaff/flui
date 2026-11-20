@@ -14,9 +14,9 @@
 //! - **Process.** [`IosSimulatorLane::start`] installs the app when asked and starts it afresh
 //!   with a Unix socket in a private directory of the host as its endpoint, which the simulator
 //!   shares, and its token, both as `SIMCTL_CHILD_` launch values (ADR-0239). When the lane ends
-//!   it ends the app with `simctl terminate`, since an iOS app does not exit when its driver goes,
-//!   once `launchctl list` inside the simulator shows the process `simctl launch` started still
-//!   running, and removes the socket's directory after it.
+//!   it ends the app with `simctl terminate`, since an iOS app does not exit when its driver goes
+//!   (an answer that nothing runs is an app that already exited), and removes the socket's
+//!   directory after it.
 //! - **Which simulator.** One named by its UDID ([`device::UDID_ENV`]), listed, available, booted
 //!   and running iOS ([`device::choose`]); the lane boots and creates none. A session holds its
 //!   simulator ([`SimulatorLock`]), since the launch and the terminate name the app by its bundle
@@ -182,13 +182,14 @@ impl SimulatorLock {
         Self::acquire_in(&crate::os_input::private_lock_dir()?, udid)
     }
 
-    /// Hold the simulator `udid`, its lock file in `dir`.
+    /// Hold the simulator `udid`, its lock file in `dir`: [`Self::acquire`]'s directory, or a
+    /// test's own (`testing::simulator_lock_in`).
     ///
     /// # Errors
     ///
     /// [`Error::Busy`] while another session holds it; [`Error::Io`] when the lock file cannot be
     /// opened or the OS fails the lock.
-    pub fn acquire_in(dir: &std::path::Path, udid: &Udid) -> Result<Self> {
+    pub(crate) fn acquire_in(dir: &std::path::Path, udid: &Udid) -> Result<Self> {
         let path = dir.join(lock_name(udid));
         let file = crate::os_input::lock_file(&path, || {
             format!(
@@ -204,7 +205,7 @@ impl SimulatorLock {
 
     /// The simulator held.
     #[must_use]
-    pub fn udid(&self) -> &Udid {
+    pub(crate) fn udid(&self) -> &Udid {
         &self.udid
     }
 }
@@ -215,21 +216,9 @@ impl Drop for SimulatorLock {
     }
 }
 
-/// An app the lane started, as far as it knows its process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(unix),
-    expect(
-        dead_code,
-        reason = "only a Unix host starts an app, whose socket the simulator reaches"
-    )
-)]
-enum StartedApp {
-    /// The process `simctl launch` printed.
-    Process(u32),
-    /// A launch that printed no process, or timed out and may have started one.
-    Unnamed,
-}
+/// What `simctl terminate` prints when no copy of the app runs: the app the lane started has
+/// already exited, which is no failure of its end.
+pub const NOTHING_TO_TERMINATE: &str = "found nothing to terminate";
 
 /// The iOS Simulator lane for one app on one simulator: see the [module docs](self).
 pub struct IosSimulatorLane {
@@ -237,8 +226,9 @@ pub struct IosSimulatorLane {
     simulator: Simulator,
     xcode: Option<XcodeVersion>,
     bundle: String,
-    /// The app the lane started, which it ends at its end.
-    started: Option<StartedApp>,
+    /// Whether the lane started the app (or may have: a launch that timed out), which it ends at
+    /// its end.
+    app_started: bool,
     /// The private directory the app's socket lives in, removed once the app was ended.
     #[cfg(unix)]
     endpoint: Option<crate::launch::EndpointPlace>,
@@ -280,7 +270,7 @@ impl IosSimulatorLane {
             simulator,
             xcode,
             bundle,
-            started: None,
+            app_started: false,
             #[cfg(unix)]
             endpoint: None,
             _lock: lock,
@@ -345,54 +335,37 @@ impl IosSimulatorLane {
         };
         // From here on the app may run, a launch that timed out included: the lane ends it at
         // its end whatever comes next.
-        self.started = Some(StartedApp::Unnamed);
+        self.app_started = true;
         let launched = checked(self.xcrun.as_mut(), &launch, SMALL, LAUNCH)?;
-        let pid = device::parse_launched(&launched.text(), &self.bundle);
-        if let Some(pid) = pid {
-            self.started = Some(StartedApp::Process(pid));
-        }
         Ok(Started {
             endpoint: crate::Endpoint::Local(address),
             token,
-            pid,
+            pid: device::parse_launched(&launched.text(), &self.bundle),
         })
     }
 
-    /// End the app the lane started, when it still runs: its copy with the process id `simctl
-    /// launch` printed, or any copy when it printed none. An app that already exited is no
-    /// failure; one the lane could not end is logged, since no caller is left to tell.
-    fn end_app(&mut self, app: StartedApp) {
+    /// End the app the lane started: `simctl terminate` by its bundle identifier, which names
+    /// only this session's copy while it holds the simulator ([`SimulatorLock`]). An answer of
+    /// [`NOTHING_TO_TERMINATE`] is an app that already exited, which is no failure; any other
+    /// failure is logged, since no caller is left to tell.
+    fn end_app(&mut self) {
         let udid = self.simulator.udid.clone();
-        let services = XcrunCommand::ListServices { udid: udid.clone() };
-        let running = checked(self.xcrun.as_mut(), &services, device::MAX_SERVICES, SHORT)
-            .map(|reply| device::parse_running(&reply.text(), &self.bundle));
-        let runs = match (&running, app) {
-            (Ok(pids), StartedApp::Process(pid)) => pids.contains(&pid),
-            (Ok(pids), StartedApp::Unnamed) => !pids.is_empty(),
-            // Unknown: ended all the same.
-            (Err(_), _) => true,
-        };
-        if !runs {
-            return;
-        }
         let terminate = XcrunCommand::Terminate {
             udid: udid.clone(),
             bundle: self.bundle.clone(),
         };
-        let Err(error) = checked(self.xcrun.as_mut(), &terminate, SMALL, SHORT) else {
-            return;
+        let failure = match self.xcrun.run(&terminate, SMALL, SHORT) {
+            Ok(reply) => match reply.failure() {
+                None => return,
+                Some(_) if exited(&reply) => return,
+                Some(failure) => command_failed(&terminate, &reply, &failure),
+            },
+            Err(error) => error,
         };
-        match running {
-            Ok(_) => tracing::error!(
-                lane = LANE,
-                "the app the lane started still runs on simulator {udid}: {error}"
-            ),
-            Err(listing) => tracing::error!(
-                lane = LANE,
-                "the app the lane started may still run on simulator {udid}: {error}; its \
-                 services could not be listed to tell: {listing}"
-            ),
-        }
+        tracing::error!(
+            lane = LANE,
+            "the app the lane started may still run on simulator {udid}: {failure}"
+        );
     }
 
     /// The refusal of every input event: see [`xcode::hid_refusal`].
@@ -404,6 +377,12 @@ impl IosSimulatorLane {
     fn screenshot(&mut self) -> Result<Vec<u8>> {
         self.xcrun.screenshot(&self.simulator.udid, CAPTURE)
     }
+}
+
+/// Whether `simctl terminate` answered that no copy of the app runs.
+fn exited(reply: &XcrunReply) -> bool {
+    let said = |text: &str| text.to_ascii_lowercase().contains(NOTHING_TO_TERMINATE);
+    said(&reply.stderr) || said(&reply.text())
 }
 
 /// Run `command` within `limit` bytes and `timeout`, failing on the Simulator's failure.
@@ -486,8 +465,8 @@ impl Drop for IosSimulatorLane {
     fn drop(&mut self) {
         // An iOS app does not exit when its driver's connection closes: the lane ends it, before
         // its socket's directory and the hold on the simulator go with the lane's fields.
-        if let Some(pid) = self.started.take() {
-            self.end_app(pid);
+        if std::mem::take(&mut self.app_started) {
+            self.end_app();
         }
     }
 }
@@ -498,7 +477,7 @@ impl std::fmt::Debug for IosSimulatorLane {
             .field("simulator", &self.simulator)
             .field("xcode", &self.xcode)
             .field("bundle", &self.bundle)
-            .field("started", &self.started)
+            .field("app_started", &self.app_started)
             .finish_non_exhaustive()
     }
 }
