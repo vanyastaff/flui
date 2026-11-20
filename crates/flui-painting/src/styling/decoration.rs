@@ -126,7 +126,8 @@ pub(crate) struct ImageBlend {
 
 impl ImageBlend {
     /// The most layers a blend keeps: a run retargeted from a blend blends its
-    /// layers again, and the weakest ones go first.
+    /// layers again. Past it the weakest layers other than the published one
+    /// go, and the kept layers take up their shares.
     const MAX_LAYERS: usize = 4;
 
     /// `a`'s layers at `1 - t` of their opacity and `b`'s at `t`, as the
@@ -150,7 +151,9 @@ impl ImageBlend {
             .chain(b.iter().map(|layer| (layer, t)));
         for (layer, share) in shares {
             let opacity = layer.opacity * share;
-            if opacity <= 0.0 {
+            // A layer with no opacity, or a non-finite one from a non-finite `t`, is
+            // no layer.
+            if !(opacity > 0.0 && opacity.is_finite()) {
                 continue;
             }
             // The same image on both sides is one layer: its shares add up.
@@ -212,10 +215,19 @@ impl ImageBlend {
 
     /// Whether two layers draw the same image, whatever their opacity.
     fn same_image(x: &DecorationImage, y: &DecorationImage) -> bool {
-        DecorationImage {
-            opacity: x.opacity,
-            ..y.clone()
-        } == *x
+        let DecorationImage {
+            image,
+            fit,
+            alignment,
+            repeat,
+            opacity: _,
+            color_filter,
+        } = x;
+        *image == y.image
+            && *fit == y.fit
+            && *alignment == y.alignment
+            && *repeat == y.repeat
+            && *color_filter == y.color_filter
     }
 }
 
@@ -286,7 +298,9 @@ pub struct BoxDecoration<T: Unit = f64> {
     /// The color to fill the box with.
     pub color: Option<Color>,
 
-    /// An image to paint above the background color or gradient.
+    /// An image to paint above the background color or gradient. After a
+    /// [`lerp`](Self::lerp) it is the image the lerp published, and the images
+    /// it blends are painted with it until this field is replaced.
     pub image: Option<DecorationImage>,
 
     /// A border to draw above the background.
@@ -454,10 +468,12 @@ where
     /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). Images
     /// crossfade: the result keeps `a`'s image layers at `1 - t` of their
     /// opacity and `b`'s at `t`, painted added together in a layer, so an
-    /// opaque crossfade covers the box at every `t`. An image on both sides is
-    /// one layer, a lerped endpoint brings the layers it blends, and `image`
-    /// holds `b`'s own image as the blend paints it. The shape is not interpolated and switches at
-    /// `t = 0.5`.
+    /// opaque crossfade covers the box at every `t`. The same image on both
+    /// sides is one layer, a lerped endpoint brings the layers it blends, and
+    /// past four layers the weakest go and the kept ones take up their shares.
+    /// `image` holds `b`'s own image as the blend paints it, or, with no image
+    /// on `b`'s side, the strongest layer. The shape is not interpolated and
+    /// switches at `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
         if t == 0.0 {
@@ -556,9 +572,10 @@ where
         // Images crossfade at constant coverage: each side's image layers keep
         // their share, `1 - t` of `a`'s and `t` of `b`'s, and paint adds them
         // up. The same image on both sides is one layer whose shares add back
-        // to its own opacity, so it does not dim.
-        let (image, image_blend) = if a.image_layers() == b.image_layers() {
-            (b.image.clone(), b.image_blend().cloned())
+        // to its own opacity, so it does not dim; equal images on both sides
+        // are kept as they are, so their opacity does not drift by rounding.
+        let (image, image_blend) = if a.image == b.image && a.image_layers() == b.image_layers() {
+            (a.image.clone(), a.image_blend().cloned())
         } else {
             ImageBlend::mix(a.image_layers(), b.image_layers(), b.image.as_ref(), t)
         };

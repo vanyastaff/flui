@@ -400,6 +400,28 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
         "the strongest layer is published when b has no image"
     );
 
+    // The strongest layer, not the first: blue leads a three-to-one blend.
+    let blue_heavy = BoxDecoration::lerp(&with(&red), &with(&blue), 0.75);
+    let fading_heavy = BoxDecoration::lerp(&blue_heavy, &BoxDecoration::new(), 0.5);
+    assert!(
+        fading_heavy
+            .image
+            .as_ref()
+            .is_some_and(|image| image.image == blue),
+        "the strongest layer, not the first, is published"
+    );
+
+    // A non-finite `t` adds no layer rather than one of unknown opacity.
+    let undefined = painted(&BoxDecoration::lerp(
+        &with(&red),
+        &BoxDecoration::new(),
+        f64::NAN,
+    ));
+    assert!(
+        undefined.is_empty(),
+        "a NaN share paints no image: {undefined:?}"
+    );
+
     // When b is itself a blend, the published image is b's own, not its last
     // layer: back_to_red publishes red, though blue is its last layer.
     let onto_blend = BoxDecoration::lerp(&with(&green), &back_to_red, 0.5);
