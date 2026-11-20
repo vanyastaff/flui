@@ -134,7 +134,7 @@ pub enum FragmentScope {
     /// A clip scope (rect, rounded-rect, or arbitrary path) in
     /// node-local coordinates — the same [`PaintClip`] value a node's
     /// declarative `paint_effects().clip` carries. `clip_layer`
-    /// (`pipeline/owner/paint.rs`) maps it onto its `flui-layer` layer
+    /// (`pipeline/owner/paint/effect_layers.rs`) maps it onto its `flui-layer` layer
     /// identically whether it arrived here (an imperative `with_clip*`
     /// scope) or through that value, so the two routes stay one
     /// implementation.

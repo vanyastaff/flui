@@ -14,6 +14,10 @@
 
 use std::ops::{Add, AddAssign};
 
+use crate::pipeline::phase::PipelinePhase;
+
+use super::PipelineOwner;
+
 /// Work the pipeline did, counted per phase. See the module docs.
 ///
 /// Returned by [`PipelineOwner::counters`](super::PipelineOwner::counters) as
@@ -123,4 +127,30 @@ pub(super) struct PaintCounts {
     pub(super) nodes_painted: u64,
     pub(super) layers_produced: u64,
     pub(super) layers_reused: u64,
+}
+
+impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+    /// Dirty layout entries drained by every `run_layout` so far (monotonic).
+    /// A frame's relayout-root count is the difference across the frame
+    /// (ADR-0074 §8 telemetry). Entries that turned out already clean or
+    /// layout-poisoned count too: they were scheduled, which is what the
+    /// figure measures.
+    #[inline]
+    pub fn layout_roots_total(&self) -> u64 {
+        self.scheduler.layout_drained_total()
+    }
+
+    /// Work totals for every phase since this owner was constructed
+    /// (monotonic). A frame's work is the difference across the frame,
+    /// [`PipelineCounters::since`](crate::pipeline::PipelineCounters::since):
+    /// the owner has no frame-begin hook, because the layout↔build fixpoint
+    /// runs `run_layout` several times before the frame's `run_frame`.
+    #[inline]
+    pub fn counters(&self) -> crate::pipeline::PipelineCounters {
+        crate::pipeline::PipelineCounters {
+            layout_roots: self.scheduler.layout_drained_total(),
+            layout_mark_steps: self.scheduler.layout_mark_steps(),
+            ..self.counters
+        }
+    }
 }
