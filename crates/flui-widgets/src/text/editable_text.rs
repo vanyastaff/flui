@@ -2829,12 +2829,12 @@ struct FieldMount {
 }
 
 impl EditableTextRenderView {
-    fn build_render_object(&self) -> RenderEditable {
+    fn build_render_object(&self, direction: TextDirection) -> RenderEditable {
         let mut span = TextSpan::new(self.text.clone());
         if let Some(style) = self.text_style.clone() {
             span = span.with_style(style);
         }
-        let mut editable = RenderEditable::new(span, TextDirection::Ltr)
+        let mut editable = RenderEditable::new(span, direction)
             .with_text_sizing(self.text_sizing.clone())
             .with_font_weight_adjustment(self.font_weight_adjustment)
             .with_caret_byte_offset(self.caret_byte_offset)
@@ -2857,7 +2857,9 @@ impl RenderView for EditableTextRenderView {
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         self.press_probe.set(ctx.press_probe());
-        self.build_render_object()
+        // The ambient reading direction is the line's base direction, as it
+        // is for `Text` without one; a dependency, so a flip relays out.
+        self.build_render_object(crate::Directionality::of_render_object(ctx))
     }
 
     fn update_render_object(
@@ -2871,6 +2873,7 @@ impl RenderView for EditableTextRenderView {
             span = span.with_style(style);
         }
         let mut impact = render_object.set_text(span);
+        impact |= render_object.set_text_direction(crate::Directionality::of_render_object(ctx));
         impact |= render_object.set_text_sizing(self.text_sizing.clone());
         impact |= render_object.set_font_weight_adjustment(self.font_weight_adjustment);
         impact |= render_object.set_caret_byte_offset(self.caret_byte_offset);

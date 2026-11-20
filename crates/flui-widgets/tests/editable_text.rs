@@ -3581,3 +3581,57 @@ pub(crate) fn a_field_highlights_its_selection_with_the_inherited_style() {
         );
     }
 }
+
+/// A field lays its line out in the ambient reading direction, as `Text`
+/// without one does: under right-to-left the line's base direction is
+/// right-to-left and an empty field's caret, its start, sits at the right
+/// edge. A flip above a preserved subtree reaches the mounted field through
+/// its dependency and moves the caret to the other edge.
+///
+/// Red-check: lay the editable out left-to-right whatever the ambient
+/// direction, and the right-to-left caret stays at the left edge.
+pub(crate) fn a_field_lays_its_line_out_in_the_ambient_direction() {
+    use crate::media_query_fields::StaticChild;
+    use flui_foundation::TextDirection;
+    use flui_view::ViewExt;
+    use flui_widgets::Directionality;
+
+    let field = || StaticChild {
+        inner: EditableText::new(
+            TextEditingController::new(),
+            FocusNode::with_debug_label("directional field"),
+        )
+        .boxed(),
+    };
+    let laid_out = |harness: &crate::common::harness::Harness| {
+        with_render_editable(harness, |editable| {
+            (
+                editable.painter().text_direction(),
+                editable.caret_offset().dx,
+            )
+        })
+        .expect("a mounted EditableText always has a RenderEditable")
+    };
+
+    let mut harness =
+        crate::common::harness::mount(Directionality::new(TextDirection::Rtl, field()));
+    let (direction, caret_x) = laid_out(&harness);
+    assert_eq!(direction, Some(TextDirection::Rtl));
+    assert!(
+        caret_x > 700.0,
+        "a right-to-left field's empty line starts at its right edge, the caret at {caret_x}"
+    );
+
+    harness.swap_root(Directionality::new(TextDirection::Ltr, field()));
+    harness.tick();
+    let (direction, caret_x) = laid_out(&harness);
+    assert_eq!(
+        direction,
+        Some(TextDirection::Ltr),
+        "the flip reaches the field"
+    );
+    assert!(
+        caret_x < 10.0,
+        "a left-to-right field's empty line starts at its left edge, the caret at {caret_x}"
+    );
+}

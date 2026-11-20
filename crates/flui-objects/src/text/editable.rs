@@ -316,6 +316,20 @@ impl RenderEditable {
         }
     }
 
+    /// Lays the text out in `direction`: the line's base direction, which
+    /// side its start is aligned to, and so where the caret, the selection
+    /// and an input method's rects fall. A change relays out.
+    pub fn set_text_direction(
+        &mut self,
+        direction: TextDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.painter.text_direction() == Some(direction) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.painter.set_text_direction(Some(direction));
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
     /// Replaces the composing-region range and returns the invalidation
     /// level — always paint-only: the composing region changes what gets an
     /// underline, never glyph shaping.

@@ -12,7 +12,6 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
-use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable};
@@ -1291,7 +1290,9 @@ fn handle(
     let (_, line_height) = handles.end_line(side)?;
     let info = HandleInfo {
         side,
-        text_direction: TextDirection::Ltr,
+        // The direction the field lays its line out in, read at the field:
+        // the overlay these handles are built in may have another.
+        text_direction: handles.menu.direction(),
         line_height,
     };
     let (start, update, end) = (
@@ -1379,7 +1380,7 @@ fn drag_magnifier(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<
         HandleSide::End => handles.links[1],
         HandleSide::Start | HandleSide::Collapsed => handles.links[0],
     };
-    let info = MagnifierInfo::new(side, TextDirection::Ltr, line_height);
+    let info = MagnifierInfo::new(side, handles.menu.direction(), line_height);
     let along = handles.magnifier_along.get();
     Some(crate::text::magnifier(
         look.as_ref(),

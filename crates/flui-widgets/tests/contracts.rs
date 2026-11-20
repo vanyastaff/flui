@@ -316,6 +316,7 @@ fn text_editing() {
             ("editable_text::enter_moves_the_focus_as_the_fields_enter_key_says", crate::editable_text::enter_moves_the_focus_as_the_fields_enter_key_says),
             ("editable_text::a_push_platform_is_told_the_focused_fields_status", crate::editable_text::a_push_platform_is_told_the_focused_fields_status),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
+            ("editable_text::a_field_lays_its_line_out_in_the_ambient_direction", crate::editable_text::a_field_lays_its_line_out_in_the_ambient_direction),
             ("editable_text_platform_selection::a_field_leaves_its_selection_ui_to_a_platform_that_draws_it", crate::editable_text_platform_selection::a_field_leaves_its_selection_ui_to_a_platform_that_draws_it),
             ("editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui", crate::editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui),
             ("editable_text_platform_selection::a_control_over_the_field_keeps_its_press", crate::editable_text_platform_selection::a_control_over_the_field_keeps_its_press),
@@ -792,6 +793,7 @@ fn editable_text_handles() {
         "editable_text_handles",
         &[
             ("editable_text_handles::a_tap_shows_a_caret_handle_that_a_drag_moves", crate::editable_text_handles::a_tap_shows_a_caret_handle_that_a_drag_moves as fn()),
+            ("editable_text_handles::a_fields_handles_take_the_fields_direction_not_the_overlays", crate::editable_text_handles::a_fields_handles_take_the_fields_direction_not_the_overlays as fn()),
             ("editable_text_handles::a_caret_handle_follows_the_field_or_its_default", crate::editable_text_handles::a_caret_handle_follows_the_field_or_its_default),
             ("editable_text_handles::a_caret_handle_hides_after_its_timeout", crate::editable_text_handles::a_caret_handle_hides_after_its_timeout),
             ("editable_text_handles::a_long_press_selects_a_word_whose_handles_move_its_ends", crate::editable_text_handles::a_long_press_selects_a_word_whose_handles_move_its_ends),

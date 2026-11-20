@@ -1222,3 +1222,88 @@ pub(crate) fn a_long_press_moves_the_caret_or_extends_the_word_under_the_magnifi
         "iOS moves the caret, Android selects the word"
     );
 }
+
+/// A field's handles and its magnifier are built for the direction the field
+/// lays its line out in, read at the field: a right-to-left field in a
+/// left-to-right app, whose overlay they are built in, gives its handle and
+/// magnifier builders right-to-left.
+///
+/// Red-check: build the handles or the magnifier for left-to-right (the
+/// overlay's direction), and the right-to-left field's says left-to-right.
+pub(crate) fn a_fields_handles_take_the_fields_direction_not_the_overlays() {
+    use flui_foundation::TextDirection;
+    use flui_widgets::{Directionality, LongPressSelection, MagnifierInfo, SelectionMagnifier};
+
+    /// Magnifiers that note each one they build.
+    #[derive(Clone, Default)]
+    struct Noted(Rc<RefCell<Vec<MagnifierInfo>>>);
+    impl SelectionMagnifier for Noted {
+        fn build(&self, info: &MagnifierInfo, _ctx: &dyn BuildContext) -> BoxedView {
+            self.0.borrow_mut().push(*info);
+            SizedBox::new(10.0, 10.0).boxed()
+        }
+    }
+
+    let (marked, noted) = (Marked::default(), Noted::default());
+    let field = EditableText::new(
+        TextEditingController::with_text(WORDS),
+        FocusNode::with_debug_label("field"),
+    )
+    .text_style(style())
+    .handles(marked.clone())
+    .caret_handle(CaretHandle::on_tap())
+    .long_press(LongPressSelection::Caret)
+    .no_menu();
+    let page = Column::new((
+        SizedBox::new(400.0, 40.0).child(Directionality::new(TextDirection::Rtl, field)),
+    ))
+    .boxed();
+    let mut laid = lay_out(
+        WidgetsApp::new(
+            DefaultSelectionControls::new(page)
+                .magnifier(noted.clone())
+                .boxed(),
+        ),
+        tight(400.0, 300.0),
+    );
+    laid.pump();
+    let editable = laid.find_all_by_render_type("RenderEditable")[0];
+    let at =
+        |x: f64| laid.absolute_offset(editable) + Offset::new(x, laid.size(editable).height / 2.0);
+    let (middle, beside) = (at(200.0), at(190.0));
+    laid.replay(&PointerScript::tap(middle));
+    for _ in 0..4 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let handle = *marked
+        .0
+        .borrow()
+        .last()
+        .expect("a tap on the field shows its caret handle");
+    assert_eq!(handle.side, HandleSide::Collapsed);
+    assert_eq!(handle.text_direction, TextDirection::Rtl, "the handle");
+
+    let press = TouchScript::new("long press and move")
+        .down(1, middle)
+        .wait(Duration::from_millis(800))
+        .frame()
+        .wait(Duration::from_millis(16))
+        .move_to(1, beside)
+        .frame()
+        .wait(Duration::from_millis(16))
+        .frame()
+        .up(1)
+        .build()
+        .expect("a valid script");
+    laid.replay(&press);
+    let magnifier = *noted
+        .0
+        .borrow()
+        .last()
+        .expect("a long press on the field shows its magnifier");
+    assert_eq!(
+        magnifier.text_direction,
+        TextDirection::Rtl,
+        "the magnifier"
+    );
+}
