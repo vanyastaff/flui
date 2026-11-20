@@ -41,7 +41,10 @@
 // boundary, rather than for the whole crate (see `lib.rs`); every `unsafe`
 // block still carries its own `// SAFETY:` comment stating the invariant
 // that makes it sound. The pure half forbids it.
-#![cfg_attr(windows, expect(unsafe_code))]
+#![cfg_attr(
+    windows,
+    expect(unsafe_code, reason = "the window host calls Win32 directly")
+)]
 
 #[cfg(windows)]
 mod app_bars;

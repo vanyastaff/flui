@@ -17,7 +17,10 @@
 
 // The FFI half calls Win32 directly: `unsafe` is expected on Windows only,
 // where it is compiled; the pure halves forbid it.
-#![cfg_attr(windows, expect(unsafe_code))]
+#![cfg_attr(
+    windows,
+    expect(unsafe_code, reason = "the FFI half calls Win32 input APIs directly")
+)]
 
 mod caption;
 pub mod direct_manipulation;

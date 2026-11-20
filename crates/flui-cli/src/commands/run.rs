@@ -737,7 +737,10 @@ mod env {
 /// Only [`KeyReader`] constructs these, and it reads keys on Unix alone;
 /// the loop still matches every variant so there is one dev loop, not two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only the Unix key reader constructs it")
+)]
 enum HotKey {
     /// `r`: apply the cheapest reload the strategy offers.
     Reload,

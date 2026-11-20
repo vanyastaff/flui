@@ -253,7 +253,13 @@ impl OffscreenRenderer {
     /// * `surface_format` — the swapchain surface format.
     // `pub` under `testing`: the `render_throughput` bench measures the
     // retained-target blit. Private otherwise.
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(
+            unreachable_pub,
+            reason = "reachable from outside the crate only through the `testing` feature"
+        )
+    )]
     /// # Errors
     /// Returns admission, submission-backpressure or device-progress failures.
     #[cfg(feature = "testing")]

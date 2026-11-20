@@ -40,7 +40,10 @@
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`); every `unsafe`
 // block carries its own `// SAFETY:` comment. Its pure part forbids it.
-#![cfg_attr(windows, expect(unsafe_code))]
+#![cfg_attr(
+    windows,
+    expect(unsafe_code, reason = "OLE drag-and-drop is COM and Win32 FFI")
+)]
 
 #[cfg(windows)]
 mod com;
