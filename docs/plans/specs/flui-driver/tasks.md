@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD15 is built and under review (its HID spike answered no-go, so the lane refuses input and an input channel is the owner's decision; its runs on a Simulator owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -1309,6 +1309,72 @@ graph LR
   fallback.
 - **Done when:** the scenarios run on S, and the probe answers `not_supported` with the Xcode
   version on a mismatched runtime (a test with a mocked selector table).
+- **Status (2026-11-20):** built with the spike's answer, no-go; the pull request is under review
+  and the choice of an input channel is back with the owner (D5). The lane refuses every input
+  event by name. Open: the runs on S below, and an input channel the owner accepts. Of the done
+  items, the refusal naming the Xcode version is met on every Xcode, since no channel is used
+  (there is no selector table to mock); the scenarios on S are owed.
+- **Spike (2026-11-20), no-go.** No Mac was at hand, so the spike read what the tools that drive
+  the channel record rather than run a prototype:
+  - `idb` (Meta), the tool whose channel D5 names, fails Indigo touch and button sends on
+    purpose from CoreSimulator 1155.4 (Xcode 27): there the Simulator drops Indigo button and
+    keyboard events on every runtime and delivers touch only on some boots, while the send
+    reports success (its commits `b4670b5cb`, `a67f6e724`, `5fcb9fa83`, 2026-09-30). The design's
+    selector probe cannot see that: the selectors are there, and C structures whose layout changed
+    are memory sent wrong, not a missing method.
+  - Its replacement there, DTUHID, is a private XPC service in each simulator whose daemon aborts
+    while a boot settles and then discards every send in silence; `idb` meets it with liveness
+    probes, retries and timed drains (`SimulatorDTUHIDConnection`, 2026-09), and a send still
+    cannot tell a delivered event from a dropped one.
+  - `simctl io` has no input operation; Quartz events on the Simulator's window (the macOS lane's
+    path) are public, but land on the shared desktop, so the simulator is no longer the isolation
+    R14b names, and the screen's place in the window (bezels, zoom) is published by no API;
+    XCUITest is Apple's own channel and needs a Swift test runner, which D5 excludes.
+- **Evidence (2026-11-20):**
+  - On every host (`driver_it`, against `ScriptedXcrun`; Windows 11 and WSL Ubuntu 24.04):
+    `ios_simulator_lane::every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_sent`
+    (Xcode 26.4, 27.1 and an unreadable version; a tap, keys, text, a scroll, a pause then text),
+    `the_lane_is_the_simulator_and_has_no_guard`, `the_lane_refuses_a_simulator_it_cannot_drive`,
+    `the_lane_drives_only_a_listed_available_booted_ios_simulator`,
+    `the_listing_is_read_entry_by_entry`, `a_udid_is_a_uuid_and_is_held_in_upper_case`,
+    `a_bundle_identifier_is_checked_before_it_becomes_an_argument`,
+    `an_apps_environment_takes_variable_names_alone`, `an_ios_runtime_reads_as_its_version`,
+    `the_launch_line_gives_the_apps_process`, `the_xcode_version_is_read_from_xcodebuild`,
+    `a_capture_is_the_screen_when_the_window_fills_it`,
+    `a_screen_of_another_size_than_the_window_is_refused_before_it_is_decoded`; on every Unix host,
+    `ios_simulator_lane::start::starting_the_app_hands_it_its_endpoint_and_token_as_launch_values`,
+    `a_launch_that_timed_out_still_ends_the_app`, `a_lane_that_started_nothing_ends_nothing`, and
+    `HostXcrun` against a stand-in `xcrun` (`ios_simulator_host::*`: the launch values in
+    `simctl`'s environment alone, the screenshot read back from its file, the bound, the deadline,
+    a host without `xcrun`).
+  - The scenarios on the headless target (CI): `scenarios::the_ios_input_scenario_passes_on_the_headless_target`,
+    `the_safe_area_scenario_measures_a_padded_window_on_the_headless_target`.
+  - Owed on S (`FLUI_IOS_SIMULATOR_UDID`, `FLUI_IOS_SCENARIO_APP`, `FLUI_IOS_SCENARIO_BUNDLE`,
+    `FLUI_REQUIRE_IOS_SIMULATOR=1`): `ios_simulator::the_ios_scenarios_run_on_a_simulator`, which
+    needs the scenario apps packaged for the simulator first (`examples/scenario_app.rs` builds
+    for the desktops alone); the app reaching the host's socket through `SIMCTL_CHILD_` values;
+    `simctl io screenshot`'s size against the window, upright and turned; `simctl launch`'s output
+    line; `simctl terminate` ending the app. These are the `OS input through the driver` and
+    `assistive technology conformance` rows of `crates/flui-native/platform-parity.toml`.
+- **As built:**
+  - The lane is `lane::ios_simulator`: `device` (the UDID, the bundle identifier, `simctl list`
+    and `simctl launch` read as untrusted input), `xcode` (the version, the refusal and its
+    reasons), `screenshot` (the PNG's declared size against the window before decoding) and
+    `xcrun` (the one door, `HostXcrun`), all host code built and tested on every host.
+  - Isolation is the simulator itself (`Isolation::Simulator`), with no guard; the lane has no
+    pointers and no keys in its capabilities, and `Lane::check` refuses every event but a pause.
+  - A UIKit window fills its screen, so the screen is the window: the capture and the window's
+    place are refused as `not_supported` naming `window_position` when the screen is another size.
+  - `IosSimulatorLane::start` installs the `.app` when named and starts the app with
+    `simctl launch --terminate-running-process`, its endpoint a Unix socket in a private directory
+    of the host and its token as `SIMCTL_CHILD_` variables of `simctl`'s environment (ADR-0239),
+    which no command's text carries; the lane ends the app with `simctl terminate` when it ends,
+    since the iOS runner does not exit on a disconnect, and removes the socket's directory after.
+  - The `adb` and `xcrun` doors run their tools through one bounded runner, `lane::tool`.
+  - The `ios-*` scenarios are `ios_input` (the tap on the pad and the press beside it) and
+    `safe_area` (a `SafeArea`'s child inset by the padding the window reports, the `Insets` app);
+    Home and return need a button the lane cannot press, and the old `ios-execution` delegate
+    cases drove a probe binary's own protocol, which is no driver scenario.
 
 ### FD16. Linux lanes
 

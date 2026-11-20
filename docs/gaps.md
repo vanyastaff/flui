@@ -614,15 +614,24 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - A page's agent is reached through the browser's own remote protocol (ADR-0288 §6): `flui run --agent` speaks WebDriver BiDi to Firefox and the DevTools protocol to Chrome, Chromium, Edge, Brave and Opera, which need no driver of their own. Safari has neither: `safaridriver` speaks classic WebDriver, which has no channel or binding a page can report through, so `flui run --agent --device browser:safari` is refused, naming this entry.
 - The likely shape is a third dialect of the CLI's `BrowserLink` once `safaridriver` serves WebDriver BiDi, or one over classic WebDriver that polls the page for its lines.
+- The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
 
 ### The driver agent cannot reach an app in the iOS Simulator
 
 > **Environments:** iOS · **Who it hurts:** Agents and tests that drive a FLUI app on iOS · **Parity:** none yet (the driver agent has no row)
 
 - `flui run --device <simulator>` builds the app, installs it and launches it once through `simctl`, and hands it no agent endpoint or launch token, so `flui run --agent` on a Simulator is refused, naming this entry. The nightly iOS run of the counter scenario (`an_agent_presses_the_counter_on_a_live_device`) fails as this entry.
-- The likely shape: the Simulator shares the Mac's file system, so the desktop's Unix socket and token can reach the app through `simctl launch`'s `SIMCTL_CHILD_` environment, and the iOS runner serves the agent as the desktop runners do. A device needs a transport of its own (a forwarded port, as on Android).
+- `flui-driver`'s iOS Simulator lane takes that shape (`lane::ios_simulator::launch`): the Simulator shares the Mac's file system, so the lane hands the app a Unix socket in a private directory of the host and its token as `SIMCTL_CHILD_` values of `simctl launch`, and the iOS runner serves the agent from them (`install_from_launch`). No Simulator has run it yet ([its own entry](#the-drivers-ios-simulator-lane-sends-no-input-and-reads-no-accessibility-tree)), and the CLI starts no app through it. A device needs a transport of its own (a forwarded port, as on Android).
 - The check is the counter scenario passing on a Simulator, then on a device.
-- The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
+
+### The driver's iOS Simulator lane sends no input and reads no accessibility tree
+
+> **Environments:** iOS · **Who it hurts:** Tests and agents that drive a FLUI app on a Simulator through the OS lane, and the VoiceOver column of the assistive technology row · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- **No input.** `flui-driver`'s iOS Simulator lane refuses every touch, key, text, scroll and button as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything is sent. No public channel reaches a simulator's input from the host (`simctl io` captures and records only); `SimulatorKit`'s Indigo HID, the channel `idb` used, is reverse-engineered C, and from CoreSimulator 1155.4 (Xcode 27) the Simulator drops its button and keyboard events and delivers its touch only some of the time while the send reports success; the DTUHID XPC service that replaced it discards sends in silence while its daemon restarts. The app's own input path (the synthetic path) reaches the app as on every target.
+- **No accessibility read.** UIKit serves `accesskit_ios`'s tree inside the simulator, where XCUITest reads it ([No accessibility on mobile and the Web](#no-accessibility-on-mobile-and-the-web)); no public host API reads it, so `read_tree` and `invoke` answer the trait's `not_supported`.
+- **Not run.** No Simulator has run the lane: `ios_simulator::the_ios_scenarios_run_on_a_simulator` is owed on a Mac, with the scenario apps packaged for the simulator, which `examples/scenario_app.rs` is not (its `flui-app` dev-dependency is the desktops').
+- The input closes with a channel the owner accepts (the flui-driver spec's decision D5 chose Indigo HID, which went away): an XCUITest runner, which D5's "no Swift" excludes, or Quartz events on the Simulator's window through the macOS lane, on the shared desktop and guarded; then `ios_simulator_lane` holds its plan and `ios_simulator` its run. The read closes with a host reader of the simulator's tree.
 
 ### The driver's Wayland lane captures no window and is told no window position
 

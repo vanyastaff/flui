@@ -49,7 +49,7 @@ impl Artifact {
     fn lane(&self) -> &'static str {
         match self {
             Self::Executable(_) => "desktop",
-            Self::AppBundle(_) => "apple",
+            Self::AppBundle(_) => "ios_simulator",
             Self::Apk(_) => "android",
             Self::WasmBundle(_) => "chrome",
         }
@@ -159,6 +159,17 @@ impl Launch {
                     "{} is started by `lane::android::launch`, which names its package and \
                      activity",
                     apk.display()
+                ),
+            )),
+            // A simulator's app needs the simulator and its bundle identifier, which the path
+            // does not name; a macOS app is its executable.
+            Target::Artifact(Artifact::AppBundle(app)) => Err(Error::not_supported(
+                "app_bundle_launch",
+                format!(
+                    "{} is started on an iOS Simulator by `lane::ios_simulator::launch`, which \
+                     names the simulator and the bundle identifier, and on macOS by its \
+                     executable (`Launch::executable`)",
+                    app.display()
                 ),
             )),
             Target::Artifact(artifact) => Err(Error::not_supported(
