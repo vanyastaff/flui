@@ -224,8 +224,8 @@ pub(crate) fn explicit_finish_commits_an_authored_page_and_retires_the_old_route
     use std::time::Duration;
 
     use flui_animation::{Animation, AnimationController, AnimationError, DrivenController, Vsync};
+    use flui_layer::Layer;
     use flui_painting::{DrawOp, styling::Color};
-    use flui_rendering::layer::Layer;
     use flui_widgets::{AnimationRunFuture, FadeTransition, PushCompletion};
 
     struct AuthoredPage {

@@ -12,7 +12,7 @@ use flui_view::{CreationSite, IntoView, RenderView, impl_render_view};
 /// Register the texture with
 /// [`LifecycleContext::texture_registry`](flui_view::prelude::LifecycleContext::texture_registry)
 /// and feed it with
-/// [`TextureRegistration::submit_frame`](flui_rendering::layer::TextureRegistration::submit_frame),
+/// [`TextureRegistration::submit_frame`](flui_layer::TextureRegistration::submit_frame),
 /// from any thread. A frame rebuilds and repaints nothing: the presentation
 /// publishes the scene it holds with the frame, and the raster side redraws
 /// the texture's box alone (ADR-0304 §8, §9). The widget rebuilds only when

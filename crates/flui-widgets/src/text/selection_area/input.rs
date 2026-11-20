@@ -12,6 +12,7 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_foundation::panic::FirstPanic;
+use flui_interaction::{events::PointerEvent, pointer::HitTestBehavior};
 use flui_interaction::{
     focus::KeyEventResult,
     gesture::{
@@ -24,8 +25,7 @@ use flui_painting::text_boundaries;
 use flui_painting::typography::{LineMetrics, TextAffinity, TextPosition};
 use flui_platform::input::capabilities::PointerKindSet;
 use flui_platform::input::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
-use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
-use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
+use flui_semantics::{DocumentPosition, DocumentSelection};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 

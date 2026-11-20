@@ -154,7 +154,7 @@ pub struct RenderSliverCarousel {
     axis: Axis,
     warned_unbounded: bool,
     /// The accessible set the items announce, when it differs from the item count.
-    collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    collection: Option<flui_semantics::SemanticsCollection>,
     /// The collection's accessible name (`set_collection_label`).
     collection_label: Option<std::sync::Arc<str>>,
     /// The pinned residents outside the window (`set_pinned_indices`).
@@ -218,7 +218,7 @@ impl RenderSliverCarousel {
         &mut self,
         count: Option<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         let collection = SemanticsCollection::new(SemanticsCollectionKind::List, count);
         if self.collection == Some(collection) {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -326,9 +326,9 @@ impl RenderSliver for RenderSliverCarousel {
 
     fn describe_semantics_configuration(
         &self,
-        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+        config: &mut flui_semantics::SemanticsConfiguration,
     ) {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));

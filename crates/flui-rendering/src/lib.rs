@@ -71,20 +71,19 @@
 
 // Public for exported macro expansion in downstream crates, not an authoring alias.
 #[doc(hidden)]
+pub use flui_foundation::Single as __MacroSingle;
+#[doc(hidden)]
 pub use flui_foundation::geometry::Size as __MacroSize;
 
 pub mod constraints;
 pub mod context;
 pub mod delegates;
 pub mod error;
-pub mod hit_testing;
 pub mod input_regions;
 pub mod inspect;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
-/// Re-export semantics from flui-semantics crate.
-pub use flui_semantics as semantics;
 // `objects` module removed: concrete render objects live in the `flui-objects`
 // crate (the flui-objects extraction). flui-rendering now exports
 // only engine primitives (traits, pipeline, protocol, contexts, arena).
@@ -104,77 +103,6 @@ pub mod testing;
 pub mod traits;
 mod update;
 pub mod view;
-
-/// Re-export layer types from flui-layer crate for convenience.
-pub mod layer {
-    pub use flui_layer::*;
-}
-
-/// Prelude module for convenient imports.
-pub mod prelude {
-    // Arity system
-    // Re-export RenderId from flui_foundation
-    pub use flui_foundation::{RenderId, SemanticsId};
-    pub use flui_interaction::pointer::{HitTestBehavior, HitTestEntry, HitTestResult};
-    // Re-export commonly used value types
-    pub use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
-
-    // Per-child layout state (lives in box_protocol since it's a
-    // RawBoxLayoutContext implementation detail; re-exported here for
-    // convenience via the public-facing `protocol` module surface).
-    pub use crate::protocol::ChildState;
-    // Constraints from this crate
-    pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
-    // Context types for RenderBox and RenderSliver
-    pub use crate::context::{
-        BoxHitTestContext, BoxLayoutContext, FragmentRecorder, PaintContext, PaintFragment,
-        SliverHitTestContext, SliverLayoutContext,
-    };
-    // Error types
-    pub use crate::error::{PoisonPhase, RenderError, RenderResult, SemanticsError};
-    // Hit testing. The parallel `BoxHitTestEntry`/`BoxHitTestResult`/
-    // `SliverHitTestEntry`/`SliverHitTestResult` exports that used to live
-    // here have been removed; the protocol-canonical versions live in
-    // `crate::protocol` and are re-exported alongside each
-    // `BoxProtocol`/`SliverProtocol` (see lib.rs protocol prelude).
-    // `PointerEventKind` was dropped alongside the deletion of the
-    // rendering-side `target.rs` module; canonical pointer-event types
-    // live in `flui_interaction::events`.
-    // Render hit-test metadata; executable tracking remains owned by the
-    // presentation's interaction runtime.
-    pub use crate::hit_testing::{CursorIcon, MouseTrackerAnnotation};
-    // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
-    pub use crate::protocol::IntoRenderObject;
-    // Arity types (canonical home: flui_foundation::arity)
-    pub use flui_foundation::{Arity, Leaf, Optional, Single, Variable};
-    // Tree types
-    pub use crate::storage::{RenderNode, RenderTree};
-    pub use crate::{
-        RenderUpdateImpact,
-        parent_data::{
-            BoxParentData, FlexFit, FlexParentData, ParentData, SliverMultiBoxAdaptorParentData,
-            SliverParentData, SliverPhysicalParentData, StackParentData,
-        },
-        pipeline::{Canvas, Paint, PaintStyle, PipelineCell, PipelineOwner},
-        protocol::{BoxProtocol, Protocol, SliverProtocol},
-        semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner},
-        traits::{RenderBox, RenderObject, TextBaseline},
-        view::{
-            CacheExtentStyle, FixedViewportOffset, RenderAbstractViewport, RenderView,
-            RevealedOffset, ScrollDirection, ScrollPosition, SliverPaintOrder, ViewConfiguration,
-            ViewportOffset,
-        },
-    };
-    // Grid, custom-paint, flow, and custom-layout delegates — always available
-    // because their companion render objects ship in the default build
-    //.
-    pub use crate::delegates::{
-        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
-        SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
-    };
-}
 
 // Re-export key types at crate root
 // Context system

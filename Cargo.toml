@@ -796,6 +796,7 @@ flui-devtools = { workspace = true, optional = true }
 flui-assets = { workspace = true, optional = true }
 flui-painting = { workspace = true }
 flui-rendering = { workspace = true }
+flui-semantics = { workspace = true }
 flui-objects = { workspace = true }
 flui-interaction = { workspace = true }
 flui-testing = { workspace = true, optional = true }

@@ -84,7 +84,7 @@ pub use proxy::{
 };
 pub use shimmer::{ShimmerBand, ShimmerSweep};
 // The follower's clip mode is a layer value its configuration takes.
-pub use flui_rendering::layer::LeaderClip;
+pub use flui_layer::LeaderClip;
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{

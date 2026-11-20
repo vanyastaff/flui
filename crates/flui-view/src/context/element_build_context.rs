@@ -421,12 +421,10 @@ impl LifecycleContext for LiveBuildContext<'_> {
         let source = self.capabilities.presentation.capabilities.clone();
         acquire_capability(source.as_deref(), capability, name)
     }
-    fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
+    fn announcer(&self) -> Option<flui_semantics::Announcer> {
         self.capabilities.presentation.announcer.clone()
     }
-    fn assistive_focus_support(
-        &self,
-    ) -> flui_rendering::semantics::platform::AssistiveFocusSupport {
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
         self.capabilities.presentation.assistive_focus
     }
     fn haptics(&self) -> Option<flui_interaction::haptics::HapticsHandle> {
@@ -436,7 +434,7 @@ impl LifecycleContext for LiveBuildContext<'_> {
     fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
         self.capabilities.presentation.drag_and_drop.clone()
     }
-    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
+    fn texture_registry(&self) -> Option<flui_layer::TextureRegistry> {
         self.capabilities.presentation.textures.clone()
     }
     fn close_guard(&self) -> Option<crate::CloseGuard> {

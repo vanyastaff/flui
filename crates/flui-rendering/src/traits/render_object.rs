@@ -51,11 +51,11 @@ use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::inspect::Inspect;
 
 use crate::{
-    hit_testing::{CursorRequest, MouseTrackerAnnotation, PointerTarget},
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
-    semantics::SemanticsConfiguration,
     traits::PaintEffects,
 };
+use flui_interaction::pointer::{CursorRequest, MouseTrackerAnnotation, PointerTarget};
+use flui_semantics::SemanticsConfiguration;
 
 /// Result of a raw hit-test bridge call.
 ///
@@ -655,7 +655,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// entry, if any.
     ///
     /// When a hit lands on this node, the pipeline attaches the returned
-    /// identity to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
+    /// identity to the node's [`HitTestEntry`](flui_interaction::pointer::HitTestEntry);
     /// pointer dispatch resolves it through the owner-local interaction lane
     /// and invokes the registered handler with the locally transformed
     /// [`PointerEvent`]. Delivery is leaf-first to every target with no
@@ -664,8 +664,8 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// The executable callback never lives in render storage; the render
     /// object registers itself as the `HitTestEntry`'s target by identity.
     ///
-    /// [`PointerEvent`]: crate::hit_testing::PointerEvent
-    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+    /// [`PointerEvent`]: flui_interaction::events::PointerEvent
+    fn pointer_target(&self) -> Option<flui_interaction::pointer::PointerTarget> {
         None
     }
 
@@ -686,7 +686,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// it. Like [`pointer_target`](Self::pointer_target), the identity is
     /// data-only; the executable handler lives in the owner-local interaction
     /// lane.
-    fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
+    fn scroll_target(&self) -> Option<flui_interaction::pointer::ScrollTarget> {
         None
     }
 
@@ -703,7 +703,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Default `None` — only a render object that arbitrates pan-zoom (e.g.
     /// `RenderListener` configured with a claiming handler) overrides it.
-    fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
+    fn pan_zoom_target(&self) -> Option<flui_interaction::pointer::PanZoomTarget> {
         None
     }
 
@@ -714,7 +714,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Default `None`; a `RenderListener` configured with a claiming handler
     /// overrides it.
-    fn smart_zoom_target(&self) -> Option<crate::hit_testing::SmartZoomTarget> {
+    fn smart_zoom_target(&self) -> Option<flui_interaction::pointer::SmartZoomTarget> {
         None
     }
 
@@ -731,7 +731,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// it, for searchers that cannot otherwise identify it.
     ///
     /// When a hit lands here, the pipeline attaches the returned value to the
-    /// node's [`HitTestEntry`](crate::hit_testing::HitTestEntry), where a
+    /// node's [`HitTestEntry`](flui_interaction::pointer::HitTestEntry), where a
     /// caller downcasts it with `metadata_as::<T>()`. This is how a drag finds
     /// the `DragTarget`s it has moved over: it cannot ask the element tree who
     /// is under a point, and a bare `RenderId` is only resolvable inside the
@@ -739,7 +739,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Default `None` — only a render object that exists to be *found*
     /// overrides it.
-    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
+    fn metadata(&self) -> Option<flui_interaction::pointer::HitMetadata> {
         None
     }
 
@@ -803,8 +803,8 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     fn semantics_regions(
         &self,
         _size: flui_foundation::geometry::Size,
-    ) -> crate::semantics::SemanticsRegions {
-        crate::semantics::SemanticsRegions::default()
+    ) -> flui_semantics::SemanticsRegions {
+        flui_semantics::SemanticsRegions::default()
     }
 
     /// Whether the semantics assembly walk should skip this render

@@ -624,7 +624,7 @@ mod tests {
 
         fn describe_semantics_configuration(
             &self,
-            config: &mut crate::semantics::SemanticsConfiguration,
+            config: &mut flui_semantics::SemanticsConfiguration,
         ) {
             config.set_semantics_boundary(self.boundary.load(std::sync::atomic::Ordering::Relaxed));
             config.set_label(
@@ -654,7 +654,7 @@ mod tests {
 
         fn describe_semantics_configuration(
             &self,
-            config: &mut crate::semantics::SemanticsConfiguration,
+            config: &mut flui_semantics::SemanticsConfiguration,
         ) {
             config.set_semantics_boundary(self.boundary);
             if self.merge_descendants {

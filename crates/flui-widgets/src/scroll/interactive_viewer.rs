@@ -97,6 +97,7 @@ use flui_interaction::gesture::{
     GestureSettingsProvider, ScaleEndDetails, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
 };
 use flui_interaction::pointer::EventPropagation;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::{events::PointerEvent, pointer::WheelPreferencesProvider};
 use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
@@ -110,9 +111,8 @@ use flui_platform::{
         PanZoomEvent, PanZoomPhase, PointerKind, ScrollEvent, ScrollPhase, ScrollUnit,
     },
 };
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
-use flui_rendering::semantics::{NumericRange, ScrollUnit as SemanticsScrollUnit};
+use flui_semantics::{NumericRange, ScrollUnit as SemanticsScrollUnit};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, Child, IntoView, PostFrameHandle, View, ViewExt, ViewState};

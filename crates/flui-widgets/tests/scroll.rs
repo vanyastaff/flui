@@ -4572,7 +4572,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
 }
 
 pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers() {
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         AccessibilityNodeId, ActionCall, SemanticsActionInvocation, SemanticsActionRequest,
     };
     use std::cell::RefCell;
@@ -4641,7 +4641,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
 }
 
 pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion() {
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         AccessibilityNodeId, ActionCall, SemanticsActionInvocation, SemanticsActionRequest,
     };
     use std::cell::RefCell;

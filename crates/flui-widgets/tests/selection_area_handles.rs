@@ -20,7 +20,7 @@ use flui_platform::input::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
 };
-use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
+use flui_semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{

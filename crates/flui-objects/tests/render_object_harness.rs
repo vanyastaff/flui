@@ -142,7 +142,9 @@ use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_foundation::inspect::{Fields, Inspect, OwnedValue, Rgba, Variant};
 use flui_interaction::pointer::InteractionLane;
+use flui_interaction::pointer::{HitTestBehavior, HitTestResult, MouseRegionCallbacks};
 use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
+use flui_layer::{LayerLink, LeaderClip};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
 use flui_painting::{Alignment, BoxFit, BoxShape, ImagePlacement};
@@ -162,13 +164,10 @@ use flui_rendering::{
         MultiChildLayoutDelegate, SingleChildLayoutDelegate, SliverGridDelegate,
         SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout,
     },
-    hit_testing::{HitTestBehavior, HitTestResult, MouseRegionCallbacks},
-    layer::{LayerLink, LeaderClip},
     parent_data::{
         HorizontalInsets, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
         StackParentData, TableCellParentData,
     },
-    semantics::{SemanticsConfiguration, SemanticsRole, Toggled},
     testing::{
         BoxQueryRun, DrawKind, FrameRun, ParentDataSeed, Probe, RenderTester, TreeNode,
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
@@ -177,6 +176,7 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
     view::{ScrollDirection, ScrollPosition},
 };
+use flui_semantics::{SemanticsConfiguration, SemanticsRole, Toggled};
 
 /// Describes a test double that has no fields of its own to report.
 macro_rules! inspect_nothing {
@@ -2169,7 +2169,7 @@ fn harness_paragraph_describes_one_run_as_text_and_several_as_runs() {
 /// publishes its laid-out text as runs; the same paragraph not selectable
 /// publishes none (ADR-0214).
 fn harness_paragraph_publishes_runs_only_while_selectable() {
-    use flui_rendering::semantics::SemanticsAnchor;
+    use flui_semantics::SemanticsAnchor;
 
     let anchor = SemanticsAnchor::new();
     for (selectable, expected_runs) in [(Some(anchor.clone()), 2_usize), (None, 0)] {
@@ -4299,7 +4299,7 @@ fn harness_static_opacity_setters_report_their_exact_impact() {
 }
 
 fn harness_static_opacity_visibility_controls_semantics_and_actions() {
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
     };
     let mut failures = Vec::new();
@@ -4378,7 +4378,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
 }
 
 fn harness_sliver_offstage_removes_hidden_semantics_and_stale_actions() {
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
     };
     let mut config = labelled("Offstage sliver content");
@@ -6051,8 +6051,8 @@ fn held<T: Clone + 'static>(value: T) -> ProxyAnimation<T> {
 /// Every rounded rectangle painted in the frame, in paint order, with the
 /// `from`/`to` points of its linear gradient (`None` for a flat fill).
 fn rrect_fills(run: &FrameRun) -> Vec<(Color, Option<(Offset, Offset)>)> {
+    use flui_layer::Layer;
     use flui_painting::DrawOp;
-    use flui_rendering::layer::Layer;
     let tree = run.layer_tree().expect("a painted frame");
     let mut fills = Vec::new();
     for (_, node) in tree.iter() {
@@ -6154,21 +6154,23 @@ fn harness_skeleton_sizes_by_width_factor_and_clamps_corners() {
         .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 12.0))
         .run_frame();
     assert_eq!(run.box_geometry(run.root()), Size::new(100.0, 12.0));
-    let rrect =
-        run.layer_tree()
-            .expect("a painted frame")
-            .iter()
-            .find_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::Picture(picture) => picture
+    let rrect = run
+        .layer_tree()
+        .expect("a painted frame")
+        .iter()
+        .find_map(|(_, node)| match node.layer() {
+            flui_layer::Layer::Picture(picture) => {
+                picture
                     .picture()
                     .iter()
                     .find_map(|command| match &command.op {
                         flui_painting::DrawOp::RRect { rrect, .. } => Some(*rrect),
                         _ => None,
-                    }),
-                _ => None,
-            })
-            .expect("the skeleton paints a rounded rectangle");
+                    })
+            }
+            _ => None,
+        })
+        .expect("the skeleton paints a rounded rectangle");
     assert_eq!(rrect.top_left.x, 6.0, "half the 12 px height");
 
     let unbounded = RenderTester::mount(box_node(RenderSkeleton::new(BONE, None, held(0.0))))
@@ -6363,7 +6365,7 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
 
 #[derive(Debug)]
 struct RegionPainter {
-    regions: Rc<std::cell::RefCell<Vec<flui_rendering::semantics::SemanticsRegion>>>,
+    regions: Rc<std::cell::RefCell<Vec<flui_semantics::SemanticsRegion>>>,
     size: Rc<Cell<Size>>,
 }
 
@@ -6372,7 +6374,7 @@ impl CustomPainter for RegionPainter {
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
         false
     }
-    fn semantics_regions(&self, size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+    fn semantics_regions(&self, size: Size) -> Vec<flui_semantics::SemanticsRegion> {
         self.size.set(size);
         self.regions.borrow().clone()
     }
@@ -6381,9 +6383,9 @@ impl CustomPainter for RegionPainter {
     }
 }
 
-fn semantic_region(key: u64, label: &str, x: f64) -> flui_rendering::semantics::SemanticsRegion {
-    flui_rendering::semantics::SemanticsRegion::new(
-        flui_rendering::semantics::SemanticsRegionKey(key),
+fn semantic_region(key: u64, label: &str, x: f64) -> flui_semantics::SemanticsRegion {
+    flui_semantics::SemanticsRegion::new(
+        flui_semantics::SemanticsRegionKey(key),
         Rect::from_origin_size(Point::new(x, 2.0), Size::new(8.0, 6.0)),
         labelled(label),
     )
@@ -6392,7 +6394,7 @@ fn semantic_region(key: u64, label: &str, x: f64) -> flui_rendering::semantics::
 #[derive(Debug)]
 struct RepaintingRegions {
     source: Rc<flui_foundation::ChangeNotifier>,
-    regions: Rc<std::cell::RefCell<Vec<flui_rendering::semantics::SemanticsRegion>>>,
+    regions: Rc<std::cell::RefCell<Vec<flui_semantics::SemanticsRegion>>>,
 }
 
 impl CustomPainter for RepaintingRegions {
@@ -6407,7 +6409,7 @@ impl CustomPainter for RepaintingRegions {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.source.clone())
     }
-    fn semantics_regions(&self, _size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+    fn semantics_regions(&self, _size: Size) -> Vec<flui_semantics::SemanticsRegion> {
         self.regions.borrow().clone()
     }
     fn as_any(&self) -> &dyn Any {
@@ -6416,7 +6418,7 @@ impl CustomPainter for RepaintingRegions {
 }
 
 fn harness_custom_paint_repaint_refreshes_region_geometry_identity_and_actions() {
-    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
     use std::sync::atomic::{AtomicUsize, Ordering};
     for foreground in [false, true] {
         let old_calls = Arc::new(AtomicUsize::new(0));
@@ -6570,19 +6572,11 @@ fn harness_custom_paint_region_barriers_follow_painter_placement_and_updates() {
 
 fn semantics_content(
     run: &FrameRun,
-) -> Vec<(
-    String,
-    flui_rendering::semantics::AccessibilityNodeId,
-    Rect<f64>,
-)> {
+) -> Vec<(String, flui_semantics::AccessibilityNodeId, Rect<f64>)> {
     fn walk(
-        owner: &flui_rendering::semantics::SemanticsOwner,
+        owner: &flui_semantics::SemanticsOwner,
         id: flui_foundation::SemanticsId,
-        out: &mut Vec<(
-            String,
-            flui_rendering::semantics::AccessibilityNodeId,
-            Rect<f64>,
-        )>,
+        out: &mut Vec<(String, flui_semantics::AccessibilityNodeId, Rect<f64>)>,
     ) {
         let node = owner.get(id).expect("rooted semantics node");
         if let Some(label) = node.label() {
@@ -6631,7 +6625,7 @@ impl CustomPainter for CapturingRegionPainter {
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
         false
     }
-    fn semantics_regions(&self, _size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+    fn semantics_regions(&self, _size: Size) -> Vec<flui_semantics::SemanticsRegion> {
         if !self.invalid.get() {
             return vec![semantic_region(1, "Retained presentation", 1.0)];
         }
@@ -6643,16 +6637,15 @@ impl CustomPainter for CapturingRegionPainter {
                 };
                 let key = if self.duplicate { 1 } else { index as u64 + 1 };
                 let mut region = semantic_region(key, "Draft region", index as f64);
-                let handler: flui_rendering::semantics::SemanticsActionHandler =
-                    std::rc::Rc::new(move |_| {
-                        std::hint::black_box(&capture);
-                    });
+                let handler: flui_semantics::SemanticsActionHandler = std::rc::Rc::new(move |_| {
+                    std::hint::black_box(&capture);
+                });
                 if self.custom {
                     region.config.add_custom_action("Inspect region", handler);
                 } else {
                     region
                         .config
-                        .add_action(flui_rendering::semantics::SemanticsAction::Click, handler);
+                        .add_action(flui_semantics::SemanticsAction::Click, handler);
                 }
                 region.config.set_blocks_user_actions(self.blocked);
                 region
@@ -6691,7 +6684,7 @@ impl RenderBox for CapturingSemanticsMerge {
                 fails: true,
             };
             config.add_action(
-                flui_rendering::semantics::SemanticsAction::Click,
+                flui_semantics::SemanticsAction::Click,
                 std::rc::Rc::new(move |_| {
                     std::hint::black_box(&capture);
                 }),
@@ -6889,7 +6882,7 @@ fn harness_accepted_semantics_drafts_retire_filtered_callbacks() {
 }
 
 fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_actions() {
-    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let calls = Arc::new(AtomicUsize::new(0));
     let mut first = semantic_region(1, "first", 1.0);
@@ -7026,7 +7019,7 @@ fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_action
 }
 
 fn harness_custom_paint_regions_obey_merge_exclude_and_action_blocking() {
-    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
     for policy in ["merge", "exclude", "blocked"] {
         let mut region = semantic_region(1, "painted", 1.0);
         region.config.set_role(SemanticsRole::Button);
@@ -7152,7 +7145,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
 }
 
 fn harness_custom_paint_regions_project_clip_and_rebind_owner() {
-    use flui_rendering::semantics::{SemanticsIdentitySource, SemanticsNode, SemanticsOwner};
+    use flui_semantics::{SemanticsIdentitySource, SemanticsNode, SemanticsOwner};
     let mut region = semantic_region(1, "projected", 2.0);
     region.transform = Matrix4::translation(3.0, 4.0, 0.0);
     let regions = Rc::new(std::cell::RefCell::new(vec![region]));
@@ -7605,9 +7598,7 @@ fn harness_clip_rsuperellipse_hit_tests_the_drawn_curve() {
         .expect("a painted frame")
         .iter()
         .filter_map(|(_, node)| match node.layer() {
-            flui_rendering::layer::Layer::ClipSuperellipse(layer) => {
-                Some(*layer.clip_superellipse())
-            }
+            flui_layer::Layer::ClipSuperellipse(layer) => Some(*layer.clip_superellipse()),
             _ => None,
         })
         .collect();
@@ -7734,7 +7725,7 @@ fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
 /// A grouped backdrop filter carries its group onto the layer it paints;
 /// joining or leaving the group is paint-only.
 fn harness_backdrop_filter_carries_its_group_to_the_layer() {
-    use flui_rendering::layer::BackdropGroupKey;
+    use flui_layer::BackdropGroupKey;
 
     let group = BackdropGroupKey::new();
     let run = RenderTester::mount(
@@ -7748,7 +7739,7 @@ fn harness_backdrop_filter_carries_its_group_to_the_layer() {
         .expect("a painted frame")
         .iter()
         .filter_map(|(_, node)| match node.layer() {
-            flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.group().cloned()),
+            flui_layer::Layer::BackdropFilter(layer) => Some(layer.group().cloned()),
             _ => None,
         })
         .collect();
@@ -7788,7 +7779,7 @@ fn harness_backdrop_filter_transform_follows_its_node() {
             .expect("a painted frame")
             .iter()
             .filter_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.filter().clone()),
+                flui_layer::Layer::BackdropFilter(layer) => Some(layer.filter().clone()),
                 _ => None,
             })
             .filter_map(|filter| match filter {
@@ -9433,7 +9424,7 @@ fn harness_input_regions_give_back_presses_no_press_taker_receives() {
 fn harness_input_regions_cut_routed_links_out_of_a_move_area() {
     use flui_objects::{SemanticsActionRoute, TextLinkKey, TextLinkRoute};
     use flui_rendering::input_regions::{InputRegion, InputRegionKind};
-    use flui_rendering::semantics::SemanticsActionHandler;
+    use flui_semantics::SemanticsActionHandler;
     let lane = flui_interaction::pointer::InteractionLane::try_new().expect("interaction lane");
     let route = lane.enter(|| {
         let handle = lane.dispatch_handle();
@@ -10150,7 +10141,7 @@ fn harness_lazy_slivers_keep_a_pinned_child_out_of_band() {
                 // which keeps a laid-out row past the cache addressable.
                 let mut revealing = SemanticsConfiguration::new();
                 revealing.add_action(
-                    flui_rendering::semantics::SemanticsAction::ScrollIntoView,
+                    flui_semantics::SemanticsAction::ScrollIntoView,
                     Rc::new(|_| {}),
                 );
                 let scrollable =
@@ -12054,7 +12045,7 @@ fn semantic_flow(delegate: SemanticFlowDelegate) -> FrameRun {
         let mut config = labelled(label);
         config.set_role(SemanticsRole::Button);
         config.add_action(
-            flui_rendering::semantics::SemanticsAction::Click,
+            flui_semantics::SemanticsAction::Click,
             std::rc::Rc::new(|_| {}),
         );
         box_node(RenderSemanticsAnnotations::from_configuration(config).with_container(true))
@@ -12199,7 +12190,7 @@ fn harness_flow_keeps_hitting_its_last_presentation_after_a_failed_repaint() {
 }
 
 fn harness_flow_only_announces_presented_children_after_repaint_and_replacement() {
-    use flui_rendering::semantics::{ActionCall, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsActionRequest};
     let delegate = SemanticFlowDelegate {
         selected: Rc::new(Cell::new(0)),
         x: Rc::new(Cell::new(0.0)),

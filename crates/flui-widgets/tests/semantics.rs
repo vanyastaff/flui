@@ -1,7 +1,7 @@
 //! Widget-level coverage for the accessibility semantics wrappers.
 
 use crate::common::{lay_out, loose};
-use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction};
+use flui_semantics::{ActionCall, ActionDecodeError, SemanticsAction};
 use flui_widgets::ScrollView;
 use flui_widgets::{MergeSemantics, Semantics, SemanticsRole, SizedBox};
 
@@ -203,9 +203,7 @@ pub(crate) fn collection_consumer_preserves_unknown_and_explicit_nested_sets() {
         }
     }
 
-    use flui_rendering::semantics::{
-        SemanticsCollection, SemanticsCollectionKind, SemanticsConfiguration,
-    };
+    use flui_semantics::{SemanticsCollection, SemanticsCollectionKind, SemanticsConfiguration};
     let mut authored = SemanticsConfiguration::new();
     authored.set_collection(SemanticsCollection::new(
         SemanticsCollectionKind::List,
@@ -434,7 +432,7 @@ pub(crate) fn a_semantics_barrier_crosses_proxies_but_stops_at_its_boundary() {
 }
 
 pub(crate) fn semantics_sort_keys_reorder_published_siblings_after_local_updates() {
-    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsSortKey};
+    use flui_semantics::{SemanticsConfiguration, SemanticsSortKey};
     use flui_widgets::Row;
 
     let item = |label: &str, order: f64| {
@@ -493,7 +491,7 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
     let alpha = |laid: &crate::common::LaidOut| {
         laid.layer_tree().and_then(|tree| {
             tree.iter().find_map(|(_, node)| {
-                if let flui_rendering::layer::Layer::Opacity(opacity) = node.layer() {
+                if let flui_layer::Layer::Opacity(opacity) = node.layer() {
                     Some(opacity.alpha())
                 } else {
                     None
@@ -707,7 +705,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
 pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_size() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
-    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey};
+    use flui_semantics::{SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey};
     use flui_widgets::{CustomPaint, CustomPainter};
 
     #[derive(Debug)]
@@ -780,7 +778,7 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
 pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey, TextContent, TextRun,
         TextRunParts, TextRunPosition, TextRunSelection,
     };
@@ -1324,7 +1322,7 @@ pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_rendering::semantics::{AccessibilityNodeId, SemanticsActionRequest};
+use flui_semantics::{AccessibilityNodeId, SemanticsActionRequest};
 use flui_testing::widgets::LaidOut;
 use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_view::{SignalWriteExt as _, View};
@@ -1824,7 +1822,7 @@ pub(crate) fn a_detached_mount_advertises_no_actions() {
 }
 
 /// The configuration the single `Semantics` wrapper has mounted.
-fn mounted_configuration(laid: &LaidOut) -> flui_rendering::semantics::SemanticsConfiguration {
+fn mounted_configuration(laid: &LaidOut) -> flui_semantics::SemanticsConfiguration {
     let [id] = laid.find_semantics_wrappers()[..] else {
         panic!("one Semantics wrapper is mounted");
     };
@@ -1872,7 +1870,7 @@ pub(crate) fn a_set_value_request_without_its_text_is_refused_rather_than_emptie
 /// Platform actions preserve direction and exact values across queued delivery.
 /// The signal write forces the real frame producer to republish the result.
 pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_producer() {
-    use flui_rendering::semantics::NumericRange;
+    use flui_semantics::NumericRange;
 
     let state = Rc::new(Cell::new(false));
     let described = Rc::clone(&state);
@@ -1997,7 +1995,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
 
 /// Native range metadata cannot admit non-finite values or reversed bounds.
 pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
-    use flui_rendering::semantics::{ActionCall, NumericRange, NumericRangeError};
+    use flui_semantics::{ActionCall, NumericRange, NumericRangeError};
     for (value, min, max, step, error) in [
         (f64::NAN, 0.0, 1.0, 1.0, NumericRangeError::NonFinite),
         (
@@ -2929,9 +2927,8 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
             identifier: "volume",
             role: Some(flui_testing::a11y::Role::Slider),
             view: || {
-                let range =
-                    flui_rendering::semantics::NumericRange::try_new(25.0, 0.0, 100.0, 10.0)
-                        .expect("valid range");
+                let range = flui_semantics::NumericRange::try_new(25.0, 0.0, 100.0, 10.0)
+                    .expect("valid range");
                 Slider::new(range)
                     .label("Volume")
                     .on_changed(|_ctx, _value| {})

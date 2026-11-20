@@ -10,7 +10,8 @@ use flui_foundation::Listenable;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_painting::{Canvas, paint::Paint, styling::Color};
-use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
+use flui_rendering::delegates::CustomPainter;
+use flui_semantics::SemanticsRole;
 use flui_view::prelude::*;
 use flui_view::{EventContext, RebuildHandle, RebuildReason};
 

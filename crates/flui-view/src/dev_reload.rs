@@ -42,7 +42,7 @@
 
 use std::{fmt, sync::Arc};
 
-use flui_rendering::layer::Scene;
+use flui_layer::Scene;
 
 /// What a development reload driver observed since its last poll.
 ///

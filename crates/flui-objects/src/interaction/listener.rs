@@ -2,7 +2,7 @@
 //! within its bounds and routes them to its owner-local handler.
 //!
 //! The listener advertises a data-only [`PointerTarget`] that the pipeline attaches to its
-//! [`HitTestEntry`](flui_rendering::hit_testing::HitTestEntry); pointer
+//! [`HitTestEntry`](flui_interaction::pointer::HitTestEntry); pointer
 //! dispatch resolves the target through the owner-local interaction lane and
 //! invokes the registered handler (ADR-0027 — the executable callback never
 //! lives in render storage). Layout and paint pass through transparently.
@@ -13,10 +13,12 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 
+use flui_interaction::pointer::{
+    HitTestBehavior, PanZoomTarget, PointerTarget, ScrollTarget, SmartZoomTarget,
+};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::{HitTestBehavior, PanZoomTarget, PointerTarget, ScrollTarget, SmartZoomTarget},
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };

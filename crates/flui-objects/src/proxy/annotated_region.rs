@@ -4,14 +4,13 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use flui_foundation::Single;
-use flui_rendering::{
-    context::PaintContext, layer::AnnotationValue, parent_data::BoxParentData, traits::RenderBox,
-};
+use flui_layer::AnnotationValue;
+use flui_rendering::{context::PaintContext, parent_data::BoxParentData, traits::RenderBox};
 
 /// A pass-through proxy whose box carries a type-erased annotation.
 ///
 /// It paints an annotated region around its child, sized to its own box;
-/// [`SceneVersion::find_annotation`](flui_rendering::layer::SceneVersion::find_annotation)
+/// [`SceneVersion::find_annotation`](flui_layer::SceneVersion::find_annotation)
 /// finds the value at points inside it. Layout and hit testing are the
 /// child's. Without a child it annotates nothing.
 #[derive(Clone)]

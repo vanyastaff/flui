@@ -1018,7 +1018,7 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
     runtime
         .attach_root_widget_with_size(
             &flui_widgets::Listener::new()
-                .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+                .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                 .on_pointer_down(move |_, _| {
                     let read = Rc::clone(&seen);
                     let sync = nested.request_lock(

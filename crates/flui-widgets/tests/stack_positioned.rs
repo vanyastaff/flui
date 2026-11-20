@@ -72,8 +72,8 @@ pub(crate) fn a_stack_clips_overflow_unless_its_clip_behavior_is_none() {
     use crate::common::LaidOut;
     use flui_foundation::geometry::{Offset, Point, Rect};
     use flui_interaction::events::PointerKind;
+    use flui_layer::Layer;
     use flui_painting::paint::Clip;
-    use flui_rendering::layer::Layer;
     use flui_view::ViewExt;
     use flui_widgets::IndexedStack;
 

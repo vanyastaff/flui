@@ -299,8 +299,11 @@ fn a_render_object_that_panics_while_read_answers_platform_before_the_owner_resu
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use flui_foundation::Leaf;
     use flui_foundation::geometry::Size;
-    use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
+    use flui_rendering::{
+        BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+    };
     use flui_view::{IntoView, RenderView, View};
     use flui_widgets::{Stack, Text};
 

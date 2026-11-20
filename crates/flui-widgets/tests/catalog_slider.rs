@@ -4,12 +4,10 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::Size;
 use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
+use flui_layer::Layer;
 use flui_painting::{DrawOp, paint::PaintStyle};
-use flui_rendering::{
-    constraints::BoxConstraints,
-    layer::Layer,
-    semantics::{AccessibilityNodeId, ActionCall, NumericRange, SemanticsActionRequest},
-};
+use flui_rendering::constraints::BoxConstraints;
+use flui_semantics::{AccessibilityNodeId, ActionCall, NumericRange, SemanticsActionRequest};
 use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, widgets::LaidOut};
 use flui_widgets::{Directionality, SizedBox, Slider};
 use std::{

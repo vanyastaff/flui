@@ -449,7 +449,7 @@ impl FrameRun {
     ///
     /// ```
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
-    /// # use flui_rendering::prelude::*;
+    /// # use flui_rendering::{BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox};
     /// # use flui_foundation::Leaf;
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
@@ -529,7 +529,7 @@ impl FrameRun {
     ///
     /// ```
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
-    /// # use flui_rendering::prelude::*;
+    /// # use flui_rendering::{BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox};
     /// # use flui_foundation::Leaf;
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
@@ -673,7 +673,7 @@ impl RenderTester {
     ///
     /// ```compile_fail
     /// # use flui_rendering::testing::{box_node, RenderTester};
-    /// # use flui_rendering::prelude::*;
+    /// # use flui_rendering::{BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox};
     /// # use flui_foundation::Leaf;
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
@@ -696,7 +696,7 @@ impl RenderTester {
     ///
     /// ```
     /// # use flui_rendering::testing::{box_node, RenderTester};
-    /// # use flui_rendering::prelude::*;
+    /// # use flui_rendering::{BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox};
     /// # use flui_foundation::Leaf;
     /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
@@ -996,7 +996,7 @@ impl SemanticsRun {
     /// `None` when semantics was never enabled — `run_semantics` is then a
     /// no-op and no `SemanticsOwner` was ever lazily created (see flui-semantics ARCHITECTURE.md, semantics assembly).
     #[must_use]
-    pub fn semantics_owner(&self) -> Option<&crate::semantics::SemanticsOwner> {
+    pub fn semantics_owner(&self) -> Option<&flui_semantics::SemanticsOwner> {
         self.owner.semantics_owner()
     }
 }

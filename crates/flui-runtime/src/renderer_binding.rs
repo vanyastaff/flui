@@ -20,10 +20,8 @@
 use std::cell::Cell;
 
 use flui_foundation::geometry::Offset;
-use flui_rendering::{
-    hit_testing::HitTestResult,
-    pipeline::{PipelineCell, PipelineOwner, TextContextHandle},
-};
+use flui_interaction::pointer::HitTestResult;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
 
 /// Shared body for [`RenderingBinding::redirty_root_for_represent`]:
 /// operates on the bare [`PipelineCell`] (rather than requiring a full

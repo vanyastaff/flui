@@ -33,7 +33,7 @@ pub(crate) mod text_form_field_core;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use flui_rendering::semantics::SemanticsRole;
+use flui_semantics::SemanticsRole;
 use flui_view::EventContextError;
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;

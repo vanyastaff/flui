@@ -4,7 +4,7 @@
 use std::cell::OnceCell;
 use std::num::NonZeroU32;
 
-use flui_rendering::layer::{
+use flui_layer::{
     LayerTree, Lineage, ScenePublication, SceneVersion, TextureRegistry, TextureUpdates,
 };
 use flui_runtime::sink::{FrameSink, SubmitVerdict};

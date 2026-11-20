@@ -10,8 +10,8 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
 
 use flui_animation::Vsync;
+use flui_layer::Layer;
 use flui_painting::DrawOp;
-use flui_rendering::layer::Layer;
 use flui_testing::a11y::Role;
 use flui_view::environment::VsyncScope;
 use flui_view::{SignalWriteExt, ViewExt};
@@ -192,7 +192,7 @@ fn indicator_ticks_preserve_surrounding_paint_content() {
             .expect("painted scene")
             .iter()
             .find_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::Picture(picture) => {
+                flui_layer::Layer::Picture(picture) => {
                     Some(std::ptr::from_ref(picture.picture()).addr())
                 }
                 _ => None,

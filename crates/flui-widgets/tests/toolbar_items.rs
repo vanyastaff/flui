@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::focus::FocusNode;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_painting::Alignment;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_testing::a11y::{A11yTree, Role};
 use flui_testing::replay::PointerScript;
 use flui_view::{BoxedView, ViewExt};
