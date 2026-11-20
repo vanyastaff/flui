@@ -70,6 +70,32 @@ pub fn granted(permission: safety::Permission) -> bool {
     quartz::granted(permission)
 }
 
+/// Release everything the lane holds: the keys through `post_key`, then the mouse buttons through
+/// `post_mouse`, each event with the modifier flags the lane holds once the keys' release is over;
+/// the mouse is tried whatever the keys came to, a panic included.
+///
+/// # Errors
+///
+/// What [`release_outcome`](crate::lane::release_outcome) makes of the two releases:
+/// [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming everything still held.
+///
+/// # Panics
+///
+/// The first part's panic, resumed once both parts were tried and what the other leaves held is
+/// logged at error level; discarded instead when the thread is already unwinding.
+pub fn release_held(
+    keys: &mut held::HeldKeys,
+    pointer: &mut pointer::Pointer,
+    post_key: impl FnMut(held::Keystroke, u64) -> crate::Result<()>,
+    mut post_mouse: impl FnMut(&pointer::MouseEvent, u64) -> crate::Result<()>,
+) -> crate::Result<()> {
+    let mut panicked = flui_foundation::panic::FirstPanic::new();
+    let released_keys = panicked.contain(|| keys.release_all(post_key));
+    let flags = keys.flags();
+    let released_mouse = panicked.contain(|| pointer.release_all(|event| post_mouse(event, flags)));
+    crate::lane::release_settled(panicked, [released_keys, released_mouse])
+}
+
 #[cfg(target_os = "macos")]
 mod lane {
     use std::time::{Duration, Instant};
@@ -498,16 +524,18 @@ mod lane {
             // A release without Accessibility would be dropped with no word: it is refused, and
             // what it would have released stays held and is named (`Error::ReleaseFailed`).
             let pid = self.pid;
-            let keys = self.keys.release_all(|stroke, flags| {
-                Self::permitted(Permission::Accessibility)?;
-                quartz::keystroke(pid, stroke, flags)
-            });
-            let flags = self.keys.flags();
-            let pointer = self.pointer.release_all(|event| {
-                Self::permitted(Permission::Accessibility)?;
-                quartz::mouse(pid, event, flags)
-            });
-            crate::lane::release_outcome(keys, pointer)
+            super::release_held(
+                &mut self.keys,
+                &mut self.pointer,
+                |stroke, flags| {
+                    Self::permitted(Permission::Accessibility)?;
+                    quartz::keystroke(pid, stroke, flags)
+                },
+                |event, flags| {
+                    Self::permitted(Permission::Accessibility)?;
+                    quartz::mouse(pid, event, flags)
+                },
+            )
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {

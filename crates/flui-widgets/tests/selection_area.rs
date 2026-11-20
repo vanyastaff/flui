@@ -413,9 +413,6 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
                 config,
             )]
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     let text = SemanticsAnchor::new();

@@ -857,7 +857,7 @@ impl CustomPainter for IndicationPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             !Rc::ptr_eq(&old.indication, &self.indication) || old.shape != self.shape
         })
     }
@@ -869,9 +869,5 @@ impl CustomPainter for IndicationPainter {
     /// The feedback is decoration: hits belong to the child and the well.
     fn hit_test(&self, _position: flui_sdk::geometry::Offset) -> Option<bool> {
         Some(false)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

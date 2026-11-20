@@ -184,8 +184,4 @@ impl PlatformHaptics for FakeHaptics {
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
         self.state().capabilities
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

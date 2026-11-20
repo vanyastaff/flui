@@ -820,7 +820,7 @@ fn a_release_failure_names_every_key_and_button_still_held() {
         .deliver(3, true, || Ok(()), || Ok(()))
         .expect("pressed");
     let buttons = buttons.release_all(|_| refuse());
-    let answer = release_outcome(keys, buttons);
+    let answer = release_outcome([keys, buttons]);
     assert!(
         matches!(&answer, Err(Error::ReleaseFailed { held, message, .. })
             if held == &["Control", "mouse button 3"] && message.contains("no keymap")),
@@ -837,10 +837,10 @@ fn a_release_failure_names_every_key_and_button_still_held() {
         "nothing held: the failure itself, {empty:?}"
     );
     assert!(matches!(
-        release_outcome(refuse(), Ok(())),
+        release_outcome([refuse(), Ok(())]),
         Err(Error::Lane { .. })
     ));
-    assert!(release_outcome(Ok(()), Ok(())).is_ok());
+    assert!(release_outcome([Ok(()), Ok(())]).is_ok());
 }
 
 /// A wheel click is a press and a release held as a button's are: a click whose echo never came

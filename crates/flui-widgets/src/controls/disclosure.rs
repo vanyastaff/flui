@@ -548,15 +548,11 @@ impl CustomPainter for Chevron {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             self.state != old.state
                 || self.direction != old.direction
                 || self.color != old.color
                 || self.focused != old.focused
         })
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

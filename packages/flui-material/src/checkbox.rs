@@ -72,6 +72,7 @@
 //!   hook yet (a whole-substrate gap, not specific to this type); only
 //!   `focus_node` sharing is wired through.
 
+use std::any::Any;
 use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
@@ -642,14 +643,9 @@ impl CustomPainter for CheckboxPainter {
     }
 
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old != self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

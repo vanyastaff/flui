@@ -143,7 +143,9 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **Nothing stays pressed without a word.** Where no caller is left to retry (the lane's worker
   ending, a job that panicked), the worker releases once more after a failed release and logs
   what is still held at error level; the error (`Error::ReleaseFailed`, the lane's own failure,
-  apart from `input_held`) names the keys. It never waits, and a panic in that release (the
+  apart from `input_held`) names every key, mouse button and touch contact still down and a pen
+  down or in range, gathered from the lane's parts by `lane::release_outcome` with each part's
+  first failure, so one part's failure never hides another's. It never waits, and a panic in that release (the
   lane's, a log subscriber's) is held behind the job's panic (`FirstPanic`), never in its place.
 - **An accessibility provider's answers stay apart.** A UI Automation read or invoke tells a
   provider that timed out (`timeout`), an element that went away (`gone`) and a pattern the
