@@ -27,11 +27,11 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// if state.needs_layout() {
-    ///     perform_layout();
-    ///     state.clear_needs_layout();
-    /// }
+    /// ```
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// // A node that has never been laid out needs layout.
+    /// assert!(BoxRenderState::new().needs_layout());
     /// ```
     #[inline]
     pub fn needs_layout(&self) -> bool {
@@ -70,15 +70,6 @@ impl<P: Protocol> RenderState<P> {
     /// relayout boundary.
     ///
     /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::PipelineOwner::mark_needs_layout
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let state = BoxRenderState::new();
-    /// state.clear_needs_layout();
-    /// state.mark_needs_layout();
-    /// assert!(state.needs_layout());
-    /// ```
     #[inline]
     pub(crate) fn mark_needs_layout(&self) {
         self.flags.mark_needs_layout();
@@ -134,15 +125,6 @@ impl<P: Protocol> RenderState<P> {
     /// inspect this flag during pipeline-owner-driven traversal; the
     /// `mark_needs_layout`-style chain hangs off `PipelineOwner`, not off
     /// `RenderState`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if state.is_relayout_boundary() {
-    ///     // boundary owns its layout pass
-    ///     pipeline_owner.add_node_needing_layout(element_id);
-    /// }
-    /// ```
     #[inline]
     pub fn is_relayout_boundary(&self) -> bool {
         self.flags.contains(RenderFlags::IS_RELAYOUT_BOUNDARY)
@@ -172,13 +154,6 @@ impl<P: Protocol> RenderState<P> {
     }
 
     /// Sets whether this render object is a relayout boundary.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Make this a relayout boundary to isolate layout changes
-    /// state.set_relayout_boundary(true);
-    /// ```
     #[inline]
     pub(crate) fn set_relayout_boundary(&self, is_boundary: bool) {
         if is_boundary {

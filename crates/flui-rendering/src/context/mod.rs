@@ -19,14 +19,28 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use flui_rendering::context::{BoxLayoutContext, BoxHitTestContext, PaintContext};
+//! ```
+//! # use flui_foundation::Single;
+//! # use flui_foundation::geometry::{Point, Rect, Size};
+//! # use flui_painting::paint::Paint;
+//! use flui_rendering::context::{BoxHitTestContext, BoxLayoutContext, PaintContext};
+//! use flui_rendering::parent_data::BoxParentData;
+//! use flui_rendering::traits::RenderBox;
 //!
+//! # #[derive(Debug, Default)]
+//! # struct MyWidget;
+//! # impl flui_foundation::inspect::Inspect for MyWidget {
+//! #     fn kind(&self) -> &'static str { "MyWidget" }
+//! #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+//! # }
 //! impl RenderBox for MyWidget {
 //!     type Arity = Single;
 //!     type ParentData = BoxParentData;
 //!
-//!     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> flui_rendering::RenderResult<Size> {
+//!     fn perform_layout(
+//!         &mut self,
+//!         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+//!     ) -> flui_rendering::RenderResult<Size> {
 //!         let child_size = ctx.layout_single_child_loose()?;
 //!         ctx.position_single_child_at_origin();
 //!         Ok(ctx.constrain(child_size))
@@ -34,13 +48,14 @@
 //!
 //!     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
 //!         // Draw self in LOCAL coordinates (origin pre-translated).
-//!         ctx.canvas().draw_rect(...);
+//!         let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+//!         ctx.canvas().draw_rect(bounds, &Paint::default());
 //!         // Splice the child at its laid-out offset.
 //!         ctx.paint_child();
 //!     }
 //!
-//!     fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
-//!         if !ctx.is_within_size(self.size.width, self.size.height) {
+//!     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
+//!         if !ctx.is_within_own_size() {
 //!             return false;
 //!         }
 //!         ctx.register_self_hit_entry();

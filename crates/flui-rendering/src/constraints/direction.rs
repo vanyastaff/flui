@@ -13,7 +13,7 @@ use crate::constraints::AxisDirection;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use flui_rendering::constraints::GrowthDirection;
 ///
 /// let dir = GrowthDirection::Forward;
@@ -67,7 +67,9 @@ impl GrowthDirection {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// use flui_rendering::constraints::GrowthDirection;
+    ///
     /// assert_eq!(GrowthDirection::Forward.apply_to(10.0), 10.0);
     /// assert_eq!(GrowthDirection::Reverse.apply_to(10.0), -10.0);
     /// ```

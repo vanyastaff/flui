@@ -64,8 +64,12 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let screen_position = parent_offset + state.offset();
+    /// ```
+    /// use flui_foundation::geometry::Offset;
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// // Until the parent positions it, a node sits at the origin.
+    /// assert_eq!(BoxRenderState::new().offset(), Offset::ZERO);
     /// ```
     #[inline]
     pub fn offset(&self) -> Offset {
@@ -82,13 +86,6 @@ impl<P: Protocol> RenderState<P> {
     /// - O(1) time
     /// - Single store
     /// - No allocation
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Parent positioning child during layout
-    /// child_state.set_offset(Offset::new(10.0, 20.0));
-    /// ```
     #[inline]
     pub(crate) fn set_offset(&self, offset: Offset) {
         self.offset.store(offset);

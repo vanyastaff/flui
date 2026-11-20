@@ -384,16 +384,20 @@ fn the_server_captures_the_apps_window_alone() {
         )
         .expect("the app answers");
     assert!(settled.satisfied, "the app settled: {settled:?}");
-    let drawn = |capture: &flui_driver::lane::OsCapture| {
+    let drawn = |capture: &flui_driver::pixels::Image| {
         let first = capture.pixel(0, 0);
-        (0..capture.height)
+        (0..capture.height())
             .step_by(4)
-            .flat_map(|y| (0..capture.width).step_by(4).map(move |x| (x, y)))
+            .flat_map(|y| (0..capture.width()).step_by(4).map(move |x| (x, y)))
             .any(|(x, y)| capture.pixel(x, y) != first)
     };
     let deadline = Instant::now() + Duration::from_secs(15);
     let capture = loop {
-        let capture = window.capture_os().expect("the server captures the window");
+        let capture = window
+            .capture(flui_driver::pixels::CaptureSource::Os)
+            .expect("the server captures the window")
+            .image()
+            .clone();
         if drawn(&capture) || Instant::now() >= deadline {
             break capture;
         }
@@ -401,7 +405,7 @@ fn the_server_captures_the_apps_window_alone() {
     };
     let device = |logical: f64| (logical * placement.scale).round() as u32;
     assert_eq!(
-        (capture.width, capture.height),
+        (capture.width(), capture.height()),
         (device(placement.size.width), device(placement.size.height)),
         "the capture is the window's surface, at its scale"
     );

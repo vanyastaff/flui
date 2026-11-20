@@ -1,5 +1,12 @@
 //! `flui-driver`'s integration tests, through its public API.
 
+#[cfg(any(unix, windows))]
+mod android_device;
+mod android_edges;
+#[cfg(unix)]
+mod android_host;
+mod android_lane;
+mod android_rules;
 mod apps;
 mod coordinates;
 mod failure_matrix;
@@ -9,6 +16,7 @@ mod launch;
 #[cfg(target_os = "macos")]
 mod macos_desktop;
 mod macos_lane;
+mod pixels;
 mod policy;
 mod private_desktop;
 mod report;
@@ -16,6 +24,12 @@ mod scenarios;
 #[cfg(any(unix, windows))]
 mod socket;
 mod steps;
+mod trace;
+mod trace_bounds;
+// The test `trace::codegen` writes from a trace of the counter, compiled and run here as it was
+// written: rustfmt would rewrite what the comparison holds.
+#[rustfmt::skip]
+mod trace_generated;
 mod wayland_lane;
 #[cfg(windows)]
 mod windows_desktop;

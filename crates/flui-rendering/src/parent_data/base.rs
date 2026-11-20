@@ -29,7 +29,7 @@ use downcast_rs::{Downcast, impl_downcast};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use flui_rendering::parent_data::{ParentData, BoxParentData};
 ///
 /// fn access_offset(data: &dyn ParentData) {
@@ -41,7 +41,9 @@ use downcast_rs::{Downcast, impl_downcast};
 ///
 /// # Implementation
 ///
-/// ```ignore
+/// ```
+/// use flui_rendering::parent_data::ParentData;
+///
 /// #[derive(Debug, Clone, Default)]
 /// struct CustomParentData {
 ///     custom_field: f64,

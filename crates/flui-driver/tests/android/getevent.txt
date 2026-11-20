@@ -1,0 +1,16 @@
+add device 1: /dev/input/event5
+  name:     "sec_touchscreen"
+add device 2: /dev/input/event2
+  name:     "gpio_keys"
+add device 3: /dev/input/event7
+  name:     "accelerometer_sensor"
+/dev/input/event7: EV_ABS       ABS_X                0000fe12
+/dev/input/event7: EV_ABS       ABS_Y                00000140
+/dev/input/event7: EV_SYN       SYN_REPORT           00000000
+/dev/input/event2: EV_SW        SW_LID               00000000
+/dev/input/event2: EV_KEY       KEY_VOLUMEDOWN       REPEAT
+add device 4: /dev/input/event9
+  name:     "FLUI Driver Stylus"
+/dev/input/event9: EV_KEY       BTN_TOOL_PEN         DOWN
+/dev/input/event9: EV_ABS       ABS_X                000001f4
+/dev/input/event9: EV_SYN       SYN_REPORT           00000000

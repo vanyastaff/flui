@@ -64,9 +64,7 @@ mod lane {
     use crate::lane::atspi::client::{A11yBus, WindowTarget};
     use crate::lane::pacing;
     use crate::lane::screen;
-    use crate::lane::{
-        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
-    };
+    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
     use crate::steps::OsEvent;
 
     /// How far a window's device size may be from the app's logical size times its scale: the
@@ -520,7 +518,7 @@ mod lane {
             bus.invoke(WindowTarget::of(self.pid, placement), identifier)
         }
 
-        fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+        fn capture_window(&mut self, placement: &Placement) -> Result<crate::pixels::Image> {
             let (window, _) = self.find(placement)?;
             self.server()?.capture(window)
         }

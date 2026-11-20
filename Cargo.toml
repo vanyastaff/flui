@@ -297,6 +297,8 @@ dirs = "6"
 
 # The semantics and agent-protocol vocabulary (ADR-0095).
 flui-protocol = { path = "crates/flui-protocol", version = "=0.2.0-dev" }
+# The driver's client (ADR-0238), versioned apart from the train; `flui-cli` is its front end.
+flui-driver = { path = "crates/flui-driver", version = "=0.1.0-dev" }
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }

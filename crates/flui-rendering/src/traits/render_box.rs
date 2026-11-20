@@ -25,45 +25,39 @@ use flui_interaction::pointer::{CursorRequest, HitTestBehavior, MouseTrackerAnno
 ///
 /// ## Example
 ///
-/// ```ignore
-/// // Simple leaf with default BoxParentData
+/// ```
+/// # use flui_foundation::Leaf;
+/// # use flui_foundation::geometry::Size;
+/// # use flui_painting::styling::Color;
+/// # use flui_rendering::context::{BoxLayoutContext, PaintContext};
+/// # use flui_rendering::parent_data::BoxParentData;
+/// # use flui_rendering::traits::RenderBox;
+/// # impl flui_foundation::inspect::Inspect for RenderColoredBox {
+/// #     fn kind(&self) -> &'static str { "RenderColoredBox" }
+/// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+/// # }
+/// // A leaf with the default `BoxParentData`.
+/// #[derive(Debug)]
 /// struct RenderColoredBox { color: Color, size: Size }
 ///
 /// impl RenderBox for RenderColoredBox {
 ///     type Arity = Leaf;
 ///     type ParentData = BoxParentData;
 ///
-///     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Leaf, BoxParentData>) -> RenderResult<Size> {
+///     fn perform_layout(
+///         &mut self,
+///         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+///     ) -> flui_rendering::RenderResult<Size> {
 ///         Ok(ctx.constraints().constrain(self.size))
 ///     }
-/// }
 ///
-/// // Flex container with FlexParentData on children
-/// struct RenderFlex { children: Vec<...> }
-///
-/// impl RenderBox for RenderFlex {
-///     type Arity = Variable;
-///     type ParentData = FlexParentData;  // Children get FlexParentData
-///
-///     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Variable, FlexParentData>) -> RenderResult<Size> {
-///         for child in ctx.iter_children() {
-///             // Type-safe access to FlexParentData
-///             let flex = child.parent_data().flex;
-///             let fit = child.parent_data().fit;
-///         }
-///     }
-/// }
-///
-/// // Stack container with StackParentData on children
-/// struct RenderStack { ... }
-///
-/// impl RenderBox for RenderStack {
-///     type Arity = Variable;
-///     type ParentData = StackParentData;  // Children get positioning info
-///     ...
+///     fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
 /// }
 /// ```
-/// Trait for render objects that use 2D cartesian coordinates.
+///
+/// A container whose children carry their own metadata names a different
+/// `ParentData` (for example `FlexParentData` for a flex container, or
+/// `StackParentData` for a stack) and reads it type-safely through the context.
 ///
 /// Users implement this trait for their custom render objects.
 /// Render objects are automatically converted to `RenderObject<BoxProtocol>`
@@ -107,12 +101,31 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<Single, BoxParentData>) -> RenderResult<Size> {
+    /// ```
+    /// # use flui_foundation::Single;
+    /// # use flui_foundation::geometry::Size;
+    /// # use flui_rendering::context::{BoxLayoutContext, PaintContext};
+    /// # use flui_rendering::parent_data::BoxParentData;
+    /// # use flui_rendering::traits::RenderBox;
+    /// # #[derive(Debug, Default)]
+    /// # struct Padding;
+    /// # impl flui_foundation::inspect::Inspect for Padding {
+    /// #     fn kind(&self) -> &'static str { "Padding" }
+    /// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    /// # }
+    /// # impl RenderBox for Padding {
+    /// #     type Arity = Single;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn paint(&self, _ctx: &mut PaintContext<'_, Single>) {}
+    /// fn perform_layout(
+    ///     &mut self,
+    ///     ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    /// ) -> flui_rendering::RenderResult<Size> {
     ///     let child_size = ctx.layout_single_child_loose()?;
     ///     ctx.position_single_child_at_origin();
     ///     Ok(ctx.constrain(child_size))
     /// }
+    /// # }
     /// ```
     fn perform_layout(
         &mut self,
@@ -160,8 +173,26 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// fn hit_test(&self, ctx: &mut BoxHitTestContext<Single, BoxParentData>) -> bool {
+    /// ```
+    /// # use flui_foundation::Single;
+    /// # use flui_foundation::geometry::Size;
+    /// # use flui_rendering::context::{BoxHitTestContext, BoxLayoutContext, PaintContext};
+    /// # use flui_rendering::parent_data::BoxParentData;
+    /// # use flui_rendering::traits::RenderBox;
+    /// # #[derive(Debug, Default)]
+    /// # struct Wrapper;
+    /// # impl flui_foundation::inspect::Inspect for Wrapper {
+    /// #     fn kind(&self) -> &'static str { "Wrapper" }
+    /// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    /// # }
+    /// # impl RenderBox for Wrapper {
+    /// #     type Arity = Single;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> flui_rendering::RenderResult<Size> {
+    /// #         Ok(ctx.constraints().biggest())
+    /// #     }
+    /// #     fn paint(&self, _ctx: &mut PaintContext<'_, Single>) {}
+    /// fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
     ///     // Start with the default bounds gate (size from RenderState).
     ///     if !ctx.is_within_own_size() {
     ///         return false;
@@ -174,6 +205,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     ///     ctx.register_self_hit_entry();
     ///     true
     /// }
+    /// # }
     /// ```
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {
         if !ctx.is_within_own_size() {
@@ -348,14 +380,33 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// # use flui_foundation::Single;
+    /// # use flui_foundation::geometry::{Point, Rect, Size};
+    /// # use flui_painting::paint::Paint;
+    /// # use flui_rendering::context::{BoxLayoutContext, PaintContext};
+    /// # use flui_rendering::parent_data::BoxParentData;
+    /// # use flui_rendering::traits::RenderBox;
+    /// # #[derive(Debug, Default)]
+    /// # struct Panel;
+    /// # impl flui_foundation::inspect::Inspect for Panel {
+    /// #     fn kind(&self) -> &'static str { "Panel" }
+    /// #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+    /// # }
+    /// # impl RenderBox for Panel {
+    /// #     type Arity = Single;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> flui_rendering::RenderResult<Size> {
+    /// #         Ok(ctx.constraints().biggest())
+    /// #     }
     /// fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
     ///     // Draw background in local coordinates (size from RenderState).
-    ///     ctx.canvas()
-    ///         .draw_rect(Rect::from_origin_size(Point::ZERO, ctx.size()), &paint);
+    ///     let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+    ///     ctx.canvas().draw_rect(bounds, &Paint::default());
     ///     // Splice the child at its laid-out offset.
     ///     ctx.paint_child();
     /// }
+    /// # }
     /// ```
     ///
     /// The default implementation splices all children in tree order
@@ -721,7 +772,7 @@ where
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
+    ) -> crate::error::RenderResult<Size> {
         // The real bridge.
         //
         // The pipeline / `RenderEntry::layout_leaf_only` hands us a
@@ -764,12 +815,12 @@ where
 
     fn hit_test_raw(
         &self,
-        position: crate::protocol::ProtocolPosition<BoxProtocol>,
+        position: flui_foundation::geometry::Offset,
         child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
-            Option<crate::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<flui_foundation::geometry::Offset>,
             Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {
@@ -827,15 +878,15 @@ where
 
     fn dry_layout_raw(
         &self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        constraints: BoxConstraints,
         ctx: &mut crate::context::BoxDryLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
+    ) -> crate::error::RenderResult<Size> {
         T::compute_dry_layout(self, constraints, ctx)
     }
 
     fn dry_baseline_raw(
         &self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        constraints: BoxConstraints,
         baseline: crate::traits::TextBaseline,
         ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {

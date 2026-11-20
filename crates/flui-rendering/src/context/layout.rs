@@ -1,7 +1,7 @@
 //! Rich LayoutContext with ergonomic API for layout operations.
 //!
-//! This module provides `LayoutContext`, a high-level wrapper around the layout
-//! capability traits that offers ergonomic APIs for common layout patterns.
+//! This module provides `LayoutContext`, a high-level wrapper around a protocol's
+//! typed layout context that offers ergonomic APIs for common layout patterns.
 //!
 //! # Features
 //!
@@ -13,21 +13,41 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! fn perform_layout(&mut self, ctx: &mut LayoutContext<BoxProtocol, Variable, BoxParentData>) {
-//!     let constraints = ctx.constraints();
+//! ```
+//! # use flui_foundation::Variable;
+//! # use flui_foundation::geometry::{Offset, Size};
+//! # use flui_rendering::context::BoxLayoutContext;
+//! # use flui_rendering::parent_data::BoxParentData;
+//! # use flui_rendering::traits::RenderBox;
+//! # use flui_rendering::{PaintContext, RenderResult};
+//! # #[derive(Debug, Default)]
+//! # struct Column;
+//! # impl flui_foundation::inspect::Inspect for Column {
+//! #     fn kind(&self) -> &'static str { "Column" }
+//! #     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+//! # }
+//! # impl RenderBox for Column {
+//! #     type Arity = Variable;
+//! #     type ParentData = BoxParentData;
+//! #     fn paint(&self, _ctx: &mut PaintContext<'_, Variable>) {}
+//! fn perform_layout(
+//!     &mut self,
+//!     ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+//! ) -> RenderResult<Size> {
+//!     let constraints = *ctx.constraints();
 //!
-//!     // Layout children with loose constraints
+//!     // Lay children out with loose constraints, stacked vertically.
 //!     let child_constraints = ctx.loosen();
+//!     let mut y_offset = 0.0;
 //!     for i in 0..ctx.child_count() {
-//!         let child_size = ctx.layout_child(i, child_constraints.clone());
+//!         let child_size = ctx.layout_child(i, child_constraints)?;
 //!         ctx.position_child(i, Offset::new(0.0, y_offset));
 //!         y_offset += child_size.height;
 //!     }
 //!
-//!     // Return the computed size
-//!     Size::new(constraints.max_width(), y_offset)
+//!     Ok(constraints.constrain(Size::new(constraints.max_width, y_offset)))
 //! }
+//! # }
 //! ```
 
 use flui_foundation::Arity;
@@ -36,7 +56,7 @@ use flui_foundation::geometry::{Offset, Size};
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
-    protocol::{BoxLayout, ChildLayout, LayoutCapability, LayoutContextApi, Protocol},
+    protocol::{ChildLayout, LayoutContextApi, Protocol},
     storage::IntrinsicDimension,
 };
 
@@ -46,30 +66,27 @@ use crate::{
 
 /// Rich layout context with ergonomic API for common layout patterns.
 ///
-/// This context wraps the underlying capability context and provides:
+/// This context wraps the protocol's typed layout context ([`Protocol::LayoutContext`]) and provides:
 /// - Constraint manipulation helpers
 /// - Child layout and positioning utilities
 /// - Debugging aids
 pub struct LayoutContext<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> {
-    /// The underlying layout context from the capability
-    inner: <P::Layout as LayoutCapability>::Context<'ctx, A, PD>,
+    /// The protocol's typed layout context.
+    inner: P::LayoutContext<'ctx, A, PD>,
 }
 
 impl<P: Protocol, A: Arity, PD: ParentData + Default> std::fmt::Debug
     for LayoutContext<'_, P, A, PD>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `inner` is a capability-GAT context (may hold live driver callbacks).
+        // `inner` is the protocol's typed context (may hold live driver callbacks).
         f.debug_struct("LayoutContext").finish_non_exhaustive()
     }
 }
 
-impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, P, A, PD>
-where
-    <P::Layout as LayoutCapability>::Context<'ctx, A, PD>: LayoutContextApi<'ctx, P::Layout, A, PD>,
-{
-    /// Creates a new layout context wrapping the capability context.
-    pub fn new(inner: <P::Layout as LayoutCapability>::Context<'ctx, A, PD>) -> Self {
+impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, P, A, PD> {
+    /// Creates a new layout context wrapping the protocol's typed context.
+    pub fn new(inner: P::LayoutContext<'ctx, A, PD>) -> Self {
         Self { inner }
     }
 
@@ -78,7 +95,7 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the layout constraints from parent.
-    pub fn constraints(&self) -> &<P::Layout as LayoutCapability>::Constraints {
+    pub fn constraints(&self) -> &P::Constraints {
         self.inner.constraints()
     }
 
@@ -100,8 +117,8 @@ where
     pub fn layout_child(
         &mut self,
         index: usize,
-        constraints: <P::Layout as LayoutCapability>::Constraints,
-    ) -> crate::error::RenderResult<<P::Layout as LayoutCapability>::Geometry> {
+        constraints: P::Constraints,
+    ) -> crate::error::RenderResult<P::Geometry> {
         self.inner.layout_child(index, constraints)
     }
 
@@ -111,10 +128,7 @@ where
     }
 
     /// Gets a child's current geometry (after layout).
-    pub fn child_geometry(
-        &self,
-        index: usize,
-    ) -> Option<&<P::Layout as LayoutCapability>::Geometry> {
+    pub fn child_geometry(&self, index: usize) -> Option<&P::Geometry> {
         self.inner.child_geometry(index)
     }
 
@@ -142,12 +156,12 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the underlying context for advanced operations.
-    pub fn inner(&self) -> &<P::Layout as LayoutCapability>::Context<'ctx, A, PD> {
+    pub fn inner(&self) -> &P::LayoutContext<'ctx, A, PD> {
         &self.inner
     }
 
     /// Gets mutable access to the underlying context.
-    pub fn inner_mut(&mut self) -> &mut <P::Layout as LayoutCapability>::Context<'ctx, A, PD> {
+    pub fn inner_mut(&mut self) -> &mut P::LayoutContext<'ctx, A, PD> {
         &mut self.inner
     }
 }
@@ -160,7 +174,8 @@ use crate::protocol::{BoxProtocol, SliverProtocol};
 
 impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, BoxProtocol, A, PD>
 where
-    <BoxLayout as LayoutCapability>::Context<'ctx, A, PD>: LayoutContextApi<'ctx, BoxLayout, A, PD>,
+    <BoxProtocol as Protocol>::LayoutContext<'ctx, A, PD>:
+        LayoutContextApi<'ctx, BoxProtocol, A, PD>,
 {
     /// Whether a descendant's layout was degraded during this node's pass —
     /// a layout that failed and handed its caller a stand-in, or a poisoned
@@ -173,9 +188,7 @@ where
     /// `false`.
     #[must_use]
     pub fn descendant_layout_degraded(&self) -> bool {
-        crate::protocol::box_protocol::ErasedBoxLayoutContext::descendant_layout_degraded(
-            &self.inner,
-        )
+        crate::protocol::ErasedBoxLayoutContext::descendant_layout_degraded(&self.inner)
     }
 
     /// The text context to measure with: the UI runtime's, lent through the
@@ -301,14 +314,13 @@ where
 
 impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, BoxProtocol, A, PD>
 where
-    <BoxLayout as LayoutCapability>::Context<'ctx, A, PD>:
-        crate::protocol::box_protocol::ErasedBoxLayoutContext,
+    <BoxProtocol as Protocol>::LayoutContext<'ctx, A, PD>: crate::protocol::ErasedBoxLayoutContext,
 {
     /// Lays out a **sliver** child at `index` with the given
     /// [`SliverConstraints`] and returns its [`SliverGeometry`].
     ///
     /// Delegates to
-    /// [`crate::protocol::box_protocol::ErasedBoxLayoutContext::layout_sliver_child`]
+    /// [`crate::protocol::ErasedBoxLayoutContext::layout_sliver_child`]
     /// on the underlying context. In Direct-storage contexts (leaf-only
     /// layout, unit tests without a pipeline-wired sliver callback) the
     /// underlying impl returns [`SliverGeometry::ZERO`]. In the production
@@ -321,7 +333,7 @@ where
         index: usize,
         constraints: SliverConstraints,
     ) -> crate::error::RenderResult<SliverGeometry> {
-        crate::protocol::box_protocol::ErasedBoxLayoutContext::layout_sliver_child(
+        crate::protocol::ErasedBoxLayoutContext::layout_sliver_child(
             &mut self.inner,
             index,
             constraints,
@@ -334,10 +346,7 @@ where
         &self,
         index: usize,
     ) -> Option<(SliverConstraints, SliverGeometry)> {
-        crate::protocol::box_protocol::ErasedBoxLayoutContext::cached_sliver_child_layout(
-            &self.inner,
-            index,
-        )
+        crate::protocol::ErasedBoxLayoutContext::cached_sliver_child_layout(&self.inner, index)
     }
 
     /// Whether the sliver child at `index` committed its geometry in a
@@ -347,18 +356,12 @@ where
     /// walked and the pass looks healthy.
     #[must_use]
     pub fn sliver_child_geometry_degraded(&self, index: usize) -> bool {
-        crate::protocol::box_protocol::ErasedBoxLayoutContext::sliver_child_geometry_degraded(
-            &self.inner,
-            index,
-        )
+        crate::protocol::ErasedBoxLayoutContext::sliver_child_geometry_degraded(&self.inner, index)
     }
 
     /// Returns whether a sliver child is still marked as needing layout.
     pub fn sliver_child_needs_layout(&self, index: usize) -> bool {
-        crate::protocol::box_protocol::ErasedBoxLayoutContext::sliver_child_needs_layout(
-            &self.inner,
-            index,
-        )
+        crate::protocol::ErasedBoxLayoutContext::sliver_child_needs_layout(&self.inner, index)
     }
 
     /// Distance from the top of child `index` to its first baseline of
@@ -368,7 +371,7 @@ where
         index: usize,
         baseline: crate::traits::TextBaseline,
     ) -> crate::error::RenderResult<Option<f64>> {
-        crate::protocol::box_protocol::ErasedBoxLayoutContext::child_distance_to_actual_baseline(
+        crate::protocol::ErasedBoxLayoutContext::child_distance_to_actual_baseline(
             &self.inner,
             index,
             baseline,
@@ -391,7 +394,7 @@ where
         dimension: IntrinsicDimension,
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
-        crate::protocol::box_protocol::ErasedBoxLayoutContext::child_intrinsic(
+        crate::protocol::ErasedBoxLayoutContext::child_intrinsic(
             &mut self.inner,
             index,
             dimension,
@@ -446,8 +449,8 @@ where
 
 impl<'ctx, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, SliverProtocol, A, PD>
 where
-    <crate::protocol::SliverLayout as LayoutCapability>::Context<'ctx, A, PD>:
-        crate::protocol::sliver_protocol::ErasedSliverLayoutContext,
+    <SliverProtocol as Protocol>::LayoutContext<'ctx, A, PD>:
+        crate::protocol::ErasedSliverLayoutContext,
 {
     /// Lays out a **Box** child at `index` with the given
     /// [`BoxConstraints`] and returns its [`Size`].
@@ -465,7 +468,7 @@ where
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<Size> {
-        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::layout_box_child(
+        crate::protocol::ErasedSliverLayoutContext::layout_box_child(
             &mut self.inner,
             index,
             constraints,
@@ -487,7 +490,7 @@ where
         index: usize,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<crate::protocol::BoxChildSize> {
-        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::measure_box_child(
+        crate::protocol::ErasedSliverLayoutContext::measure_box_child(
             &mut self.inner,
             index,
             constraints,
@@ -501,7 +504,7 @@ where
         dimension: IntrinsicDimension,
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
-        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::box_child_intrinsic(
+        crate::protocol::ErasedSliverLayoutContext::box_child_intrinsic(
             &mut self.inner,
             index,
             dimension,
@@ -541,7 +544,7 @@ where
     /// Returns [`ChildLayout::Scheduled`] once the request is recorded, or
     /// [`ChildLayout::Unwired`] when this context carries no request sink.
     pub fn request_child_build(&mut self, logical_index: usize) -> ChildLayout {
-        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::request_child_build(
+        crate::protocol::ErasedSliverLayoutContext::request_child_build(
             &mut self.inner,
             logical_index,
         )
@@ -552,9 +555,7 @@ where
     /// stand-in), at any depth. See `DegradationProbe`.
     #[must_use]
     pub fn descendant_layout_degraded(&self) -> bool {
-        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::descendant_layout_degraded(
-            &self.inner,
-        )
+        crate::protocol::ErasedSliverLayoutContext::descendant_layout_degraded(&self.inner)
     }
 
     /// Emits the retained logical-index band `[first, last)` for this
@@ -567,10 +568,6 @@ where
     /// children on the element side. The render side never disposes a child
     /// itself, which is what avoids an ABA double-remove between the two.
     pub fn emit_retain_band(&mut self, first: usize, last: usize) {
-        crate::protocol::sliver_protocol::ErasedSliverLayoutContext::emit_retain_band(
-            &mut self.inner,
-            first,
-            last,
-        );
+        crate::protocol::ErasedSliverLayoutContext::emit_retain_band(&mut self.inner, first, last);
     }
 }

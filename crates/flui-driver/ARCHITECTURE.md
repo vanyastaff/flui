@@ -33,9 +33,12 @@ app's trees, frames and input, and this crate composes that with what only the O
   `may_have_run` for a method that acts; a late answer is passed over by its id.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
-  `Lane::guard`) refuses OS input in process and on the shared desktop without a guard, before the
-  run is announced and again at every `lane::send_guarded`, which asks the guard before every
-  event and releases everything on every exit; `OsInputLock` holds one session per user's
+  `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
+  without a guard, before the run is announced and again at every `lane::send_guarded`, which
+  asks the guard before every event and releases everything on every exit, answering
+  `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
+  failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
+  `Error::is_cannot_verify`); `OsInputLock` holds one session per user's
   desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
   existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
   of mode 0700 in the temporary directory on Unix), `busy` only while another
@@ -58,7 +61,32 @@ app's trees, frames and input, and this crate composes that with what only the O
   pure, and `quartz`, `ax`, `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
   `lane::x11` keeps its keysyms, keymap and held input, safety rules, echo count and image layout
   pure, `lane::atspi::roles` and `lane::wayland::mapping` are pure, and the parts that reach an X
-  server, AT-SPI or libei are Linux only (libei with the `wayland` feature).
+  server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
+  host code that drives `adb`, so all of it builds on every host, and its tests script the device
+  (`testing::ScriptedAdb`).
+- **The Android lane reaches the device through one door.** Every `adb` command runs through
+  `lane::android::adb::Adb` with a deadline and a bound on its output, a timed-out command being
+  `timeout` with `may_have_run`; a stream (`getevent`, `uinput`) hands over bounded records, at
+  most a fixed number waiting; a value from outside the lane enters a device shell line only
+  through `adb::quote`. What the device prints is read as untrusted input: sizes checked before
+  decoding (`screencap`, `uiautomator dump`), node, depth and device counts bounded.
+- **The Android lane holds what `input` holds, and records it once taken.** `input` holds no key
+  between commands, so `lane::android::held::HeldInput` sends a key at its release (alone, or as
+  one `keycombination` with the modifiers held) and holds only the one `motionevent` contact and
+  the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
+  device answered a sync); a timed-out press is held and cancelled at the release, and a key a
+  timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
+  It refuses a second contact, a sequence that ends with a key down (which would never be sent),
+  the keys and chords that leave the app or change the device (the fallbacks of AOSP's
+  `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
+  the mouse included, going down at the display's edge; before each press, key and text the
+  app's window must hold the focus.
+- **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
+  serial, so every command it runs names one; `lane::android::host_device` builds it from
+  `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
+  its own: a window dump at a path of the session's, and a forward from a loopback port the lane
+  picked, asked for with `--no-rebind` (a port another session holds is refused and another
+  picked) and removed by that port at its end once `adb` made it or may have.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and
@@ -186,6 +214,53 @@ app's trees, frames and input, and this crate composes that with what only the O
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts
   again after its last frame, so an element that turns actionable on that frame is acted on, and
   a refusal reports what the app last showed.
+- **A capture names its source, and a source the driver cannot read is named, never faked.**
+  `pixels::Capture` carries its `CaptureSource`, backend, scale and frame. `os` comes from the
+  lane (`Lane::capture_window`, one `pixels::Image` type for every lane); `presented` and
+  `rendered` are `not_supported` naming the method while the app does not serve it, and naming
+  `capture_payload` while the connections read no binary frame.
+- **A baseline check passes only by matching.** `pixels::Baselines::compare` answers `Matched`
+  or a status that fails (`Missing`, `SizeDiffers`, `Differs`, `Written`): a baseline an update
+  wrote fails its check, and `FLUI_DRIVER_UPDATE_BASELINES` is refused under `CI`. A missing or
+  differing baseline leaves `.new.png` (and `.diff.png`) beside it; a match or a write removes
+  them. A stable capture compares masked images, so what a mask hides cannot keep it unstable,
+  and it ends after `MAX_STABLE_CAPTURES` captures whatever its clock does.
+- **Every image and trace the driver reads is bounded before it is decoded.** A PNG's file
+  length, then its declared size, then the decoder's allocations (`pixels::codec`); a trace's
+  file length, then its bytes as they are read (one past the bound stops a file that grows),
+  line length and row count (`trace::reader`); a native recording through the format's own
+  `Budget` (`trace::native::read`). Native streams are read only as `native/index.json` names
+  them, at most `MAX_NATIVE_STREAMS` and `MAX_NATIVE_TOTAL_BYTES` together (every size added up
+  before any is read), each under its one name (`<stream>.jsonl`). A trace's files have fixed
+  names, each checked from the top down to be no symbolic link or junction (`native/`,
+  `evidence/` and the file), so none resolves outside the trace.
+- **A trace records the caller's commands, once each.** `Driver::command` is the one place a
+  command becomes a row: the outermost call only (`command_depth`), its parameters as written
+  (locators, never only the handle they resolved to), written before it runs, its result after;
+  a panic out of the command restores the depth and writes no result. The rows of the trace's own
+  recording go to `input.jsonl` and `native/`; every other event is written and kept for
+  `take_events`. Events the connection dropped are a `gap` row, a `gap` in `input.jsonl` and in
+  every native stream (which ones lost lines is not known) while the recording runs, and part
+  of the caller's dropped count; once the recording ended, no line of it is left to lose. A write that fails is the trace's first failure, nothing is written after it, and
+  `finish_trace` answers it; a session that ends unfinished leaves no `end`, which readers report
+  as incomplete, and so does a last line torn mid-write.
+- **The app records only while a trace holds its recording.** `start_trace` makes the trace's
+  files before it sends `record.start`, and every way out after it (a recording file that cannot
+  be made, a panic) sends `record.stop` and removes what it made, never what was there: each
+  file is made new (`create_new`), and the directory goes only if the trace made it.
+  `finish_trace` takes the trace out of the session before its own stop, so the stop is no row.
+- **One writer of native recordings.** `trace::native::NativeFiles` writes a recording's native
+  layer for a trace and for `flui record --native` alike, and `trace::native::read` reads one
+  back through `flui-protocol`'s schema, without the core.
+- **Redaction is by field over the JSON a row carries** (`trace::TEXT_FIELDS`), a command's
+  `TextMatch` kept as the caller's own; `trace::every_text_field_of_the_wire_is_redacted_or_named_as_kept`
+  holds every free string field of the protocol's schema to one side of the list. A replay never
+  sends redacted text: a redacted row ends it, refused there.
+- **A replay reads handles only where the method's schema has one** (`trace::handles` walks
+  each value along the protocol's own schema of its method, made with `schemars`): a text, a
+  locator's name or an input source's id shaped like `e1` is text, though a node's `id` is a
+  handle. `trace::no_field_the_trace_redacts_holds_a_handle` keeps the redaction, which goes by
+  name, off every name that is a handle anywhere.
 - **The verdict rule is one function.** `Report::verdict`: `fail` when a check failed, else
   `cannot_verify` when a check could not be made or nothing was checked, else `pass`.
   `Error::is_cannot_verify` decides which failures cannot be verified.

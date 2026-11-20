@@ -75,17 +75,14 @@ fn layout_survives(subscriber: PanicsOnSpan) {
     assert!(unwound.is_err(), "the subscriber's panic continues");
     assert!(!owner.debug_doing_layout(), "the layout phase was left");
     assert!(
-        owner
-            .nodes_needing_layout()
-            .iter()
-            .any(|node| node.id == root),
+        owner.queued_for_layout().contains(&root),
         "the root was dropped from the dirty queue"
     );
     if closes {
         // The root was laid out before the span closed, so its changed geometry still owes a
         // paint that the retained (now clean) layout entry would not bring back.
         assert!(
-            !owner.nodes_needing_paint().is_empty(),
+            !owner.queued_for_paint().is_empty(),
             "the laid-out root owes a paint"
         );
     }

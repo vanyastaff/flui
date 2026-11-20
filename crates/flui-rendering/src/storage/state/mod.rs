@@ -20,9 +20,7 @@ use std::marker::PhantomData;
 
 use flui_foundation::RenderId;
 
-use crate::protocol::{
-    BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol,
-};
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::storage::flags::{RenderFlags, RenderFlagsCell};
 
 mod constraints;
@@ -166,7 +164,9 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
     /// let state = BoxRenderState::new();
     /// assert!(state.needs_layout());
     /// assert!(state.needs_paint());
@@ -192,8 +192,10 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// // Create state that doesn't need initial layout
+    /// ```
+    /// use flui_rendering::storage::{BoxRenderState, RenderFlags};
+    ///
+    /// // A state that does not need an initial layout.
     /// let state = BoxRenderState::with_flags(RenderFlags::empty());
     /// assert!(!state.needs_layout());
     /// ```
@@ -291,8 +293,8 @@ impl<P: Protocol> Default for RenderState<P> {
 
 impl<P: Protocol> Clone for RenderState<P>
 where
-    ProtocolGeometry<P>: Clone,
-    ProtocolConstraints<P>: Clone,
+    P::Geometry: Clone,
+    P::Constraints: Clone,
 {
     fn clone(&self) -> Self {
         Self {

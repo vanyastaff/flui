@@ -3,7 +3,7 @@
 
 use flui_foundation::Leaf;
 use flui_foundation::TextDirection;
-use flui_foundation::geometry::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_objects::{RenderFlex, RenderParagraph};
 use flui_painting::testing::text_context_lends;
 use flui_painting::typography::TextSpan;
@@ -13,7 +13,7 @@ use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, FragmentRecorder},
     error::{PoisonPhase, RenderError},
     parent_data::BoxParentData,
-    protocol::{BoxProtocol, Protocol, ProtocolPosition},
+    protocol::{BoxProtocol, Protocol},
     storage::IntrinsicDimension,
     testing::{SceneHost, box_node, inspect, tree},
     traits::{HitTestOutcome, RenderBox, RenderObject, TextBaseline},
@@ -111,14 +111,10 @@ impl RenderObject<BoxProtocol> for RawTextQueries {
 
     fn hit_test_raw(
         &self,
-        _position: ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut dyn FnMut(
-            usize,
-            Option<ProtocolPosition<BoxProtocol>>,
-            Option<Matrix4>,
-        ) -> bool,
+        _hit_child: &mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }
@@ -1456,7 +1452,7 @@ fn text_failure_retains_independent_pending_layout() {
     );
     owner.mark_needs_layout(content);
     assert!(
-        owner.nodes_needing_layout().len() >= 2,
+        owner.queued_for_layout().len() >= 2,
         "the failure and pending content must occupy independent queued boundaries"
     );
     let (mut owner, result) = scene.run_frame(owner);

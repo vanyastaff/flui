@@ -1,0 +1,5 @@
+### Removed
+
+- `flui-rendering` pipeline: the dirty-queue internals are no longer public API: `DirtyNode`, `DirtySets`, `PaintEntry`, `PaintKind`, `PaintQueue` and `VisualUpdateNotifier`, and with them `PipelineOwner::nodes_needing_layout`, `nodes_needing_paint`, `nodes_needing_compositing_bits_update` and `nodes_needing_semantics`. Dirty a node with `PipelineOwner::mark_needs_layout` / `mark_needs_paint`; read one node's state with `RenderNode::needs_layout` / `needs_paint`; a test that asserts what was queued uses the `testing` feature's `PipelineOwner::queued_for_layout`, `queued_for_paint`, `queued_for_compositing_bits` and `queued_for_semantics`, which return the queued `RenderId`s.
+- `PipelineOwner::add_node_needing_layout`: a second way to queue a node beside `mark_needs_layout`, which also propagates the flag to the relayout boundary.
+- `PipelineOwner::set_on_semantics_owner_created` and `set_on_semantics_owner_disposed`: no production code installed either. Read `PipelineOwner::semantics_enabled` or `semantics_owner` after `set_semantics_enabled`.

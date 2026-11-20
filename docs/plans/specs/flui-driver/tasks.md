@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -665,6 +665,97 @@ graph LR
   - a headless record → replay round trip has no divergence, and a changed app diverges at the
     expected `seq`;
   - codegen output compiles and passes in a trybuild-style nested test.
+- **Status (2026-11-20):** built; the pull request is under review. Two items of the card are met
+  another way or in part, and three of R21–R27 wait on other tasks (below).
+- **Evidence (2026-11-20, `driver_it` on Windows 11 build 26300 and WSL Ubuntu 24.04):**
+  - Metric: `pixels::the_metric_measures_pixelmatchs_yiq_distance` (distances worked out by hand
+    from pixelmatch's formula, its `35215` bound), `the_threshold_lets_close_colours_pass_and_far_ones_fail`,
+    `anti_aliased_pixels_count_unless_the_tolerance_excuses_them`. pixelmatch's own PNG fixture
+    pairs (`1a.png`/`1b.png` and their expected counts) are not in the tree: vendoring them is a
+    download the owner approves, so the table pins the formula, not those counts.
+  - Masks, baselines and predicates: `pixels::a_mask_hides_a_changing_clock` (the count's bounds
+    from the headless counter's semantics, its pixels from a scripted lane's screen that shades
+    them anew at every capture; unmasked, the capture never settles),
+    `a_missing_baseline_fails_and_leaves_the_capture_as_new`,
+    `update_modes_write_baselines_and_a_written_one_still_fails`,
+    `an_update_is_refused_in_ci_and_a_misspelled_one_everywhere`,
+    `a_baseline_past_its_bounds_or_not_a_png_is_refused_before_it_is_decoded` (a header declaring
+    20000 x 20000 refused before any pixel buffer), `a_logical_region_covers_every_device_pixel_it_touches`,
+    `the_predicates_check_one_capture_without_a_baseline`,
+    `a_window_stable_for_n_frames_passes_and_a_moving_one_names_the_frame`,
+    `the_apps_own_sources_are_named_as_not_supported_until_the_app_serves_them`.
+  - Trace: `trace::a_headless_trace_matches_its_golden_rows` (`tests/golden/counter.trace.jsonl`),
+    `a_trace_records_commands_as_written_with_their_results`, `a_trace_cut_short_reads_as_incomplete`
+    (a session ended unfinished, and a last line torn mid-write),
+    `a_reader_refuses_a_newer_format_an_unknown_row_and_a_row_after_the_end`,
+    `evidence_is_kept_once_and_past_the_budget_becomes_a_gap`,
+    `text_is_redacted_unless_the_session_keeps_it`,
+    `every_text_field_of_the_wire_is_redacted_or_named_as_kept` (every free string field of
+    `protocol-0.28.json` is in `trace::TEXT_FIELDS` or the test's kept list),
+    `a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`,
+    `a_headless_replay_has_no_divergence_and_a_changed_app_diverges_at_its_wait` (a counter
+    stepping by 2 diverges at seq 4, `wait.until`, `/satisfied`),
+    `codegen_writes_the_checked_in_test_from_a_trace` with `trace_generated::a_generated_test_taps_the_counter`
+    compiled and run in the same suite,
+    `a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core` (over a scripted
+    agent's socket: `record.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
+    `flui-protocol`, the stream's `gap` in place), `a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`.
+  - After the review of `f45a3b4b`, each with its test failing with the fix taken out by hand:
+    `trace_bounds::scripted::events_lost_mid_trace_mark_every_stream_and_the_callers_count`
+    (a `gap` in `input.jsonl` and in every native stream, and the caller's dropped count),
+    `trace_bounds::scripted::a_trace_that_cannot_start_leaves_the_app_recording_nothing`
+    (the trace's files before `record.start`, `record.stop` after a hold that fails),
+    `trace_bounds::a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction`,
+    `trace_bounds::scripted::a_replay_maps_handles_where_the_schema_has_them_only` (an input
+    source's `id` of `e1` stays text, a node's `id` pairs),
+    `trace::no_field_the_trace_redacts_holds_a_handle`,
+    `trace_bounds::native_recordings_are_read_from_the_index_under_their_one_name` (another
+    name, `../`, a stream twice, past 256 streams, an index past its bytes, no index),
+    `trace_bounds::native_streams_past_their_total_budget_are_refused_before_any_is_read`,
+    `trace_bounds::a_native_stream_through_a_link_is_refused` and
+    `trace_bounds::evidence_through_a_link_is_refused` (a junction on Windows, a symbolic link on
+    Unix, and a linked file on Unix), `trace_bounds::a_command_numbered_twice_is_refused`,
+    `trace_bounds::a_native_recording_past_its_byte_or_row_budget_or_reading_an_undeclared_device_is_refused`,
+    `pixels::an_image_too_large_to_count_is_refused`, `pixels::the_metric_matches_pixelmatch_5_worked_by_hand`
+    (deltas worked out by hand from pixelmatch 5's published formula, the arithmetic in the test),
+    a `cannot_verify` run keeping its trace in
+    `trace::a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`, and the
+    codegen golden marking `capture.os` as not generated and sending a control character as a
+    Rust literal. The reader's running byte bound (a file that grows as it is read) and the
+    linear `Trace::steps` have no test of their own: the first needs a file past 1 GiB, the
+    second changes no answer.
+- **As built:**
+  - `flui_driver::pixels` and `flui_driver::trace`, as the Rust API; their protocol rows
+    (`capture.os`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
+    FD11's `os.*` rows do, so a replay lists a pixel command as skipped rather than compare it.
+  - One image type: `lane::OsCapture` became `pixels::Image`, and `Window::capture_os` became
+    `Window::capture(CaptureSource::Os)`.
+  - The `presented` and `rendered` sources answer `not_supported` naming the method while the app
+    does not serve it (FD8 is not built), and naming `capture_payload` once it does, since the
+    connections read no binary frame yet; the headless target has no pixel source until FD8's
+    `rendered`, so the pixel tests on it take their pixels from `ScriptedLane::screen`.
+  - A comparison records its source, backend, OS and scale; the renderer (adapter, backend) and
+    the font set R22 also asks for are not reported by any source yet, and wait for FD8's capture
+    answer to carry them.
+  - Codegen is held by a checked-in module of the suite (`tests/trace_generated.rs`) that the
+    golden test compares and the suite compiles and runs, instead of a nested cargo build: the same
+    proof, on every PR. A command codegen cannot write (a pixel command until its row joins the
+    method table, a session's start or end) is a `// not generated:` line where it was sent, and
+    the file's header counts them, as a replay lists the same commands as skipped: emitting the
+    pixel commands would need their masks and tolerance in the trace's parameters, which the
+    rows the front ends add will carry.
+  - The writer of a recording's native layer moved from `flui-cli` into the driver
+    (`trace::native::NativeFiles`), which `flui record --native` and a trace share; its files are
+    one per stream (`native/<n>.jsonl` with `index.json`), as ADR-0241 §1 now says.
+  - Three parts of ADR-0241 are not built, each a bullet of `docs/gaps.md` ("Accepted ADR
+    sections not built yet"): reading a packed trace (§1, with `flui drive trace pack`), the
+    header's `target.backend` and `target.profile` (§2, which no app's hello reports yet), and
+    tree snapshots as evidence files (§1; a tree stays in its `result` row).
+  - `retain_on_failure` writes the trace in place and removes it when the report passes (a `cannot_verify` run keeps it, as a failing one does).
+  - Left for later tasks: blessing `flui-native`'s native goldens through the driver in place of
+    `FLUI_NATIVE_RECORDING_BLESS` (R26) comes with the scenarios that record through
+    `record.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,
+    `trace codegen`, `trace pack` and the inspector's player (R25) are FD17's and FD18's.
 
 ### FD11. Windows lane
 
@@ -791,9 +882,9 @@ graph LR
     not `uiautomation` and `windows-capture`.
   - `Lane` gains `check` (asked by `send_guarded` before the guard arms), `read_tree`, `invoke` and
     `capture_window`, each `not_supported` by default; the Rust API reaches them as
-    `Window::os_tree`, `compare_projection`, `os_invoke` and `capture_os`. The protocol rows
-    `os.tree`, `os.compare_projection` and `capture.os` are not in `flui_protocol::method` yet: they
-    join it with the front ends, and FD10 makes `capture_window` its `os` source.
+    `Window::os_tree`, `compare_projection`, `os_invoke` and `capture(CaptureSource::Os)` (FD10's
+    `os` source). The protocol rows `os.tree`, `os.compare_projection` and `capture.os` are not in
+    `flui_protocol::method` yet: they join it with the front ends.
   - ADR-0095 §4's projection is `flui_protocol::tree::normalized_outline`; it leaves out the
     window node, a title bar and the framework's own identifiers (`flui:`, the announcer's live
     regions), and reads an OS automation id as the identifier.
@@ -812,8 +903,9 @@ graph LR
     the gallery (`windows-gallery`), the accessibility checks with the roles page
     (`windows-a11y`, on a page of every role of the table instead of `a11y_probe`), `windows-input`
     and `windows-notes` (on a note field instead of `two_screens`). DPI after a resize and native
-    goldens through `record.start{native}` are not checked: the driver neither resizes a window nor
-    records native input yet (FD6, FD10).
+    goldens through `record.start{native}` are not checked: the driver resizes no window, and its
+    trace records the native layer (FD10) only from an app built with the `native-capture`
+    journal, which no scenario run on Windows has made yet.
   - The headless target's window offers text input (`HeadlessWindow::with_text_input`): without it
     `element.type_text` and a composition reached no field.
   - The isolation modes are refused, `not_supported` naming `windows_isolation_<mode>`
@@ -860,6 +952,125 @@ graph LR
   - the device recordings are held by the existing test, comparing order;
   - a device without root `uinput` reports the capability missing and the stylus and touchpad rows
     as cannot-verify.
+- **Status (2026-11-20):** built; the pull request is under review. Open until the runs on A
+  below are made: the `OS input through the driver` row of `crates/flui-native/platform-parity.toml`
+  names them. Of the Done-when items: the scenario is written and passes on the headless target,
+  and has not run on A (no device or emulator was taken: the owner runs them); the device
+  recordings are not re-recorded through the driver, which records no native input yet
+  (`record.start{native}`, FD10), and the existing hold
+  (`android_device_recordings_decode_to_their_host_input` in `flui-native`) already compares their
+  order; a device without root `uinput` reports `uinput_device` missing and its pen row
+  cannot-verify, held on every host against a scripted device; the touchpad row is cannot-verify on
+  every device, with or without `uinput`, since no OS lane sends a touchpad gesture
+  (`steps::os_events` refuses it) and the headless windows take none either.
+- **Evidence (2026-11-20):**
+  - On every host (`driver_it`, against the AOSP-format fixtures in `tests/android/` and a scripted
+    device): `android_lane::a_key_name_maps_to_its_key_code_and_a_system_key_is_refused`,
+    `text_is_typed_as_ascii_runs_and_line_breaks_as_keys`,
+    `a_value_from_outside_the_lane_is_one_word_of_the_device_shell`,
+    `a_stream_is_cut_into_lines_and_json_objects_and_a_record_is_bounded`,
+    `a_command_fails_on_its_exit_code_or_on_what_the_device_printed`,
+    `the_devices_listing_is_read_and_only_a_named_ready_device_is_taken`,
+    `what_the_device_prints_reads_into_its_facts`, `the_dump_gives_the_rotation_and_the_apps_surface`,
+    `a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies`,
+    `a_png_capture_decodes_and_a_window_is_cut_from_it`,
+    `getevent_lines_tell_the_lanes_devices_from_everyone_elses`,
+    `uinput_lines_register_inject_and_sync`, `a_display_point_lands_on_the_pens_axes_at_every_rotation`,
+    `each_safety_rule_refuses_with_its_code`,
+    `a_contact_going_down_at_an_edge_of_the_display_is_the_systems_gesture`,
+    `a_key_is_sent_at_its_release_alone_or_as_a_chord`, `a_contact_is_held_only_once_the_device_took_it`,
+    `a_second_contact_a_press_with_a_key_held_and_other_buttons_are_refused`,
+    `a_pen_needs_uinput_and_hovers_presses_and_leaves`,
+    `the_lane_connects_reading_the_device_and_probing_uinput`,
+    `a_device_without_root_uinput_reports_the_capability_missing_and_refuses_the_pen`,
+    `a_tap_goes_out_as_motion_events_each_press_after_the_focus_check`,
+    `keys_text_and_a_scroll_go_out_as_input_commands`,
+    `the_app_without_the_focus_is_refused_before_its_press`,
+    `a_release_failure_names_the_contact_still_held`, `a_timed_out_press_is_held_and_cancelled`,
+    `a_key_a_timed_out_command_may_have_left_down_is_named_once`,
+    `foreign_input_on_a_device_ends_the_run_and_releases_its_contact`,
+    `a_guard_that_stopped_watching_ends_the_run`,
+    `a_pen_goes_through_its_uinput_device_and_leaves_at_the_end`,
+    `a_pen_whose_device_stopped_answering_is_released_with_it`,
+    `the_window_is_captured_from_screencap_and_cut_to_the_surface`,
+    `a_capture_in_another_pixel_format_is_taken_again_as_a_png`,
+    `a_window_the_device_does_not_show_is_not_in_front`,
+    `starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port`,
+    `an_app_that_does_not_start_is_stopped_and_reports_why`, `a_device_gone_mid_run_is_unavailable`;
+    `android_edges::*` (the exact `uinput` lines, the bounds of every parser at their edges, the
+    plan's orders of events, the parts of a release, a late `uinput` answer refused by its token,
+    a guard that waits for and loses `getevent`, a pause cut short by the person's input);
+    on every Unix host `android_host::*` (`HostAdb` against a stand-in program: output, exit code,
+    the output bound, the deadline, a missing `adb`, streams cut into records);
+    `android_rules::a_press_of_every_pointer_at_an_edge_of_the_display_is_the_systems`,
+    `every_fallback_that_leaves_the_app_is_refused`, `a_device_is_driven_only_by_its_serial`,
+    `arming_forgets_every_line_that_came_while_the_guard_was_disarmed`,
+    `a_capture_is_read_and_cut_in_the_buffer_it_came_in`, `each_session_dumps_to_a_file_of_its_own`,
+    `a_release_that_fails_after_the_run_did_keeps_the_runs_effect_and_verdict`;
+    `android_edges::a_sequence_that_ends_with_a_key_down_is_refused_naming_it`,
+    `a_key_an_aborted_sequence_left_held_is_forgotten_with_it`,
+    `a_lane_that_started_no_app_stops_nothing_when_it_ends` (a forward `adb` refused is removed by
+    its port); each fails with its fix taken out by hand;
+    `policy::a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send` (a device in
+    someone's hands without a guard is refused); `policy::input_left_held_is_named_whatever_ended_the_run`
+    (a run that failed or was interrupted and then left input held answers `ReleaseFailed`, on
+    every lane); `socket::an_artifact_without_its_lane_is_named_as_the_capability_missing`.
+  - The scenario on the headless target (CI):
+    `scenarios::the_android_input_scenario_passes_on_the_headless_target_but_its_touchpad_row`.
+    `android_device::the_android_input_scenario_runs_through_the_os_lane` takes no device unless
+    `FLUI_ANDROID_SERIAL`, `FLUI_ANDROID_SCENARIO_APK` and `FLUI_ANDROID_SCENARIO_PACKAGE` name one
+    and the app, and is `cannot_verify` without them.
+  - Owed on A (an emulator and a physical device, `FLUI_REQUIRE_ANDROID=1`, the scenario app
+    packaged for Android by `flui-cli`): the `android-input` scenario through the lane; whether
+    `input mouse motionevent` delivers a primary-button press the app reads as the mouse; the
+    `uinput` probe and the pen's hover, press and leave on a device that allows it, and the probe's
+    refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
+    `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
+    commands; `uiautomator dump` answering while the app animates; `screencap`'s raw header and
+    format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
+    endpoint forward and the app's exit when the session ends; which window is under the point
+    before a press (a heads-up notification, the input method, an overlay), which the lane does
+    not check yet; whether the pen's first report after its device registers reaches the app
+    before `InputReader` opens the device. The old probe's gesture-exclusion,
+    preference, haptics, drag-and-drop and soft-keyboard checks need fixtures in the scenario app
+    and a way for a scenario to reach the lane's shell; neither exists, so they are not carried yet.
+- **As built:**
+  - The lane is `lane::android`, host code that builds on every host: `adb` (the one door: a
+    deadline and an output bound on every command, quoting for the device's shell, bounded
+    streams), `device`, `keys`, `held`, `safety`, `getevent`, `uinput`, `uiautomator` and
+    `screencap` are pure; `AndroidLane`, `guard` and `adb::HostAdb` run `adb`. A test scripts the
+    device with `testing::ScriptedAdb`.
+  - `input` holds no key between commands, so a key is sent at its release, alone or as a
+    `keycombination` with the modifiers held; a contact is held between commands through
+    `motionevent`. What the device holds (the contact, the pen) is recorded once the command
+    returned; a timed-out press is held and cancelled at the release (`motionevent CANCEL`), and a
+    key a timed-out command may have left down is named in `Error::ReleaseFailed` once, never
+    pressed again. A sequence that ends with a key down is refused naming it: that key would never
+    be sent.
+  - The refusals cover every pointer's press at an edge of the display, the mouse included (the
+    three-button bar's Home sits at the bottom), and every key or chord whose fallback in AOSP's
+    `Virtual.kcm` or `Generic.kcm` leaves the app (`safety::FALLBACKS`). Escape alone and Control
+    and Escape are sent: a `NativeActivity` takes its own input queue, so they reach the app.
+  - `send_guarded`'s `ReleaseFailed` keeps the run's own failure as `first`, and `effect` and
+    `is_cannot_verify` answer from it.
+  - A pen goes only through the lane's `uinput` device (hover, press with pressure, leave), each
+    report confirmed by the command's sync answer; `input stylus` is not used, so a device without
+    `uinput` refuses the pen. The design's touchpad `uinput` script is not built: no OS lane sends a
+    touchpad gesture, and adding one is a change to `steps::os_events` and every lane's check.
+  - Where the app's window is and how the display is turned come from `uiautomator dump`; before
+    every press, key, text and scroll the app's window must hold the input focus (`dumpsys window`).
+  - A device is someone's: `os_input::admit` admits it only with a guard, as the shared desktop.
+  - The capture reads `screencap` raw first and falls back to `-p` for a pixel format it does not
+    read raw; the driver's own PNG reader (`pixels::codec`) decodes the PNG within its bounds, and the capture is a `pixels::Image`; `roxmltree` reads the dump.
+  - The lane never picks a device: `adb::HostAdb` cannot be built without a serial, and
+    `lane::android::host_device` takes the one `FLUI_ANDROID_SERIAL` names and asks `adb` nothing
+    without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
+    and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
+    port tried when one is taken, is removed by that port once `adb` made it or may have.
+  - `uiautomator dump` suspends the accessibility services running while it dumps, so a TalkBack
+    run locates the window before TalkBack is on (`docs/gaps.md`).
+  - `lane::android::launch` installs, starts and attaches; `Artifact::Apk` through `Driver::launch`
+    answers `not_supported` naming `android_launch`, since a path names no package or activity.
 
 ### FD14. macOS lane
 

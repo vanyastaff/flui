@@ -31,7 +31,9 @@ wayland = ["dep:reis"]
 
 [dependencies]
 # The wire: the method table, its parameters and outputs, the envelope and the launch contract.
-flui-protocol = { workspace = true, features = ["serde"] }
+# With its schemas, which tell a replay where each method's parameters and output hold a handle.
+flui-protocol = { workspace = true, features = ["serde", "schemars"] }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -46,6 +48,14 @@ flui-view = { workspace = true, optional = true }
 flui-foundation = { workspace = true }
 # The instants the in-process agent's conversation is polled at (std's on native targets).
 web-time = { workspace = true, optional = true }
+# Baselines and a trace's captured evidence are PNG files: the codec `image` already brings into
+# the workspace, without `image`'s other formats. The Android lane decodes a `screencap` PNG with
+# it too.
+png = "0.18"
+# A trace's evidence is named by the SHA-256 of its bytes, so a capture taken twice is kept once.
+sha2 = { workspace = true }
+# The Android lane, which runs on every host: the window `uiautomator dump` describes.
+roxmltree = { workspace = true }
 
 # Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.
 [target.'cfg(any(unix, windows))'.dependencies]
