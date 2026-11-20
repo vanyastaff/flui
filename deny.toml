@@ -112,7 +112,7 @@ allow = ["CDLA-Permissive-2.0"]
 
 # libfuzzer-sys carries LLVM's libFuzzer runtime, which is under NCSA, a
 # permissive license of the BSD family. Only the fuzz targets link it
-# (`cfg(fuzzing)`, `cargo xtask fuzz`); no application and no published crate
+# (`cfg(fuzzing)`, `.cargo/fuzz.toml`); no application and no published crate
 # does.
 [[licenses.exceptions]]
 crate = "libfuzzer-sys"

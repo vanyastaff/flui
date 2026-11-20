@@ -1,9 +1,9 @@
-//! The fuzz target of the development agent's wire (ADR-0288): `cargo xtask fuzz agent_wire`
+//! The fuzz target of the development agent's wire (ADR-0288): the nightly fuzz workflow
 //! builds it under `--cfg fuzzing` and libFuzzer mutates what a client writes to a session
 //! toward code no input has reached yet, starting from `fuzz/seeds/agent_wire/`. Each input is
 //! one conversation with a service whose window shows a counter. A panic, an abort, a line
 //! that is not a line of the protocol or an answer nobody asked for ends the run and leaves
-//! the input that did it; `cargo xtask fuzz agent_wire --replay <file>` runs that input again
+//! the input that did it; its replay (docs/testing.md, "Fuzzing") runs that input again
 //! in the same build.
 //!
 //! Built without that flag it holds the conversation of each file named on its command line,
