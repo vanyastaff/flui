@@ -18,6 +18,12 @@ mod table_test;
 
 mod tasks;
 
+// `key-vocabulary` reads keyboard-types' sources through this crate's
+// dependency graph, which needs the dev-dependency; naming it here keeps cargo's
+// `unused_dependencies` from flagging it.
+#[cfg(test)]
+use keyboard_types as _;
+
 mod android_dex;
 mod changelog;
 mod fonts;
