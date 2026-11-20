@@ -5,5 +5,6 @@
 
 ### Changed
 
+- `lane::send_guarded` answers `Error::ReleaseFailed` when the release that ends a run leaves input held, also after the run failed or was interrupted: the message names the run's own failure as well. Before, the run's failure hid what stayed held.
 - `os_input::admit` refuses OS input on a physical device (`Isolation::Device`) without a user-activity guard, as on the shared desktop.
 - Launching an `Artifact::Apk` through `Driver::launch` answers `not_supported` naming `android_launch`: an APK is started through `lane::android::launch`, which names its package and activity.

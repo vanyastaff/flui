@@ -895,6 +895,7 @@ graph LR
     `keys_text_and_a_scroll_go_out_as_input_commands`,
     `the_app_without_the_focus_is_refused_before_its_press`,
     `a_release_failure_names_the_contact_still_held`, `a_timed_out_press_is_held_and_cancelled`,
+    `a_key_a_timed_out_command_may_have_left_down_is_named_once`,
     `foreign_input_on_a_device_ends_the_run_and_releases_its_contact`,
     `a_guard_that_stopped_watching_ends_the_run`,
     `a_pen_goes_through_its_uinput_device_and_leaves_at_the_end`,
@@ -905,7 +906,9 @@ graph LR
     `starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port`,
     `an_app_that_does_not_start_is_stopped_and_reports_why`, `a_device_gone_mid_run_is_unavailable`;
     `policy::a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send` (a device in
-    someone's hands without a guard is refused); `socket::an_artifact_without_its_lane_is_named_as_the_capability_missing`.
+    someone's hands without a guard is refused); `policy::input_left_held_outranks_why_the_run_ended`
+    (a run that failed or was interrupted and then left input held answers `ReleaseFailed`, on
+    every lane); `socket::an_artifact_without_its_lane_is_named_as_the_capability_missing`.
   - The scenario on the headless target (CI):
     `scenarios::the_android_input_scenario_passes_on_the_headless_target_but_its_touchpad_row`.
     `android_device::the_android_input_scenario_runs_through_the_os_lane` takes no device unless

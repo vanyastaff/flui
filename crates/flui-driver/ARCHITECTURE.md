@@ -34,9 +34,10 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
-  without a guard, before the
-  run is announced and again at every `lane::send_guarded`, which asks the guard before every
-  event and releases everything on every exit; `OsInputLock` holds one session per user's
+  without a guard, before the run is announced and again at every `lane::send_guarded`, which
+  asks the guard before every event and releases everything on every exit, answering
+  `ReleaseFailed` when the release leaves input held, whatever ended the run (its message names
+  that too); `OsInputLock` holds one session per user's
   desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
   existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
   of mode 0700 in the temporary directory on Unix), `busy` only while another
