@@ -1,6 +1,4 @@
-//! [`ScriptedAdb`]: a device scripted for the Android lane, answering each command by the first
-//! rule its text starts with, so the lane's every command, refusal and release runs without a
-//! device or an `adb`.
+//! A device scripted for the Android lane: [`ScriptedAdb`].
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -80,8 +78,9 @@ struct Script {
     log: Vec<String>,
 }
 
-/// A device scripted for the Android lane: see the [module docs](self). Clones share one script
-/// and one log, so a test keeps one while the lane owns another.
+/// A device scripted for the Android lane, answering each command by the first rule its text
+/// starts with, so the lane's every command, refusal and release runs without a device or an
+/// `adb`. Clones share one script and one log, so a test keeps one while the lane owns another.
 #[derive(Debug, Clone, Default)]
 pub struct ScriptedAdb {
     script: Arc<Mutex<Script>>,
