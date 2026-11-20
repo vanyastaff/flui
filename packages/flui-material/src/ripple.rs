@@ -33,9 +33,10 @@
 //! no expanding circle: the state layer shows `Pressed` from the contact's
 //! down to its up, and through the tap's pressed window after.
 //!
-//! An idle well attaches no painter and records nothing; a state change or a
-//! press rebuilds it with one, and the last run coming to rest rebuilds it
-//! without.
+//! An idle well attaches no painter and records nothing. A state change or a
+//! press that makes it visible rebuilds it with one; while the painter is
+//! attached, state changes repaint through it with no build, and the last run
+//! coming to rest rebuilds the well without it.
 //!
 //! [`RippleScope`] provides the ambient [`RippleConfiguration`]; a scope with
 //! no configuration turns the whole indication off.
