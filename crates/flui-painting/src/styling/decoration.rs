@@ -131,11 +131,16 @@ impl ImageBlend {
 
     /// `a`'s layers at `1 - t` of their opacity and `b`'s at `t`, as the
     /// decoration's `image` and the blend beside it. One layer needs no blend.
+    ///
+    /// The published `image` is `b`'s own image, as far as it is in the blend,
+    /// else the strongest layer. Past [`MAX_LAYERS`](Self::MAX_LAYERS) the
+    /// weakest other layers go, and the ones kept take up their shares, so the
+    /// blend covers the box as fully as before.
     fn mix(
         a: &[DecorationImage],
         b: &[DecorationImage],
         t: f64,
-    ) -> (Option<DecorationImage>, Option<Box<Self>>) {
+    ) -> (Option<DecorationImage>, Option<Self>) {
         let mut layers: Vec<DecorationImage> = Vec::new();
         let shares = a
             .iter()
@@ -147,12 +152,7 @@ impl ImageBlend {
                 continue;
             }
             // The same image on both sides is one layer: its shares add up.
-            match layers.iter_mut().find(|kept| {
-                DecorationImage {
-                    opacity: kept.opacity,
-                    ..layer.clone()
-                } == **kept
-            }) {
+            match layers.iter_mut().find(|kept| Self::same_image(kept, layer)) {
                 Some(kept) => kept.opacity += opacity,
                 None => layers.push(DecorationImage {
                     opacity,
@@ -160,25 +160,90 @@ impl ImageBlend {
                 }),
             }
         }
+
+        let strongest = |layers: &[DecorationImage]| {
+            layers
+                .iter()
+                .enumerate()
+                .max_by(|(_, x), (_, y)| x.opacity.total_cmp(&y.opacity))
+                .map(|(index, _)| index)
+        };
+        let mut published = b
+            .last()
+            .and_then(|target| {
+                layers
+                    .iter()
+                    .position(|kept| Self::same_image(kept, target))
+            })
+            .or_else(|| strongest(&layers));
+
+        let total: f64 = layers.iter().map(|layer| layer.opacity).sum();
         while layers.len() > Self::MAX_LAYERS {
             let Some(weakest) = layers
                 .iter()
                 .enumerate()
+                .filter(|(index, _)| Some(*index) != published)
                 .min_by(|(_, x), (_, y)| x.opacity.total_cmp(&y.opacity))
                 .map(|(index, _)| index)
             else {
                 break;
             };
             layers.remove(weakest);
+            published = published.map(|index| if weakest < index { index - 1 } else { index });
         }
-        // No layer is no image, and one layer needs no blend.
-        let (2.., Some(published)) = (layers.len(), layers.last().cloned()) else {
-            return (layers.pop(), None);
+        let kept: f64 = layers.iter().map(|layer| layer.opacity).sum();
+        if kept > 0.0 && kept < total {
+            let scale = total / kept;
+            for layer in &mut layers {
+                layer.opacity *= scale;
+            }
+        }
+
+        let image = published.and_then(|index| layers.get(index)).cloned();
+        if layers.len() < 2 {
+            return (image, None);
+        }
+        let Some(published) = image else {
+            return (None, None);
         };
-        (
-            Some(published.clone()),
-            Some(Box::new(Self { published, layers })),
-        )
+        (Some(published.clone()), Some(Self { published, layers }))
+    }
+
+    /// Whether two layers draw the same image, whatever their opacity.
+    fn same_image(x: &DecorationImage, y: &DecorationImage) -> bool {
+        DecorationImage {
+            opacity: x.opacity,
+            ..y.clone()
+        } == *x
+    }
+}
+
+/// What a [`BoxDecoration::lerp`] keeps beside the public fields it published.
+/// Each part is honoured only while the public field still holds what the lerp
+/// wrote, so a direct write to `gradient` or `image` cannot reach stale state.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) struct LerpRetained {
+    /// The raw gradient the lerp published and the bounded endpoint painted
+    /// when the raw one cannot be represented at the box's size.
+    gradient: Option<(Gradient, Gradient)>,
+    /// The image layers the lerp blends.
+    image: Option<ImageBlend>,
+}
+
+impl LerpRetained {
+    /// The retained state, boxed, or nothing when no part is kept.
+    fn boxed(
+        gradient: Option<(Gradient, Gradient)>,
+        image: Option<ImageBlend>,
+    ) -> Option<Box<Self>> {
+        (gradient.is_some() || image.is_some()).then(|| Box::new(Self { gradient, image }))
+    }
+
+    /// Replaces the retained gradient, keeping the image blend.
+    fn set_gradient(retained: &mut Option<Box<Self>>, gradient: Option<(Gradient, Gradient)>) {
+        let image = retained.take().and_then(|kept| kept.image);
+        *retained = Self::boxed(gradient, image);
     }
 }
 
@@ -223,15 +288,6 @@ pub struct BoxDecoration<T: Unit = f64> {
     /// An image to paint above the background color or gradient.
     pub image: Option<DecorationImage>,
 
-    // The images a lerp blends, kept with the `image` it published: once the
-    // public `image` is replaced, the blend no longer matches and `image` is
-    // painted alone (see `image_layers`).
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
-    pub(crate) image_blend: Option<Box<ImageBlend>>,
-
     /// A border to draw above the background.
     pub border: Option<Border<T>>,
 
@@ -246,15 +302,14 @@ pub struct BoxDecoration<T: Unit = f64> {
     /// If this is specified, `color` has no effect.
     pub gradient: Option<Gradient>,
 
-    // Retain the bounded endpoint until paint bounds are available. The raw
-    // gradient is also retained so direct writes to the public gradient field
-    // cannot accidentally use a stale fallback. Box this rare state rather
-    // than adding two full gradient values to every decoration.
+    // What a lerp keeps beside the public fields it published (see
+    // `LerpRetained`), boxed: the state is rare, and one pointer keeps every
+    // other decoration its size.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub(crate) gradient_fallback: Option<Box<(Gradient, Gradient)>>,
+    pub(crate) lerp_retained: Option<Box<LerpRetained>>,
 
     /// The shape to fill the background, gradient, and image into, and
     /// to cast as the box shadow.
@@ -285,12 +340,11 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: None,
-            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
             gradient: None,
-            gradient_fallback: None,
+            lerp_retained: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -301,12 +355,11 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: Some(color),
             image: None,
-            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
             gradient: None,
-            gradient_fallback: None,
+            lerp_retained: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -317,12 +370,11 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: None,
-            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
             gradient: Some(gradient),
-            gradient_fallback: None,
+            lerp_retained: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -333,12 +385,11 @@ impl<T: Unit> BoxDecoration<T> {
         Self {
             color: None,
             image: Some(image),
-            image_blend: None,
             border: None,
             border_radius: None,
             box_shadow: None,
             gradient: None,
-            gradient_fallback: None,
+            lerp_retained: None,
             shape: BoxShape::Rectangle,
         }
     }
@@ -375,7 +426,7 @@ impl<T: Unit> BoxDecoration<T> {
     #[inline]
     pub fn set_gradient(mut self, gradient: Option<Gradient>) -> Self {
         self.gradient = gradient;
-        self.gradient_fallback = None;
+        LerpRetained::set_gradient(&mut self.lerp_retained, None);
         self
     }
 
@@ -400,8 +451,11 @@ where
     /// A field set on only one side fades toward nothing: a lone
     /// color or gradient scales its alpha, a lone border, radius or shadow
     /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). Images
-    /// crossfade: `b`'s is painted at `t` times its opacity over `a`'s at
-    /// `1 - t` times its own. The shape is not interpolated and switches at
+    /// crossfade: the result keeps `a`'s image layers at `1 - t` of their
+    /// opacity and `b`'s at `t`, painted added together in a layer, so an
+    /// opaque crossfade covers the box at every `t`. An image on both sides is
+    /// one layer, a lerped endpoint brings the layers it blends, and `image`
+    /// holds `b`'s image at its share. The shape is not interpolated and switches at
     /// `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
@@ -438,8 +492,8 @@ where
                     }
                     if &gradient != bounded {
                         let terminal = endpoint.terminal_gradient().unwrap_or(bounded);
-                        endpoint.gradient_fallback =
-                            Some(Box::new((gradient.clone(), terminal.clone())));
+                        let fallback = (gradient.clone(), terminal.clone());
+                        LerpRetained::set_gradient(&mut endpoint.lerp_retained, Some(fallback));
                     }
                 }
                 endpoint.gradient = Some(gradient);
@@ -486,14 +540,14 @@ where
             (None, None) => None,
         };
         let gradient = mix_gradient(a.gradient.as_ref(), b.gradient.as_ref());
-        let bounded = if a.gradient_fallback.is_some() || b.gradient_fallback.is_some() {
+        let bounded = if a.gradient_fallback().is_some() || b.gradient_fallback().is_some() {
             mix_gradient(a.terminal_gradient(), b.terminal_gradient())
         } else {
             None
         };
         let (gradient, gradient_fallback) = match (gradient, bounded) {
             (Some(raw), Some(bounded)) if raw != bounded => {
-                (Some(raw.clone()), Some(Box::new((raw, bounded))))
+                (Some(raw.clone()), Some((raw, bounded)))
             }
             (raw, bounded) => (raw.or(bounded), None),
         };
@@ -503,7 +557,7 @@ where
         // up. The same image on both sides is one layer whose shares add back
         // to its own opacity, so it does not dim.
         let (image, image_blend) = if a.image_layers() == b.image_layers() {
-            (a.image.clone(), a.image_blend.clone())
+            (a.image.clone(), a.image_blend().cloned())
         } else {
             ImageBlend::mix(a.image_layers(), b.image_layers(), t)
         };
@@ -513,12 +567,11 @@ where
         Self {
             color,
             image,
-            image_blend,
             border,
             border_radius,
             box_shadow,
             gradient,
-            gradient_fallback,
+            lerp_retained: LerpRetained::boxed(gradient_fallback, image_blend),
             shape,
         }
     }
@@ -527,17 +580,26 @@ where
     /// opacity: a lerp's blend while [`image`](Self::image) is still the one
     /// the lerp published, else `image` alone.
     pub(crate) fn image_layers(&self) -> &[DecorationImage] {
-        match self.image_blend.as_deref() {
+        match self.image_blend() {
             Some(blend) if self.image.as_ref() == Some(&blend.published) => &blend.layers,
             _ => self.image.as_slice(),
         }
     }
 
+    /// The raw gradient a lerp published and its bounded endpoint.
+    pub(crate) fn gradient_fallback(&self) -> Option<&(Gradient, Gradient)> {
+        self.lerp_retained.as_deref()?.gradient.as_ref()
+    }
+
+    /// The image layers a lerp blends.
+    fn image_blend(&self) -> Option<&ImageBlend> {
+        self.lerp_retained.as_deref()?.image.as_ref()
+    }
+
     /// Ignore retained state after direct replacement of the public gradient.
     fn terminal_gradient(&self) -> Option<&Gradient> {
         self.gradient.as_ref().map(|gradient| {
-            self.gradient_fallback
-                .as_deref()
+            self.gradient_fallback()
                 .filter(|(raw, _)| raw == gradient)
                 .map_or(gradient, |(_, bounded)| bounded)
         })

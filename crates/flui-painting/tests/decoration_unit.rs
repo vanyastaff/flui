@@ -312,18 +312,112 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
         &with(&blue).set_shape(BoxShape::Circle),
         0.5,
     );
-    let ops = commands_in(square_rect(), &circle);
-    let opens = ops
+    let scopes: Vec<&str> = commands_in(square_rect(), &circle)
         .iter()
-        .filter(|op| matches!(op, DrawOp::Save | DrawOp::SaveLayer { .. }))
-        .count();
-    let closes = ops
-        .iter()
-        .filter(|op| matches!(op, DrawOp::Restore | DrawOp::RestoreLayer))
-        .count();
+        .filter_map(|op| match op {
+            DrawOp::Save => Some("save"),
+            DrawOp::ClipRRect { .. } => Some("clip"),
+            DrawOp::SaveLayer { .. } => Some("layer"),
+            DrawOp::Image { .. } | DrawOp::ImageRegion { .. } | DrawOp::ImageRepeat { .. } => {
+                Some("image")
+            }
+            DrawOp::RestoreLayer => Some("end layer"),
+            DrawOp::Restore => Some("restore"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        scopes,
+        [
+            "save",
+            "clip",
+            "layer",
+            "image",
+            "image",
+            "end layer",
+            "restore"
+        ],
+        "a circle's blend sits in a layer inside its clip"
+    );
+
+    // The published image is b's at its share, also when the blend still holds
+    // a's.
     assert!(
-        painted(&circle).len() == 2 && opens == 2 && opens == closes,
-        "a circle's blend sits in its clip, every scope closed: {ops:?}"
+        crossfaded
+            .image
+            .as_ref()
+            .is_some_and(|image| image.image == blue && (image.opacity - 0.25).abs() < 1e-9),
+        "the published image is b's at 25%: {:?}",
+        crossfaded.image.as_ref().map(|image| image.opacity)
+    );
+    let back_to_red = BoxDecoration::lerp(&crossfaded, &with(&red), 0.5);
+    assert!(
+        back_to_red
+            .image
+            .as_ref()
+            .is_some_and(|image| image.image == red && (image.opacity - 0.875).abs() < 1e-9),
+        "the published image is b's, merged with a's share of it"
+    );
+
+    // An endpoint whose layers are the target's keeps its blend as it is.
+    let tinted = BoxDecoration::lerp(
+        &crossfaded.clone().set_color(Some(Color::RED)),
+        &crossfaded.clone().set_color(Some(Color::BLUE)),
+        // A share where `0.75 * (1 - t) + 0.75 * t` rounds away from 0.75.
+        0.002,
+    );
+    assert_eq!(
+        tinted.image, crossfaded.image,
+        "the same layers keep their image exactly"
+    );
+    assert_eq!(painted(&tinted), painted(&crossfaded), "and their blend");
+    assert_eq!(
+        BoxDecoration::lerp(&crossfaded, &crossfaded, 0.002),
+        crossfaded,
+        "a lerp between equal decorations is that decoration"
+    );
+
+    // A layer with no opacity is no layer.
+    let invisible = BoxDecoration::with_image(DecorationImage {
+        opacity: 0.0,
+        ..DecorationImage::new(red)
+    });
+    let images = painted(&BoxDecoration::lerp(&invisible, &with(&blue), 0.5));
+    assert!(
+        images.len() == 1
+            && images[0].0 == blue
+            && layers(&BoxDecoration::lerp(&invisible, &with(&blue), 0.5)) == 0,
+        "an image with no opacity adds no layer: {images:?}"
+    );
+
+    // Past four layers the weakest other one goes, the incoming image stays,
+    // and the kept layers still cover the box.
+    let colors = [
+        Color::RED,
+        Color::BLUE,
+        Color::GREEN,
+        Color::BLACK,
+        Color::WHITE,
+    ];
+    let images: Vec<Image> = colors
+        .iter()
+        .map(|color| Image::solid_color(4, 4, *color))
+        .collect();
+    let mut chained = with(&images[0]);
+    for (index, image) in images.iter().enumerate().skip(1) {
+        let t = if index == images.len() - 1 { 0.1 } else { 0.5 };
+        chained = BoxDecoration::lerp(&chained, &with(image), t);
+    }
+    let kept = painted(&chained);
+    let coverage: f32 = kept.iter().map(|(_, opacity, _)| opacity).sum();
+    assert!(
+        kept.len() == 4
+            && kept.iter().any(|(image, _, _)| *image == images[4])
+            && (coverage - 1.0).abs() < 0.01,
+        "four layers, the incoming one among them, still covering the box: {:?}",
+        kept.iter()
+            .map(|(_, opacity, _)| opacity)
+            .collect::<Vec<_>>()
     );
 
     let mut replaced = crossfaded;

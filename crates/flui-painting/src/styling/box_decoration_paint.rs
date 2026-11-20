@@ -190,7 +190,7 @@ impl BoxDecoration {
                 Silhouette::RRect(rrect) => rrect.bounding_rect(),
                 Silhouette::Rect => rect,
             };
-            let gradient = if let Some((raw, bounded)) = decoration.gradient_fallback.as_deref()
+            let gradient = if let Some((raw, bounded)) = decoration.gradient_fallback()
                 && raw == gradient
                 && !crate::styling::valid_bounds(gradient, rect, shader_bounds)
             {
