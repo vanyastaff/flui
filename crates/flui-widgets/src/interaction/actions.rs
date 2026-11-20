@@ -357,6 +357,24 @@ impl ActionChain {
     pub(crate) fn is(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
+
+    /// The chain above the nearest scope.
+    pub(crate) fn enclosing(&self) -> Option<&Self> {
+        self.0.enclosing.as_ref()
+    }
+
+    /// Hang the nearest scope's bindings under `enclosing`. A link nobody
+    /// else holds yet is rewritten in place; one already shared is
+    /// replaced, so a holder of it keeps the chain it was given. Returns
+    /// what the link was hung under before, for the caller to drop.
+    pub(crate) fn rehang(&mut self, enclosing: Option<Self>) -> Option<Self> {
+        if let Some(link) = Rc::get_mut(&mut self.0) {
+            std::mem::replace(&mut link.enclosing, enclosing)
+        } else {
+            let own = Rc::clone(&self.0.own);
+            Some(std::mem::replace(self, layered_chain(enclosing, own)))
+        }
+    }
 }
 
 impl std::fmt::Debug for ActionChain {
