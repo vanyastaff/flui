@@ -50,7 +50,31 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
-  and `WindowsLane` are `cfg(windows)`.
+  and `WindowsLane` are `cfg(windows)`. `lane::macos` does the same: its key, role, screen,
+  activity, pointer, frame and release tables, its safety rules and its callback containment are
+  pure, and `quartz`, `ax`,
+  `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
+- **The macOS lane posts to the app's process from a private, tagged source.** Every event goes
+  out through `CGEventPostToPid` from a `kCGEventSourceStatePrivate` source whose user data is the
+  lane's tag, and carries the modifiers the lane holds as its flags (a modifier is a flags-changed
+  event with the flags it leaves). Its events never reach the hardware state, so anything that
+  state shows held is someone else's and refuses the event; its guard, a listen-only session
+  tap, takes an event for the lane's only with the private state, the tag and the driver's
+  process id together, and a tap the system turned off ends the run.
+- **A privacy permission is asked, never awaited.** Before every event, release and read that
+  needs Accessibility, Input Monitoring or Screen Recording, the macOS lane preflights it (from
+  macOS 10.15, the release that brought them) and refuses with `not_supported` naming
+  `macos_permission_<name>`, since the person can take one back mid-run and an event posted
+  without it is dropped with no word; a release refused so leaves its key or button held and
+  named (`Error::ReleaseFailed`). It never shows or waits on a prompt.
+- **Code macOS calls back into is contained.** The guard's tap callback and ScreenCaptureKit's
+  completion handlers run under `FirstPanic` (`lane::macos::callback`): a panic never unwinds into
+  the system's frame, the guard stops watching (which ends the run), and a capture answers a
+  typed failure.
+- **A newer Apple API is looked up, never linked.** FLUI runs on macOS releases older than
+  ScreenCaptureKit, so the lane loads that framework by path when a capture is asked for and
+  finds its classes by name: a release without them answers `not_supported`, and the driver links
+  only frameworks every release has.
 - **The Windows lane rechecks the desktop before every event.** It sends nothing off the desktop
   that takes the user's input (`UOI_IO`), and that refusal is a lane the host cannot run
   (`cannot_verify`); then the window, the foreground, the window under the point and the physical
@@ -89,11 +113,13 @@ app's trees, frames and input, and this crate composes that with what only the O
   cell would be a trampoline only `flui-app` and `flui-native` may hold (ADR-0097): the procedure
   posts what it saw to its own thread's queue, and the loop that owns the state classifies it.
 - **A lane stays `Send` without a new `unsafe impl`.** OS handles a lane keeps (a window, a
-  synthetic pointer device) are kept as integers; a COM object (UI Automation, Direct3D, a
-  capture session) and its apartment live for one call on the lane's thread.
+  synthetic pointer device, a window number) are kept as integers; a COM object (UI Automation,
+  Direct3D, a capture session), an accessibility element or a Quartz event source lives for one
+  call on the lane's thread.
 - **A launched Windows app runs in a kill-on-close job.** The app starts suspended and joins the
   job before its first instruction, and the job's handle closes with the session or with the
-  driver's process, however that ends.
+  driver's process, however that ends. On Unix a launched app leads a process group of its own,
+  which the session ends whole while its leader runs unreaped.
 - **The OS tree is read against the app's through one projection.** A lane projects its OS tree
   onto the wire's nodes, and `projection::Projection` compares the two through
   `flui_protocol::tree::normalized_outline` (ADR-0095 §4), the one definition of what only one
@@ -106,9 +132,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
   A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
   that adds up to no whole pixel yet sends nothing.
-- **A hung app costs one timeout.** Reading a UI Automation element stops at the first property
-  read that times out or finds the element gone (`lane::windows::walk::Properties`), and the walk
-  ends with `timeout`.
+- **A hung app costs one timeout.** Reading a UI Automation or accessibility-API element stops at
+  the first property read that times out or finds the element gone
+  (`lane::windows::walk::Properties`, which both lanes read through), and the walk ends with
+  `timeout`.
 - **Waits are on the connection's clock.** An action's actionability wait ends at a deadline on
   the clock the connection counts budgets in, or as soon as the window presents no frame before
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts

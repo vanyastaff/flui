@@ -60,7 +60,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Every claim of support · **Parity:** [Summary](platform-parity.md#summary)
 
 - 🟡 dominates every column of the parity summary.
-- Device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift.
+- Device checks exist for a handful of rows.
 - Display runs still owed:
   - the macOS and iOS display sources (type-checked, never run)
   - the macOS window by hand: the AppKit window conformance kit passes on an M1, macOS 27.0,
