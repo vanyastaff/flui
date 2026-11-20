@@ -148,8 +148,8 @@ impl flui_rendering::delegates::FlowDelegate for RowFlowDelegate {
 fn warm_hit_tests_reuse_their_result_storage() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::PointerKind;
+    use flui_interaction::pointer::HitTestResult;
     use flui_objects::{RenderFlex, RenderFlow, RenderTransform};
-    use flui_rendering::hit_testing::HitTestResult;
 
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root =

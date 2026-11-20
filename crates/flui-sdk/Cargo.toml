@@ -34,6 +34,7 @@ flui-view = { workspace = true }
 flui-widgets = { workspace = true }
 flui-interaction = { workspace = true }
 flui-rendering = { workspace = true }
+flui-semantics = { workspace = true }
 flui-painting = { workspace = true }
 flui-objects = { workspace = true }
 # `hooks::FrameSnapshot`, which `flui-devtools`' timeline records. Already in

@@ -49,7 +49,8 @@
 //! # Example
 //!
 //! ```ignore
-//! use flui_rendering::prelude::*;
+//! use flui_rendering::{BoxLayoutContext, PaintContext, constraints::BoxConstraints, parent_data::BoxParentData, traits::RenderBox};
+//! use flui_foundation::{Leaf, geometry::{Rect, Size}};
 //!
 //! struct MyColoredBox {
 //!     color: Color,

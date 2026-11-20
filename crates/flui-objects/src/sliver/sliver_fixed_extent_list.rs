@@ -82,7 +82,7 @@ pub const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_
 pub struct RenderSliverFixedExtentList {
     item_extent: f64,
     item_count: usize,
-    collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    collection: Option<flui_semantics::SemanticsCollection>,
     /// The collection's accessible name, published on its list or grid node.
     collection_label: Option<std::sync::Arc<str>>,
     /// Logical index → dense slot of every attached child, rebuilt each pass
@@ -127,7 +127,7 @@ impl RenderSliverFixedExtentList {
         &mut self,
         count: Option<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         let collection = SemanticsCollection::new(SemanticsCollectionKind::List, count);
         if self.collection == Some(collection) {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -408,9 +408,9 @@ impl RenderSliver for RenderSliverFixedExtentList {
 
     fn describe_semantics_configuration(
         &self,
-        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+        config: &mut flui_semantics::SemanticsConfiguration,
     ) {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));

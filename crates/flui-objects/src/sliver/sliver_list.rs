@@ -77,7 +77,7 @@ pub struct RenderSliverList {
     /// Total known item count (may be updated via `set_item_count` once
     /// the child manager learns the real count from the data source).
     item_count: usize,
-    collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    collection: Option<flui_semantics::SemanticsCollection>,
     /// The collection's accessible name, published on its list or grid node.
     collection_label: Option<std::sync::Arc<str>>,
 
@@ -171,7 +171,7 @@ impl RenderSliverList {
         &mut self,
         count: Option<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         let collection = SemanticsCollection::new(SemanticsCollectionKind::List, count);
         if self.collection == Some(collection) {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -286,9 +286,9 @@ impl RenderSliver for RenderSliverList {
 
     fn describe_semantics_configuration(
         &self,
-        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+        config: &mut flui_semantics::SemanticsConfiguration,
     ) {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
         }));

@@ -40,7 +40,7 @@ use flui_interaction::gesture::DragAxis;
 use flui_interaction::gesture::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
 };
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_view::environment::GesturePolicy;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, impl_animated_view};

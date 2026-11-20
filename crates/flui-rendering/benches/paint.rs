@@ -20,12 +20,12 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_interaction::pointer::InteractionLane;
+use flui_interaction::pointer::PathClipTarget;
 use flui_objects::{
     RenderClipPath, RenderClipRRect, RenderOpacity, RenderRotatedBox, RenderTransform,
 };
 use flui_painting::paint::Path;
 use flui_painting::styling::{BorderRadius, BorderRadiusExt};
-use flui_rendering::hit_testing::PathClipTarget;
 use flui_rendering::pipeline::{PaintPhase, PipelineOwner};
 use flui_rendering::testing::{SceneHost, update_render_object};
 

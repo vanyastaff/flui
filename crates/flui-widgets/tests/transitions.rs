@@ -268,7 +268,7 @@ impl Headless {
         let tree = self.laid.layer_tree().expect("a painted frame");
         tree.iter()
             .filter_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::Picture(picture) => Some(picture.picture().clone()),
+                flui_layer::Layer::Picture(picture) => Some(picture.picture().clone()),
                 _ => None,
             })
             .flat_map(|picture| {

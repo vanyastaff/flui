@@ -61,8 +61,9 @@ use flui_objects::{
 };
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
-    semantics::SetSize, traits::RenderSliver,
+    traits::RenderSliver,
 };
+use flui_semantics::SetSize;
 
 use super::sparse_children::{ReconcileSource, build_item_or_report};
 use super::{

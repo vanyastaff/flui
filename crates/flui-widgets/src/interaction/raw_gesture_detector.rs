@@ -9,6 +9,7 @@ use smallvec::SmallVec;
 use flui_foundation::ViewKey;
 use flui_foundation::geometry::Axis;
 use flui_foundation::panic::FirstPanic;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, SmartZoomDispatch};
 use flui_interaction::{
     events::{PointerEvent, PointerEventExt},
@@ -18,7 +19,6 @@ use flui_interaction::{
     pointer::PointerDispatch,
 };
 use flui_platform::input::pointer::PointerKind;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
 use flui_view::prelude::*;
 

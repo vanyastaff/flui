@@ -40,10 +40,10 @@ use flui_painting::{
     styling::BorderRadius,
 };
 
+use flui_interaction::pointer::PathClipTarget;
 use flui_rendering::{
     RenderUpdateImpact,
     context::BoxHitTestContext,
-    hit_testing::PathClipTarget,
     parent_data::BoxParentData,
     traits::{PaintClip, PaintEffects, RenderBox, resolve_path_clip},
 };

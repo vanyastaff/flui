@@ -15,7 +15,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Matrix4, Point, RRect, RSuperellipse, Rect, Size};
 use flui_painting::paint::{Clip, Path};
 
-use crate::hit_testing::PathClipTarget;
+use flui_interaction::pointer::PathClipTarget;
 
 /// A node's own paint effects, in the order they wrap the node's content.
 ///
@@ -269,7 +269,7 @@ pub enum PaintClip {
 /// `RenderClip<Path>` performs for a token it cannot resolve, kept in one
 /// place so paint, hit-test and semantics agree.
 pub fn resolve_path_clip(target: PathClipTarget, size: Size) -> Path {
-    match crate::hit_testing::resolve_path_clip_target(target, size) {
+    match flui_interaction::pointer::resolve_path_clip_target(target, size) {
         Ok(path) => path,
         Err(error) => {
             tracing::debug!(?error, "path clip target resolution failed");

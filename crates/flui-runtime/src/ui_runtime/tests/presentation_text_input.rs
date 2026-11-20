@@ -410,7 +410,7 @@ pub(crate) fn a_press_outside_the_field_commits_the_composition_before_its_handl
     ui_runtime
         .attach_root_widget(
             &flui_widgets::Listener::new()
-                .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+                .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                 .on_pointer_down(move |_, _| {
                     at_press
                         .borrow_mut()

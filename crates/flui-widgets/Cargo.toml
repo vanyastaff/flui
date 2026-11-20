@@ -31,6 +31,8 @@ futures-core = { workspace = true }
 flui-objects = { workspace = true }
 # Protocol + RenderObject traits + BoxConstraints referenced by `RenderView`.
 flui-rendering = { workspace = true }
+flui-layer = { workspace = true }
+flui-semantics = { workspace = true }
 # Animation primitives (`Animation<T>`) for transition widgets (`FadeTransition`).
 flui-animation = { workspace = true }
 # `NavigatorState::init_state` stores a `PostFrameHandle` so a

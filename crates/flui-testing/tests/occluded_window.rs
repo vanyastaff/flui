@@ -11,9 +11,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use flui_foundation::Leaf;
 use flui_foundation::geometry::Size;
 use flui_platform::{SystemNotice, WindowCommand, WindowMode};
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
+use flui_rendering::{
+    BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::{HeadlessHost, HeadlessWindow, UnshownFrame};
 use flui_view::prelude::*;

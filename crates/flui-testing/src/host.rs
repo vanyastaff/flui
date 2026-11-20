@@ -1809,7 +1809,7 @@ impl HeadlessHost {
         &self,
     ) -> Vec<(
         flui_foundation::PresentationId,
-        Vec<flui_rendering::semantics::SemanticsDiagnostic>,
+        Vec<flui_semantics::SemanticsDiagnostic>,
     )> {
         let Some(ui_runtime) = self.try_ui_runtime() else {
             return Vec::new();

@@ -244,7 +244,7 @@ pub(crate) fn locks_release_repeat_and_next_operation_preserve_existing_behavior
 pub(crate) fn lock_states_do_not_disable_slider_navigation() {
     use crate::common::{lay_out, tight};
     use flui_platform::input::keyboard::NamedKey;
-    use flui_rendering::semantics::NumericRange;
+    use flui_semantics::NumericRange;
     use flui_widgets::Slider;
     use std::cell::RefCell;
     let mut failures = Vec::new();
@@ -717,7 +717,7 @@ pub(crate) fn source_composition_leaves_traversal_and_activation_unclaimed() {
 
 pub(crate) fn slider_glyph_and_composition_policy() {
     use crate::common::{lay_out, tight};
-    use flui_rendering::semantics::NumericRange;
+    use flui_semantics::NumericRange;
     use flui_widgets::Slider;
     use std::cell::RefCell;
     let aliases = Modifiers::ALT_GRAPH | Modifiers::CONTROL | Modifiers::ALT;

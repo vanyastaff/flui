@@ -6,9 +6,9 @@
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Offset, Point, Size};
+use flui_layer::LayerLink;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
-use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{FrameTiming, PostFrameHandle};
 use flui_view::prelude::*;

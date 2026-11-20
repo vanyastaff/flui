@@ -27,6 +27,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Rect;
 use flui_foundation::{Subscription, ValueKey};
+use flui_interaction::events::PointerEvent;
 use flui_interaction::focus::{FocusCause, FocusNode};
 use flui_interaction::{
     focus::RectProvider,
@@ -42,9 +43,8 @@ use flui_objects::{
 };
 use flui_painting::typography::{InlineSpan, TextLink};
 use flui_platform::input::keyboard::NamedKey;
-use flui_rendering::hit_testing::PointerEvent;
 use flui_rendering::pipeline::PipelineCell;
-use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionHandler};
+use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionHandler};
 use flui_view::element::ElementKind;
 use flui_view::prelude::StatelessView;
 use flui_view::{

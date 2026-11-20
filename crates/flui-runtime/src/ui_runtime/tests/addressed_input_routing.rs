@@ -10,8 +10,8 @@ use flui_interaction::events::{
     make_down_event_with_button, make_up_event, make_up_event_with_button,
 };
 use flui_interaction::focus::{FocusNode, KeyEventResult};
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::{Signal, SignalWriteExt};
 use flui_widgets::{Focus, Listener, SizedBox};
 

@@ -378,7 +378,7 @@ fn input_a_connection_holds_is_let_go_when_it_goes() {
     };
     host.attach(
         &flui_widgets::Listener::new()
-            .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .on_pointer_down(log("down"))
             .on_pointer_up(log("up"))
             .on_pointer_cancel(log("cancel"))

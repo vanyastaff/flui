@@ -19,11 +19,11 @@ use flui_interaction::events::PointerKind;
 
 use crate::{
     constraints::SliverGeometry,
-    hit_testing::HitTestResult,
     pipeline::{PipelineOwner, PipelinePhase},
     storage::RenderNode,
     testing::tree::RenderLabelRegistry,
 };
+use flui_interaction::pointer::HitTestResult;
 
 // The layer-tree walkers live in `flui_layer` (the crate that owns
 // `LayerTree`), the architecturally correct home. Re-exported here under

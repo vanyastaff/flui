@@ -22,7 +22,7 @@ use flui_painting::styling::Color;
 use flui_rendering::RenderUpdateImpact;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_rendering::semantics::SemanticsRole;
+use flui_semantics::SemanticsRole;
 use flui_view::prelude::*;
 use flui_view::{
     InheritedView, RenderObjectContext, RenderView, impl_inherited_view, impl_render_view,

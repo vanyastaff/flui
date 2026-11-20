@@ -37,12 +37,12 @@ use flui_foundation::Arity;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 
 use crate::{
-    hit_testing::{CursorRequest, PointerTarget},
     parent_data::ParentData,
     protocol::{
         BoxHitTest, HitTestCapability, HitTestContextApi, MainAxisPosition, Protocol, SliverHitTest,
     },
 };
+use flui_interaction::pointer::{CursorRequest, PointerTarget};
 
 // ============================================================================
 // HIT TEST CONTEXT
