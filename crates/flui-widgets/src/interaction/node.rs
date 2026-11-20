@@ -41,6 +41,7 @@ use flui_view::{
     Provided, RenderObjectContext, RenderView, RenderViewState, StatefulRenderView,
     impl_stateful_render_view,
 };
+use smallvec::SmallVec;
 
 use super::actions::{
     Action, ActionChain, EnclosingActions, ErasedAction, FocusRecord, Intent, layered_chain,
@@ -51,7 +52,7 @@ use super::focus_host::{FocusConfig, FocusEdges, FocusHost, FocusNodeOwnership};
 use super::focus_ring::DefaultFocusRingStyle;
 use super::gesture_detector::{PressCallbacks, PressShape, PressSource, TapSlot};
 use super::listener::{ContactCallbacks, pointer_callback, release_targets};
-use super::raw_gesture_detector::RecognizerHost;
+use super::raw_gesture_detector::{FactoryEntry, RecognizerHost};
 use crate::support::{event_callback, value_callback};
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
 use crate::{Listener, MouseRegion, Semantics, SemanticsAnchor, SemanticsRole, Toggled};
@@ -696,7 +697,10 @@ impl InteractiveNodeState {
     /// The chain above the node.
     fn ambient_actions(&self) -> Option<ActionChain> {
         if self.layered {
-            self.actions.as_ref().and_then(ActionChain::enclosing).cloned()
+            self.actions
+                .as_ref()
+                .and_then(ActionChain::enclosing)
+                .cloned()
         } else {
             self.actions.clone()
         }
@@ -810,7 +814,7 @@ impl StatefulRenderView for InteractiveNode {
     fn create_state(&self, ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         let tap = TapSlot::new(self.live_tap(), self.states.as_ref());
         InteractiveNodeState {
-            recognizers: RecognizerHost::new(tap.factory().as_slice()),
+            recognizers: RecognizerHost::default(),
             tap,
             focus: self
                 .focus_config()
@@ -820,9 +824,7 @@ impl StatefulRenderView for InteractiveNode {
             // the link is rehung there in place, so mounting allocates it
             // once.
             layered: self.actions.is_some(),
-            actions: self
-                .declared_actions()
-                .map(|own| layered_chain(None, own)),
+            actions: self.declared_actions().map(|own| layered_chain(None, own)),
             platform: None,
             ring_style: None,
             anchor: SubtreeAnchor::new(),
@@ -856,7 +858,7 @@ impl StatefulRenderView for InteractiveNode {
 impl RenderViewState<InteractiveNode> for InteractiveNodeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.read_dependencies(ctx);
-        self.recognizers.init(ctx);
+        self.recognizers.init(ctx, self.tap.factory().as_slice());
         let record = self.focus_record();
         if let Some(focus) = &mut self.focus {
             let anchor = self.anchor.clone();
@@ -877,7 +879,12 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.read_dependencies(ctx);
-        self.recognizers.dependencies_changed(ctx);
+        let tap = &self.tap;
+        self.recognizers.dependencies_changed(ctx, || {
+            tap.factory()
+                .into_iter()
+                .collect::<SmallVec<[FactoryEntry; 1]>>()
+        });
         let record = self.focus_record();
         if let Some(focus) = &mut self.focus {
             focus.dependencies_changed(ctx, record);

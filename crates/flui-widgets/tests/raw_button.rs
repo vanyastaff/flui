@@ -666,6 +666,85 @@ pub(crate) fn disabled_raw_button_is_disabled_in_every_part() {
     );
 }
 
+/// A button under a gesture scope whose settings the test switches.
+#[derive(Clone, StatefulView)]
+struct UnderPolicy {
+    slow: flui_testing::widgets::SharedSignal<bool>,
+    log: PressLog,
+}
+
+struct UnderPolicyState {
+    slow: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for UnderPolicy {
+    type State = UnderPolicyState;
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        UnderPolicyState {
+            slow: self.slow.clone(),
+        }
+    }
+}
+
+impl ViewState<UnderPolicy> for UnderPolicyState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.slow.bind(ctx);
+    }
+
+    fn build(&self, view: &UnderPolicy, ctx: &dyn BuildContext) -> impl IntoView {
+        let timeout = if self.slow.get(ctx) { 400 } else { 300 };
+        let settings = flui_interaction::gesture::GestureSettings::default()
+            .with_double_tap_timeout(std::time::Duration::from_millis(timeout));
+        crate::gesture_settings::SettingsScope::new(
+            settings,
+            button(
+                Made::Raw,
+                Some(logging(&view.log, "press")),
+                flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")),
+            ),
+        )
+    }
+}
+
+/// A changed gesture policy rebuilds a button's recognizers from the press
+/// it holds, and the scope's rebuild updates the button: the button
+/// presses before the change, after it, and after it is changed back.
+///
+/// Red-check: rebuild the node's recognizers from an empty factory list on
+/// a dependency change, and the tap after the policy change presses
+/// nothing.
+pub(crate) fn a_raw_button_presses_after_its_gesture_policy_changes() {
+    let slow = flui_testing::widgets::SharedSignal::new(false);
+    let log = PressLog::default();
+    let mut app = lay_out(
+        UnderPolicy {
+            slow: slow.clone(),
+            log: Rc::clone(&log),
+        },
+        loose(400.0),
+    );
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert_eq!(*log.borrow(), ["press"], "the button presses");
+
+    slow.set(true);
+    app.pump();
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert_eq!(
+        *log.borrow(),
+        ["press", "press"],
+        "the button presses under the changed policy"
+    );
+
+    slow.set(false);
+    app.pump();
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert_eq!(
+        *log.borrow(),
+        ["press", "press", "press"],
+        "the button presses under the policy it started with"
+    );
+}
+
 /// A button given a states controller, with the switches the test turns.
 #[derive(Clone, StatefulView)]
 struct Stated {
