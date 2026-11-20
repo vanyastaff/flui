@@ -22,13 +22,10 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// if let Some(old_constraints) = state.constraints() {
-    ///     if old_constraints == new_constraints {
-    ///         // Can skip layout - constraints unchanged!
-    ///         return state.geometry().unwrap();
-    ///     }
-    /// }
+    /// ```
+    /// use flui_rendering::storage::BoxRenderState;
+    ///
+    /// assert!(BoxRenderState::new().constraints().is_none());
     /// ```
     #[inline]
     pub fn constraints(&self) -> Option<&P::Constraints> {

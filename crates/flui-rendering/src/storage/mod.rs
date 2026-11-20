@@ -41,19 +41,13 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use flui_rendering::{TextContextHandle, pipeline::PipelineOwner};
+//! ```
+//! use flui_rendering::storage::RenderTree;
 //!
-//! // The owner holds the tree and edits it, marking what each edit
-//! // invalidates; code outside this crate only reads the tree.
-//! let mut owner = PipelineOwner::new(TextContextHandle::standalone());
-//! let root_id = owner.set_root_render_object(Box::new(MyRenderBox::new()));
-//!
-//! // Access the node
-//! if let Some(node) = owner.render_tree().get(root_id) {
-//!     assert!(node.is_box());
-//!     assert!(node.needs_layout());
-//! }
+//! // The `PipelineOwner` owns the tree and edits it, marking what each edit
+//! // invalidates; code outside this crate only reads it.
+//! let tree = RenderTree::new();
+//! assert!(tree.is_empty());
 //! ```
 
 mod entry;

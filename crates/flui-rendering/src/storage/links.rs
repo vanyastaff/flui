@@ -14,10 +14,12 @@ use flui_foundation::RenderId;
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let mut links = NodeLinks::new();
-/// links.add_child(child_id);
-/// assert_eq!(links.children().len(), 1);
+/// ```
+/// use flui_rendering::storage::NodeLinks;
+///
+/// let links = NodeLinks::with_depth(2);
+/// assert!(links.is_leaf());
+/// assert_eq!(links.depth(), 2);
 /// ```
 #[derive(Debug, Clone)]
 pub struct NodeLinks {

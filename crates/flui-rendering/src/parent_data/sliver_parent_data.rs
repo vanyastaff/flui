@@ -19,7 +19,7 @@ use super::base::ParentData;
 ///
 /// # Usage
 ///
-/// ```ignore
+/// ```
 /// use flui_rendering::parent_data::SliverParentData;
 ///
 /// // Create with specific layout offset

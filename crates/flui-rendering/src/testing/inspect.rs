@@ -119,10 +119,12 @@ pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
 ///
 /// # Usage
 ///
-/// ```ignore
-/// let entries = hit_path_with_transforms(owner, 50.0, 50.0);
-/// let (_, transform) = entries.iter().find(|(id, _)| *id == child_id).unwrap();
-/// let transform = transform.expect("child entry must carry a recorded transform");
+/// ```
+/// use flui_foundation::geometry::{Matrix4, Offset};
+/// use flui_rendering::testing::localize_hit_point;
+///
+/// // A child laid out at (30, 30): its recorded transform maps global to local.
+/// let transform = Matrix4::translation(-30.0, -30.0, 0.0);
 /// let local = localize_hit_point(transform, 50.0, 50.0)
 ///     .expect("transform must be invertible");
 /// assert_eq!(local, Offset::new(20.0, 20.0));
