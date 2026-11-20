@@ -313,6 +313,16 @@ pub fn resolve(name: &str) -> Option<KeyName> {
     })
 }
 
+/// Whether the safety rules read key `code`'s hardware state for a key someone holds: every key a
+/// keyboard sends but the modifiers, which the flags say, and Caps Lock, whose state a lock
+/// light keeps: Apple does not document whether `CGEventSourceKeyState` reports a locked Caps
+/// Lock as held, and if it does every event would be refused while the light is on. Whether it
+/// does is owed to a run on a Mac.
+#[must_use]
+pub fn scanned_for_held(code: u16) -> bool {
+    code < 0x80 && Modifier::of(KeyCode(code)).is_none() && KeyCode(code) != CAPS_LOCK
+}
+
 /// The key `code` by name, for people: its W3C name, the character an ANSI keyboard prints on it,
 /// or its code.
 #[must_use]

@@ -67,6 +67,22 @@ impl Permission {
     }
 }
 
+/// Whether the lane may make a call that needs `permission`, the system having answered
+/// `granted`: asked before every event, every release and every read, since the person can take
+/// a permission back while a run goes on, and an event posted without Accessibility is dropped
+/// with no word.
+///
+/// # Errors
+///
+/// [`Refusal::MissingPermission`] naming `permission` when it is not granted.
+pub fn permitted(permission: Permission, granted: bool) -> Result<(), Refusal> {
+    if granted {
+        Ok(())
+    } else {
+        Err(Refusal::MissingPermission { permission })
+    }
+}
+
 /// Why the lane refuses an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

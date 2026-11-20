@@ -4,12 +4,13 @@
 
 use flui_driver::coordinates::{DevicePoint, WindowGeometry, to_device};
 use flui_driver::lane::OsCapture;
-use flui_driver::lane::macos::activity::{self, LANE_TAG, Motion, Observed, PRIVATE_STATE};
-use flui_driver::lane::macos::frame;
+use flui_driver::lane::macos::activity::{
+    self, LANE_TAG, Motion, Observed, PRIVATE_STATE, TapEvent, Watcher,
+};
 use flui_driver::lane::macos::held::{HeldKeys, KeyInput, Keystroke, TEXT_KEY};
 use flui_driver::lane::macos::keys::{self, KeyCode, KeyName, Modifier, TextStroke};
 use flui_driver::lane::macos::pointer::{
-    self, MouseButton, MouseEvent, MouseKind, Point, Pointer, Step, Subtype,
+    MouseButton, MouseEvent, MouseKind, Point, Pointer, Step, Wheel,
 };
 use flui_driver::lane::macos::roles::{self, ROLES};
 use flui_driver::lane::macos::safety::{
@@ -17,6 +18,7 @@ use flui_driver::lane::macos::safety::{
 };
 use flui_driver::lane::macos::screen::{self, PointRect, WindowInfo};
 use flui_driver::lane::macos::version::MacosVersion;
+use flui_driver::lane::macos::{callback, frame};
 use flui_driver::lane::windows;
 use flui_driver::projection::Projection;
 use flui_driver::protocol::error::ErrorCode;
@@ -873,65 +875,6 @@ fn a_move_with_a_button_down_is_a_drag_and_a_press_lands_where_the_pointer_went(
     assert_eq!(pointer.buttons(), 0b100);
 }
 
-#[test]
-fn a_pen_comes_into_range_carries_its_pressure_and_leaves_range_when_released() {
-    let mut pointer = Pointer::new();
-    let pen = PointerDevice::Pen;
-    let first = pointer
-        .plan(Step::Move {
-            device: pen,
-            to: at(5.5, 5.5),
-        })
-        .expect("a pen move");
-    assert_eq!(
-        first
-            .iter()
-            .map(|event| (event.kind, event.subtype))
-            .collect::<Vec<_>>(),
-        [
-            (
-                MouseKind::Proximity { entering: true },
-                Subtype::TabletPoint
-            ),
-            (MouseKind::Moved, Subtype::TabletPoint),
-        ]
-    );
-    pointer.deliver(&first, |_| Ok(())).expect("posted");
-    let down = pointer
-        .plan(Step::Down {
-            device: pen,
-            button: PointerButton::Primary,
-        })
-        .expect("a pen press");
-    assert_eq!(down[0].kind, MouseKind::Down(MouseButton::LEFT));
-    assert!((down[0].pressure - pointer::PEN_PRESSURE).abs() < f64::EPSILON);
-    pointer.deliver(&down, |_| Ok(())).expect("posted");
-    let drag = pointer
-        .plan(Step::Move {
-            device: pen,
-            to: at(6.5, 5.5),
-        })
-        .expect("a pen drag");
-    assert_eq!(drag[0].kind, MouseKind::Dragged(MouseButton::LEFT));
-    assert!(drag[0].pressure > 0.0);
-    pointer.deliver(&drag, |_| Ok(())).expect("posted");
-    let mut released = Vec::new();
-    pointer
-        .release_all(|event| {
-            released.push((event.kind, event.at));
-            Ok(())
-        })
-        .expect("released");
-    assert_eq!(
-        released,
-        [
-            (MouseKind::Up(MouseButton::LEFT), at(6.5, 5.5)),
-            (MouseKind::Proximity { entering: false }, at(6.5, 5.5)),
-        ]
-    );
-    assert_eq!(pointer.position(pen), None, "the pen left range");
-}
-
 fn capability(result: Result<Vec<MouseEvent>>) -> Option<String> {
     match result {
         Err(Error::NotSupported { capability, .. }) => capability,
@@ -939,16 +882,30 @@ fn capability(result: Result<Vec<MouseEvent>>) -> Option<String> {
     }
 }
 
+/// The mouse is the one pointer the lane sends: touch has no Quartz event, and a pen's tablet
+/// events reach FLUI's AppKit host as the mouse, so both are refused before any event, as is a
+/// press with nowhere to land.
 #[test]
-fn input_no_quartz_event_carries_is_refused_before_any_event() {
+fn input_the_app_would_not_read_as_itself_is_refused_before_any_event() {
     let pointer = Pointer::new();
-    assert_eq!(
-        capability(pointer.plan(Step::Move {
-            device: PointerDevice::Touch,
-            to: at(1.0, 1.0)
-        })),
-        Some("os_input_device".to_owned())
-    );
+    for device in [PointerDevice::Touch, PointerDevice::Pen] {
+        assert_eq!(
+            capability(pointer.plan(Step::Move {
+                device,
+                to: at(1.0, 1.0)
+            })),
+            Some("os_input_device".to_owned()),
+            "{device:?}"
+        );
+        assert_eq!(
+            capability(pointer.plan(Step::Down {
+                device,
+                button: PointerButton::Primary
+            })),
+            Some("os_input_device".to_owned()),
+            "{device:?}"
+        );
+    }
     assert_eq!(
         capability(pointer.plan(Step::Down {
             device: PointerDevice::Mouse,
@@ -960,25 +917,18 @@ fn input_no_quartz_event_carries_is_refused_before_any_event() {
     let mut placed = Pointer::new();
     let moved = placed
         .plan(Step::Move {
-            device: PointerDevice::Pen,
+            device: PointerDevice::Mouse,
             to: at(1.0, 1.0),
         })
-        .expect("a pen move");
+        .expect("a mouse move");
     placed.deliver(&moved, |_| Ok(())).expect("posted");
     assert_eq!(
-        capability(placed.plan(Step::Down {
-            device: PointerDevice::Pen,
-            button: PointerButton::Secondary
-        })),
-        Some("os_input_device".to_owned())
-    );
-    assert_eq!(
         capability(placed.plan(Step::Up {
-            device: PointerDevice::Pen,
+            device: PointerDevice::Mouse,
             button: PointerButton::Primary
         })),
         Some("os_input_device".to_owned()),
-        "a release of a pen that is not down"
+        "a release of a button that is not down"
     );
 }
 
@@ -1020,18 +970,177 @@ fn a_pointer_change_is_held_only_once_its_event_was_posted() {
     assert_eq!(pointer.buttons(), 0);
 }
 
+/// A scroll of device pixels turns the wheels by points, the unit a Quartz pixel-unit scroll
+/// counts: the same at 1x, half at 2x, the part of a point carried into the next turn, each wheel
+/// the other way round, and a turn past an `i32` refused with nothing carried.
 #[test]
-fn a_scroll_turns_the_wheels_the_other_way_and_refuses_overflow() {
-    assert_eq!(pointer::scroll_wheels(0, 40).ok(), Some((-40, 0)));
-    assert_eq!(pointer::scroll_wheels(-12, 0).ok(), Some((0, 12)));
-    assert_eq!(pointer::scroll_wheels(3, -5).ok(), Some((5, -3)));
-    for (x, y) in [(i32::MIN, 0), (0, i32::MIN)] {
-        let refused = pointer::scroll_wheels(x, y);
+fn a_scroll_turns_the_wheels_by_points_the_other_way() {
+    let mut wheel = Wheel::new();
+    assert_eq!(wheel.turn(0, 40, 1.0).ok(), Some((-40, 0)));
+    assert_eq!(wheel.turn(-12, 0, 1.0).ok(), Some((0, 12)));
+    assert_eq!(wheel.turn(3, -5, 1.0).ok(), Some((5, -3)));
+    let mut retina = Wheel::new();
+    assert_eq!(
+        retina.turn(0, 40, 2.0).ok(),
+        Some((-20, 0)),
+        "40 pixels are 20 points"
+    );
+    assert_eq!(
+        retina.turn(0, 1, 2.0).ok(),
+        Some((0, 0)),
+        "half a point turns nothing yet"
+    );
+    assert_eq!(
+        retina.turn(0, 1, 2.0).ok(),
+        Some((-1, 0)),
+        "two halves make a point"
+    );
+    assert_eq!(
+        retina.turn(-3, 0, 2.0).ok(),
+        Some((0, 1)),
+        "the half left over waits"
+    );
+    assert_eq!(retina.turn(-1, 0, 2.0).ok(), Some((0, 1)));
+    let mut wide = Wheel::new();
+    for (x, y, scale) in [
+        (i32::MIN, 0, 1.0),
+        (0, i32::MIN, 1.0),
+        (0, i32::MAX, 0.5),
+        (0, 1, 0.0),
+        (0, 1, f64::NAN),
+    ] {
+        let refused = wide.turn(x, y, scale);
         assert!(
             matches!(refused, Err(Error::InvalidArgument { .. })),
-            "{refused:?}"
+            "({x}, {y}) at {scale}: {refused:?}"
         );
     }
+    assert_eq!(wide, Wheel::new(), "a refused turn carries nothing");
+}
+
+/// The person can take a permission back mid-run: every post asks first, and a release the
+/// system no longer permits is refused, its key or button kept held and named.
+#[test]
+fn a_release_without_accessibility_is_refused_and_names_what_stays_held() {
+    let post_without = |granted: bool| {
+        safety::permitted(Permission::Accessibility, granted).map_err(Refusal::into_error)
+    };
+    let mut keys = HeldKeys::new();
+    keys.deliver(Keystroke::Press(keys::COMMAND, None), |_, _| Ok(()))
+        .expect("posted");
+    let refused = keys.release_all(|_, _| post_without(false));
+    assert!(
+        matches!(&refused, Err(Error::ReleaseFailed { held, message, .. })
+            if held == &["Meta"] && message.contains("Accessibility")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        keys.held(),
+        [keys::COMMAND.0],
+        "the release was never posted"
+    );
+    keys.release_all(|_, _| post_without(true))
+        .expect("granted again, the release goes out");
+    assert_eq!(keys.held(), [0_u16; 0]);
+
+    let mut pointer = Pointer::new();
+    for step in [
+        Step::Move {
+            device: PointerDevice::Mouse,
+            to: at(4.5, 4.5),
+        },
+        Step::Down {
+            device: PointerDevice::Mouse,
+            button: PointerButton::Secondary,
+        },
+    ] {
+        let events = pointer.plan(step).expect("a mouse step");
+        pointer.deliver(&events, |_| Ok(())).expect("posted");
+    }
+    let refused = pointer.release_all(|_| post_without(false));
+    assert!(
+        matches!(&refused, Err(Error::ReleaseFailed { held, .. })
+            if held == &["the right mouse button"]),
+        "{refused:?}"
+    );
+    assert_eq!(pointer.buttons(), 0b10);
+    assert_eq!(
+        safety::permitted(Permission::Accessibility, false)
+            .map_err(Refusal::into_error)
+            .err()
+            .and_then(|error| error.missing_capability()),
+        Some("macos_permission_accessibility".to_owned())
+    );
+}
+
+/// Code macOS calls back into never lets a panic out: it answers the failure its caller chose.
+#[test]
+fn a_callback_that_panics_answers_its_failure() {
+    let answered = callback::contained_or(
+        Err("the handler panicked"),
+        || -> std::result::Result<u8, &str> { panic!("a completion handler's own failure") },
+    );
+    assert_eq!(answered, Err("the handler panicked"));
+    assert_eq!(callback::contained_or(0, || 7), 7);
+}
+
+/// The guard ends the run whenever it can no longer tell the person's input from the lane's: its
+/// tap turned off, its watcher gone, or reading an event panicked; and the run then cannot be
+/// verified, as on Windows.
+#[test]
+fn a_guard_that_stopped_watching_ends_the_run_as_cannot_verify() {
+    let own = 4242;
+    let ours = Observed::new(Motion::Move, PRIVATE_STATE, LANE_TAG, 4242);
+    let hand = Observed::new(Motion::Key, 1, 0, 0);
+    assert_eq!(
+        activity::tap_report(|| TapEvent::Disabled, own),
+        Some(activity::STOPPED_WATCHING)
+    );
+    assert_eq!(activity::tap_report(|| TapEvent::Event(ours), own), None);
+    assert_eq!(
+        activity::tap_report(|| TapEvent::Event(hand), own),
+        Some("a key press")
+    );
+    assert_eq!(activity::tap_report(|| TapEvent::Other, own), None);
+    assert_eq!(
+        activity::tap_report(|| panic!("an event's fields could not be read"), own),
+        Some(activity::STOPPED_WATCHING)
+    );
+    assert_eq!(
+        activity::guard_report(Watcher::Gone),
+        Some(activity::STOPPED_WATCHING)
+    );
+    assert_eq!(activity::guard_report(Watcher::Quiet), None);
+    assert_eq!(
+        activity::guard_report(Watcher::Reported("a mouse move")),
+        Some("a mouse move")
+    );
+    let ended = Error::InterruptedByUser {
+        lane: "macos".to_owned(),
+        event: activity::STOPPED_WATCHING.to_owned(),
+    };
+    assert!(ended.is_cannot_verify());
+}
+
+/// The held-input rule reads every key a keyboard sends for a key someone holds, but the
+/// modifiers, which the flags say, and Caps Lock, whose locked state may read as held.
+#[test]
+fn the_held_scan_leaves_out_the_modifiers_and_caps_lock() {
+    assert!(keys::scanned_for_held(0x00), "a letter");
+    assert!(keys::scanned_for_held(keys::RETURN.0));
+    assert!(keys::scanned_for_held(keys::F11.0));
+    assert!(!keys::scanned_for_held(keys::CAPS_LOCK.0));
+    for modifier in [
+        keys::SHIFT,
+        keys::RIGHT_SHIFT,
+        keys::CONTROL,
+        keys::OPTION,
+        keys::COMMAND,
+        keys::FUNCTION,
+    ] {
+        assert!(!keys::scanned_for_held(modifier.0), "{modifier:?}");
+    }
+    assert!(!keys::scanned_for_held(0x80), "no keyboard sends it");
 }
 
 /// A surface point the driver maps to a device pixel comes back, as the point the lane posts at,

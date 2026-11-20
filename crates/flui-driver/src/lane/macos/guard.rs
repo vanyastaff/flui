@@ -34,14 +34,10 @@ use objc2_core_graphics::{
 };
 
 use crate::error::Result;
-use crate::lane::macos::activity::{self, Motion, Observed};
+use crate::lane::macos::activity::{self, Motion, Observed, STOPPED_WATCHING, TapEvent, Watcher};
 use crate::lane::macos::quartz::{granted, lane_error};
-use crate::lane::macos::safety::{Permission, Refusal};
+use crate::lane::macos::safety::{self, Permission, Refusal};
 use crate::lane::{ActivityGuard, ForeignInput};
-
-/// What the guard reports when it stopped watching while armed: it can no longer tell the
-/// person's input from the lane's, which ends the run as the person's input does.
-pub const STOPPED_WATCHING: &str = "the user-activity guard stopped watching";
 
 /// How long arming waits for the tap to be installed.
 const ARM_WITHIN: Duration = Duration::from_secs(5);
@@ -84,12 +80,11 @@ impl ActivityGuard for MacosGuard {
     fn arm(&mut self) -> Result<()> {
         self.disarm();
         self.reported = false;
-        if !granted(Permission::InputMonitoring) {
-            return Err(Refusal::MissingPermission {
-                permission: Permission::InputMonitoring,
-            }
-            .into_error());
-        }
+        safety::permitted(
+            Permission::InputMonitoring,
+            granted(Permission::InputMonitoring),
+        )
+        .map_err(Refusal::into_error)?;
         let (ready, armed) = mpsc::channel::<Start>();
         let (report, seen) = mpsc::channel::<&'static str>();
         let stop = Arc::new(AtomicBool::new(false));
@@ -122,12 +117,12 @@ impl ActivityGuard for MacosGuard {
         if self.reported {
             return None;
         }
-        let what = match self.watching.as_ref()?.seen.try_recv() {
-            Ok(what) => what,
-            Err(TryRecvError::Empty) => return None,
-            // The watcher is gone while armed: nothing listens for the person's input any more.
-            Err(TryRecvError::Disconnected) => STOPPED_WATCHING,
+        let watcher = match self.watching.as_ref()?.seen.try_recv() {
+            Ok(what) => Watcher::Reported(what),
+            Err(TryRecvError::Empty) => Watcher::Quiet,
+            Err(TryRecvError::Disconnected) => Watcher::Gone,
         };
+        let what = activity::guard_report(watcher)?;
         self.reported = true;
         Some(ForeignInput::new(what))
     }
@@ -207,7 +202,9 @@ fn motion(event_type: CGEventType) -> Option<Motion> {
     })
 }
 
-/// The tap's callback: report what the event was when it is not the lane's, and pass it on.
+/// The tap's callback: report what the event was when it is not the lane's, and pass it on. Its
+/// judgement runs contained (`activity::tap_report`), so a panic never unwinds into the window
+/// server's frame and stops the guard instead.
 unsafe extern "C-unwind" fn tap_callback(
     _proxy: CGEventTapProxy,
     event_type: CGEventType,
@@ -217,26 +214,28 @@ unsafe extern "C-unwind" fn tap_callback(
     // SAFETY: `user_info` is the `TapState` the watching thread created the tap with; the thread
     // owns it until after it removed the tap, and the callback runs on that thread's run loop.
     let state = unsafe { &*user_info.cast::<TapState>() };
-    if matches!(
-        event_type,
-        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
-    ) {
-        state.report(STOPPED_WATCHING);
-        return event.as_ptr();
-    }
-    if let Some(motion) = motion(event_type) {
+    let read = || {
+        if matches!(
+            event_type,
+            CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
+        ) {
+            return TapEvent::Disabled;
+        }
+        let Some(motion) = motion(event_type) else {
+            return TapEvent::Other;
+        };
         // SAFETY: the event the tap passes is valid for the call.
         let event_ref = unsafe { event.as_ref() };
         let field = |which| CGEvent::integer_value_field(Some(event_ref), which);
-        let observed = Observed::new(
+        TapEvent::Event(Observed::new(
             motion,
             field(CGEventField::EventSourceStateID),
             field(CGEventField::EventSourceUserData),
             field(CGEventField::EventSourceUnixProcessID),
-        );
-        if let Some(what) = activity::foreign(observed, state.own_pid) {
-            state.report(what);
-        }
+        ))
+    };
+    if let Some(what) = activity::tap_report(read, state.own_pid) {
+        state.report(what);
     }
     event.as_ptr()
 }

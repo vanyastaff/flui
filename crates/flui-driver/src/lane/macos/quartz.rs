@@ -22,8 +22,8 @@ use objc2_core_graphics::{
 use crate::error::{Error, Result};
 use crate::lane::macos::activity::LANE_TAG;
 use crate::lane::macos::held::{Keystroke, TEXT_KEY};
-use crate::lane::macos::keys::{KeyCode, Modifier, SHIFT};
-use crate::lane::macos::pointer::{MouseEvent, MouseKind, Point, Subtype};
+use crate::lane::macos::keys::{self, KeyCode, Modifier, SHIFT};
+use crate::lane::macos::pointer::{MouseEvent, MouseKind, Point};
 use crate::lane::macos::safety::{ButtonBits, LANE, Permission};
 use crate::lane::macos::screen::{PointRect, WindowInfo};
 use crate::lane::macos::version::MacosVersion;
@@ -155,9 +155,7 @@ fn mouse_type(kind: MouseKind) -> (CGEventType, CGMouseButton) {
         (event, CGMouseButton(button))
     };
     match kind {
-        MouseKind::Moved | MouseKind::Proximity { .. } => {
-            (CGEventType::MouseMoved, CGMouseButton::Left)
-        }
+        MouseKind::Moved => (CGEventType::MouseMoved, CGMouseButton::Left),
         MouseKind::Dragged(button) => by_button(
             button.0,
             CGEventType::LeftMouseDragged,
@@ -179,76 +177,30 @@ fn mouse_type(kind: MouseKind) -> (CGEventType, CGMouseButton) {
     }
 }
 
-/// `kCGEventMouseSubtypeTabletPoint` and `kCGEventMouseSubtypeTabletProximity`.
-const SUBTYPE_TABLET_POINT: i64 = 1;
-const SUBTYPE_TABLET_PROXIMITY: i64 = 2;
-
-/// `NX_TABLET_POINTER_PEN`, the pointer type of a pen in a proximity event.
-const POINTER_PEN: i64 = 1;
-
 /// Post `event` to the process `pid`, carrying `flags`.
 pub(super) fn mouse(pid: libc::pid_t, event: &MouseEvent, flags: u64) -> Result<()> {
     let source = source()?;
     let at = CGPoint::new(event.at.x, event.at.y);
-    let cg = if let MouseKind::Proximity { entering } = event.kind {
-        let cg = made(CGEvent::new(Some(&*source)), "a pen's proximity")?;
-        CGEvent::set_type(Some(&*cg), CGEventType::TabletProximity);
-        CGEvent::set_location(Some(&*cg), at);
-        CGEvent::set_integer_value_field(
-            Some(&*cg),
-            CGEventField::MouseEventSubtype,
-            SUBTYPE_TABLET_PROXIMITY,
-        );
-        CGEvent::set_integer_value_field(
-            Some(&*cg),
-            CGEventField::TabletProximityEventEnterProximity,
-            i64::from(entering),
-        );
-        CGEvent::set_integer_value_field(
-            Some(&*cg),
-            CGEventField::TabletProximityEventPointerType,
-            POINTER_PEN,
-        );
-        cg
-    } else {
-        let (event_type, button) = mouse_type(event.kind);
-        let cg = made(
-            CGEvent::new_mouse_event(Some(&*source), event_type, at, button),
-            "a mouse event",
-        )?;
-        if matches!(event.kind, MouseKind::Down(_) | MouseKind::Up(_)) {
-            CGEvent::set_integer_value_field(Some(&*cg), CGEventField::MouseEventClickState, 1);
-        }
-        CGEvent::set_integer_value_field(
-            Some(&*cg),
-            CGEventField::MouseEventButtonNumber,
-            i64::from(button.0),
-        );
-        if event.subtype == Subtype::TabletPoint {
-            CGEvent::set_integer_value_field(
-                Some(&*cg),
-                CGEventField::MouseEventSubtype,
-                SUBTYPE_TABLET_POINT,
-            );
-            CGEvent::set_double_value_field(
-                Some(&*cg),
-                CGEventField::MouseEventPressure,
-                event.pressure,
-            );
-            CGEvent::set_double_value_field(
-                Some(&*cg),
-                CGEventField::TabletEventPointPressure,
-                event.pressure,
-            );
-        }
-        cg
-    };
+    let (event_type, button) = mouse_type(event.kind);
+    let cg = made(
+        CGEvent::new_mouse_event(Some(&*source), event_type, at, button),
+        "a mouse event",
+    )?;
+    if matches!(event.kind, MouseKind::Down(_) | MouseKind::Up(_)) {
+        CGEvent::set_integer_value_field(Some(&*cg), CGEventField::MouseEventClickState, 1);
+    }
+    CGEvent::set_integer_value_field(
+        Some(&*cg),
+        CGEventField::MouseEventButtonNumber,
+        i64::from(button.0),
+    );
     CGEvent::set_flags(Some(&*cg), CGEventFlags(flags));
     post(pid, &cg);
     Ok(())
 }
 
-/// Post a turn of the wheels `vertical` and `horizontal` pixels at `at` to the process `pid`.
+/// Post a turn of the wheels `vertical` and `horizontal` points at `at` to the process `pid`:
+/// Quartz counts a pixel-unit scroll in points (`pointer::Wheel`).
 pub(super) fn scroll(
     pid: libc::pid_t,
     at: Point,
@@ -360,10 +312,8 @@ pub(super) fn physical() -> (ButtonBits, Vec<Modifier>, Option<u16>) {
     let modifiers = Modifier::ALL
         .into_iter()
         .filter(|modifier| flags & modifier.flag() != 0)
-        .collect();
-    // Every key code a keyboard sends, the modifiers (which the flags say) left out.
-    let other_key = (0..0x80_u16).find(|&code| {
-        Modifier::of(KeyCode(code)).is_none() && CGEventSource::key_state(state, code)
-    });
+        .collect::<Vec<Modifier>>();
+    let other_key = (0..0x80_u16)
+        .find(|&code| keys::scanned_for_held(code) && CGEventSource::key_state(state, code));
     (buttons, modifiers, other_key)
 }

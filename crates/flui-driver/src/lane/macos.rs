@@ -3,12 +3,12 @@
 //!
 //! - **Input.** Quartz events posted to the app's process (`CGEventPostToPid`), each from a
 //!   private event source carrying the lane's tag ([`activity::LANE_TAG`]): the mouse and its
-//!   wheel, keys with the character they type, text as Unicode runs ([`keys::text_strokes`]), and
-//!   a pen as tablet mouse events with their pressure and proximity ([`mod@pointer`]). Touch has no
-//!   Quartz event and is not sent. Positions are global display points; the lane posts at the
-//!   centre of the device pixel the driver aimed at, which lies in that pixel on every display
-//!   ([`screen`]). An input-method composition goes through the app's own input path
-//!   (`input.inject`). A pause is waited out whole, watching the guard as it waits.
+//!   wheel ([`mod@pointer`], a scroll counted in points), keys with the character they type, and
+//!   text as Unicode runs ([`keys::text_strokes`]). Touch has no Quartz event, and FLUI's AppKit
+//!   host reads a pen's tablet events as the mouse, so neither is sent. Positions are global
+//!   display points; the lane posts inside the device pixel the driver aimed at and inside the
+//!   window, on every display ([`screen`]). An input-method composition goes through the app's own
+//!   input path (`input.inject`). A pause is waited out whole, watching the guard as it waits.
 //! - **One path for keys.** A key event and typed text alike become keystrokes planned against
 //!   what the lane holds ([`held`]): the system-shortcut rule reads those strokes before a
 //!   sequence, and the lane posts them, reading the desktop again before each one. Every event
@@ -19,12 +19,13 @@
 //!   device or button it does not send, a shortcut the system takes, and a run the system has not
 //!   permitted (Accessibility). What the lane pressed is released on every exit.
 //! - **Permissions.** Posting events needs Accessibility, the guard's tap Input Monitoring, a
-//!   capture Screen Recording ([`safety::Permission`]): the lane asks the system before the call
-//!   that needs each and answers `not_supported` naming the one missing, never a prompt it waits
-//!   on.
+//!   capture Screen Recording ([`safety::Permission`]): the lane asks the system before each
+//!   event, release and read that needs one ([`safety::permitted`]), since the person can take one
+//!   back mid-run, and answers `not_supported` naming the one missing, never a prompt it waits on.
 //! - **The guard** (`MacosGuard`, on macOS) listens on a session event tap for input the lane did
-//!   not send ([`activity`]); a tap the system turned off ends the run, since it would no longer
-//!   see the person's input.
+//!   not send ([`activity`]); a tap the system turned off, a watcher gone and a callback that
+//!   panicked all end the run, since it would no longer see the person's input. Code macOS calls
+//!   back into runs contained ([`callback`]).
 //! - **Reading.** [`roles`] is the role table the accessibility API is read against; the lane
 //!   projects the window's accessibility tree onto the wire's nodes (`Lane::read_tree`) through
 //!   the bounded walk of `lane::windows::walk`, the window frame's own controls left out
@@ -36,6 +37,7 @@
 //! tables run on Linux CI; the parts that call macOS are `cfg(target_os = "macos")`.
 
 pub mod activity;
+pub mod callback;
 pub mod frame;
 pub mod held;
 pub mod keys;
@@ -55,7 +57,7 @@ mod guard;
 mod quartz;
 
 #[cfg(target_os = "macos")]
-pub use guard::{MacosGuard, STOPPED_WATCHING};
+pub use guard::MacosGuard;
 #[cfg(target_os = "macos")]
 pub use lane::MacosLane;
 
@@ -80,7 +82,7 @@ mod lane {
     use super::guard::MacosGuard;
     use super::held::{HeldKeys, KeyInput};
     use super::keys::{self, KeyName};
-    use super::pointer::{self, Point, Pointer, Step};
+    use super::pointer::{Point, Pointer, Step, Wheel};
     use super::safety::{self, Desk, Landing, Permission, Refusal};
     use super::screen::{self, PointRect, WindowInfo};
     use super::{ax, capture, quartz};
@@ -115,6 +117,22 @@ mod lane {
         }
     }
 
+    /// Where a pointer event lands: the device pixel the driver aimed at, and the point in global
+    /// points the lane posts at.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct Aim {
+        device: DevicePoint,
+        at: Point,
+    }
+
+    /// One pointer event as the lane plans it: its step, and where it lands when the event names
+    /// a point (a press or a release lands where the pointer last went).
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct PointerStep {
+        step: Step,
+        aim: Option<Aim>,
+    }
+
     /// The macOS lane for the app whose process is `pid`: see the [module docs](super).
     #[derive(Debug)]
     pub struct MacosLane {
@@ -123,6 +141,7 @@ mod lane {
         guard: MacosGuard,
         keys: HeldKeys,
         pointer: Pointer,
+        wheel: Wheel,
     }
 
     impl MacosLane {
@@ -143,6 +162,7 @@ mod lane {
                 guard: MacosGuard::new(),
                 keys: HeldKeys::new(),
                 pointer: Pointer::new(),
+                wheel: Wheel::new(),
             })
         }
 
@@ -225,14 +245,16 @@ mod lane {
             Ok((desk, on_screen))
         }
 
-        /// The safety rules over the desktop as it is now, for an event landing at `landing` in
-        /// global points.
-        fn checked(&self, target: Target, landing: Option<(DevicePoint, Point)>) -> Result<()> {
+        /// The safety rules over the desktop as it is now, for an event landing at `aim`, after
+        /// the permission posting needs: the person can take it back mid-run, and an event posted
+        /// without it is dropped with no word.
+        fn checked(&self, target: Target, aim: Option<Aim>) -> Result<()> {
+            Self::permitted(Permission::Accessibility)?;
             let (desk, on_screen) = self.desk(target)?;
-            let landing = landing.map(|(device, point)| {
-                let under = screen::window_at(&on_screen, point);
+            let landing = aim.map(|aim| {
+                let under = screen::window_at(&on_screen, aim.at);
                 Landing::new(
-                    device,
+                    aim.device,
                     under.is_some_and(|window| window.number == target.number),
                     under.map(WindowInfo::describe),
                 )
@@ -295,49 +317,45 @@ mod lane {
             Ok(())
         }
 
-        /// The step a pointer `event` is, its point in global points with the device pixel it
-        /// was aimed at.
-        fn step_of(
-            target: Target,
-            event: &OsEvent,
-        ) -> Result<Option<(Step, Option<(DevicePoint, Point)>)>> {
+        /// The step a pointer `event` is, and where it lands: a move where it goes, a press or a
+        /// release where the pointer last went.
+        fn step_of(&self, target: Target, event: &OsEvent) -> Result<Option<PointerStep>> {
             Ok(match event {
                 OsEvent::PointerMove { device, to, .. } => {
-                    let point = target.points_of(*to)?;
-                    Some((
-                        Step::Move {
+                    let at = target.points_of(*to)?;
+                    Some(PointerStep {
+                        step: Step::Move {
                             device: *device,
-                            to: point,
+                            to: at,
                         },
-                        Some((*to, point)),
-                    ))
+                        aim: Some(Aim { device: *to, at }),
+                    })
                 }
-                OsEvent::PointerDown { device, button, .. } => Some((
-                    Step::Down {
+                OsEvent::PointerDown { device, button, .. } => Some(PointerStep {
+                    step: Step::Down {
                         device: *device,
                         button: *button,
                     },
-                    None,
-                )),
-                OsEvent::PointerUp { device, button, .. } => Some((
-                    Step::Up {
+                    aim: self.aim_of(target),
+                }),
+                OsEvent::PointerUp { device, button, .. } => Some(PointerStep {
+                    step: Step::Up {
                         device: *device,
                         button: *button,
                     },
-                    None,
-                )),
+                    aim: self.aim_of(target),
+                }),
                 _ => None,
             })
         }
 
-        /// Where a press or release of `device` lands: where its pointer last went.
-        fn landing_of(
-            &self,
-            device: PointerDevice,
-            target: Target,
-        ) -> Option<(DevicePoint, Point)> {
-            let point = self.pointer.position(device)?;
-            Some((screen::device_of(point, target.scale)?, point))
+        /// Where a press or release lands: where the mouse last went.
+        fn aim_of(&self, target: Target) -> Option<Aim> {
+            let at = self.pointer.position()?;
+            Some(Aim {
+                device: screen::device_of(at, target.scale)?,
+                at,
+            })
         }
 
         fn pointer(&mut self, target: Target, event: &OsEvent) -> Result<()> {
@@ -348,25 +366,28 @@ mod lane {
             } = event
             {
                 let point = target.points_of(*at)?;
-                self.checked(target, Some((*at, point)))?;
-                // A turn that moves nothing posts nothing.
-                if *delta_x == 0 && *delta_y == 0 {
-                    return Ok(());
+                self.checked(
+                    target,
+                    Some(Aim {
+                        device: *at,
+                        at: point,
+                    }),
+                )?;
+                // The carry moves only once the turn went out; a turn of no whole point posts
+                // nothing and keeps its part of a point for the next.
+                let mut wheel = self.wheel;
+                let (vertical, horizontal) = wheel.turn(*delta_x, *delta_y, target.scale)?;
+                if vertical != 0 || horizontal != 0 {
+                    quartz::scroll(self.pid, point, vertical, horizontal, self.keys.flags())?;
                 }
-                let (vertical, horizontal) = pointer::scroll_wheels(*delta_x, *delta_y)?;
-                return quartz::scroll(self.pid, point, vertical, horizontal, self.keys.flags());
+                self.wheel = wheel;
+                return Ok(());
             }
-            let Some((step, landing)) = Self::step_of(target, event)? else {
+            let Some(PointerStep { step, aim }) = self.step_of(target, event)? else {
                 return Ok(());
             };
-            let landing = match step {
-                Step::Down { device, .. } | Step::Up { device, .. } => {
-                    self.landing_of(device, target)
-                }
-                Step::Move { .. } => landing,
-            };
             let events = self.pointer.plan(step)?;
-            self.checked(target, landing)?;
+            self.checked(target, aim)?;
             let (pid, flags) = (self.pid, self.keys.flags());
             self.pointer
                 .deliver(&events, |event| quartz::mouse(pid, event, flags))
@@ -389,11 +410,7 @@ mod lane {
 
         /// Refuse a call that needs `permission` when the system has not granted it.
         fn permitted(permission: Permission) -> Result<()> {
-            if quartz::granted(permission) {
-                Ok(())
-            } else {
-                Err(Refusal::MissingPermission { permission }.into_error())
-            }
+            safety::permitted(permission, quartz::granted(permission)).map_err(Refusal::into_error)
         }
     }
 
@@ -403,8 +420,10 @@ mod lane {
         }
 
         fn capabilities(&self) -> LaneCapabilities {
+            // The mouse alone: Quartz has no touch event, and FLUI's AppKit host reads a pen's
+            // tablet events as the mouse (`pointer`).
             LaneCapabilities::new(
-                vec![PointerDevice::Mouse, PointerDevice::Pen],
+                vec![PointerDevice::Mouse],
                 true,
                 Isolation::Shared,
                 PositionFidelity::Exact,
@@ -473,14 +492,18 @@ mod lane {
         }
 
         fn release_all(&mut self) -> Result<()> {
+            // A release without Accessibility would be dropped with no word: it is refused, and
+            // what it would have released stays held and is named (`Error::ReleaseFailed`).
             let pid = self.pid;
-            let keys = self
-                .keys
-                .release_all(|stroke, flags| quartz::keystroke(pid, stroke, flags));
+            let keys = self.keys.release_all(|stroke, flags| {
+                Self::permitted(Permission::Accessibility)?;
+                quartz::keystroke(pid, stroke, flags)
+            });
             let flags = self.keys.flags();
-            let pointer = self
-                .pointer
-                .release_all(|event| quartz::mouse(pid, event, flags));
+            let pointer = self.pointer.release_all(|event| {
+                Self::permitted(Permission::Accessibility)?;
+                quartz::mouse(pid, event, flags)
+            });
             keys.and(pointer)
         }
 

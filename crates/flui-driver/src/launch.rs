@@ -185,9 +185,9 @@ impl Launch {
                 other => other,
             })?
             .resume()?;
-        // On macOS the app leads a process group of its own, which the session ends whole
+        // On Unix the app leads a process group of its own, which the session ends whole
         // (`AppProcess::end`).
-        #[cfg(target_os = "macos")]
+        #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         #[cfg(not(windows))]
         let child = command.spawn().map_err(started)?;
@@ -231,7 +231,8 @@ pub(crate) struct Launched {
 
 /// A process the session owns: killed when the session ends while it still runs. On Windows it
 /// runs in a kill-on-close job, so whatever it started ends with it, and so does the app when the
-/// driver's process ends without dropping the session.
+/// driver's process ends without dropping the session. On Unix it leads a process group, which
+/// ends with it.
 pub(crate) struct AppProcess {
     child: Child,
     #[cfg(windows)]
@@ -267,13 +268,13 @@ impl AppProcess {
         }
     }
 
-    /// End the process if it still runs, and reap it. On macOS the process group it leads ends
+    /// End the process if it still runs, and reap it. On Unix the process group it leads ends
     /// with it: while the leader runs unreaped, the group's id is still its own, so the signal
     /// reaches nothing else. A leader that already exited leaves its group to
     /// [`EXIT_ON_DISCONNECT_ENV`].
     pub(crate) fn end(&mut self) {
         if matches!(self.child.try_wait(), Ok(None)) {
-            #[cfg(target_os = "macos")]
+            #[cfg(unix)]
             {
                 let group = rustix::process::Pid::from_child(&self.child);
                 let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);

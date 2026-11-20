@@ -16,7 +16,6 @@
 )]
 
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::time::Duration;
 
 use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
@@ -143,7 +142,7 @@ fn items<T: ConcreteType>(array: CFRetained<CFArray>) -> Vec<CFRetained<T>> {
     array
         .iter()
         .filter_map(|item| item.downcast::<T>().ok())
-        .collect()
+        .collect::<Vec<CFRetained<T>>>()
 }
 
 /// The elements `attribute` of `element` lists; none when it lists nothing.
@@ -159,18 +158,40 @@ fn elements(
     })
 }
 
-/// The children of `element`.
-fn children(
-    element: &AXUIElement,
-) -> std::result::Result<Vec<CFRetained<AXUIElement>>, ProviderError> {
-    elements(element, "AXChildren")
+/// The child of `parent` at `index`, read alone (`AXUIElementCopyAttributeValues` for one value),
+/// so a walk copies no more children than its budget visits; `None` past the last child, which
+/// the API answers as an index outside the array.
+fn child_at(
+    parent: &AXUIElement,
+    index: CFIndex,
+) -> std::result::Result<Option<CFRetained<AXUIElement>>, ProviderError> {
+    let mut values: *const CFArray = std::ptr::null();
+    // SAFETY: a live element, an attribute name, a range of one value, and a local the call writes
+    // a +1 array into.
+    let error = unsafe {
+        parent.copy_attribute_values(&name("AXChildren"), index, 1, NonNull::from(&mut values))
+    };
+    match error {
+        AXError::Success => {}
+        AXError::NoValue | AXError::AttributeUnsupported | AXError::IllegalArgument => {
+            return Ok(None);
+        }
+        error => return Err(classify(error)),
+    }
+    let Some(values) = NonNull::new(values.cast_mut()) else {
+        return Ok(None);
+    };
+    // SAFETY: a `Copy` call's array, owned by the caller with its +1 count.
+    let values: CFRetained<CFArray> = unsafe { CFRetained::from_raw(values) };
+    Ok(items::<AXUIElement>(values).into_iter().next())
 }
 
-/// An element as the walk visits it: the element, its siblings and where it is among them.
+/// An element as the walk visits it: the element, its parent and its index among the parent's
+/// children (none for the window, the walk's root).
 struct Visit {
     element: CFRetained<AXUIElement>,
-    siblings: Rc<[CFRetained<AXUIElement>]>,
-    index: usize,
+    parent: Option<CFRetained<AXUIElement>>,
+    index: CFIndex,
 }
 
 /// The accessibility API as the walk reads it, for one read at `scale`.
@@ -182,19 +203,23 @@ impl Provider for Ax {
     type Element = Visit;
 
     fn first_child(&mut self, visit: &Visit) -> std::result::Result<Option<Visit>, ProviderError> {
-        let children: Rc<[CFRetained<AXUIElement>]> = children(&visit.element)?.into();
-        Ok(children.first().map(|first| Visit {
-            element: first.clone(),
-            siblings: Rc::clone(&children),
+        Ok(child_at(&visit.element, 0)?.map(|element| Visit {
+            element,
+            parent: Some(visit.element.clone()),
             index: 0,
         }))
     }
 
     fn next_sibling(&mut self, visit: &Visit) -> std::result::Result<Option<Visit>, ProviderError> {
-        let index = visit.index + 1;
-        Ok(visit.siblings.get(index).map(|next| Visit {
-            element: next.clone(),
-            siblings: Rc::clone(&visit.siblings),
+        let Some(parent) = &visit.parent else {
+            return Ok(None);
+        };
+        let Some(index) = visit.index.checked_add(1) else {
+            return Ok(None);
+        };
+        Ok(child_at(parent, index)?.map(|element| Visit {
+            element,
+            parent: Some(parent.clone()),
             index,
         }))
     }
@@ -389,10 +414,9 @@ fn same_frame(a: PointRect, b: PointRect) -> bool {
 /// [`Error::Timeout`] when the app did not answer in time; [`Error::NotFound`] when it shows no
 /// such window; [`Error::Platform`] when the API failed otherwise.
 pub(super) fn read(pid: i32, frame: PointRect, scale: f64) -> Result<Tree> {
-    let element = window(pid, frame)?;
     let root = Visit {
-        siblings: Rc::from(vec![element.clone()]),
-        element,
+        element: window(pid, frame)?,
+        parent: None,
         index: 0,
     };
     let mut tree = walk::read(&mut Ax { scale }, &root, timeout())?;
@@ -412,10 +436,9 @@ pub(super) fn read(pid: i32, frame: PointRect, scale: f64) -> Result<Tree> {
 /// for the press itself) when the app did not answer in time; [`Error::Gone`] when the element
 /// went away.
 pub(super) fn press(pid: i32, frame: PointRect, scale: f64, identifier: &str) -> Result<()> {
-    let element = window(pid, frame)?;
     let root = Visit {
-        siblings: Rc::from(vec![element.clone()]),
-        element,
+        element: window(pid, frame)?,
+        parent: None,
         index: 0,
     };
     let found = walk::find(&mut Ax { scale }, root, identifier, timeout())?;

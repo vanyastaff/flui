@@ -1,12 +1,12 @@
-//! The mouse and the pen as the Quartz mouse events the macOS lane posts, planned against what the
-//! lane holds.
+//! The mouse as the Quartz mouse events the macOS lane posts, planned against what the lane holds,
+//! and its wheel.
 //!
-//! macOS has no pointer device of its own for injected input: a pen is a mouse event whose subtype
-//! says it came from a tablet and which carries the tablet's fields (pressure), framed by
-//! proximity events when the pen comes into and leaves range. A move while a button is held is a
-//! drag of that button, as AppKit reports one; a press and a release land where the pointer last
-//! moved, since an event posted to a process does not move the system's cursor. Touch has no
-//! Quartz event at all, so the lane does not send it.
+//! A move while a button is held is a drag of that button, as AppKit reports one; a press and a
+//! release land where the pointer last moved, since an event posted to a process does not move
+//! the system's cursor. The mouse is the one pointer the lane sends: Quartz has no touch event,
+//! and a pen goes out as tablet mouse events, which FLUI's AppKit host reads as the mouse (the
+//! `pen-and-stylus` row of `crates/flui-native/platform-parity.toml`), so the lane refuses touch
+//! and the pen rather than send input the app would read as another device.
 //!
 //! Positions are global display points, top-left origin, the space Quartz events take on every
 //! display.
@@ -84,21 +84,6 @@ pub enum MouseKind {
     Down(MouseButton),
     /// A release: `kCGEventLeftMouseUp`, right or other.
     Up(MouseButton),
-    /// `kCGEventTabletProximity`: the pen comes into range, or leaves it.
-    Proximity {
-        /// Whether it enters range.
-        entering: bool,
-    },
-}
-
-/// Where a mouse event comes from: its `kCGMouseEventSubtype`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum Subtype {
-    /// A mouse.
-    Mouse,
-    /// A tablet's pen, carrying its pressure.
-    TabletPoint,
 }
 
 /// One mouse event to post.
@@ -109,34 +94,13 @@ pub struct MouseEvent {
     pub kind: MouseKind,
     /// Where, in global display points.
     pub at: Point,
-    /// What sent it.
-    pub subtype: Subtype,
-    /// The pen's pressure, 0 to 1; 0 for a mouse.
-    pub pressure: f64,
 }
 
 impl MouseEvent {
-    fn mouse(kind: MouseKind, at: Point) -> Self {
-        Self {
-            kind,
-            at,
-            subtype: Subtype::Mouse,
-            pressure: 0.0,
-        }
-    }
-
-    fn pen(kind: MouseKind, at: Point, pressure: f64) -> Self {
-        Self {
-            kind,
-            at,
-            subtype: Subtype::TabletPoint,
-            pressure,
-        }
+    const fn new(kind: MouseKind, at: Point) -> Self {
+        Self { kind, at }
     }
 }
-
-/// The pressure of a pen in contact: the lane's steps carry none, so a contact is a firm one.
-pub const PEN_PRESSURE: f64 = 1.0;
 
 /// What one pointer step does, in the lane's terms.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,21 +129,13 @@ pub enum Step {
     },
 }
 
-/// The mouse and pen as the OS holds them for the lane: see the [module docs](self).
+/// The mouse as the OS holds it for the lane: see the [module docs](self).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Pointer {
     /// Where the mouse last moved.
-    mouse_at: Option<Point>,
+    at: Option<Point>,
     /// The mouse buttons down, as bits by button number.
     buttons: u32,
-    /// The pen, while it is in range.
-    pen: Option<Pen>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Pen {
-    at: Point,
-    down: bool,
 }
 
 fn unsent(what: &str) -> Error {
@@ -196,13 +152,10 @@ impl Pointer {
         Self::default()
     }
 
-    /// Where the pointer of `device` is, if the lane placed it.
+    /// Where the mouse is, if the lane placed it.
     #[must_use]
-    pub fn position(&self, device: PointerDevice) -> Option<Point> {
-        match device {
-            PointerDevice::Pen => self.pen.map(|pen| pen.at),
-            _ => self.mouse_at,
-        }
+    pub fn position(&self) -> Option<Point> {
+        self.at
     }
 
     /// The mouse buttons down, as bits by button number.
@@ -211,107 +164,47 @@ impl Pointer {
         self.buttons
     }
 
-    /// Whether the pen is down.
-    #[must_use]
-    pub fn pen_down(&self) -> bool {
-        self.pen.is_some_and(|pen| pen.down)
-    }
-
     /// The events `step` posts from this state.
     ///
     /// # Errors
     ///
-    /// `not_supported` for touch, for a button a pen or a mouse event does not carry, and for a
-    /// press or a release the pointer is in no state for: before it moved anywhere, of a button
-    /// already down or not down.
+    /// `not_supported` for touch and the pen (see the [module docs](self)), for a button no mouse
+    /// event carries, and for a press or a release the mouse is in no state for: before it moved
+    /// anywhere, of a button already down or not down.
     pub fn plan(&self, step: Step) -> Result<Vec<MouseEvent>> {
+        let device = match step {
+            Step::Move { device, .. } | Step::Down { device, .. } | Step::Up { device, .. } => {
+                device
+            }
+        };
+        if device != PointerDevice::Mouse {
+            return Err(unsent(&format!(
+                "{} input: Quartz has no touch event, and FLUI's AppKit host reads a pen's \
+                 tablet events as the mouse",
+                device.name()
+            )));
+        }
         match step {
-            Step::Move {
-                device: PointerDevice::Pen,
-                to,
-            } => Ok(match self.pen {
-                None => vec![
-                    MouseEvent::pen(MouseKind::Proximity { entering: true }, to, 0.0),
-                    MouseEvent::pen(MouseKind::Moved, to, 0.0),
-                ],
-                Some(Pen { down: true, .. }) => vec![MouseEvent::pen(
-                    MouseKind::Dragged(MouseButton::LEFT),
-                    to,
-                    PEN_PRESSURE,
-                )],
-                Some(Pen { down: false, .. }) => vec![MouseEvent::pen(MouseKind::Moved, to, 0.0)],
-            }),
-            Step::Down {
-                device: PointerDevice::Pen,
-                button,
-            } => {
-                if button != PointerButton::Primary {
-                    return Err(unsent(&format!("the {button:?} button of a pen")));
-                }
-                let pen = self
-                    .pen
-                    .ok_or_else(|| unsent("a pen press with no position"))?;
-                if pen.down {
-                    return Err(unsent("a pen press while the pen is down"));
-                }
-                Ok(vec![MouseEvent::pen(
-                    MouseKind::Down(MouseButton::LEFT),
-                    pen.at,
-                    PEN_PRESSURE,
-                )])
-            }
-            Step::Up {
-                device: PointerDevice::Pen,
-                button,
-            } => {
-                if button != PointerButton::Primary {
-                    return Err(unsent(&format!("the {button:?} button of a pen")));
-                }
-                let pen = self
-                    .pen
-                    .filter(|pen| pen.down)
-                    .ok_or_else(|| unsent("a release of a pen that is not down"))?;
-                Ok(vec![MouseEvent::pen(
-                    MouseKind::Up(MouseButton::LEFT),
-                    pen.at,
-                    0.0,
-                )])
-            }
-            Step::Move {
-                device: PointerDevice::Mouse,
-                to,
-            } => Ok(vec![MouseEvent::mouse(self.drag_kind(), to)]),
-            Step::Down {
-                device: PointerDevice::Mouse,
-                button,
-            } => {
+            Step::Move { to, .. } => Ok(vec![MouseEvent::new(self.drag_kind(), to)]),
+            Step::Down { button, .. } => {
                 let button = MouseButton::of(button)?;
                 let at = self
-                    .mouse_at
+                    .at
                     .ok_or_else(|| unsent("a mouse press before the pointer moved anywhere"))?;
                 if self.buttons & button.bit() != 0 {
                     return Err(unsent("a press of a mouse button already down"));
                 }
-                Ok(vec![MouseEvent::mouse(MouseKind::Down(button), at)])
+                Ok(vec![MouseEvent::new(MouseKind::Down(button), at)])
             }
-            Step::Up {
-                device: PointerDevice::Mouse,
-                button,
-            } => {
+            Step::Up { button, .. } => {
                 let button = MouseButton::of(button)?;
                 let at = self
-                    .mouse_at
+                    .at
                     .ok_or_else(|| unsent("a mouse release before the pointer moved anywhere"))?;
                 if self.buttons & button.bit() == 0 {
                     return Err(unsent("a release of a mouse button that is not down"));
                 }
-                Ok(vec![MouseEvent::mouse(MouseKind::Up(button), at)])
-            }
-            Step::Move { device, .. } | Step::Down { device, .. } | Step::Up { device, .. } => {
-                Err(unsent(&format!(
-                    "{} input: Quartz has no event for it",
-                    device.name()
-                )))
+                Ok(vec![MouseEvent::new(MouseKind::Up(button), at)])
             }
         }
     }
@@ -327,35 +220,10 @@ impl Pointer {
 
     /// Record `event`, which the lane posted.
     pub fn apply(&mut self, event: &MouseEvent) {
-        match (event.subtype, event.kind) {
-            (Subtype::TabletPoint, MouseKind::Proximity { entering: true }) => {
-                self.pen = Some(Pen {
-                    at: event.at,
-                    down: false,
-                });
-            }
-            (Subtype::TabletPoint, MouseKind::Proximity { entering: false }) => self.pen = None,
-            (Subtype::TabletPoint, MouseKind::Moved | MouseKind::Dragged(_)) => {
-                if let Some(pen) = &mut self.pen {
-                    pen.at = event.at;
-                }
-            }
-            (Subtype::TabletPoint, MouseKind::Down(_)) => {
-                if let Some(pen) = &mut self.pen {
-                    pen.down = true;
-                }
-            }
-            (Subtype::TabletPoint, MouseKind::Up(_)) => {
-                if let Some(pen) = &mut self.pen {
-                    pen.down = false;
-                }
-            }
-            (Subtype::Mouse, MouseKind::Moved | MouseKind::Dragged(_)) => {
-                self.mouse_at = Some(event.at);
-            }
-            (Subtype::Mouse, MouseKind::Down(button)) => self.buttons |= button.bit(),
-            (Subtype::Mouse, MouseKind::Up(button)) => self.buttons &= !button.bit(),
-            (Subtype::Mouse, MouseKind::Proximity { .. }) => {}
+        match event.kind {
+            MouseKind::Moved | MouseKind::Dragged(_) => self.at = Some(event.at),
+            MouseKind::Down(button) => self.buttons |= button.bit(),
+            MouseKind::Up(button) => self.buttons &= !button.bit(),
         }
     }
 
@@ -376,42 +244,22 @@ impl Pointer {
         Ok(())
     }
 
-    /// Release every mouse button held and lift the pen and take it out of range, through
-    /// `post`; what could not be posted stays held.
+    /// Release every mouse button held, through `post`; what could not be posted stays held.
     ///
     /// # Errors
     ///
-    /// After every event was tried: [`Error::ReleaseFailed`] naming what is still held and the
-    /// first event that could not be posted, or that event's error when nothing stayed held.
+    /// After every button was tried: [`Error::ReleaseFailed`] naming the buttons still held and
+    /// the first release that could not be posted, or that release's error when nothing stayed
+    /// held.
     pub fn release_all(&mut self, mut post: impl FnMut(&MouseEvent) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
-        if let Some(at) = self.mouse_at {
+        if let Some(at) = self.at {
             for number in 0..32_u32 {
                 let button = MouseButton(number);
                 if self.buttons & button.bit() == 0 {
                     continue;
                 }
-                let event = MouseEvent::mouse(MouseKind::Up(button), at);
-                match post(&event) {
-                    Ok(()) => self.apply(&event),
-                    Err(error) => {
-                        first.get_or_insert(error);
-                    }
-                }
-            }
-        }
-        if let Some(pen) = self.pen {
-            if pen.down {
-                let event = MouseEvent::pen(MouseKind::Up(MouseButton::LEFT), pen.at, 0.0);
-                match post(&event) {
-                    Ok(()) => self.apply(&event),
-                    Err(error) => {
-                        first.get_or_insert(error);
-                    }
-                }
-            }
-            if !self.pen_down() {
-                let event = MouseEvent::pen(MouseKind::Proximity { entering: false }, pen.at, 0.0);
+                let event = MouseEvent::new(MouseKind::Up(button), at);
                 match post(&event) {
                     Ok(()) => self.apply(&event),
                     Err(error) => {
@@ -432,39 +280,69 @@ impl Pointer {
         }
     }
 
-    /// What the lane still holds, by name, for people.
+    /// The buttons the lane still holds, by name, for people.
     fn held(&self) -> Vec<String> {
-        let mut held: Vec<String> = (0..32_u32)
+        (0..32_u32)
             .filter(|&number| self.buttons & MouseButton(number).bit() != 0)
             .map(|number| match number {
                 0 => "the left mouse button".to_owned(),
                 1 => "the right mouse button".to_owned(),
                 number => format!("mouse button {number}"),
             })
-            .collect();
-        match self.pen {
-            Some(Pen { down: true, .. }) => held.push("the pen, down".to_owned()),
-            Some(Pen { down: false, .. }) => held.push("the pen, in range".to_owned()),
-            None => {}
-        }
-        held
+            .collect()
     }
 }
 
-/// The wheel turns a scroll of `delta_x` rightwards and `delta_y` downwards device pixels posts,
-/// as `CGEventCreateScrollWheelEvent2` takes them in pixel units: the first wheel vertical, the
-/// second horizontal, positive towards the top and the left, so each is the delta negated.
-///
-/// # Errors
-///
-/// `invalid_argument` for a delta whose negation does not fit an `i32`.
-pub fn scroll_wheels(delta_x: i32, delta_y: i32) -> Result<(i32, i32)> {
-    let negate = |delta: i32| {
-        delta.checked_neg().ok_or_else(|| {
-            Error::invalid_argument(format!(
-                "a scroll of {delta} pixels is past what Quartz takes"
-            ))
-        })
-    };
-    Ok((negate(delta_y)?, negate(delta_x)?))
+/// What the wheel turns for scrolls of whole device pixels, in the points a Quartz pixel-unit
+/// scroll event counts (`kCGScrollEventUnitPixel` deltas are points, as AppKit's
+/// `scrollingDeltaX` reads them), carrying the part of a point each turn leaves into the next, so
+/// that small scrolls add up and a scroll that adds up to no whole point yet turns nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Wheel {
+    /// The part of a point not turned yet, rightwards and downwards.
+    carried: (f64, f64),
+}
+
+impl Wheel {
+    /// A wheel that has carried nothing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The turn of a scroll of `delta_x` rightwards and `delta_y` downwards device pixels at
+    /// `scale`, as `CGEventCreateScrollWheelEvent2` takes it: the first wheel vertical, the
+    /// second horizontal, each positive towards the top and the left, so each is the scroll in
+    /// points negated. The part of a point left over is carried into the next turn.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_argument` for a scale that is not positive and finite, or a turn past what an
+    /// `i32` counts; nothing is carried then.
+    pub fn turn(&mut self, delta_x: i32, delta_y: i32, scale: f64) -> Result<(i32, i32)> {
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(Error::invalid_argument(format!(
+                "the window's scale {scale} is not a positive number"
+            )));
+        }
+        let axis = |delta: i32, carried: f64| -> Result<(i32, f64)> {
+            let total = f64::from(delta) / scale + carried;
+            let whole = total.trunc();
+            if !(whole.is_finite() && whole > f64::from(i32::MIN) && whole <= f64::from(i32::MAX)) {
+                return Err(Error::invalid_argument(format!(
+                    "a scroll of {delta} pixels at scale {scale} is past what Quartz takes"
+                )));
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a whole number checked inside i32's range, its negation included"
+            )]
+            let points = whole as i32;
+            Ok((points, total - whole))
+        };
+        let (right, carried_x) = axis(delta_x, self.carried.0)?;
+        let (down, carried_y) = axis(delta_y, self.carried.1)?;
+        self.carried = (carried_x, carried_y);
+        Ok((-down, -right))
+    }
 }

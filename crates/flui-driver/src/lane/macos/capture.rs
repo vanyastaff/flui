@@ -33,8 +33,9 @@ use objc2_core_graphics::{
 
 use crate::error::{Error, Result};
 use crate::lane::OsCapture;
+use crate::lane::macos::callback;
 use crate::lane::macos::quartz::{granted, lane_error, os_version};
-use crate::lane::macos::safety::{Permission, Refusal};
+use crate::lane::macos::safety::{self, Permission, Refusal};
 use crate::lane::macos::screen::{self, PointRect};
 use crate::lane::macos::version::{MacosVersion, WINDOW_SCREENSHOT};
 
@@ -90,6 +91,11 @@ impl Classes {
             screenshot: class(c"SCScreenshotManager")?,
         })
     }
+}
+
+/// What a capture answers when its completion handler panicked.
+fn handler_panicked() -> Error {
+    lane_error("ScreenCaptureKit's completion handler panicked while it read the capture")
 }
 
 /// What an `NSError` says, for people.
@@ -192,12 +198,11 @@ pub(super) fn capture(
     size: LogicalSize,
     scale: f64,
 ) -> Result<OsCapture> {
-    if !granted(Permission::ScreenRecording) {
-        return Err(Refusal::MissingPermission {
-            permission: Permission::ScreenRecording,
-        }
-        .into_error());
-    }
+    safety::permitted(
+        Permission::ScreenRecording,
+        granted(Permission::ScreenRecording),
+    )
+    .map_err(Refusal::into_error)?;
     if !os_version().is_some_and(MacosVersion::has_window_screenshot) {
         return Err(unsupported(format!(
             "ScreenCaptureKit's window capture needs macOS {}.{}",
@@ -209,19 +214,23 @@ pub(super) fn capture(
     let (answer, answered) = mpsc::channel::<Result<OsCapture>>();
     let content_handler: RcBlock<dyn Fn(*mut AnyObject, *mut AnyObject)> =
         RcBlock::new(move |content: *mut AnyObject, error: *mut AnyObject| {
-            if let Err(failure) = shoot(classes, content, error, number, width, height, &answer) {
+            // A panic never unwinds into ScreenCaptureKit's queue: the waiting side hears of it.
+            let shot = callback::contained_or(Err(handler_panicked()), || {
+                shoot(classes, content, error, number, width, height, &answer)
+            });
+            if let Err(failure) = shot {
                 let _ = answer.send(Err(failure));
             }
         });
     // SAFETY: a class method taking two booleans and a completion handler, which it copies.
-    let () = unsafe {
-        msg_send![
+    unsafe {
+        let () = msg_send![
             classes.shareable,
             getShareableContentExcludingDesktopWindows: Bool::YES,
             onScreenWindowsOnly: Bool::NO,
             completionHandler: &*content_handler
-        ]
-    };
+        ];
+    }
     let whole = answered
         .recv_timeout(CAPTURE_WITHIN)
         .map_err(|_| Error::Timeout {
@@ -301,28 +310,30 @@ fn shoot(
     let sender = answer.clone();
     let image_handler: RcBlock<dyn Fn(*mut c_void, *mut AnyObject)> =
         RcBlock::new(move |image: *mut c_void, error: *mut AnyObject| {
-            let captured = NonNull::new(image.cast::<CGImage>())
-                .ok_or_else(|| {
-                    lane_error(format!(
-                        "ScreenCaptureKit captured nothing: {}",
-                        reason(error)
-                    ))
-                })
-                .and_then(|image| {
-                    // SAFETY: the handler's image is a `CGImage`, valid for the call.
-                    rgba(unsafe { image.as_ref() })
-                });
+            let captured = callback::contained_or(Err(handler_panicked()), || {
+                NonNull::new(image.cast::<CGImage>())
+                    .ok_or_else(|| {
+                        lane_error(format!(
+                            "ScreenCaptureKit captured nothing: {}",
+                            reason(error)
+                        ))
+                    })
+                    .and_then(|image| {
+                        // SAFETY: the handler's image is a `CGImage`, valid for the call.
+                        rgba(unsafe { image.as_ref() })
+                    })
+            });
             let _ = sender.send(captured);
         });
     // SAFETY: a class method taking a filter, a configuration and a completion handler, which it
     // copies.
-    let () = unsafe {
-        msg_send![
+    unsafe {
+        let () = msg_send![
             classes.screenshot,
             captureImageWithFilter: &*filter,
             configuration: &*configuration,
             completionHandler: &*image_handler
-        ]
-    };
+        ];
+    }
     Ok(())
 }

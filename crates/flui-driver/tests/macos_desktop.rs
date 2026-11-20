@@ -269,7 +269,7 @@ fn the_lanes_check_refuses_typed_text_that_completes_a_system_shortcut() {
     }
 }
 
-/// A launched app leads a process group of its own, which ends with its session.
+/// A launched app leads a process group of its own, and ends with its session.
 #[test]
 fn a_launched_app_ends_with_its_session() {
     let dir = tempfile::tempdir().expect("a temporary directory");
@@ -279,20 +279,25 @@ fn a_launched_app_ends_with_its_session() {
         .args(["-o", "pgid=", "-p", &pid.to_string()])
         .output()
         .expect("ps runs");
+    assert!(
+        group.status.success(),
+        "ps lists the running app: {group:?}"
+    );
     assert_eq!(
         String::from_utf8_lossy(&group.stdout).trim(),
         pid.to_string(),
         "the app leads its own process group"
     );
     drop(driver);
-    let alive = Command::new("ps")
-        .args(["-o", "pid=", "-g", &pid.to_string()])
+    // `ps -p` fails when no process has the id: the app is gone (its group's grandchildren are
+    // `launch::a_launched_apps_process_group_ends_with_its_session`'s).
+    let gone = Command::new("ps")
+        .args(["-o", "pid=", "-p", &pid.to_string()])
         .output()
         .expect("ps runs");
     assert!(
-        String::from_utf8_lossy(&alive.stdout).trim().is_empty(),
-        "process group {pid} outlived its session: {}",
-        String::from_utf8_lossy(&alive.stdout)
+        !gone.status.success() && String::from_utf8_lossy(&gone.stdout).trim().is_empty(),
+        "process {pid} outlived its session: {gone:?}"
     );
 }
 

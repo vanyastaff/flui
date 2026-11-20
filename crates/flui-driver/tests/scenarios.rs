@@ -584,9 +584,12 @@ fn the_notes_scenario_passes_on_the_headless_target() {
     passed(&run("windows-notes", headless(|| Notes), notes));
 }
 
-/// The macOS variants of the input and roles scenarios, the halves that need no OS lane.
+/// The macOS input scenario, and the half of the macOS roles scenario that needs no OS lane: the
+/// role the app publishes for each row. The accessibility API's half reads an OS tree, so it runs
+/// on a Mac (`macos_desktop::every_role_reads_back_as_its_ax_role_through_the_accessibility_api`),
+/// and the table it reads against is held by `macos_lane`'s tables.
 #[test]
-fn the_macos_input_and_roles_scenarios_pass_on_the_headless_target() {
+fn the_macos_input_scenario_and_the_published_roles_pass_on_the_headless_target() {
     passed(&run("macos-input", headless(|| Controls), macos_input));
     passed(&run("macos-roles", headless(|| Roles), macos_roles));
 }

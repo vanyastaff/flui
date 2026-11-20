@@ -51,7 +51,8 @@ app's trees, frames and input, and this crate composes that with what only the O
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
   and `WindowsLane` are `cfg(windows)`. `lane::macos` does the same: its key, role, screen,
-  activity, pointer, frame and release tables and its safety rules are pure, and `quartz`, `ax`,
+  activity, pointer, frame and release tables, its safety rules and its callback containment are
+  pure, and `quartz`, `ax`,
   `guard`, `capture` and `MacosLane` are `cfg(target_os = "macos")`.
 - **The macOS lane posts to the app's process from a private, tagged source.** Every event goes
   out through `CGEventPostToPid` from a `kCGEventSourceStatePrivate` source whose user data is the
@@ -60,10 +61,16 @@ app's trees, frames and input, and this crate composes that with what only the O
   state shows held is someone else's and refuses the event; its guard, a listen-only session
   tap, takes an event for the lane's only with the private state, the tag and the driver's
   process id together, and a tap the system turned off ends the run.
-- **A privacy permission is asked, never awaited.** Before a call that needs Accessibility, Input
-  Monitoring or Screen Recording, the macOS lane preflights it (from macOS 10.15, the release that
-  brought them) and refuses with `not_supported` naming `macos_permission_<name>`; it never shows
-  or waits on a prompt.
+- **A privacy permission is asked, never awaited.** Before every event, release and read that
+  needs Accessibility, Input Monitoring or Screen Recording, the macOS lane preflights it (from
+  macOS 10.15, the release that brought them) and refuses with `not_supported` naming
+  `macos_permission_<name>`, since the person can take one back mid-run and an event posted
+  without it is dropped with no word; a release refused so leaves its key or button held and
+  named (`Error::ReleaseFailed`). It never shows or waits on a prompt.
+- **Code macOS calls back into is contained.** The guard's tap callback and ScreenCaptureKit's
+  completion handlers run under `FirstPanic` (`lane::macos::callback`): a panic never unwinds into
+  the system's frame, the guard stops watching (which ends the run), and a capture answers a
+  typed failure.
 - **A newer Apple API is looked up, never linked.** FLUI runs on macOS releases older than
   ScreenCaptureKit, so the lane loads that framework by path when a capture is asked for and
   finds its classes by name: a release without them answers `not_supported`, and the driver links
@@ -111,7 +118,7 @@ app's trees, frames and input, and this crate composes that with what only the O
   call on the lane's thread.
 - **A launched Windows app runs in a kill-on-close job.** The app starts suspended and joins the
   job before its first instruction, and the job's handle closes with the session or with the
-  driver's process, however that ends. A launched macOS app leads a process group of its own,
+  driver's process, however that ends. On Unix a launched app leads a process group of its own,
   which the session ends whole while its leader runs unreaped.
 - **The OS tree is read against the app's through one projection.** A lane projects its OS tree
   onto the wire's nodes, and `projection::Projection` compares the two through
