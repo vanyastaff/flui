@@ -63,14 +63,14 @@ pub(in crate::pipeline::owner) struct RegionIdentities {
     pub(super) placed: Vec<RenderId>,
     pub(super) placement_walk: PlacementScratch,
     /// The published nodes that are not contained (see
-    /// [`PendingSemanticsNode::form`]), which a graft compares its anchor
+    /// [`PendingSemanticsNode::form`](super::PendingSemanticsNode::form)), which a graft compares its anchor
     /// with. Its table is kept between passes, as the lists above are.
     pub(super) uncontained: FxHashSet<flui_foundation::SemanticsId>,
     /// Whether `uncontained` describes the published tree: false until a
     /// full assembly publishes it here.
     pub(super) containment_known: bool,
     /// Set by a test that measures a pass and so must not pay for
-    /// [`check_placement_against_rebuild`].
+    /// [`check_placement_against_rebuild`](super::graft::check_placement_against_rebuild).
     #[cfg(any(test, feature = "testing"))]
     skip_placement_check: bool,
 }

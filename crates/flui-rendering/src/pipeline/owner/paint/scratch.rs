@@ -183,7 +183,7 @@ fn recycle_vec<T>(vec: &mut Vec<T>) {
     }
 }
 
-/// What [`FragmentComposer`] works in, between passes.
+/// What [`FragmentComposer`](super::composer::FragmentComposer) works in, between passes.
 #[derive(Debug, Default)]
 pub(super) struct ComposerScratch {
     pub(super) builds: Vec<BoundaryBuild>,
@@ -223,7 +223,7 @@ pub(super) struct ComposerScratch {
     /// inside its paint's containment and pushed before its children paint:
     /// empty between nodes.
     pub(super) own_effects: Vec<Effect>,
-    /// The words of [`PaintedSlots`] of the nodes on the path being painted
+    /// The words of [`PaintedSlots`](super::kept_chunks::PaintedSlots) of the nodes on the path being painted
     /// that needed them, each after its ancestors': empty between passes.
     pub(super) painted_slots: Vec<u64>,
     /// The previous chunks of the open contents that were looked up out of
