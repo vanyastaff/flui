@@ -15,7 +15,7 @@ use crate::tree::LayerTree;
 impl SceneVersion {
     /// The version that paints `tree`: one node holding the whole tree, each
     /// picture a chunk of its recording, drawn before any layer the tree hangs
-    /// under it, and every other layer an [`Effect`](crate::Effect) over its
+    /// under it, and every other layer an [`Effect`] over its
     /// children, in the tree's paint order.
     ///
     /// No render tree owns a hand-built scene: a layer
