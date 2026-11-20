@@ -24,27 +24,31 @@ use flui_rendering::{
 
 /// A render object that forces a specific size.
 ///
-/// If width or height is None, that dimension is unconstrained
-/// and will use the incoming constraints.
+/// An axis left at `None` takes the incoming maximum on that axis, so
+/// [`expand`](Self::expand) fills its parent.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use flui_objects::RenderSizedBox;
 ///
 /// // Fixed 100x100 box
 /// let sized = RenderSizedBox::new(Some(100.0), Some(100.0));
+/// assert_eq!((sized.width(), sized.height()), (Some(100.0), Some(100.0)));
 ///
 /// // Fixed width, flexible height
 /// let wide = RenderSizedBox::new(Some(200.0), None);
+/// assert_eq!(wide.height(), None);
 ///
 /// // Expand to fill available space
 /// let expand = RenderSizedBox::expand();
+/// assert_eq!((expand.width(), expand.height()), (None, None));
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderSizedBox {
-    /// Fixed width, or None for flexible.
+    /// Fixed width, or `None` to take the incoming maximum width.
     width: Option<f64>,
-    /// Fixed height, or None for flexible.
+    /// Fixed height, or `None` to take the incoming maximum height.
     height: Option<f64>,
 }
 

@@ -202,7 +202,7 @@ impl RenderBox for RenderIntrinsicHeight {
         // Structurally identical to perform_layout: child_constraints issues
         // the real intrinsic sub-query through DryLayoutChildRequest::Intrinsic
         // (flui-rendering ARCHITECTURE.md, dry intrinsics), routed by the driver to the memoized intrinsic_query.
-        // The old `child_dry_layout`-based approximation is removed — dry ≡ committed.
+        // Dry layout is the committed layout (dry ≡ committed).
         let child_constraints = Self::child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)
         })?;

@@ -14,10 +14,12 @@ use flui_rendering::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use flui_foundation::geometry::EdgeInsets;
+/// use flui_objects::RenderPadding;
+///
 /// let padding = RenderPadding::new(EdgeInsets::all(16.0));
-/// let mut wrapper = BoxWrapper::new(padding);
-/// // Add child, then layout...
+/// assert_eq!(padding.padding(), EdgeInsets::all(16.0));
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderPadding {

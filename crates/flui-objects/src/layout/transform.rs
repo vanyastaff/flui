@@ -23,15 +23,20 @@ use flui_rendering::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use flui_foundation::geometry::Matrix4;
+/// use flui_objects::RenderTransform;
+///
 /// // Scale to 50%
-/// let transform = RenderTransform::scale(0.5, 0.5);
+/// let scaled = RenderTransform::scale(0.5, 0.5);
 ///
 /// // Rotate 45 degrees around center
-/// let transform = RenderTransform::rotation(std::f64::consts::PI / 4.0);
+/// let rotated = RenderTransform::rotation(std::f64::consts::PI / 4.0);
 ///
 /// // Custom matrix
-/// let transform = RenderTransform::new(Matrix4::IDENTITY);
+/// let custom = RenderTransform::new(Matrix4::IDENTITY);
+/// assert_eq!(*custom.transform(), Matrix4::IDENTITY);
+/// assert_ne!(*scaled.transform(), *rotated.transform());
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderTransform {

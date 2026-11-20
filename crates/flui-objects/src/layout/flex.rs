@@ -105,14 +105,18 @@ struct FlexSizes {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use flui_objects::{CrossAxisAlignment, MainAxisAlignment, RenderFlex};
+///
 /// // Horizontal row
 /// let row = RenderFlex::row();
+/// assert!(row.is_horizontal());
 ///
 /// // Vertical column with center alignment
 /// let column = RenderFlex::column()
 ///     .with_main_axis_alignment(MainAxisAlignment::Center)
 ///     .with_cross_axis_alignment(CrossAxisAlignment::Center);
+/// assert!(column.is_vertical());
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderFlex {
