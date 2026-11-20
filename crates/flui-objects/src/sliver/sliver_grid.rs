@@ -91,8 +91,8 @@ pub(super) const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
 
 /// How many children the sentinel case actually lays out.
 ///
-/// Deliberately a SEPARATE number from [`MAX_UNBOUNDED_WINDOW_CHILDREN`], and
-/// conflating the two was a real bug. The threshold has to be high, since no
+/// Deliberately a SEPARATE number from [`MAX_UNBOUNDED_WINDOW_CHILDREN`], since
+/// conflating the two is a bug. The threshold has to be high, since no
 /// genuine data-source length may fall past it; the window served once it
 /// trips has to be small, because layout runs EVERY FRAME. Serving a
 /// threshold-sized window meant enqueueing a million build requests per frame
@@ -157,14 +157,12 @@ fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> 
 ///
 /// # Construction
 ///
-/// ```ignore
+/// ```
 /// use flui_objects::RenderSliverGrid;
 /// use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 ///
-/// let grid = RenderSliverGrid::new(
-///     SliverGridDelegateWithFixedCrossAxisCount::new(2),
-///     50,
-/// );
+/// let grid = RenderSliverGrid::new(SliverGridDelegateWithFixedCrossAxisCount::new(2), 50);
+/// assert_eq!(grid.item_count(), 50);
 /// ```
 pub struct RenderSliverGrid {
     /// Grid layout delegate — controls tile sizes and cross-axis count.

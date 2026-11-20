@@ -5,12 +5,9 @@
 //!
 //! The surface is `filter: ImageFilter`, `blend_mode: BlendMode`,
 //! `enabled: bool` and an optional [`BackdropGroupKey`]: filters of one group
-//! on one compositing surface sample a single shared backdrop (ADR-0230). A
-//! layout-aware filter blueprint (bounded-blur/tile-mode/compose support) has
-//! no FLUI-side backing today — `flui_painting::paint::ImageFilter` has no
-//! bounded/tile-mode blur variant — so it stays deferred; see the
-//! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md),
-//! §1.3 and §6.
+//! on one compositing surface sample a single shared backdrop (ADR-0230). There
+//! is no layout-aware filter (bounded blur, tile mode, compose), because
+//! `flui_painting::paint::ImageFilter` has no bounded or tile-mode blur variant.
 //!
 //! # Rust-native shape
 //!

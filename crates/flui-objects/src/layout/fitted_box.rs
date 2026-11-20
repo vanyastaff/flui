@@ -176,12 +176,9 @@ impl RenderFittedBox {
     /// when [`BoxFit::apply`] crops the child (`Cover`/`FitWidth`/
     /// `FitHeight`/an overflowing `None`) under an off-center `alignment` —
     /// `Contain`/`Fill`/`ScaleDown` never crop, so `source_offset` is
-    /// always `Offset::ZERO` for them and this term is a no-op. Dropping
-    /// it (as an earlier version of this method did) left both paint and
-    /// hit-testing consistently wrong together for a cropped, off-center
-    /// `Cover` — silently, since the invariant this method exists to
-    /// enforce (paint and hit-test can't disagree WITH EACH OTHER) still
-    /// held; they simply agreed on the wrong point.
+    /// always `Offset::ZERO` for them and this term is a no-op. Omitting it
+    /// makes paint and hit-testing agree on the wrong point for a cropped,
+    /// off-center `Cover`.
     pub fn effective_transform(&self) -> Matrix4 {
         let t = Matrix4::translation(self.align_offset.dx, self.align_offset.dy, 0.0);
         let s = Matrix4::scaling(self.scale_x, self.scale_y, 1.0);

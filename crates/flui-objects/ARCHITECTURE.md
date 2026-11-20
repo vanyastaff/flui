@@ -452,10 +452,10 @@ single offset (`NaN`/`+∞` → `0` + error; `−∞` → `0` without error).
 - Clamp `+∞` leading to `0` like `−∞` — would hide a genuine overflow and lay
   out the wrong end of a large list.
 
-**Trade-off:** malformed constraints that previously continued with a
-saturated index now produce an empty window and a structured error log.
-That is louder than silent saturation and quieter than a crash; diagnostics name the sliver type and the offending fields so production
-reports identify the bad window.
+**Trade-off:** malformed constraints produce an empty window and a structured
+error log instead of a saturated index. That is louder than silent saturation
+and quieter than a crash; diagnostics name the sliver type and the offending
+fields so production reports identify the bad window.
 
 **Tests:** unit tests on
 `sliver_fixed_extent_list::window` / index helpers and on
@@ -676,21 +676,7 @@ owner-local data, not a callback). An absorbing `RenderAbsorbPointer` reports
 `blocks_hit_slop`, so no area takes a point that landed on a barrier.
 `harness_hit_slop_min_target_centres_on_the_child` pins the growth.
 
-## Thread safety
-
-No locks. Catalog objects are mutated on the UI runtime's layout/paint thread
-through `PipelineOwner`; they hold no shared mutable state of their own.
-
----
-
-## Friction log
-
-| Item | Notes |
-|------|-------|
-| Shared `classify_cache_window` helper across list + grid | Grid owns its classify today; list uses `finite_leading_cache_edge`. Consolidating into one module is optional follow-up once a third consumer appears. |
-
-
-### RenderImage source fitting
+### Image fitting follows painting's placement contract
 
 RenderImage paints through painting's `ImagePlacement` (ADR-0229), the same
 contract decoration images use: any `BoxFit` at a fractional alignment with
@@ -722,7 +708,7 @@ clip, so it clips no hits either. A directly drawn rounded rect (a decoration) i
 fitted the same way at the engine's draw entry: `harness_decorated_box_pill_hits_the_painted_radius`
 and the readback row `a_drawn_rrect_matches_hit_testing_with_oversized_radii`.
 
-### Superellipse clips and backdrop groups
+### Superellipse clips hit the curve they draw and backdrop filters share a group
 
 `RenderClipRSuperellipse` hit-tests with `RSuperellipse::contains`, the same
 normalized exponent-4 corner curve the engine's clip mask draws (ADR-0231);
@@ -733,7 +719,7 @@ capture (ADR-0230), pinned by
 `harness_backdrop_filter_carries_its_group_to_the_layer` and the engine row
 `grouped_backdrops_share_one_capture`.
 
-### Annotated regions and external textures
+### Annotated regions and external textures ride the layer tree
 
 `RenderAnnotatedRegion` annotates its own box through a paint scope that becomes an
 `AnnotatedRegionLayer`; readers use `SceneVersion::find_annotation` (ADR-0232). The harness
@@ -749,3 +735,9 @@ it holds with the frame, and the raster host damages the texture's users in it
 and `perf_a_texture_frame_republishes_the_held_version` in flui-widgets. It is not a
 repaint boundary; the `Texture` widget puts one above it, so the texture is composited in
 a layer of its own.
+
+## Thread safety
+
+No locks. Catalog objects are mutated on the UI runtime's layout/paint thread
+through `PipelineOwner`; they hold no shared mutable state of their own.
+

@@ -64,10 +64,11 @@ use super::virtualized_band::{item_extent_from_virtualizer, walk_virtualizer_ban
 ///
 /// # Construction
 ///
-/// ```ignore
+/// ```
 /// use flui_objects::RenderSliverList;
 ///
 /// let list = RenderSliverList::new(10_000, 48.0);
+/// assert_eq!(list.item_count(), 10_000);
 /// ```
 ///
 /// `default_extent_estimate` must be finite and positive; it seeds the

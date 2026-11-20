@@ -18,7 +18,7 @@
 //! [`PhysicalClipShape`] are a small, local trait pair scoped to exactly
 //! this family instead.
 //!
-//! # Design notes (see the [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-physical-model-plan.md))
+//! # Design notes
 //!
 //! - **Hit-test always tests the clip shape for both variants.** Gating the
 //!   test on a custom clipper being present would mean it never engages for
@@ -178,7 +178,7 @@ impl PhysicalClipSource for RectangleClip {
                 let br = self.border_radius.unwrap_or(BorderRadius::ZERO);
                 // Mirrors `flui-painting/src/decoration.rs`'s `decoration_rrect`
                 // exactly — same field destructure, same lack of
-                // `clamp_radii()` (see module doc / research plan trap §4.8).
+                // `clamp_radii()`.
                 RRect::from_rect_and_corners(
                     rect,
                     br.top_left,
@@ -190,7 +190,7 @@ impl PhysicalClipSource for RectangleClip {
             // `width/2, height/2` as TWO INDEPENDENT radii (an ellipse
             // inscribed in the bounding box), NOT a true circle for
             // non-square boxes. This deliberately contradicts
-            // `BoxShape::Circle`'s own doc comment (research plan trap §4.4).
+            // `BoxShape::Circle`'s own doc comment.
             BoxShape::Circle => RRect::from_rect_xy(rect, rect.width() * 0.5, rect.height() * 0.5),
         }
     }
@@ -661,7 +661,7 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
         // the shape. Gating on a custom clipper would never engage for
         // `RenderPhysicalModel` (it has no public clipper), so a circular or
         // rounded-corner one would hit-test as its full bounding box. See the
-        // module doc and the design research it links (trap §4.2).
+        // module doc.
         // `RenderPhysicalShape` uses the
         // same shape gate when an owner-lane path target is installed, and
         // otherwise falls back to the whole-box default clip.

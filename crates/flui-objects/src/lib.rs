@@ -21,9 +21,8 @@
 //!
 //! # Flat public surface
 //!
-//! Render-object types are re-exported flat from this crate root so the consumer
-//! import path is simply `flui_objects::RenderPadding` — identical depth to the
-//! old `flui_rendering::objects::RenderPadding`.
+//! Render-object types are re-exported flat from this crate root, so the import
+//! path is `flui_objects::RenderPadding`.
 //!
 //! [`RenderBox`]: flui_rendering::traits::RenderBox
 //! [`RenderSliver`]: flui_rendering::traits::RenderSliver

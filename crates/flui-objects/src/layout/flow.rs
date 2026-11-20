@@ -358,8 +358,7 @@ impl RenderBox for RenderFlow {
 
     /// The flow's own clip, reported as a paint effect so the pipeline opens
     /// it around the whole fragment `paint` records — outside every per-child
-    /// transform scope the delegate pushes, exactly where `paint` used to
-    /// open it itself.
+    /// transform scope the delegate pushes.
     ///
     /// Gated on `!= Clip::None` rather than reported unconditionally, as
     /// `RenderStack` does (no layer at all when clipping is off), so
