@@ -19,7 +19,7 @@
 //! Pure CPU micro-benchmarks that require no GPU and isolate the hot-path
 //! allocation sites targeted by GLM audit #8:
 //!
-//! - `path_cache_warm_hit` — measures the cost of a warm `PathCache::get` hit
+//! - `path_cache_warm_hit` — measures the cost of keying a path and a warm `PathCache::get` hit
 //!   (the borrowed-slice path; baseline proves no allocation after the fix).
 //! - `draw_segment_seal` — measures `DrawBatcher::finish_current_segment` with a
 //!   populated segment, isolating the per-seal allocation cost.  After the
@@ -33,8 +33,8 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::PathCache;
 use flui_engine::WgpuPainter;
 use flui_foundation::geometry::Offset;
-use flui_foundation::geometry::Rect;
-use flui_painting::paint::Paint;
+use flui_foundation::geometry::{Point, Rect};
+use flui_painting::paint::{Paint, Path};
 use flui_painting::{paint::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
@@ -269,23 +269,32 @@ fn alloc_micro(c: &mut Criterion) {
     // a comparison point for any future refactor of the return type.
     {
         let mut cache = PathCache::new(64);
-        let hash = 0xdead_beef_u64;
-        // Pre-populate with realistic path data (128 positions, 378 indices).
-        let positions: Vec<[f32; 2]> = (0..128_u32)
+        // A realistic path: a 128-point polygon (128 positions, 378 indices).
+        let points: Vec<[f32; 2]> = (0..128_u32)
             .map(|i| {
                 let a = (i as f32) * std::f32::consts::TAU / 128.0;
                 [50.0 + 50.0 * a.cos(), 50.0 + 50.0 * a.sin()]
             })
             .collect();
+        let mut path = Path::new();
+        path.move_to(Point::new(f64::from(points[0][0]), f64::from(points[0][1])));
+        for &[x, y] in &points[1..] {
+            path.line_to(Point::new(f64::from(x), f64::from(y)));
+        }
+        path.close();
+        let paint = Paint::default();
+        let key = cache.key(&path, &paint, 1.0);
         let indices: Vec<u32> = (1_u32..127).flat_map(|i| [0, i, i + 1]).collect();
-        cache.insert(hash, positions, indices);
+        cache.insert(&key, points, indices);
 
         group.bench_function("path_cache_warm_hit", |b| {
             b.iter(|| {
-                // Hit path: returns `(&[[f32;2]], &[u32])` — zero allocation.
-                // The reference cannot escape the closure (borrows `cache`);
-                // use `black_box` on the lengths to prevent the call being elided.
-                if let Some((verts, idxs)) = cache.get(black_box(hash)) {
+                // Hit path: keys the path, then returns `(&[[f32;2]], &[u32])`
+                // — zero allocation. The reference cannot escape the closure
+                // (borrows `cache`); use `black_box` on the lengths to prevent
+                // the call being elided.
+                let key = cache.key(black_box(&path), &paint, 1.0);
+                if let Some((verts, idxs)) = cache.get(&key) {
                     black_box(verts.len());
                     black_box(idxs.len());
                 }
@@ -300,7 +309,6 @@ fn alloc_micro(c: &mut Criterion) {
 /// reconstruction and the recording budget. No GPU encoding is timed.
 fn warm_path_recording(c: &mut Criterion) {
     use flui_foundation::geometry::Point;
-    use flui_painting::paint::Path;
 
     let Some((device, queue)) = try_create_gpu() else {
         return;

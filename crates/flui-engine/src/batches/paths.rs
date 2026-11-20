@@ -7,7 +7,6 @@ use flui_painting::{paint::Path, styling::Color};
 use super::{
     super::{
         command_ir::{DrawItem, DrawSegment},
-        path_cache::PathCache,
         pipeline_cache::{self as pipeline, PipelineKey},
         state_stack::GpuStateStack,
         vertex::Vertex,
@@ -236,7 +235,7 @@ impl DrawBatcher {
     /// 1. Prime the tessellator flatten-tolerance from the current CTM scale.
     ///    A gradient or solid shader then takes `draw_shaded_path` instead.
     /// 2. **Dashed-stroke early return** — dashes are not cached (the pattern
-    ///    affects geometry but is not part of `compute_path_hash`; caching
+    ///    affects geometry but is not part of the cache key; caching
     ///    would collide a solid and a dashed stroke of the same path).
     /// 3. **Cache hit** — reconstruct `Vertex`s from UNTRANSFORMED cached
     ///    positions with the *current* `paint.color`, then submit.
@@ -269,7 +268,7 @@ impl DrawBatcher {
         }
 
         // Dashed strokes cannot use the path cache: the dash pattern affects
-        // geometry but is not part of compute_path_hash, so caching would
+        // geometry but is not part of the cache key, so caching would
         // collide a solid and a dashed stroke of the same path.
         if paint.style != PaintStyle::Fill
             && let Some(ref dash) = paint.dash_pattern
@@ -328,20 +327,13 @@ impl DrawBatcher {
             None
         };
 
-        // Compute cache key from path geometry + paint tessellation parameters
-        // + the quantized world scale (so a scale-1 entry is not reused at a
+        // Key from path geometry + paint tessellation parameters + the
+        // quantized world scale (so a scale-1 entry is not reused at a
         // larger scale with scale-1 chord density).
-        let path_hash = PathCache::compute_path_hash(
-            path,
-            paint.style,
-            paint.stroke_width as f32,
-            paint.stroke_cap,
-            paint.stroke_join,
-            max_scale,
-        );
+        let key = self.path_cache.key(path, paint, max_scale);
 
         // Check cache for previously tessellated geometry.
-        if let Some((positions, cached_indices)) = self.path_cache.get(path_hash) {
+        if let Some((positions, cached_indices)) = self.path_cache.get(&key) {
             // Reconstruct full Vertex data with current paint color.
             // The cache stores UNTRANSFORMED positions; bake the current transform now.
             let rgba = paint.color.to_rgba_f32_array();
@@ -386,8 +378,7 @@ impl DrawBatcher {
                 // The cache stores local (untransformed) positions so that cached
                 // geometry can be re-used across frames with different transforms.
                 let positions: Vec<[f32; 2]> = vertices.iter().map(|v| v.position).collect();
-                self.path_cache
-                    .insert(path_hash, positions, indices.clone());
+                self.path_cache.insert(&key, positions, indices.clone());
 
                 if let Some(blend) = ssaa_blend {
                     Self::submit_transformed_and_divert_to_ssaa(
@@ -451,19 +442,12 @@ impl DrawBatcher {
                 }
             }
         } else {
-            let path_hash = PathCache::compute_path_hash(
-                path,
-                paint.style,
-                paint.stroke_width as f32,
-                paint.stroke_cap,
-                paint.stroke_join,
-                max_scale,
-            );
+            let key = self.path_cache.key(path, paint, max_scale);
             // A lookup that returned the borrow from one branch would keep the
             // cache borrowed through the other's insert.
-            if self.path_cache.get(path_hash).is_some() {
+            if self.path_cache.get(&key).is_some() {
                 self.path_cache
-                    .get(path_hash)
+                    .get(&key)
                     .expect("BUG: path cache entry present on the previous lookup")
             } else {
                 let result = if paint.style == PaintStyle::Fill {
@@ -474,11 +458,8 @@ impl DrawBatcher {
                 match result {
                     Ok((vertices, indices)) => {
                         tessellated = (positions_of(vertices), indices);
-                        self.path_cache.insert(
-                            path_hash,
-                            tessellated.0.clone(),
-                            tessellated.1.clone(),
-                        );
+                        self.path_cache
+                            .insert(&key, tessellated.0.clone(), tessellated.1.clone());
                         (&tessellated.0, &tessellated.1)
                     }
                     Err(e) => {

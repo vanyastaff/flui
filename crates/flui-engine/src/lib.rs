@@ -516,4 +516,4 @@ pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
 pub use offscreen::OffscreenRenderer;
 // The tessellation cache, for the `render_throughput` bench's warm-hit case.
 #[cfg(feature = "testing")]
-pub use path_cache::PathCache;
+pub use path_cache::{PathCache, TessellationKey};
