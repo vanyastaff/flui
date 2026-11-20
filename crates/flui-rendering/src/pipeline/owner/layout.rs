@@ -178,8 +178,8 @@ impl PipelineOwner<Layout> {
         //
         // layout_dirty_root replaces the legacy
         // layout_node_with_children no-op recursion. Each dirty
-        // entry is laid out via the pre-acquired-subtree walk
-        // protected by LayoutCycleGuard. Constraints come from
+        // entry is laid out via the leased walk, whose frames refuse
+        // a layout cycle. Constraints come from
         // cached state (post-frame-1) OR the binding-set
         // root_constraints (frame-1 root).
         for (index, dirty_node) in dirty_nodes.iter().enumerate() {
@@ -449,25 +449,26 @@ impl PipelineOwner<Layout> {
     ///    tree once, with the slab's base pointer (ADR-0252). Nothing is
     ///    collected or borrowed up front, so the cost of preparing a walk is
     ///    constant.
-    /// 2. **Wrap**: the lease goes into a private `SubtreeArena`, which
-    ///    resolves an id with the tree's generation check and hands out a
-    ///    raw `NodePtr` for it. The in-flight bit and the parent link live in
-    ///    the slot headers, never behind a `NodePtr`.
+    /// 2. **Wrap**: the lease goes into a private `SubtreeArena`. The lease
+    ///    resolves an id with the tree's generation check and lends a node
+    ///    only through an entry (`EnteredNode`, `storage/node_slab.rs`) that
+    ///    holds the node's in-flight bit while it lives. The in-flight bit
+    ///    and the parent link live in the slot headers, outside the node.
     /// 3. **Recursive walk**: a private `layout_subtree_borrowed`
-    ///    helper acquires one node's reborrow at each call level, after
-    ///    `LayoutCycleGuard::enter` has refused a cycle or an id that is not a
-    ///    child of the frame asking. The leaf path delegates to
+    ///    helper enters one node at each call level as a `LayoutFrame`, which
+    ///    refuses a cycle or an id that is not a child of the frame asking.
+    ///    The leaf path delegates to
     ///    [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
     ///    The non-leaf path constructs a Direct-storage `RawBoxLayoutContext`
     ///    via the erased driver context ([`crate::protocol::DriverBoxLayoutContext`]) with a closure
-    ///    that captures `&SubtreeArena` (Sync via `NodePtr`'s
-    ///    `unsafe impl`) and re-enters `layout_subtree_borrowed` for
+    ///    that captures `&SubtreeArena` (`!Send`, and never needs to be: it
+    ///    runs on this thread) and re-enters `layout_subtree_borrowed` for
     ///    each child. The bridge in `traits/render_box.rs` reconstructs
     ///    a typed `RawBoxLayoutContext<T::Arity, T::ParentData>` (Proxy
     ///    variant) and forwards to `RenderBox::perform_layout`.
     ///    Synchronous `ctx.layout_child(i, c)` calls dispatch through
-    ///    the callback, recursing into the child's subtree via its
-    ///    `NodePtr`.
+    ///    the callback, recursing into the child's subtree, which the
+    ///    callee enters in turn.
     /// 4. **Per-level cleanup**: on success **AND when no descendant
     ///    errored**, updates `state.set_geometry` /
     ///    `state.set_constraints`, bootstraps `IS_RELAYOUT_BOUNDARY`,
@@ -482,28 +483,15 @@ impl PipelineOwner<Layout> {
     ///
     /// # Soundness (Miri-clean)
     ///
-    /// The prior design used a recursive raw-pointer
-    /// re-entry into `RenderTree` from inside the layout-child callback —
-    /// outer `&mut RenderEntry` was held LIVE across `perform_layout_raw`
-    /// while the inner call synthesised a fresh `&mut RenderTree` from
-    /// the same `*mut`. Under Stacked / Tree Borrows that invalidates
-    /// the outer tag (latent UB; Miri flagged the 2-level and 3-level
-    /// happy paths).
-    ///
-    /// This design eliminates the inner reborrow entirely. The lease holds the
-    /// one `&mut RenderTree` for the walk, and the callback acquires one
-    /// node's reborrow per call level by dereferencing a `NodePtr` derived
-    /// from the slab's base pointer — no `&mut RenderTree` ever appears
-    /// inside the callback chain.
-    ///
-    /// At any given moment during the walk, the per-slot reborrows in
-    /// scope are: one for the current call's parent + one for each
-    /// active recursive child call below it. All on **distinct slab
-    /// slots** (parent ≠ child in a well-formed tree). The Unique tag
-    /// for each slot lives independently because `NodePtr` is a raw
-    /// pointer (SharedReadWrite permission on the allocation, distinct
-    /// derived Unique tags per slot reborrow). Miri verifies this on
-    /// the existing integration tests.
+    /// The lease holds the one `&mut RenderTree` for the walk, so no
+    /// `&mut RenderTree` ever appears inside the callback chain, and each
+    /// call level borrows its node only through the entry it holds. At any
+    /// moment the entries live are one per active call level, plus the
+    /// short entry a frame takes to seed or place a child; `enter` refuses
+    /// a slot whose entry is live, so no two borrow one node. The slot
+    /// pointers behind the entries, and the `unsafe` that turns them into
+    /// references, are confined to `storage/node_slab.rs`; Miri checks them
+    /// on the unit tests under `storage::` and `pipeline::owner`.
     ///
     /// # Error handling
     ///
@@ -519,7 +507,7 @@ impl PipelineOwner<Layout> {
     ///   returned as the same [`crate::error::RenderError::Poisoned`].
     ///   Symmetric with the leaf path.
     /// - **Descendant `Err` returned through the callback** → tracking
-    ///   flag (`AtomicBool`) set; outer `perform_layout` still completes
+    ///   flag (a `Cell<bool>`) set; outer `perform_layout` still completes
     ///   with `Size::ZERO` for that child; outer `Ok` is returned to the
     ///   caller, BUT parent's `NEEDS_LAYOUT` is **not cleared** — unless
     ///   the failure tips the child over its layout-poison budget, in
@@ -557,13 +545,12 @@ impl PipelineOwner<Layout> {
     ///
     /// 1. Nothing is collected up front, so a cyclic `children()` edge
     ///    cannot hang or exhaust memory in a preparation phase.
-    /// 2. `layout_subtree_borrowed` marks each `id`'s in-flight bit in its
-    ///    slot header via the `LayoutCycleGuard` RAII on entry. A `perform_layout`
+    /// 2. `layout_subtree_borrowed` sets each `id`'s in-flight bit in its
+    ///    slot header by entering it as a `LayoutFrame`. A `perform_layout`
     ///    body that calls `layout_child` for an ancestor id already
-    ///    in flight hits the guard's `enter` collision check →
+    ///    in flight is refused by that entry →
     ///    returns [`crate::error::RenderError::LayoutCycle`]
-    ///    immediately instead of attempting a second `NodePtr`
-    ///    reborrow (which would be UB).
+    ///    immediately, with no second borrow of the ancestor's node.
     ///
     /// The cycle error collapses through the layout-child callback
     /// (Size::ZERO + `descendant_error_flag`) so the parent stays
@@ -575,7 +562,7 @@ impl PipelineOwner<Layout> {
     /// tree (remove the cyclic `add_child`) and the next invalidation
     /// lifts the poison, so the retry succeeds.
     ///
-    /// Frame-cross panic safety: `LayoutCycleGuard::Drop` runs on
+    /// Frame-cross panic safety: the `LayoutFrame`'s drop runs on
     /// every exit path including unwind from a panicking
     /// `perform_layout`. Combined with the non-leaf path's
     /// `catch_unwind` wrapper, the cycle set stays consistent across
@@ -662,9 +649,8 @@ impl PipelineOwner<Layout> {
             Err(error) => return (Err(error), flui_foundation::panic::FirstPanic::new()),
         };
 
-        // Step 4: recursive walk via the safe arena API.  Internally the arena
-        // reborrows one NodePtr per call level (distinct slots; parent ≠ child
-        // enforced by LayoutCycleGuard), but no `unsafe` appears here.
+        // Step 4: recursive walk via the arena, which enters one node per call
+        // level and refuses a node already entered up the stack.
         //
         // The walk contains each render object's own hooks, but a panic can
         // still leave it from user code outside them, a `tracing` subscriber

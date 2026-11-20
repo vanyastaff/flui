@@ -1,51 +1,24 @@
-//! Leased subtree access and recursive layout walks.
+//! The recursive layout walks over a leased render tree, and the lease the query walks share.
 //!
-//! This module owns **all** of the `unsafe` code for the re-entrant layout
-//! walk.  Every export to `super` is a **safe** function or method; callers
-//! in `owner/mod.rs` carry zero `unsafe` after this extraction.
+//! The pipeline takes one lease on the render tree ([`crate::storage::RenderTree`]'s `lease`, see
+//! ADR-0252) and a walk enters each node as it reaches it, so the cost of a walk follows the nodes
+//! it touches, not the size of the dirty subtree. [`SubtreeArena`] holds that lease for the layout
+//! walk, with the sinks the walk records into; [`QueryWalk`] holds one for the memoizing query
+//! walks of `query.rs`.
 //!
-//! ## Design overview
+//! A walk borrows a node only through an [`EnteredNode`] (`storage/node_slab.rs`, the one module
+//! that turns a slot into a reference), which holds the node's in-flight bit while it lives. Each
+//! level of the layout walk is a [`LayoutFrame`] that owns the entry of its node; every other
+//! node a frame touches (a child it seeds, lends parent data to or places, a baseline chain, a
+//! child's parent data for an intrinsic query) it enters for that access alone. A cyclic child
+//! link that leads back to a node entered up the stack is refused there: a frame reports
+//! [`crate::error::RenderError::LayoutCycle`], a short access skips the node.
 //!
-//! The pipeline takes one lease on the render tree
-//! ([`crate::storage::RenderTree`]'s `lease`, see ADR-0252) and the walk acquires each node as it
-//! reaches it, so the cost of a walk follows the nodes it touches, not the size of the dirty
-//! subtree.  [`SubtreeArena`] wraps the lease and hands out raw [`NodePtr`] aliases, allowing the
-//! recursive walk to reborrow exactly one slot per call level — a different slot at each
-//! recursion depth — without ever holding a `&mut RenderTree` inside a
-//! callback that could itself call back into the tree.
-//!
-//! The aliasing invariant (distinct slots, one live `&mut` per slot at a
-//! time) is enforced by:
-//! 1. [`NodePtr`] staying a plain raw-pointer newtype — `!Send + !Sync` by
-//!    the language default, same as any other `*mut T`. Confinement to the
-//!    constructing thread is structural: [`SubtreeArena`] is itself
-//!    `!Send + !Sync` (transitively, via `ParentData`'s dropped `Sync`
-//!    supertrait and `PipelineCell`'s `Rc<RefCell<_>>`), so no safe code can
-//!    move an arena — or a `NodePtr` borrowed from one — to another thread
-//!    in the first place. There is no runtime thread check to bypass.
-//! 2. [`LayoutCycleGuard`] detecting and rejecting re-entry into a slot
-//!    whose `&mut` is already live up the call stack, and an id that is not a child of the frame
-//!    asking for it (both read slot headers only).
-//! 3. [`SubtreeArena`]'s lease, which holds the `&mut RenderTree` borrow for the walk, preventing
-//!    any [`NodePtr`] from outliving it.
-//!
-//! ## Safety-gate note
-//!
-//! All seven `unsafe fn` bodies in this file must be reviewed by
-//! `unsafe-auditor` before the SAFETY-GATE passes.  The SAFETY comments
-//! attached to each `unsafe` block document the invariant that makes the
-//! operation sound; they are the primary artefact for the audit.
-
-// The sanctioned `unsafe` island for the layout walk (see module docs above).
-// The opt-out is scoped to this file; every block carries a `// SAFETY:`
-// comment, and the invariants are machine-checked by the miri CI job,
-// which runs this module's tests as part of a wider
-// `pipeline::owner` sweep (cell.rs's PipelineCell checkout tests and the
-// rest of the owner module's unit tests ride along in the same filter).
-#![expect(unsafe_code)]
+//! The walk runs on the thread that took the lease: [`SubtreeArena`] is `!Send + !Sync` (pinned
+//! in `tests`), so no callback it hands a render object can carry it elsewhere.
 
 use crate::pipeline::TextLender;
-use crate::storage::TreeLease;
+use crate::storage::{EnterRefusal, EnteredNode, TreeLease};
 
 use std::marker::PhantomData;
 
@@ -54,7 +27,7 @@ use flui_foundation::panic::payload_text;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 #[cfg(any(test, feature = "testing"))]
 use crate::testing::parent_data::ParentDataSeed;
@@ -70,7 +43,7 @@ use crate::{
         },
         sliver_protocol::{ErasedSliverLayoutContext, SliverChildLayoutCallback},
     },
-    storage::{ErasedConstraints, RenderEntry, RenderNode, RenderTree},
+    storage::{ErasedConstraints, RenderNode, RenderTree},
 };
 
 use super::buffer_pool::{BufferPool, Pooled};
@@ -86,17 +59,19 @@ pub(super) struct LayoutBuffers {
 }
 
 // ============================================================================
-// Lent parent data
+// Child states of a layout frame
 // ============================================================================
 
-/// A layout walk's state for one child, which holds that child's parent data while its parent
-/// lays it out.
-trait HoldsChildParentData {
+/// A layout walk's state for one child: the parent data it holds while its parent lays it out,
+/// and the placement the parent decided.
+trait WalkedChild {
     fn child(&self) -> RenderId;
     fn parent_data_slot(&mut self) -> &mut Option<Box<dyn ParentData>>;
+    fn offset(&self) -> flui_foundation::geometry::Offset;
+    fn laid_out_this_pass(&self) -> bool;
 }
 
-impl HoldsChildParentData for crate::protocol::ErasedChildState {
+impl WalkedChild for crate::protocol::ErasedChildState {
     fn child(&self) -> RenderId {
         self.id
     }
@@ -104,22 +79,38 @@ impl HoldsChildParentData for crate::protocol::ErasedChildState {
     fn parent_data_slot(&mut self) -> &mut Option<Box<dyn ParentData>> {
         &mut self.parent_data
     }
+
+    fn offset(&self) -> flui_foundation::geometry::Offset {
+        self.offset
+    }
+
+    fn laid_out_this_pass(&self) -> bool {
+        self.laid_out_this_pass
+    }
 }
 
-impl HoldsChildParentData for crate::protocol::ErasedSliverChildState {
+impl WalkedChild for crate::protocol::ErasedSliverChildState {
     fn child(&self) -> RenderId {
         self.id
     }
 
     fn parent_data_slot(&mut self) -> &mut Option<Box<dyn ParentData>> {
         &mut self.parent_data
+    }
+
+    fn offset(&self) -> flui_foundation::geometry::Offset {
+        self.offset
+    }
+
+    fn laid_out_this_pass(&self) -> bool {
+        self.laid_out_this_pass
     }
 }
 
 /// The child states of one layout frame, holding the parent data the frame borrowed from its
 /// children.
 ///
-/// [`Self::lend`] moves a child's parent data out of its node into the child's state, so the
+/// [`Self::seed`] moves a child's parent data out of its node into the child's state, so the
 /// parent reads and writes it there without a copy; dropping this value moves it back, on every
 /// exit of the frame: success, an error and an unwind. What the parent wrote during its layout
 /// (a sliver's `layout_offset`, a default it created on first access) is what the child keeps,
@@ -129,18 +120,20 @@ impl HoldsChildParentData for crate::protocol::ErasedSliverChildState {
 /// a copy of what the node holds (none while the owner's frame, above it, has it lent), as does a
 /// harness seed, and neither goes back. A child listed twice is lent to its first
 /// slot; the second reads none this pass, and whatever it creates never replaces the original.
+/// A child entered up the stack (a cyclic link) is neither seeded nor lent nor placed: it keeps
+/// the state's defaults, and the cycle already degrades it to a stand-in.
 ///
 /// The render tree cannot change while the walk runs (the lease holds its `&mut RenderTree`, and
 /// child builds are deferred until the walk ends), so every lent value goes back to the node it
 /// came from.
-struct LentChildren<'a, 'tree, T: HoldsChildParentData> {
+struct LentChildren<'a, 'tree, T: WalkedChild> {
     arena: &'a SubtreeArena<'tree>,
     /// The node laying these children out.
     parent: RenderId,
     states: Pooled<'a, T>,
 }
 
-impl<'a, 'tree, T: HoldsChildParentData> LentChildren<'a, 'tree, T> {
+impl<'a, 'tree, T: WalkedChild> LentChildren<'a, 'tree, T> {
     fn new(arena: &'a SubtreeArena<'tree>, parent: RenderId, states: Pooled<'a, T>) -> Self {
         Self {
             arena,
@@ -149,28 +142,70 @@ impl<'a, 'tree, T: HoldsChildParentData> LentChildren<'a, 'tree, T> {
         }
     }
 
-    /// Fills `state` with the parent data of `node`, the child it describes: moved out when
-    /// `parent`, the node laying it out, is the child's parent, a copy otherwise.
-    fn lend(arena: &SubtreeArena<'_>, parent: RenderId, state: &mut T, node: &mut RenderNode) {
-        *state.parent_data_slot() = if borrows_from(arena, parent, state.child()) {
-            node.take_parent_data()
-        } else {
-            node.parent_data().map(dyn_clone::clone_box)
-        };
+    /// Fills each child's state from its node before the parent lays it out: `read` copies what
+    /// the protocol carries over from the last pass (a parent that does not position a child
+    /// again keeps its prior offset), then the child's parent data is lent, or a harness seed
+    /// stands in for it unlent.
+    fn seed(&mut self, mut read: impl FnMut(&mut T, &RenderNode)) {
+        for state in self.states.iter_mut() {
+            let child = state.child();
+            let entered = match self.arena.lease.enter(child) {
+                Err(EnterRefusal::InFlight) => continue,
+                entered => entered.ok(),
+            };
+            let seeded = self
+                .arena
+                .seed_child_parent_data(child, state.parent_data_slot());
+            let Some(mut entered) = entered else {
+                continue;
+            };
+            read(state, entered.node());
+            if !seeded {
+                *state.parent_data_slot() = if lends_to(self.arena, self.parent, child) {
+                    entered.node_mut().take_parent_data()
+                } else {
+                    entered.node().parent_data().map(dyn_clone::clone_box)
+                };
+            }
+        }
+    }
+
+    /// Commits the placement the parent decided into each child's node, after the parent's
+    /// layout succeeded: the offset paint and hit-test read, and, for the children this pass
+    /// laid out, the parent's fresh layout generation. A child the parent skipped keeps its
+    /// previous stamp, so paint and hit-test leave it alone (a lazy sliver's out-of-band
+    /// residents are not painted at an offset that no longer describes the tree).
+    ///
+    /// The generation advances here, beside the stamps: advancing it at layout entry lets an
+    /// early return in between (a protocol error, a poisoned descendant) move the parent forward
+    /// while stamping nobody, which unplaces every child and stops the whole subtree painting.
+    fn commit_placement(&self, frame: &LayoutFrame<'_, '_>) {
+        let generation = frame.node().advance_layout_generation();
+        for state in self.states.iter() {
+            let Ok(entered) = self.arena.lease.enter(state.child()) else {
+                continue;
+            };
+            let node = entered.node();
+            node.set_offset(state.offset());
+            if state.laid_out_this_pass() {
+                node.set_placed_by(frame.id(), generation);
+            }
+        }
     }
 }
 
-/// Whether `child` lends its parent data to `parent`'s layout frame: it is not in flight, has no
-/// harness seed, and names `parent` as its parent.
-fn borrows_from(arena: &SubtreeArena<'_>, parent: RenderId, child: RenderId) -> bool {
+/// Whether `child` lends its parent data to `parent`'s layout frame: it has no harness seed and
+/// names `parent` as its parent. The caller has entered `child`, so it is not in flight up the
+/// stack.
+fn lends_to(arena: &SubtreeArena<'_>, parent: RenderId, child: RenderId) -> bool {
     #[cfg(any(test, feature = "testing"))]
     if arena.parent_data_seeds.contains_key(&child) {
         return false;
     }
-    !arena.is_in_flight(child) && arena.lease.is_child_of(child, parent)
+    arena.lease.is_child_of(child, parent)
 }
 
-impl<T: HoldsChildParentData> std::ops::Deref for LentChildren<'_, '_, T> {
+impl<T: WalkedChild> std::ops::Deref for LentChildren<'_, '_, T> {
     type Target = Vec<T>;
 
     fn deref(&self) -> &Vec<T> {
@@ -178,32 +213,28 @@ impl<T: HoldsChildParentData> std::ops::Deref for LentChildren<'_, '_, T> {
     }
 }
 
-impl<T: HoldsChildParentData> std::ops::DerefMut for LentChildren<'_, '_, T> {
+impl<T: WalkedChild> std::ops::DerefMut for LentChildren<'_, '_, T> {
     fn deref_mut(&mut self) -> &mut Vec<T> {
         &mut self.states
     }
 }
 
-impl<T: HoldsChildParentData> Drop for LentChildren<'_, '_, T> {
+impl<T: WalkedChild> Drop for LentChildren<'_, '_, T> {
     fn drop(&mut self) {
         for state in self.states.iter_mut() {
             let child = state.child();
-            // A child that did not borrow (in flight on an ancestor frame, seeded, or owned by
-            // another node) holds a copy or the parent's own default, which dies with the state.
-            if !borrows_from(self.arena, self.parent, child) {
+            // A child entered up the stack, seeded, or owned by another node holds a copy or the
+            // parent's own default, which dies with the state.
+            let Ok(mut entered) = self.arena.lease.enter(child) else {
+                continue;
+            };
+            if !lends_to(self.arena, self.parent, child) {
                 continue;
             }
             let Some(data) = state.parent_data_slot().take() else {
                 continue;
             };
-            let Some(NodePtr(ptr)) = self.arena.get(child) else {
-                continue;
-            };
-            // SAFETY: `child` is not in flight (guard above), and this frame's own Phase 2+3
-            // block, the only other holder of a `&mut` this frame derived, has ended, so this is
-            // the only live reference to the slot; the pointer is allocation-stable for the
-            // lease's lifetime (`NodePtr`).
-            let node: &mut RenderNode = unsafe { &mut *ptr };
+            let node = entered.node_mut();
             // A child listed twice was lent once; its second state never holds the original,
             // so it must not replace what the first one returned.
             if node.parent_data().is_none() {
@@ -214,69 +245,27 @@ impl<T: HoldsChildParentData> Drop for LentChildren<'_, '_, T> {
 }
 
 // ============================================================================
-// NodePtr — raw-pointer alias of a single &mut RenderNode borrow
-// ============================================================================
-
-/// Raw-pointer alias of a single `&mut RenderNode`, taken from the lease held by
-/// [`SubtreeArena`].
-///
-/// Each `NodePtr` comes from `TreeLease::node`, which derives it from the slab's one base pointer.
-/// It stays valid for the lifetime of the `SubtreeArena` because the lease holds the `&mut
-/// RenderTree` for the whole walk (`PipelineOwner` while `layout_dirty_root` runs), so nothing
-/// inserts, removes or reallocates a slot in that window.
-///
-/// The wrapper is `Copy` so the layout-child closure can capture the
-/// pointer by value without `Arc` ceremony. `NodePtr` carries no manual
-/// `Send`/`Sync` impl — a bare `*mut RenderNode` is `!Send + !Sync` by the
-/// language default, and that default is exactly right here: nothing
-/// about this type is safe to move or share across threads, so nothing
-/// should assert otherwise. The load-bearing invariant this type exists
-/// to uphold is aliasing discipline (one live `&mut` per slot at a time,
-/// enforced by [`LayoutCycleGuard`]), not thread identity — see the
-/// module-level docs.
-#[derive(Clone, Copy)]
-struct NodePtr(*mut RenderNode);
-
-// ============================================================================
 // SubtreeArena — the layout walk's leased view of the tree
 // ============================================================================
 
-/// The layout walk's view of the render tree: a lease that acquires nodes by [`RenderId`] as the
-/// walk reaches them, plus the sinks the walk records into.
+/// The layout walk's view of the render tree: a lease that enters nodes by [`RenderId`] as the
+/// walk reaches them, plus the sinks the walk records into. No `&mut RenderTree` appears inside
+/// the layout-child callback chain; the lease holds the one borrow for the whole walk.
 ///
-/// Replaces the prior `TreePtr` + recursive-tree-reborrow scheme that surfaced as latent Stacked /
-/// Tree Borrows UB, and then the scheme that borrowed every node of the dirty subtree before the
-/// first `perform_layout` (cost proportional to the subtree and the slab, not to the work). The
-/// walk reborrows one slot at a time per call level through the lease; no `&mut RenderTree` ever
-/// appears inside the layout-child callback chain.
+/// `'tree` is the source `&mut RenderTree` borrow, which the lease keeps; constructed via
+/// [`Self::from_tree`].
 ///
-/// # Lifetime
-///
-/// `'tree` ties `SubtreeArena` to the source `&mut RenderTree` borrow's lifetime through the
-/// lease. Constructed via [`Self::from_tree`]; the lease keeps the slab's slots position-stable
-/// for the lifetime of every aliased `NodePtr`.
-///
-/// # Thread affinity
-///
-/// `SubtreeArena` is `!Send + !Sync` (pinned by
-/// `static_assertions::assert_not_impl_any!` in `tests`, below) — confinement
-/// to its constructing thread is structural, not runtime-checked. There is
-/// no `ThreadId` field and no per-access check: [`NodePtr`] carries no
-/// manual `Send`/`Sync` impl (a bare `*mut RenderNode` is `!Send + !Sync` by
-/// default), and every other field transitively blocks the auto-traits too
-/// (`ParentData` dropped its `Sync` supertrait; the arena's own borrow
-/// lifetime ties it to a `&mut RenderTree`). Safe code simply cannot move an
-/// arena, or any `NodePtr` it hands out, to another thread — the compiler
-/// rejects it before any `unsafe` code would run.
+/// `SubtreeArena` is `!Send + !Sync` (pinned by `static_assertions::assert_not_impl_any!` in
+/// `tests`, below): the lease's slot pointer, the `RefCell` sinks and the `Cell` counters each
+/// block the auto-traits, so safe code cannot move an arena to another thread.
 pub(super) struct SubtreeArena<'tree> {
-    /// The walk's lease on the render tree: slots are acquired as the walk reaches them, with
-    /// the in-flight bit and parent link in the slot headers, which are never reachable through
-    /// a `NodePtr`. Reading a header never touches a node whose `&mut` may be live on the call
-    /// stack, which is the soundness invariant the former per-walk side map provided.
+    /// The walk's lease on the render tree: nodes are entered as the walk reaches them, with the
+    /// in-flight bit and the parent link in the slot headers, which the walk reads while the
+    /// node itself is entered up the stack.
     lease: TreeLease<'tree>,
     /// The node whose walk frame is innermost, the parent of whatever the next
-    /// [`LayoutCycleGuard::enter`] is asked to enter. `None` before the dirty root.
-    current: std::cell::Cell<Option<RenderId>>,
+    /// [`LayoutFrame::enter`] is asked to enter. `None` before the dirty root.
+    current: Cell<Option<RenderId>>,
     #[cfg(any(test, feature = "testing"))]
     parent_data_seeds: &'tree FxHashMap<RenderId, ParentDataSeed>,
     /// Child-build requests from `RenderSliverList`: `(sliver_id,
@@ -323,10 +312,11 @@ pub(super) struct SubtreeArena<'tree> {
     /// arena is `!Send + !Sync`, and this is one integer add per laid-out node
     /// rather than the vector push `laid_out` avoids for non-boundaries.
     /// Drained into `PipelineCounters::nodes_laid_out` after the walk.
-    laid_out_count: std::cell::Cell<u64>,
-    /// How many nodes this walk entered (a node served from its cache counts). Drained into
+    laid_out_count: Cell<u64>,
+    /// How many frames this walk entered (a node served from its cache counts; the short entries
+    /// a frame makes to seed or place its children do not). Drained into
     /// `PipelineCounters::nodes_acquired` after the walk.
-    acquired_count: std::cell::Cell<u64>,
+    acquired_count: Cell<u64>,
     /// Read-only view of the owner's layout-poison table for the whole
     /// walk.  Consulted at the top of each recursion level: a node
     /// poisoned under the *same* constraints it is now offered is
@@ -381,14 +371,14 @@ pub(super) struct SubtreeArena<'tree> {
     /// a node's context creation and its query moved inside that node's
     /// subtree, at any depth. A parent that must not act on a stand-in — a
     /// viewport about to publish scroll dimensions — asks before it commits.
-    degradation_events: std::cell::Cell<u64>,
+    degradation_events: Cell<u64>,
     _lifetime: PhantomData<&'tree mut ()>,
 }
 
 impl<'tree> SubtreeArena<'tree> {
     /// Constructs a `SubtreeArena` over a lease on the render tree, taken by
-    /// [`super::PipelineOwner::layout_dirty_root`], the only caller. No node is borrowed here:
-    /// the walk acquires each one when it reaches it.
+    /// [`super::PipelineOwner::layout_dirty_root`], the only caller. No node is entered here:
+    /// the walk enters each one when it reaches it.
     pub(super) fn new(
         lease: TreeLease<'tree>,
         layout_poison: &'tree LayoutPoison,
@@ -401,21 +391,21 @@ impl<'tree> SubtreeArena<'tree> {
     ) -> Self {
         Self {
             lease,
-            current: std::cell::Cell::new(None),
+            current: Cell::new(None),
             #[cfg(any(test, feature = "testing"))]
             parent_data_seeds,
             pending_child_requests: RefCell::new(Vec::new()),
             pending_retain_bands: RefCell::new(Vec::new()),
             laid_out: RefCell::new(Vec::new()),
-            laid_out_count: std::cell::Cell::new(0),
-            acquired_count: std::cell::Cell::new(0),
+            laid_out_count: Cell::new(0),
+            acquired_count: Cell::new(0),
             layout_poison,
             buffers,
             text,
             poison_retries: RefCell::new(FxHashSet::default()),
             layout_failures: RefCell::new(Vec::new()),
             layout_successes: RefCell::new(Vec::new()),
-            degradation_events: std::cell::Cell::new(0),
+            degradation_events: Cell::new(0),
             _lifetime: PhantomData,
         }
     }
@@ -448,36 +438,10 @@ impl<'tree> SubtreeArena<'tree> {
         false
     }
 
-    /// Returns the [`NodePtr`] for `id`, or `None` for a stale or vacant id.
-    ///
-    /// The caller holds no live `&mut` to `id`'s node: it is not in flight, or it is the caller's
-    /// own walk frame. No runtime thread check: confinement is structural (`SubtreeArena` is
-    /// `!Send + !Sync`, see the module and type docs).
-    #[inline]
-    fn get(&self, id: RenderId) -> Option<NodePtr> {
-        self.lease.node(id).map(NodePtr)
-    }
-
-    /// Returns `true` if `id`'s in-flight flag is set, meaning its
-    /// `&mut RenderNode` is live somewhere on the call stack above the
-    /// current frame.
-    ///
-    /// Used by the child-offset commit (Phase 4) to skip writing to a slot
-    /// whose Unique borrow tag is still live: a write to such a slot would
-    /// invalidate the ancestor's `&mut` provenance under Stacked / Tree
-    /// Borrows, producing UB even if the write is atomic.
-    ///
-    /// The check reads the slot header, a *side* structure that never aliases any `NodePtr` slot.
-    #[inline]
-    fn is_in_flight(&self, id: RenderId) -> bool {
-        self.lease.is_in_flight(id)
-    }
-
     /// Takes the child-build requests recorded by request-strategy slivers
     /// during this walk.  Returns `(sliver_id, logical_index)` pairs
     /// for the binding layer to service after the frame.  Called in
-    /// `layout_dirty_root` AFTER `drop(arena)` so no `NodePtr` alias is
-    /// live.
+    /// `layout_dirty_root` once the walk has returned.
     pub(super) fn take_pending_child_requests(&self) -> Vec<(flui_foundation::RenderId, usize)> {
         std::mem::take(&mut *self.pending_child_requests.borrow_mut())
     }
@@ -486,8 +450,7 @@ impl<'tree> SubtreeArena<'tree> {
     /// (`RenderSliverList`) during this walk.  Returns `(sliver_id,
     /// cache_first, cache_last)` triples — the `[first, last)` band each
     /// element-owned sliver retained this frame.  Called in `layout_dirty_root`
-    /// AFTER `take_pending_child_requests` and AFTER `drop(arena)` so no
-    /// `NodePtr` alias is live when the results are consumed.
+    /// after `take_pending_child_requests`, once the walk has returned.
     ///
     /// Symmetric to [`Self::take_pending_child_requests`].  The binding layer
     /// drives `SparseChildren::retain_band` from these entries.
@@ -518,12 +481,6 @@ impl<'tree> SubtreeArena<'tree> {
         self.laid_out_count.set(self.laid_out_count.get() + 1);
     }
 
-    /// Records a descendant layout failure swallowed at a layout-child
-    /// callback.  `parent` is the node whose `perform_layout` invoked the
-    /// callback; `failed` is the direct child whose own layout returned
-    /// `err`; `attempt` carries the constraints of the failed layout
-    /// (`None` for intrinsic-query failures).  Read by `layout_dirty_root`
-    /// after the walk to feed the poison counters.
     /// The walk's degradation count so far (see [`Self::degradation_events`]).
     fn degradation_count(&self) -> u64 {
         self.degradation_events.get()
@@ -535,6 +492,12 @@ impl<'tree> SubtreeArena<'tree> {
             .set(self.degradation_events.get().saturating_add(1));
     }
 
+    /// Records a descendant layout failure swallowed at a layout-child
+    /// callback.  `parent` is the node whose `perform_layout` invoked the
+    /// callback; `failed` is the direct child whose own layout returned
+    /// `err`; `attempt` carries the constraints of the failed layout
+    /// (`None` for intrinsic-query failures).  Read by `layout_dirty_root`
+    /// after the walk to feed the poison counters.
     fn note_layout_failure(
         &self,
         parent: RenderId,
@@ -595,32 +558,17 @@ impl<'tree> SubtreeArena<'tree> {
         std::mem::take(&mut *self.layout_successes.borrow_mut())
     }
 
-    // =========================================================================
-    // Safe public API — callers in owner/mod.rs carry zero `unsafe`
-    // =========================================================================
-
-    /// Lays out the box node identified by `id` under `constraints`,
-    /// recursively walking its subtree via the pre-acquired borrow pool.
-    ///
-    /// Wraps the private [`layout_subtree_borrowed`] unsafe walk.
-    /// The `unsafe` keyword is confined to this module; callers see only
-    /// a safe `Result`-returning method.
+    /// Lays out the box node identified by `id` under `constraints`, walking its subtree.
     pub(super) fn layout_child(
         &self,
         id: RenderId,
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
-        // SAFETY: `self` is alive for the entire duration of this call
-        // and all recursive calls it triggers.  Each recursive level
-        // reborrows a DISTINCT slab slot (parent ≠ child enforced by tree
-        // acyclicity + LayoutCycleGuard).  No concurrent reborrows of the
-        // same NodePtr exist.
-        unsafe { layout_subtree_borrowed(self, id, constraints) }
+        layout_subtree_borrowed(self, id, constraints)
     }
 
     /// Lays out the sliver node identified by `id` under `constraints`.
     ///
-    /// Wraps the private [`layout_sliver_subtree_borrowed`] unsafe walk.
     /// Called from the sliver-child callback inside `layout_subtree_borrowed_impl`
     /// (Box parent → Sliver child cross-protocol path) — not called directly
     /// from `owner/mod.rs`.
@@ -630,16 +578,12 @@ impl<'tree> SubtreeArena<'tree> {
         id: RenderId,
         constraints: SliverConstraints,
     ) -> crate::error::RenderResult<SliverGeometry> {
-        // SAFETY: identical contract as `layout_child` — distinct slot
-        // per recursion level, LayoutCycleGuard rejects re-entry, arena
-        // is alive for the full call chain.
-        unsafe { layout_sliver_subtree_borrowed(self, id, constraints) }
+        layout_sliver_subtree_borrowed(self, id, constraints)
     }
 
-    /// Queries the box intrinsic dimension of `id`, using the pre-acquired
-    /// borrow pool so no fresh `&mut RenderTree` is needed.
+    /// Queries the box intrinsic dimension of `id` through the walk's lease, so no fresh
+    /// `&mut RenderTree` is needed.
     ///
-    /// Wraps the private [`box_intrinsic_query_borrowed`] unsafe walk.
     /// Called from the box-intrinsic callback inside `layout_sliver_subtree_borrowed_impl`
     /// (Sliver parent querying Box child intrinsics) — not called directly from
     /// `owner/mod.rs`, so the dead_code lint fires through `dyn Fn` indirection.
@@ -650,16 +594,16 @@ impl<'tree> SubtreeArena<'tree> {
         dimension: crate::storage::IntrinsicDimension,
         extent: f64,
     ) -> crate::error::RenderResult<f64> {
-        // SAFETY: identical contract as `layout_child`.
-        unsafe { box_intrinsic_query_borrowed(self, id, dimension, extent) }
+        box_intrinsic_query_borrowed(self, id, dimension, extent)
     }
 
     /// Constructs a `SubtreeArena` from a `RenderTree` for the walk rooted at `id`, returning
     /// `Err(NodeNotFound)` if `id` is stale or vacant.
     ///
     /// The one-stop safe constructor used by [`super::PipelineOwner::layout_dirty_root`]. It takes
-    /// the tree's lease and borrows no node. `layout_poison` is the owner's poison table, borrowed
-    /// for exactly the walk's lifetime so each recursion level can skip poisoned nodes.
+    /// the tree's lease and leaves every node unentered. `layout_poison` is the owner's poison
+    /// table, borrowed for exactly the walk's lifetime so each recursion level can skip poisoned
+    /// nodes.
     pub(super) fn from_tree(
         render_tree: &'tree mut RenderTree,
         id: RenderId,
@@ -672,7 +616,7 @@ impl<'tree> SubtreeArena<'tree> {
         >,
     ) -> crate::error::RenderResult<Self> {
         let lease = render_tree.lease();
-        if lease.node(id).is_none() {
+        if matches!(lease.enter(id), Err(EnterRefusal::Missing)) {
             return Err(crate::error::RenderError::NodeNotFound(id));
         }
         Ok(Self::new(
@@ -687,86 +631,83 @@ impl<'tree> SubtreeArena<'tree> {
 }
 
 // ============================================================================
-// RAII layout-cycle guard
+// LayoutFrame — one level of the layout walk
 // ============================================================================
 
-/// RAII guard that sets `id`'s in-flight bit in its slot header on construction and clears it on
-/// drop, and keeps [`SubtreeArena::current`] on the innermost walk frame.
+/// One level of the layout walk: the entry of the node it lays out or measures, which holds the
+/// node's in-flight bit, and [`SubtreeArena::current`] kept on the innermost frame.
 ///
-/// Detects re-entry into a node's `layout_subtree_borrowed` call (the
-/// situation where a user `perform_layout` body calls `ctx.layout_child`
-/// for an ancestor id
-/// whose layout is already in flight up the stack).  On collision the
-/// constructor returns [`crate::error::RenderError::LayoutCycle`]
-/// instead of attempting a second [`NodePtr`] reborrow (which would be
-/// UB under aliasing rules — the same slot's Unique tag is live up the
-/// recursion stack). It also refuses an id that is not a child of the frame that asks for it
-/// ([`crate::error::RenderError::NodeNotFound`]), reading the slot headers only.
-///
-/// The guard's `Drop` impl unconditionally clears the in-flight flag,
-/// even on unwind (Rust's drop semantics guarantee this for any
-/// `Drop`-implementing value going out of scope).  Combined with the
-/// `catch_unwind` wrapper around `perform_layout_raw` in the non-leaf
-/// path, this means the in-flight state stays consistent across frames:
-/// a panicking widget's id is cleared, the next frame's walk does not
-/// see it as in-flight.
-struct LayoutCycleGuard<'arena, 'tree> {
+/// The frame borrows its node through [`Self::node`] and [`Self::node_mut`] only, so the borrow
+/// checker keeps a read of the node apart from the exclusive borrow its `perform_layout` runs
+/// under. Dropping the frame, on unwind too, restores `current` and clears the bit, so a
+/// panicking widget leaves nothing in flight for the next frame.
+struct LayoutFrame<'arena, 'tree> {
     arena: &'arena SubtreeArena<'tree>,
-    id: RenderId,
+    entry: EnteredNode<'arena, 'tree>,
     /// The frame this one was entered from, restored on drop.
     parent: Option<RenderId>,
 }
 
-impl<'arena, 'tree> LayoutCycleGuard<'arena, 'tree> {
-    /// Registers `id` as currently-laying-out by setting its in-flight bit.
+impl<'arena, 'tree> LayoutFrame<'arena, 'tree> {
+    /// Enters `id` as the innermost frame.
     ///
-    /// - `Err(RenderError::LayoutCycle(id))` if the bit was already set (id already in flight at
-    ///   a parent call level) — caller must propagate immediately. Checked first, so a cyclic
-    ///   `children()` edge reports a cycle, not a missing node.
-    /// - `Err(RenderError::NodeNotFound(id))` if a parent frame exists and `id` is not its
-    ///   child. The dirty root has no parent frame and is validated by the arena's constructor.
-    ///
-    /// A stale or vacant id claims nothing; the `get` that follows reports `NodeNotFound`.
+    /// - `Err(RenderError::LayoutCycle(id))` if `id` is already entered up the stack (a
+    ///   `perform_layout` asked for an ancestor). Checked first, so a cyclic `children()` edge
+    ///   reports a cycle, not a missing node.
+    /// - `Err(RenderError::NodeNotFound(id))` if `id` is stale or vacant, or a parent frame
+    ///   exists and `id` is not its child (read from the slot headers). The dirty root has no
+    ///   parent frame and is validated by the arena's constructor.
     fn enter(arena: &'arena SubtreeArena<'tree>, id: RenderId) -> crate::error::RenderResult<Self> {
-        // No thread check here (or anywhere in this file): confinement is
-        // structural, enforced by `SubtreeArena: !Send + !Sync` at the type
-        // level, not by a runtime assert callers could bypass.
-        if arena.lease.is_in_flight(id) {
-            // Debug-level: the layout-child callback in
-            // `layout_subtree_borrowed` already logs the propagated
-            // Err at tracing::error when it collapses descendant Err
-            // to Size::ZERO.  Logging here at error too would produce
-            // 2 log lines per cycle event.  The API-boundary error log is the
-            // user-facing one; this debug-level log retains the
-            // collision-point diagnostic for tracing.
-            tracing::debug!(
-                ?id,
-                "layout_subtree_borrowed: layout cycle detected — id is \
-                 already in flight at a parent call level; returning \
-                 RenderError::LayoutCycle(id)",
-            );
-            return Err(crate::error::RenderError::layout_cycle(id));
-        }
+        let entry = match arena.lease.enter(id) {
+            Ok(entry) => entry,
+            Err(EnterRefusal::InFlight) => {
+                // Debug-level: the layout-child callback logs the propagated error at
+                // `tracing::error` when it collapses it to a stand-in, which is the user-facing
+                // line; this one keeps the collision point for tracing.
+                tracing::debug!(
+                    ?id,
+                    "layout_subtree_borrowed: layout cycle detected — id is \
+                     already in flight at a parent call level; returning \
+                     RenderError::LayoutCycle(id)",
+                );
+                return Err(crate::error::RenderError::layout_cycle(id));
+            }
+            Err(EnterRefusal::Missing) => return Err(crate::error::RenderError::NodeNotFound(id)),
+        };
         let parent = arena.current.get();
         if let Some(parent) = parent
             && !arena.lease.is_child_of(id, parent)
         {
             return Err(crate::error::RenderError::NodeNotFound(id));
         }
-        if arena.lease.try_enter(id) {
-            arena.acquired_count.set(arena.acquired_count.get() + 1);
-        }
+        arena.acquired_count.set(arena.acquired_count.get() + 1);
         arena.current.set(Some(id));
-        Ok(Self { arena, id, parent })
+        Ok(Self {
+            arena,
+            entry,
+            parent,
+        })
+    }
+
+    /// The node this frame entered.
+    #[inline]
+    fn id(&self) -> RenderId {
+        self.entry.id()
+    }
+
+    #[inline]
+    fn node(&self) -> &RenderNode {
+        self.entry.node()
+    }
+
+    #[inline]
+    fn node_mut(&mut self) -> &mut RenderNode {
+        self.entry.node_mut()
     }
 }
 
-impl Drop for LayoutCycleGuard<'_, '_> {
+impl Drop for LayoutFrame<'_, '_> {
     fn drop(&mut self) {
-        // Unconditional clear — runs on every exit path including unwind.
-        // The in-flight flag stays consistent for the next frame.
-        // For a stale id, `enter` claimed nothing and the leave is a no-op.
-        self.arena.lease.leave(self.id);
         self.arena.current.set(self.parent);
     }
 }
@@ -775,15 +716,7 @@ impl Drop for LayoutCycleGuard<'_, '_> {
 // QueryWalk — the dry intrinsic/layout/baseline query walks' view of the tree
 // ============================================================================
 
-/// Why [`QueryWalk::enter`] handed out no node.
-pub(super) enum QueryRefusal {
-    /// The id is stale, vacant or never existed.
-    Missing,
-    /// The node is already entered up the stack: only a cyclic child link produces this.
-    InFlight,
-}
-
-/// The memoizing query walks' lease on the render tree. Like [`SubtreeArena`] it acquires a node
+/// The memoizing query walks' lease on the render tree. Like [`SubtreeArena`] it enters a node
 /// when the walk reaches it, so a query costs the nodes it visits and not the subtree it sits on.
 pub(super) struct QueryWalk<'tree> {
     lease: TreeLease<'tree>,
@@ -797,60 +730,16 @@ impl<'tree> QueryWalk<'tree> {
     }
 
     /// Enters `id`: sets its in-flight bit and lends its node until the entry drops.
-    pub(super) fn enter(&self, id: RenderId) -> Result<QueryEntry<'_, 'tree>, QueryRefusal> {
-        // Claim the slot first: `node` projects a `&mut` to the payload, which is only sound once no
-        // other entry can hold one (a cyclic child link would re-enter an ancestor's node).
-        if !self.lease.try_enter(id) {
-            return Err(if self.lease.is_in_flight(id) {
-                QueryRefusal::InFlight
-            } else {
-                QueryRefusal::Missing
-            });
-        }
-        let Some(node) = self.lease.node(id) else {
-            self.lease.leave(id);
-            return Err(QueryRefusal::Missing);
-        };
-        Ok(QueryEntry {
-            walk: self,
-            id,
-            node,
-        })
+    #[inline]
+    pub(super) fn enter(&self, id: RenderId) -> Result<EnteredNode<'_, 'tree>, EnterRefusal> {
+        self.lease.enter(id)
     }
 
     /// A copy of `child`'s committed parent data, or `None` when it has none or is entered up the
     /// stack (its node is then borrowed, and the query treats it as absent).
     pub(super) fn child_parent_data(&self, child: RenderId) -> Option<Box<dyn ParentData>> {
-        if self.lease.is_in_flight(child) {
-            return None;
-        }
-        let node = self.lease.node(child)?;
-        // SAFETY: the slot is not in flight, so no `&mut` to it is live (lease invariant 3), and
-        // the walk is single-threaded; the shared reference ends with this expression.
-        unsafe { &*node }.parent_data().map(dyn_clone::clone_box)
-    }
-}
-
-/// One node entered by a query walk. Dropping it clears the in-flight bit, on unwind too.
-pub(super) struct QueryEntry<'walk, 'tree> {
-    walk: &'walk QueryWalk<'tree>,
-    id: RenderId,
-    node: *mut RenderNode,
-}
-
-impl QueryEntry<'_, '_> {
-    /// The entered node. The reference lasts as long as this borrow of the entry.
-    pub(super) fn node(&mut self) -> &mut RenderNode {
-        // SAFETY: `QueryWalk::enter` set this slot's in-flight bit and refuses a second entry
-        // until this entry drops, so this is the only `&mut` to the node (lease invariant 3); the
-        // pointer came from the lease whose tree borrow outlives `'tree`.
-        unsafe { &mut *self.node }
-    }
-}
-
-impl Drop for QueryEntry<'_, '_> {
-    fn drop(&mut self) {
-        self.walk.lease.leave(self.id);
+        let entered = self.lease.enter(child).ok()?;
+        entered.node().parent_data().map(dyn_clone::clone_box)
     }
 }
 
@@ -891,115 +780,117 @@ pub(super) fn ensure_stack<R>(f: impl FnOnce() -> R) -> R {
 }
 
 // ============================================================================
-// Testing helpers
+// Shared pieces of the walks
 // ============================================================================
 
-/// Builds the per-child parent-data slice for the current node's children,
-/// reading from the [`SubtreeArena`] (production) with harness seed overlay
-/// (test/testing feature only).
+/// Builds the per-child parent-data slice for an intrinsic query of the current node's
+/// children: a harness seed (test/testing feature only) overlays the copy of each child's
+/// committed parent data.
 ///
-/// The returned vec of owned `Box<dyn ParentData>` can coexist with the
-/// mutable child-query closure that follows because the slice is fully
-/// constructed from read-only accesses before any recursion descends.
-///
-/// # Safety
-///
-/// Each shared `&RenderNode` this derives must not alias a live
-/// `&mut RenderNode` for the same slot. `links().children()` lists are NOT
-/// statically acyclic — a cyclic edge whose child is also an in-flight ancestor
-/// is a reachable input (`LayoutCycleGuard`, `tests/layout_cycle_guard.rs`) — so
-/// this function gates every deref on [`SubtreeArena::is_in_flight`] and yields
-/// `None` for any in-flight slot, exactly like the canonical position/offset
-/// sites in this file (the `set_offset` loop). The remaining preconditions:
-/// - No other arena walk may run concurrently; this is structural (the
-///   arena is `!Send + !Sync`, confined to the one thread that constructed
-///   it), not a runtime check `arena.get()` performs.
-/// - The arena pointer is allocation-stable for the arena's lifetime
-///   (pre-acquired slab; slots are not moved during the borrow window).
-/// - This must be called BEFORE the child-recursion closure is created, so no
-///   *non-cyclic* child slot has been entered yet either.
-unsafe fn build_intrinsic_child_parent_data(
+/// The returned owned `Box<dyn ParentData>` values coexist with the child-query closure that
+/// follows, which enters the children again. A child entered up the stack (a cyclic
+/// `children()` edge) gets `None`: the cycle already degrades it to a `LayoutCycle` stand-in,
+/// and no parent data matches that geometry.
+fn build_intrinsic_child_parent_data(
     arena: &SubtreeArena<'_>,
     child_ids: &[RenderId],
-    #[cfg(any(test, feature = "testing"))] seeds: &FxHashMap<RenderId, ParentDataSeed>,
-    #[cfg(not(any(test, feature = "testing")))] _seeds: &(),
 ) -> Vec<Option<Box<dyn ParentData>>> {
     child_ids
         .iter()
-        .map(|child_id| {
-            // Harness seeds overlay production parent data so headless tests
-            // can provide widget-level configuration without an element tree.
-            // (Seed reads never deref the arena, so they need no in-flight gate.)
-            #[cfg(any(test, feature = "testing"))]
-            if let Some(seed) = seeds.get(child_id) {
-                return Some(seed.to_box());
+        .map(|&child_id| {
+            let mut seed = None;
+            if arena.seed_child_parent_data(child_id, &mut seed) {
+                return seed;
             }
-            // A cyclic children() edge can name a slot whose `&mut` is live on
-            // an ancestor frame; a shared read of it would be aliasing UB
-            // (Stacked/Tree Borrows). Skip it — its parent data is unobservable
-            // this pass, which is correct: the cycle already degrades that child
-            // to a LayoutCycle / Size::ZERO result, so a `None` (no flex/parent
-            // data) entry matches the degraded geometry.
-            if arena.is_in_flight(*child_id) {
-                return None;
-            }
-            // Production: derive a shared borrow to read `parent_data` from
-            // the child node's raw pointer.
-            arena.get(*child_id).and_then(|NodePtr(ptr)| {
-                // SAFETY: `child_id` is NOT in-flight (guard above), so no
-                // ancestor frame holds a live `&mut` to this slot. The arena
-                // pointer is allocation-stable (pre-acquired slab; slots are not
-                // moved during the borrow window). The derived `&RenderNode` is
-                // the only live borrow of the slot and feeds a read-only
-                // `parent_data()` access.
-                let child_node: &RenderNode = unsafe { &*ptr };
-                child_node.parent_data().map(dyn_clone::clone_box)
-            })
+            let entered = arena.lease.enter(child_id).ok()?;
+            entered.node().parent_data().map(dyn_clone::clone_box)
         })
         .collect()
 }
 
+/// What a parent frame's layout callbacks do with a child walk's result: the callbacks must hand
+/// `perform_layout` a value, so a child's failure becomes a stand-in here, recorded against the
+/// child's retry budget (layout poison) and remembered so the parent stays `NEEDS_LAYOUT`.
+#[derive(Clone, Copy)]
+struct ChildOutcomes<'a, 'tree> {
+    arena: &'a SubtreeArena<'tree>,
+    /// The node whose `perform_layout` invoked the callback.
+    parent: RenderId,
+    /// Set on any descendant failure this frame contained.
+    descendant_failed: &'a Cell<bool>,
+}
+
+impl ChildOutcomes<'_, '_> {
+    /// Passes a success on (and notes it for the poison table), returns a recoverable error
+    /// unchanged, and swaps any other failure for `stand_in`, logging `report`. `attempt` is the
+    /// constraints of the failed layout, `None` for an intrinsic query.
+    fn settle<V>(
+        self,
+        child: RenderId,
+        attempt: Option<ErasedConstraints>,
+        outcome: crate::error::RenderResult<V>,
+        stand_in: V,
+        report: &'static str,
+    ) -> crate::error::RenderResult<V> {
+        match outcome {
+            Ok(value) => {
+                self.arena.note_layout_success(child);
+                Ok(value)
+            }
+            Err(err) if err.is_recoverable_layout_error() => Err(err),
+            Err(err) => {
+                self.arena
+                    .note_layout_failure(self.parent, child, &err, attempt);
+                self.descendant_failed.set(true);
+                tracing::error!(
+                    parent = self.parent.as_u64(),
+                    child_id = ?child,
+                    ?err,
+                    "{report}",
+                );
+                Ok(stand_in)
+            }
+        }
+    }
+}
+
+/// Logs a panic `perform_layout` raised and turns it into [`crate::error::RenderError::Poisoned`]
+/// for the node. The report runs tracing subscribers, so it is contained too.
+fn poisoned_by_panic(
+    debug_name: &'static str,
+    payload: Box<dyn std::any::Any + Send>,
+    report: &'static str,
+) -> crate::error::RenderError {
+    let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a panic report runs tracing subscribers, contained"
+    )]
+    if let Err(reporting_payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tracing::error!(render_object = debug_name, panic_msg = msg, "{report}");
+    })) {
+        // Reporting is secondary; do not retire its opaque failure or report it again.
+        flui_foundation::panic::discard_payload(reporting_payload);
+    }
+    flui_foundation::panic::discard_payload(payload);
+    crate::error::RenderError::poisoned(debug_name, crate::error::PoisonPhase::Layout)
+}
+
 // ============================================================================
-// Unsafe walk 1: Box layout
+// Walk 1: Box layout
 // ============================================================================
 
 /// Recursive helper for `PipelineOwner::layout_dirty_root`.
 ///
-/// Reborrows one [`NodePtr`] from the pre-acquired [`SubtreeArena`]
-/// at each call level, drives `perform_layout_raw` against a typed
-/// `RawBoxLayoutContext`, and recurses via a closure that captures
-/// `&SubtreeArena` — no `Send`/`Sync` needed; the closure runs to
-/// completion on the constructing thread, synchronously, and never
-/// crosses a thread boundary. Distinct call levels reborrow distinct
-/// slab slots (parent ≠ child) — no aliasing.
-///
-/// # Safety
-///
-/// Caller must guarantee:
-///
-/// 1. `arena` is alive for the entire duration of this call AND
-///    every recursive call this helper triggers via the callback.  The
-///    [`super::PipelineOwner::layout_dirty_root`] flow constructs
-///    `SubtreeArena` on the caller's stack and only invokes this
-///    helper while the binding is live.
-/// 2. At any moment, no two concurrent reborrows of the SAME
-///    [`NodePtr`] exist.  Sequential call levels (parent → child →
-///    grandchild) reborrow DIFFERENT slots — preserved by the
-///    `LayoutCycleGuard` (returns
-///    [`crate::error::RenderError::LayoutCycle`] on re-entry into
-///    a slot already in flight up the stack).
-unsafe fn layout_subtree_borrowed(
+/// Enters `id` as a [`LayoutFrame`], drives `perform_layout_raw` against a typed
+/// `RawBoxLayoutContext`, and recurses through callbacks that capture `&SubtreeArena`. The
+/// callbacks run to completion on this thread, synchronously, inside this frame.
+fn layout_subtree_borrowed(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
-    ensure_stack(|| {
-        // SAFETY: identical contract, forwarded verbatim from this
-        // wrapper's own `# Safety` section; the stack-growth wrapper
-        // only relocates which memory the frames live in, never their
-        // borrow structure, lifetimes, or drop order.
-        unsafe { layout_subtree_borrowed_impl(arena, id, constraints) }
-    })
+    ensure_stack(|| layout_subtree_borrowed_impl(arena, id, constraints))
 }
 
 /// Why a node with `NEEDS_LAYOUT` clear did not serve its cached geometry.
@@ -1040,30 +931,14 @@ const fn classify_cache_miss(has_cached_constraints: bool, constraints_match: bo
 
 /// Body of [`layout_subtree_borrowed`]; split out so every recursion
 /// level enters through the [`ensure_stack`] probe.
-///
-/// # Safety
-///
-/// Same contract as [`layout_subtree_borrowed`].
-unsafe fn layout_subtree_borrowed_impl(
+fn layout_subtree_borrowed_impl(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
 ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
-    // Cycle guard: set `id`'s in-flight flag FIRST — before any
-    // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
-    // guard's `enter` returns Err(LayoutCycle) here, so the aliasing
-    // shared-read that would otherwise fire on a cyclic child never
-    // happens.  Drop on every exit path (RAII) — flag stays consistent
-    // across panics via the catch_unwind in the non-leaf path below +
-    // Rust's drop-on-unwind discipline.
-    let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
-
-    // Resolve id → NodePtr. Confinement to the constructing thread is
-    // structural (`SubtreeArena: !Send + !Sync`) — there is no cross-thread
-    // case for `get` to reject at runtime.
-    let Some(NodePtr(node_ptr)) = arena.get(id) else {
-        return Err(crate::error::RenderError::NodeNotFound(id));
-    };
+    // Entered first, before any read of the node: a cyclic edge is refused here as a
+    // `LayoutCycle`. The frame drops on every exit, unwind included.
+    let mut frame = LayoutFrame::enter(arena, id)?;
 
     // Layout-poison skip, keyed on what the poison was earned from:
     // - layout-earned poison under the SAME constraints as the failed
@@ -1086,43 +961,22 @@ unsafe fn layout_subtree_borrowed_impl(
     // The skip returns `Ok`, NOT the recorded error: the poison decision
     // was already made and logged when the budget tripped, and the parent
     // still needs a geometry.
-    //
-    // SAFETY: the cycle guard is held, so no `&mut` of this slot is live
-    // on an ancestor frame (re-entry would have been rejected at
-    // `LayoutCycleGuard::enter`).  The shared reborrow is the only live
-    // borrow of the slot — the same invariant Phase 1's `parent_shared`
-    // relies on below.
     if arena.layout_poison.is_poisoned(id) {
-        let stand_in = || {
-            // Serving a stand-in is a degradation: the caller acts on
-            // geometry this pass did not compute.
-            arena.note_degradation();
-            // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
-            // an ancestor frame; this shared reborrow is the only live borrow.
-            let node: &RenderNode = unsafe { &*node_ptr };
-            node.geometry_box()
-                .unwrap_or(flui_foundation::geometry::Size::ZERO)
-        };
         if arena
             .layout_poison
             .serves_stand_in(id, ErasedConstraints::from(constraints))
         {
-            return Ok(stand_in());
+            // Serving a stand-in is a degradation: the caller acts on
+            // geometry this pass did not compute.
+            arena.note_degradation();
+            return Ok(frame
+                .node()
+                .geometry_box()
+                .unwrap_or(flui_foundation::geometry::Size::ZERO));
         }
         arena.poison_retries.borrow_mut().insert(id);
     }
 
-    // -----------------------------------------------------------------------
-    // Phase 1 — shared reads of the parent slot (no &mut live).
-    //
-    // SAFETY: We hold the `LayoutCycleGuard` for `id`, which means any
-    // recursive call that would re-enter this slot via `layout_child` is
-    // rejected by `LayoutCycleGuard::enter` BEFORE it can take any borrow
-    // of this slot.  The shared reborrow here is therefore the ONLY live
-    // borrow of `id`'s slot at this point.  The scope is intentionally
-    // narrow: `parent_shared` and everything derived from it must not be
-    // used after the `&mut *node_ptr` reborrow opens Phase 2.
-    // -----------------------------------------------------------------------
     let (
         child_ids,
         needs_layout_flag,
@@ -1131,22 +985,15 @@ unsafe fn layout_subtree_borrowed_impl(
         has_cached_constraints,
         geometry_degraded,
         node_protocol,
-        is_leaf,
         is_repaint_boundary,
     ) = {
-        // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
-        // an ancestor frame; this shared reborrow is the only live borrow, and
-        // nothing derived from it outlives the block.
-        let parent_shared: &RenderNode = unsafe { &*node_ptr };
-        let node_protocol = parent_shared.protocol_name();
-        let entry: &RenderEntry<BoxProtocol> = match parent_shared.as_box() {
-            Some(e) => e,
-            None => {
-                return Err(crate::error::RenderError::ProtocolMismatch {
-                    node_protocol,
-                    constraints_protocol: "Box",
-                });
-            }
+        let node = frame.node();
+        let node_protocol = node.protocol_name();
+        let Some(entry) = node.as_box() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol,
+                constraints_protocol: "Box",
+            });
         };
         let children = entry.links().children();
         let mut child_ids = arena.buffers.child_ids.checkout(children.len());
@@ -1174,9 +1021,8 @@ unsafe fn layout_subtree_borrowed_impl(
         if cached_geometry.is_none() {
             entry.state().flags().mark_laid_out_since_paint();
         }
-        let is_leaf = child_ids.is_empty();
-        // Snapshotted here, in the block that already holds the shared borrow,
-        // so the record below costs a branch rather than another node read.
+        // Read here, beside the other reads, so the record below costs a
+        // branch rather than another node read.
         let is_repaint_boundary = entry.state().is_repaint_boundary();
         (
             child_ids,
@@ -1186,11 +1032,10 @@ unsafe fn layout_subtree_borrowed_impl(
             has_cached_constraints,
             geometry_degraded,
             node_protocol,
-            is_leaf,
             is_repaint_boundary,
         )
-        // `parent_shared` drops here — the shared borrow of `id`'s slot ends.
     };
+    let is_leaf = child_ids.is_empty();
 
     // Short-circuit clean children: if NEEDS_LAYOUT is not set AND
     // constraints match the cached value, skip layout entirely (early
@@ -1238,24 +1083,10 @@ unsafe fn layout_subtree_borrowed_impl(
     if is_repaint_boundary {
         arena.laid_out.borrow_mut().push(id);
     }
-    // A fresh generation for this pass. Children this node lays out are
-    // stamped with it at commit; children it skips keep the previous value and
-    // fall out of `was_placed_by`, which is what paint and hit-test
-    // read to leave them alone.
 
-    // -----------------------------------------------------------------------
-    // Phase 1b — seed child states while NO &mut to the parent slot is live.
-    //
-    // Child-seeding reads MUST complete before the parent's &mut (Phase 2)
-    // opens.  On a cyclic edge where a child id resolves to the same slot as
-    // the parent, taking `&*child_ptr.0` while `&mut *node_ptr` is live would
-    // alias the parent's Unique tag → UB under both Stacked Borrows and Tree
-    // Borrows.  The `LayoutCycleGuard` guarantees re-entry into THIS frame's
-    // `id` will fail at `LayoutCycleGuard::enter` (above), but a child whose
-    // id happens to be `id` bypasses the guard's call-stack check if we read
-    // the child AFTER opening the parent's &mut.  Seeding here, while only
-    // the `LayoutCycleGuard` (not any &mut) is live, removes the race.
-    // -----------------------------------------------------------------------
+    // Seeded before `perform_layout` runs: each child state starts from the child's persisted
+    // state. Box parents can host both Box and Sliver children, so the reads go through
+    // `RenderNode`'s protocol-generic accessors.
     let mut child_states = LentChildren::new(
         arena,
         id,
@@ -1266,539 +1097,263 @@ unsafe fn layout_subtree_borrowed_impl(
             .iter()
             .map(|&cid| crate::protocol::ErasedChildState::new(cid)),
     );
-
-    if !is_leaf {
-        // Seed each ChildState from the child's persisted RenderState.
-        // A parent that does not re-position a child during this walk must
-        // preserve the child's prior offset (the offset persists until a
-        // parent positions the child again).
-        // Box parents can host both Box and Sliver children, so seed through
-        // RenderNode's protocol-generic accessors.
-        //
-        // SOUNDNESS CONSTRAINT — in-flight skip:
-        // If we are called as a recursive child (e.g. P1 → P2 and P2 is now
-        // running), an ancestor's Phase 2+3 block may hold a live `&mut` over
-        // a child id in our list (e.g. P2's child list contains P1, whose
-        // `&mut` is live on P1's frame).  Reading that child's memory while
-        // P1's Unique tag is live is a foreign read that can break P1's
-        // provenance under Stacked / Tree Borrows.  We detect this via
-        // `is_in_flight` (reads the slot header) and skip the seed for
-        // such children; their `ChildState` retains default values (zero
-        // offset, None parent_data), which is safe since any positioning
-        // decision for an in-flight ancestor that the callback yielded
-        // `Size::ZERO` for would be discarded anyway.
-        //
-        // SAFETY: for children NOT in-flight, `id`'s slot carries no borrow
-        // (Phase 1's `parent_shared` has dropped), and each `child_ptr`
-        // addresses a DISTINCT slot from `id`'s slot.  No live &mut overlaps
-        // the shared reads below.
-        for cs in child_states.iter_mut() {
-            // Skip children whose &mut is live on an ancestor frame.
-            if arena.is_in_flight(cs.id) {
-                continue;
-            }
-            let seeded = arena.seed_child_parent_data(cs.id, &mut cs.parent_data);
-            if let Some(child_ptr) = arena.get(cs.id) {
-                // SAFETY: child `cs.id` is NOT in-flight (guard above), so it is not `id`, which
-                // the cycle guard marked in flight, and no ancestor frame holds its `&mut`;
-                // `parent_shared` has dropped. This is the only live reference to the slot.
-                let child_node: &mut RenderNode = unsafe { &mut *child_ptr.0 };
-                cs.offset = child_node.offset();
-                cs.needs_layout = child_node.needs_layout();
-                cs.geometry_degraded = child_node.geometry_degraded();
-                if let Some(sliver_entry) = child_node.as_sliver() {
-                    cs.sliver_constraints = sliver_entry.state().constraints().copied();
-                    cs.sliver_geometry = sliver_entry.state().geometry();
-                }
-                // The child's parent data moves into its state for this layout and back when
-                // `child_states` drops (a copy when another node owns the child); a harness seed
-                // stands in for it unlent.
-                if !seeded {
-                    LentChildren::lend(arena, id, cs, child_node);
-                }
-            }
+    child_states.seed(|cs, child| {
+        cs.offset = child.offset();
+        cs.needs_layout = child.needs_layout();
+        cs.geometry_degraded = child.geometry_degraded();
+        if let Some(sliver_entry) = child.as_sliver() {
+            cs.sliver_constraints = sliver_entry.state().constraints().copied();
+            cs.sliver_geometry = sliver_entry.state().geometry();
         }
-        // All shared child reads complete; no borrow of any slot is live.
-    }
-
-    // -----------------------------------------------------------------------
-    // Phase 2 + 3 — exclusive reborrow of the parent slot for mutable work,
-    // scoped so it ends before Phase 4.
-    //
-    // SAFETY: Phase 1 (`parent_shared`) and Phase 1b (child shared reads) have
-    // both ended.  No other live borrow of `id`'s slot or of any child slot
-    // exists.  The `LayoutCycleGuard` prevents a concurrent recursive entry
-    // into `id`'s slot via `layout_child`, so the `&mut` below is the ONLY
-    // live borrow of `id`'s slot.  Distinct slot reborrows (parent vs children,
-    // opened by the recursive callbacks) have independent Unique tags under
-    // Stacked / Tree Borrows — no aliasing.
-    //
-    // The closing brace of this block ends both `node_ref` and `entry`,
-    // releasing the parent slot's Unique tag before Phase 4 opens shared
-    // reads on child slots (which on a cyclic tree may alias `node_ptr`).
-    // -----------------------------------------------------------------------
-    let geometry =
-        {
-            // SAFETY: what validates this unique reborrow is that Phase 1's
-            // `parent_shared` scope has closed and Phase 1b's reads have ended, so
-            // no shared borrow of this slot is live here — see the block comment
-            // above, which states the ordering in full. The cycle guard alone is
-            // NOT sufficient: it establishes only that no ANCESTOR frame holds a
-            // `&mut`. The reborrow is scoped to the block below, which ends it
-            // before Phase 4 opens shared reads that may alias `node_ptr`.
-            //
-            // Nothing derived from Phase 1 may be carried past this line.
-            let node_ref: &mut RenderNode = unsafe { &mut *node_ptr };
-
-            let entry: &mut RenderEntry<BoxProtocol> = match node_ref.as_box_mut() {
-                Some(e) => e,
-                None => {
-                    // Protocol name already snapshotted in Phase 1.
-                    return Err(crate::error::RenderError::ProtocolMismatch {
-                        node_protocol,
-                        constraints_protocol: "Box",
-                    });
-                }
-            };
-
-            // Leaf path: delegate to layout_leaf_only.
-            if is_leaf {
-                return entry.layout_leaf_only(
-                    constraints,
-                    arena.text.source(id),
-                    arena.lease.parent(id).is_some(),
-                );
-            }
-
-            // Descendant-error tracking flag.  Closure flips to `true` on any
-            // descendant `RenderError`; stage 6 below skips `clear_needs_layout`
-            // when set so the parent stays dirty for next-frame retry. The
-            // callbacks borrow it: they run on this thread, inside this frame.
-            let descendant_error_flag = std::cell::Cell::new(false);
-            let descendant_error_for_cb = &descendant_error_flag;
-
-            // Capture `&SubtreeArena` for the recursive callback. Neither the
-            // capture nor the closure it is captured into needs `Send`/`Sync`:
-            // `LayoutChildCallback` carries no such bound (dropped along with
-            // `ErasedBoxLayoutContext`'s own `Send + Sync` supertrait), and
-            // `SubtreeArena` is `!Send + !Sync` regardless (pinned by
-            // `assert_not_impl_any!` in this module's tests) — this closure
-            // simply never crosses a thread boundary; it runs to completion on
-            // the same thread that called `layout_dirty_root`, synchronously,
-            // before this stack frame returns.
-            let arena_for_cb: &SubtreeArena<'_> = arena;
-            let descendant_error_for_sliver_cb = &descendant_error_flag;
-            let cb_owned = move |child_id: RenderId,
-                             child_constraints: BoxConstraints|
-              -> crate::error::RenderResult<flui_foundation::geometry::Size> {
-            // SAFETY: `arena_for_cb` is alive (held by the outer
-            // layout_dirty_root stack frame for the entire walk).  The
-            // recursive reborrow happens on `child_id`'s slot — distinct
-            // from the current `id`'s slot (LayoutCycleGuard rejects
-            // re-entry into `id`).  No two concurrent reborrows of the
-            // same NodePtr.
-            Ok(match unsafe { layout_subtree_borrowed(arena_for_cb, child_id, child_constraints) } {
-                Ok(size) => {
-                    arena_for_cb.note_layout_success(child_id);
-                    size
-                }
-                Err(err) => {
-                    if err.is_recoverable_layout_error() {
-                        return Err(err);
-                    }
-                    arena_for_cb.note_layout_failure(
-                        id,
-                        child_id,
-                        &err,
-                        Some(child_constraints.into()),
-                    );
-                    descendant_error_for_cb.set(true);
-                    tracing::error!(
-                        parent = id.as_u64(),
-                        ?child_id,
-                        ?err,
-                        "layout_dirty_root: descendant layout failed; \
-                         returning Size::ZERO to caller's perform_layout. \
-                         The failure is recorded against the child's retry \
-                         budget (layout poison).",
-                    );
-                    flui_foundation::geometry::Size::ZERO
-                }
-            })
-        };
-            let cb_ref: LayoutChildCallback<'_> = &cb_owned;
-
-            let baseline_cb_owned =
-                move |child_id: RenderId, baseline: crate::traits::TextBaseline| {
-                    // A cyclic `children()` edge can name this frame's own slot or an
-                    // in-flight ancestor's, and the `&mut *node_ptr` opened below is live
-                    // for the whole enclosing block — so a shared reborrow here would be
-                    // a foreign read against a live Unique tag. Same gate the four other
-                    // child-slot derefs in this file use; this one was missing it.
-                    // A forwarding box has no baseline of its own and cannot reach its
-                    // child from `actual_baseline_raw` (that query takes no context),
-                    // so it flags the forward and the walk continues here.
-                    // A valid chain cannot visit more nodes than this arena contains.
-                    // This bounds malformed cycles without truncating deep valid trees.
-                    let mut node_id = child_id;
-                    let mut offset_y = 0.0;
-                    for hop in 0..arena_for_cb.lease.capacity() {
-                        if arena_for_cb.is_in_flight(node_id) {
-                            return Ok(None);
-                        }
-                        let next = arena_for_cb.get(node_id).and_then(|node_ptr| {
-                            // SAFETY: `node_id` is NOT in-flight (guard above), so no
-                            // `&mut` to its slot is live; this shared reborrow is
-                            // scoped to the closure body.
-                            let node: &RenderNode = unsafe { &*node_ptr.0 };
-                            let entry = node.as_box()?;
-                            if hop != 0 {
-                                offset_y += node.offset().dy;
-                            }
-                            if entry.render_object().forwards_baseline_to_only_child() {
-                                // Walk on; a proxy with no child has no baseline.
-                                return node.children().first().copied().map(Err);
-                            }
-                            Some(Ok(entry.render_object().actual_baseline_raw(baseline)))
-                        });
-                        match next {
-                            Some(Ok(found)) => {
-                                return found.map(|baseline| {
-                                    baseline.and_then(|value| {
-                                        let shifted = value + offset_y;
-                                        shifted.is_finite().then_some(shifted)
-                                    })
-                                });
-                            }
-                            Some(Err(grandchild)) => node_id = grandchild,
-                            None => return Ok(None),
-                        }
-                    }
-                    Ok(None)
-                };
-            let baseline_cb_ref: ActualBaselineChildCallback<'_> = &baseline_cb_owned;
-
-            // Sliver child callback: invoked when the Box parent calls
-            // `ctx.layout_sliver_child(index, sliver_constraints)`.  Uses the
-            // same `arena_for_cb` pool and `descendant_error_flag` as the box
-            // callback — no extra pre-acquisition needed since sliver children
-            // are already in the pre-acquired `SubtreeArena` set.
-            let sliver_cb_owned = move |child_id: RenderId,
-                                        sliver_constraints: SliverConstraints|
-                  -> crate::error::RenderResult<SliverGeometry> {
-                // SAFETY: `arena_for_cb` is alive for the entire walk (held
-                // by the `layout_dirty_root` stack frame).  The reborrow targets
-                // `child_id`'s slot — distinct from the Box parent's slot
-                // (LayoutCycleGuard blocks re-entry into `id`).  No two
-                // concurrent reborrows of the same NodePtr.
-                Ok(
-                    match unsafe {
-                        layout_sliver_subtree_borrowed(arena_for_cb, child_id, sliver_constraints)
-                    } {
-                        Ok(geometry) => {
-                            arena_for_cb.note_layout_success(child_id);
-                            geometry
-                        }
-                        Err(err) => {
-                            if err.is_recoverable_layout_error() {
-                                return Err(err);
-                            }
-                            arena_for_cb.note_layout_failure(
-                                id,
-                                child_id,
-                                &err,
-                                Some(sliver_constraints.into()),
-                            );
-                            descendant_error_for_sliver_cb.set(true);
-                            tracing::error!(
-                                parent = id.as_u64(),
-                                ?child_id,
-                                ?err,
-                                "layout_dirty_root: sliver descendant layout failed; \
-                                 returning SliverGeometry::ZERO to caller's perform_layout. \
-                                 The failure is recorded against the child's retry \
-                                 budget (layout poison).",
-                            );
-                            SliverGeometry::ZERO
-                        }
-                    },
-                )
-            };
-            let sliver_cb_ref: SliverLayoutChildCallback<'_> = &sliver_cb_owned;
-
-            // Box child intrinsic callback: invoked when the Box parent calls
-            // `ctx.child_intrinsic(index, dimension, extent)` from within
-            // `perform_layout` (e.g. `RenderIntrinsicWidth` / `RenderIntrinsicHeight`).
-            // Uses the same `arena_for_cb` pool and `descendant_error_flag` as the
-            // layout callback.  Mirrors the sliver→box intrinsic callback wired in
-            // `layout_sliver_subtree_borrowed_impl` — no extra pre-acquisition needed
-            // because all child slots are already in the pre-acquired `SubtreeArena`.
-            let descendant_error_for_intrinsics_cb = &descendant_error_flag;
-            let box_intrinsic_cb_owned = move |child_id: RenderId,
-                                               dimension: crate::storage::IntrinsicDimension,
-                                               extent: f64|
-                  -> crate::error::RenderResult<f64> {
-                // SAFETY: `arena_for_cb` is alive (held by the outer
-                // layout_dirty_root stack frame for the entire walk).  The
-                // query targets `child_id`'s slot — distinct from the current
-                // Box parent's slot (`LayoutCycleGuard` rejects re-entry into
-                // `id`).  No two concurrent reborrows of the same NodePtr.
-                Ok(
-                    match unsafe {
-                        box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent)
-                    } {
-                        Ok(value) => {
-                            arena_for_cb.note_layout_success(child_id);
-                            value
-                        }
-                        Err(err) => {
-                            if err.is_recoverable_layout_error() {
-                                return Err(err);
-                            }
-                            arena_for_cb.note_layout_failure(id, child_id, &err, None);
-                            descendant_error_for_intrinsics_cb.set(true);
-                            tracing::error!(
-                                parent = id.as_u64(),
-                                ?child_id,
-                                ?err,
-                                "layout_dirty_root: box child intrinsic query failed; \
-                                 returning 0.0 to caller's perform_layout. \
-                                 The failure is recorded against the child's retry \
-                                 budget (layout poison).",
-                            );
-                            0.0
-                        }
-                    },
-                )
-            };
-            let box_intrinsic_cb_ref: crate::protocol::box_protocol::BoxChildIntrinsicCallback<'_> =
-                &box_intrinsic_cb_owned;
-
-            // Construct the driver-side PARENT-DATA-ERASED context.  The walk
-            // cannot name the parent's ParentData type (it holds dyn nodes);
-            // the typed blanket bridge reconstructs RawBoxLayoutContext<T::Arity,
-            // T::ParentData> per node and lazily creates each child's
-            // parent-data slot with T::ParentData::default() — Flex/Stack and
-            // every other non-BoxParentData parent now lay out in production
-            // (the former ChildState<BoxParentData> hardcode panicked them in
-            // from_erased).
-            let mut ctx = crate::protocol::DriverBoxLayoutContext::new(
-                constraints,
-                &mut child_states,
-                &child_ids,
-                cb_ref,
-                baseline_cb_ref,
-                Some(sliver_cb_ref),
-                Some(box_intrinsic_cb_ref),
-                Some(crate::protocol::DegradationProbe::new(
-                    &arena.degradation_events,
-                )),
-                arena.text.source(id),
-            );
-            let erased: &mut dyn ErasedBoxLayoutContext = &mut ctx;
-
-            // Invoke perform_layout_raw wrapped in catch_unwind (symmetric
-            // with the leaf path's layout_leaf_only — third-party panics
-            // surface as RenderError::Poisoned instead of unwinding out of
-            // layout_dirty_root).  Capture debug_name BEFORE the &mut reborrow.
-            let debug_name = entry.render_object().debug_name();
-            // Every degradation counted from here to the end of this node's own
-            // `perform_layout` happened inside this node's subtree (the walk is
-            // depth-first and synchronous), which is what the flag below records.
-            let events_before = arena.degradation_count();
-            let render_object = entry.render_object_mut();
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: perform_layout runs contained; a panic poisons the node"
-            )]
-            let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render_object.perform_layout_raw(erased)
-            }));
-            let geometry = match unwind_result {
-                Ok(inner) => inner?,
-                Err(payload) => {
-                    let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: a panic report runs tracing subscribers, contained"
-                    )]
-                    if let Err(reporting_payload) =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            tracing::error!(
-                                render_object = debug_name,
-                                panic_msg = msg,
-                                "perform_layout panicked in non-leaf path — surfacing as \
-                         RenderError::Poisoned (symmetric with leaf-path \
-                         layout_leaf_only catch_unwind discipline)",
-                            );
-                        }))
-                    {
-                        // Reporting is secondary; do not retire its opaque failure or report it again.
-                        flui_foundation::panic::discard_payload(reporting_payload);
-                    }
-                    flui_foundation::panic::discard_payload(payload);
-                    return Err(crate::error::RenderError::poisoned(
-                        debug_name,
-                        crate::error::PoisonPhase::Layout,
-                    ));
-                }
-            };
-
-            // State update on success path.  On the Err/panic paths above we
-            // return early so NEEDS_LAYOUT stays set for next-frame retry.
-            //
-            // Same protocol-generic geometry guards as layout_leaf_only.  Runtime
-            // validation happens before state commit; the debug assertions are
-            // debug-only contract checks.
-            <BoxProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
-            <BoxProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
-
-            // Record whether this node's own pass read a stand-in, so a later
-            // pass that serves the geometry it is about to commit cannot mistake
-            // it for healthy.
-            entry
-                .state()
-                .set_geometry_degraded(arena.degradation_count() > events_before);
-            entry.state_mut().set_geometry(geometry);
-            entry.state_mut().set_constraints(constraints);
-
-            // Bootstrap the relayout boundary now that constraints are populated.
-            let has_parent = arena.lease.parent(id).is_some();
-            let sized_by_parent = entry.render_object().sized_by_parent();
-            <BoxProtocol as Protocol>::bootstrap_relayout_boundary(
-                entry.state(),
-                sized_by_parent,
-                has_parent,
-            );
-
-            // Only clear NEEDS_LAYOUT if the recursive callback observed no
-            // descendant failure.  Preserves retry-next-frame semantics.
-            let had_descendant_error = descendant_error_flag.get();
-            if had_descendant_error {
-                tracing::debug!(
-                    parent = id.as_u64(),
-                    "layout_dirty_root: a descendant errored during this walk; \
-                     keeping parent NEEDS_LAYOUT set for next-frame retry"
-                );
-            } else {
-                entry.state().clear_needs_layout();
-            }
-
-            // `entry`, `node_ref`, and all callbacks drop here.
-            // The parent slot's Unique tag (`&mut *node_ptr`) is released.
-            geometry
-        };
-
-    // -----------------------------------------------------------------------
-    // Phase 4 — child-offset commit (no &mut to any slot is live AT THIS
-    // CALL LEVEL).
-    //
-    // Commit the offsets perform_layout wrote via `position_child` into each
-    // child's persisted `RenderState.offset`.  The `ChildState` vec is a
-    // per-walk transient — without this commit every positioned offset dies
-    // with the stack frame and paint / hit-test (which read
-    // `RenderState.offset` as the authoritative child position) would place
-    // all children at the parent origin.
-    //
-    // Runs only on the parent-success path: on the Err / panic paths above,
-    // we return early so state stays unmodified and NEEDS_LAYOUT retry
-    // semantics hold.  A descendant error does NOT skip the commit — the
-    // parent's perform_layout returned Ok, so its positioning decisions are
-    // valid regardless of a failed grandchild.
-    //
-    // SOUNDNESS CONSTRAINT — in-flight skip:
-    // A child whose in-flight flag is set has its `&mut RenderNode`
-    // live on the call stack of an ancestor `layout_subtree_borrowed_impl`
-    // frame (held by that frame's Phase 2+3 block).  Writing to that slot's
-    // memory (even via an atomic `set_offset`) while the ancestor's `&mut` is
-    // live is a foreign write that invalidates the Unique provenance tag under
-    // both Stacked Borrows and Tree Borrows — UB regardless of atomicity.
-    // We therefore skip any child whose id is in-flight.  Semantically this
-    // is correct: a node that is currently being laid out cannot be validly
-    // positioned by a descendant that observed only a LayoutCycle error for it
-    // (the descendant's positioning decision is based on Size::ZERO, not real
-    // geometry); the next frame P1 re-lays-out and P2 re-positions it.
-    //
-    // SAFETY: For children NOT in flight, the Phase 2+3 block has ended and
-    // their slots carry no live borrow from this call level.  `set_offset` is
-    // an atomic store through `&self`.  The `&*child_ptr.0` shared reborrow is
-    // the only live borrow of that child slot at this point.
-    // -----------------------------------------------------------------------
-    // Advance HERE, in the same block that stamps the children. Advancing at
-    // layout entry instead lets any early return in between (a protocol error,
-    // a poisoned descendant) move the parent forward while stamping nobody,
-    // which unplaces every child and stops the whole subtree painting.
-    let parent_generation = arena.get(id).map_or(0, |ptr| {
-        // SAFETY: as for the child reborrows below — no `&mut` to this slot is
-        // live at this point in the walk.
-        let node: &RenderNode = unsafe { &*ptr.0 };
-        node.advance_layout_generation()
     });
-    for cs in child_states.iter() {
-        // Skip slots whose &mut is live on an ancestor frame (see above).
-        if arena.is_in_flight(cs.id) {
-            continue;
+
+    let geometry = {
+        let Some(entry) = frame.node_mut().as_box_mut() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol,
+                constraints_protocol: "Box",
+            });
+        };
+
+        if is_leaf {
+            return entry.layout_leaf_only(
+                constraints,
+                arena.text.source(id),
+                arena.lease.parent(id).is_some(),
+            );
         }
-        if let Some(child_ptr) = arena.get(cs.id) {
-            // SAFETY: child `cs.id` is NOT in-flight (guard above), so no
-            // ancestor frame holds a live &mut to this slot.
-            let child_node: &RenderNode = unsafe { &*child_ptr.0 };
-            child_node.set_offset(cs.offset);
-            // Stamp only the children this pass actually laid out. A child the
-            // parent skipped keeps its previous stamp and is skipped in turn by
-            // paint and hit-test, which is what keeps a lazy
-            // sliver's out-of-band residents from being painted at an offset
-            // no longer describing the tree.
-            if cs.laid_out_this_pass {
-                child_node.set_placed_by(id, parent_generation);
+
+        // Set by the callbacks on any descendant failure; the commit below then leaves
+        // NEEDS_LAYOUT set so the parent retries next frame.
+        let descendant_error_flag = Cell::new(false);
+        let outcomes = ChildOutcomes {
+            arena,
+            parent: id,
+            descendant_failed: &descendant_error_flag,
+        };
+
+        let cb_owned =
+            move |child_id: RenderId,
+                  child_constraints: BoxConstraints|
+                  -> crate::error::RenderResult<flui_foundation::geometry::Size> {
+                outcomes.settle(
+                    child_id,
+                    Some(child_constraints.into()),
+                    layout_subtree_borrowed(arena, child_id, child_constraints),
+                    flui_foundation::geometry::Size::ZERO,
+                    "layout_dirty_root: descendant layout failed; \
+                 returning Size::ZERO to caller's perform_layout. \
+                 The failure is recorded against the child's retry \
+                 budget (layout poison).",
+                )
+            };
+        let cb_ref: LayoutChildCallback<'_> = &cb_owned;
+
+        // A forwarding box has no baseline of its own and cannot reach its child from
+        // `actual_baseline_raw` (that query takes no context), so it flags the forward and the
+        // walk continues here. A valid chain cannot visit more nodes than the lease holds, which
+        // bounds a malformed cycle without truncating a deep valid tree. A node entered up the
+        // stack (a cyclic edge back to this frame or an ancestor) ends the chain with no baseline.
+        let baseline_cb_owned = move |child_id: RenderId, baseline: crate::traits::TextBaseline| {
+            let mut node_id = child_id;
+            let mut offset_y = 0.0;
+            for hop in 0..arena.lease.capacity() {
+                let Ok(entered) = arena.lease.enter(node_id) else {
+                    return Ok(None);
+                };
+                let node = entered.node();
+                let Some(entry) = node.as_box() else {
+                    return Ok(None);
+                };
+                if hop != 0 {
+                    offset_y += node.offset().dy;
+                }
+                if entry.render_object().forwards_baseline_to_only_child() {
+                    // Walk on; a proxy with no child has no baseline.
+                    let Some(&grandchild) = node.children().first() else {
+                        return Ok(None);
+                    };
+                    node_id = grandchild;
+                    continue;
+                }
+                return entry
+                    .render_object()
+                    .actual_baseline_raw(baseline)
+                    .map(|baseline| {
+                        baseline.and_then(|value| {
+                            let shifted = value + offset_y;
+                            shifted.is_finite().then_some(shifted)
+                        })
+                    });
             }
+            Ok(None)
+        };
+        let baseline_cb_ref: ActualBaselineChildCallback<'_> = &baseline_cb_owned;
+
+        // Invoked when the Box parent calls `ctx.layout_sliver_child(index, constraints)`.
+        let sliver_cb_owned = move |child_id: RenderId,
+                                    sliver_constraints: SliverConstraints|
+              -> crate::error::RenderResult<SliverGeometry> {
+            outcomes.settle(
+                child_id,
+                Some(sliver_constraints.into()),
+                layout_sliver_subtree_borrowed(arena, child_id, sliver_constraints),
+                SliverGeometry::ZERO,
+                "layout_dirty_root: sliver descendant layout failed; \
+                 returning SliverGeometry::ZERO to caller's perform_layout. \
+                 The failure is recorded against the child's retry \
+                 budget (layout poison).",
+            )
+        };
+        let sliver_cb_ref: SliverLayoutChildCallback<'_> = &sliver_cb_owned;
+
+        // Invoked when the Box parent calls `ctx.child_intrinsic(index, dimension, extent)` from
+        // within `perform_layout` (e.g. `RenderIntrinsicWidth` / `RenderIntrinsicHeight`); the
+        // twin of the sliver walk's box-intrinsic callback.
+        let box_intrinsic_cb_owned = move |child_id: RenderId,
+                                           dimension: crate::storage::IntrinsicDimension,
+                                           extent: f64|
+              -> crate::error::RenderResult<f64> {
+            outcomes.settle(
+                child_id,
+                None,
+                box_intrinsic_query_borrowed(arena, child_id, dimension, extent),
+                0.0,
+                "layout_dirty_root: box child intrinsic query failed; \
+                 returning 0.0 to caller's perform_layout. \
+                 The failure is recorded against the child's retry \
+                 budget (layout poison).",
+            )
+        };
+        let box_intrinsic_cb_ref: crate::protocol::box_protocol::BoxChildIntrinsicCallback<'_> =
+            &box_intrinsic_cb_owned;
+
+        // Construct the driver-side PARENT-DATA-ERASED context.  The walk
+        // cannot name the parent's ParentData type (it holds dyn nodes);
+        // the typed blanket bridge reconstructs RawBoxLayoutContext<T::Arity,
+        // T::ParentData> per node and lazily creates each child's
+        // parent-data slot with T::ParentData::default(), so Flex/Stack and
+        // every other non-BoxParentData parent lay out in production.
+        let mut ctx = crate::protocol::DriverBoxLayoutContext::new(
+            constraints,
+            &mut child_states,
+            &child_ids,
+            cb_ref,
+            baseline_cb_ref,
+            Some(sliver_cb_ref),
+            Some(box_intrinsic_cb_ref),
+            Some(crate::protocol::DegradationProbe::new(
+                &arena.degradation_events,
+            )),
+            arena.text.source(id),
+        );
+        let erased: &mut dyn ErasedBoxLayoutContext = &mut ctx;
+
+        // `perform_layout_raw` runs inside `catch_unwind` (symmetric with the leaf path's
+        // `layout_leaf_only`), so a third-party panic surfaces as `RenderError::Poisoned` instead
+        // of unwinding out of `layout_dirty_root`.
+        let debug_name = entry.render_object().debug_name();
+        // Every degradation counted from here to the end of this node's own
+        // `perform_layout` happened inside this node's subtree (the walk is
+        // depth-first and synchronous), which is what the flag below records.
+        let events_before = arena.degradation_count();
+        let render_object = entry.render_object_mut();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: perform_layout runs contained; a panic poisons the node"
+        )]
+        let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_object.perform_layout_raw(erased)
+        }));
+        let geometry = match unwind_result {
+            Ok(inner) => inner?,
+            Err(payload) => {
+                return Err(poisoned_by_panic(
+                    debug_name,
+                    payload,
+                    "perform_layout panicked in non-leaf path — surfacing as \
+                     RenderError::Poisoned (symmetric with leaf-path \
+                     layout_leaf_only catch_unwind discipline)",
+                ));
+            }
+        };
+
+        // State update on success path.  On the Err/panic paths above we
+        // return early so NEEDS_LAYOUT stays set for next-frame retry.
+        //
+        // Same protocol-generic geometry guards as layout_leaf_only.  Runtime
+        // validation happens before state commit; the debug assertions are
+        // debug-only contract checks.
+        <BoxProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
+        <BoxProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
+
+        // Record whether this node's own pass read a stand-in, so a later
+        // pass that serves the geometry it is about to commit cannot mistake
+        // it for healthy.
+        entry
+            .state()
+            .set_geometry_degraded(arena.degradation_count() > events_before);
+        entry.state_mut().set_geometry(geometry);
+        entry.state_mut().set_constraints(constraints);
+
+        // Bootstrap the relayout boundary now that constraints are populated.
+        let has_parent = arena.lease.parent(id).is_some();
+        let sized_by_parent = entry.render_object().sized_by_parent();
+        <BoxProtocol as Protocol>::bootstrap_relayout_boundary(
+            entry.state(),
+            sized_by_parent,
+            has_parent,
+        );
+
+        // Only clear NEEDS_LAYOUT if the recursive callback observed no
+        // descendant failure.  Preserves retry-next-frame semantics.
+        if descendant_error_flag.get() {
+            tracing::debug!(
+                parent = id.as_u64(),
+                "layout_dirty_root: a descendant errored during this walk; \
+                 keeping parent NEEDS_LAYOUT set for next-frame retry"
+            );
+        } else {
+            entry.state().clear_needs_layout();
         }
-    }
+        geometry
+    };
+
+    // Commit the offsets `perform_layout` wrote via `position_child` into each child's persisted
+    // `RenderState.offset`: the child states die with this frame, and paint and hit-test read the
+    // persisted offset as the child's position. Only on the parent's success path: the error and
+    // panic paths above returned, leaving state unmodified for the NEEDS_LAYOUT retry. A
+    // descendant error does NOT skip it, since the parent's own positioning stands.
+    child_states.commit_placement(&frame);
 
     Ok(geometry)
 }
 
 // ============================================================================
-// Unsafe walk 2: Box intrinsic query
+// Walk 2: Box intrinsic query
 // ============================================================================
 
-/// Recursive Box intrinsic query over the pre-acquired layout subtree.
+/// Recursive Box intrinsic query over the layout walk's lease.
 ///
-/// Used when a Sliver parent needs Box child intrinsics during
-/// layout.  It shares the layout walk's [`SubtreeArena`] pool instead of
-/// re-entering `PipelineOwner`, preserving the same disjoint-slot discipline
-/// as `layout_subtree_borrowed`.
-unsafe fn box_intrinsic_query_borrowed(
+/// Used when a parent needs a Box child's intrinsics during layout. It shares the layout walk's
+/// [`SubtreeArena`] and its [`LayoutFrame`] instead of re-entering `PipelineOwner`.
+fn box_intrinsic_query_borrowed(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f64,
 ) -> crate::error::RenderResult<f64> {
-    ensure_stack(|| {
-        // SAFETY: forwarded from this wrapper; ensure_stack only changes stack
-        // placement, not borrow lifetimes or aliasing.
-        unsafe { box_intrinsic_query_borrowed_impl(arena, id, dimension, extent) }
-    })
+    ensure_stack(|| box_intrinsic_query_borrowed_impl(arena, id, dimension, extent))
 }
 
 /// Body of [`box_intrinsic_query_borrowed`].
-///
-/// # Safety
-///
-/// Same contract as [`layout_subtree_borrowed`]: `arena` must outlive this
-/// call and recursive child callbacks, and re-entry into an in-flight node is
-/// rejected by [`LayoutCycleGuard`] before any second mutable reborrow occurs.
-unsafe fn box_intrinsic_query_borrowed_impl(
+fn box_intrinsic_query_borrowed_impl(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f64,
 ) -> crate::error::RenderResult<f64> {
-    let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
-
-    let Some(NodePtr(node_ptr)) = arena.get(id) else {
-        return Err(crate::error::RenderError::NodeNotFound(id));
-    };
+    let mut frame = LayoutFrame::enter(arena, id)?;
 
     // Layout-poison skip: a node that exhausted its retry budget is not
     // re-measured until freshly invalidated. Its last-good cached value
@@ -1806,16 +1361,9 @@ unsafe fn box_intrinsic_query_borrowed_impl(
     // cache is only written on success, so a hit is a real previously
     // computed answer; a miss falls back to 0.0, the same value the
     // error-swallow path used before the poison mechanism existed.
-    //
-    // SAFETY: the cycle guard is held, so no `&mut` of this slot is live
-    // on an ancestor frame (re-entry would have been rejected at
-    // `LayoutCycleGuard::enter`).  The shared reborrow is the only live
-    // borrow of the slot.
     if arena.layout_poison.is_poisoned(id) {
-        // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
-        // an ancestor frame; this shared reborrow is the only live borrow.
-        let node: &RenderNode = unsafe { &*node_ptr };
-        let value = node
+        let value = frame
+            .node()
             .as_box()
             .and_then(|entry| {
                 entry
@@ -1827,19 +1375,13 @@ unsafe fn box_intrinsic_query_borrowed_impl(
         return Ok(value);
     }
 
-    // SAFETY: this is the only live reborrow of `id` in this intrinsic
-    // query frame.  Recursive callbacks target child slots; cycle guard
-    // rejects attempts to revisit an in-flight ancestor.
-    let node_ref: &mut RenderNode = unsafe { &mut *node_ptr };
-    let node_protocol = node_ref.protocol_name();
-    let entry: &mut RenderEntry<BoxProtocol> = match node_ref.as_box_mut() {
-        Some(e) => e,
-        None => {
-            return Err(crate::error::RenderError::ProtocolMismatch {
-                node_protocol,
-                constraints_protocol: "box",
-            });
-        }
+    let node = frame.node_mut();
+    let node_protocol = node.protocol_name();
+    let Some(entry) = node.as_box_mut() else {
+        return Err(crate::error::RenderError::ProtocolMismatch {
+            node_protocol,
+            constraints_protocol: "box",
+        });
     };
 
     if let Some(hit) = entry
@@ -1854,28 +1396,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
     let mut child_ids = arena.buffers.child_ids.checkout(children.len());
     child_ids.extend_from_slice(children);
 
-    // Build the per-child parent-data slice before creating the child-query
-    // closure. The owned boxes coexist with the `&mut` the closure captures
-    // because the slice is read-only and refers to different nodes.
-    //
-    // SAFETY: `child_ids` are the current node's children. The tree is not
-    // statically acyclic — a cyclic edge can name an in-flight ancestor — so
-    // `build_intrinsic_child_parent_data` gates each deref on `is_in_flight`
-    // and skips any in-flight slot (see its `# Safety`). This call precedes the
-    // child-query closure, so no non-cyclic child slot has been entered yet, and
-    // no other arena walk can run concurrently: that is structural
-    // (`SubtreeArena: !Send + !Sync`), not a runtime check `arena.get()`
-    // performs. All its preconditions hold.
-    let child_parent_data_owned: Vec<Option<Box<dyn ParentData>>> = unsafe {
-        build_intrinsic_child_parent_data(
-            arena,
-            &child_ids,
-            #[cfg(any(test, feature = "testing"))]
-            arena.parent_data_seeds,
-            #[cfg(not(any(test, feature = "testing")))]
-            &(),
-        )
-    };
+    let child_parent_data_owned = build_intrinsic_child_parent_data(arena, &child_ids);
     let child_parent_data_refs: Vec<Option<&dyn ParentData>> = child_parent_data_owned
         .iter()
         .map(|opt| opt.as_deref())
@@ -1891,10 +1412,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
                 arena.note_layout_failure(id, id, &err, None);
                 return Err(err);
             };
-            // SAFETY: the child query targets a child slot distinct from the
-            // current box node; the pre-acquired subtree arena is still live;
-            // `LayoutCycleGuard` will reject re-entry into any ancestor slot.
-            match unsafe { box_intrinsic_query_borrowed(arena, child_id, dim, ext) } {
+            match box_intrinsic_query_borrowed(arena, child_id, dim, ext) {
                 Ok(value) => {
                     arena.note_layout_success(child_id);
                     Ok(value)
@@ -1924,133 +1442,74 @@ unsafe fn box_intrinsic_query_borrowed_impl(
 }
 
 // ============================================================================
-// Unsafe walk 3: Sliver layout
+// Walk 3: Sliver layout
 // ============================================================================
 //
 // `layout_sliver_subtree_borrowed` is the Sliver sibling of
-// `layout_subtree_borrowed`.  It is called from the `sliver_cb_owned`
-// closure captured inside `layout_subtree_borrowed_impl`'s non-leaf path
-// when a Box parent calls `ctx.layout_sliver_child(index, constraints)`.
-//
-// Scope: sliver subtrees.  Leaf nodes still delegate to
-// `RenderEntry::layout_leaf_only`; non-leaf slivers get an erased driver
-// context and may call `ctx.layout_child(...)` to lay out sliver children.
+// `layout_subtree_borrowed`.  It is called from the sliver-child callback
+// inside `layout_subtree_borrowed_impl`'s non-leaf path when a Box parent
+// calls `ctx.layout_sliver_child(index, constraints)`, and from its own
+// child callback.
 //
 // The short-circuit clean-child optimisation from the Box path is omitted
 // here on purpose: sliver constraints change with scroll position on every
 // frame.  Omitting the check is correct and saves a branch.
 
 /// Stack-probe wrapper for [`layout_sliver_subtree_borrowed_impl`].
-///
-/// # Safety
-///
-/// Same contract as [`layout_subtree_borrowed`]:
-/// 1. `arena` must outlive every recursive invocation this helper
-///    triggers (it is held by the outer `layout_dirty_root` stack frame
-///    for the entire walk).
-/// 2. At any moment, no two concurrent reborrows of the SAME [`NodePtr`]
-///    exist.  The `LayoutCycleGuard` enforces this by returning
-///    [`crate::error::RenderError::LayoutCycle`] on re-entry into a slot
-///    already in flight, preventing the otherwise-UB second Unique tag.
-unsafe fn layout_sliver_subtree_borrowed(
+fn layout_sliver_subtree_borrowed(
     arena: &SubtreeArena<'_>,
     id: flui_foundation::RenderId,
     constraints: SliverConstraints,
 ) -> crate::error::RenderResult<SliverGeometry> {
-    ensure_stack(|| {
-        // SAFETY: identical contract, forwarded verbatim from this
-        // wrapper's own `# Safety` section; the stack-growth wrapper
-        // only relocates which memory the frames live in, never their
-        // borrow structure, lifetimes, or drop order.
-        unsafe { layout_sliver_subtree_borrowed_impl(arena, id, constraints) }
-    })
+    ensure_stack(|| layout_sliver_subtree_borrowed_impl(arena, id, constraints))
 }
 
 /// Body of [`layout_sliver_subtree_borrowed`]; split out so every
 /// recursion level enters through the [`ensure_stack`] probe.
-///
-/// # Safety
-///
-/// Same contract as [`layout_sliver_subtree_borrowed`].
-unsafe fn layout_sliver_subtree_borrowed_impl(
+fn layout_sliver_subtree_borrowed_impl(
     arena: &SubtreeArena<'_>,
     id: flui_foundation::RenderId,
     constraints: SliverConstraints,
 ) -> crate::error::RenderResult<SliverGeometry> {
-    // Cycle guard: set `id`'s in-flight flag FIRST — before any
-    // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
-    // guard's `enter` returns Err(LayoutCycle) here so the aliasing
-    // shared read that would otherwise fire never happens.
-    // Drop runs on every exit including unwind so the flag stays consistent.
-    let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
-
-    // Resolve id → NodePtr. Confinement to the constructing thread is
-    // structural (`SubtreeArena: !Send + !Sync`) — there is no cross-thread
-    // case for `get` to reject at runtime.
-    let Some(NodePtr(node_ptr)) = arena.get(id) else {
-        return Err(crate::error::RenderError::NodeNotFound(id));
-    };
+    // Entered first, as in the Box walk.
+    let mut frame = LayoutFrame::enter(arena, id)?;
 
     // Layout-poison skip: same contract as the Box walk — a poisoned
     // sliver is not re-laid out until freshly invalidated; its last
     // committed geometry stands in (`SliverGeometry::ZERO` when it never
     // succeeded).
-    //
-    // SAFETY: the cycle guard is held, so no `&mut` of this slot is live
-    // on an ancestor frame; the shared reborrow is the only live borrow
-    // of the slot.
     if arena.layout_poison.is_poisoned(id) {
-        let stand_in = || {
-            // Serving a stand-in is a degradation (see the box twin).
-            arena.note_degradation();
-            // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
-            // an ancestor frame; this shared reborrow is the only live borrow.
-            let node: &crate::storage::RenderNode = unsafe { &*node_ptr };
-            node.geometry_sliver().unwrap_or(SliverGeometry::ZERO)
-        };
         if arena
             .layout_poison
             .serves_stand_in(id, ErasedConstraints::from(constraints))
         {
-            return Ok(stand_in());
+            // Serving a stand-in is a degradation (see the box twin).
+            arena.note_degradation();
+            return Ok(frame
+                .node()
+                .geometry_sliver()
+                .unwrap_or(SliverGeometry::ZERO));
         }
         arena.poison_retries.borrow_mut().insert(id);
     }
 
-    // -----------------------------------------------------------------------
-    // Phase 1 — shared reads of the parent slot (no &mut live).
-    //
-    // SAFETY: `LayoutCycleGuard` for `id` is held; recursive re-entry into
-    // this slot via `layout_sliver_child` / `layout_child` is rejected before
-    // any borrow of this slot opens.  The narrow scope below is the ONLY live
-    // borrow of `id`'s slot at this point.  Nothing derived from
-    // `parent_shared` may be used after the `&mut *node_ptr` reborrow (Phase 2).
-    // -----------------------------------------------------------------------
     let (child_ids, node_protocol, is_repaint_boundary) = {
-        // SAFETY: the cycle guard rejects re-entry into this slot before any
-        // borrow of it opens, so this shared reborrow is the only live borrow.
-        let parent_shared: &crate::storage::RenderNode = unsafe { &*node_ptr };
-        let node_protocol = parent_shared.protocol_name();
-        let entry: &RenderEntry<SliverProtocol> = match parent_shared.as_sliver() {
-            Some(e) => e,
-            None => {
-                return Err(crate::error::RenderError::ProtocolMismatch {
-                    node_protocol,
-                    constraints_protocol: "Sliver",
-                });
-            }
+        let node = frame.node();
+        let node_protocol = node.protocol_name();
+        let Some(entry) = node.as_sliver() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol,
+                constraints_protocol: "Sliver",
+            });
         };
         let children = entry.links().children();
         let mut child_ids = arena.buffers.child_ids.checkout(children.len());
         child_ids.extend_from_slice(children);
-        // Snapshotted in the block that already holds the shared borrow, as
-        // in the Box walk.
         let is_repaint_boundary = entry.state().is_repaint_boundary();
         // A sliver reached here lays out (see below), which the paint that
         // follows reads to record its chunks again (ADR-0304 §2).
         entry.state().flags().mark_laid_out_since_paint();
         (child_ids, node_protocol, is_repaint_boundary)
-        // `parent_shared` drops here — the shared borrow of `id`'s slot ends.
     };
 
     // A sliver reached here is being laid out: this walk has no short-circuit
@@ -2067,10 +1526,6 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     if is_repaint_boundary {
         arena.laid_out.borrow_mut().push(id);
     }
-    // A fresh generation for this pass. Children this node lays out are
-    // stamped with it at commit; children it skips keep the previous value and
-    // fall out of `was_placed_by`, which is what paint and hit-test
-    // read to leave them alone.
 
     // No early-return here for the empty case: a lazy sliver (e.g.
     // `RenderSliverList`) starts with zero attached children and must
@@ -2079,6 +1534,11 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // `DriverSliverLayoutContext` path is always taken for slivers so that the
     // context's `pending_child_requests` / `pending_retain_bands` sinks are
     // wired in — even when the current child list is empty.
+    //
+    // Seeded before `perform_layout` runs, as in the Box walk. The lent parent data lets lazy
+    // sliver consumers (e.g. `RenderSliverList`) read the logical index the element tree stamped
+    // on insertion (`stamp_sliver_logical_index` in
+    // `flui-view/src/element/behavior_commons.rs`) on a previous frame.
     let mut child_states = LentChildren::new(
         arena,
         id,
@@ -2089,125 +1549,35 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             .iter()
             .map(|&cid| crate::protocol::ErasedSliverChildState::new(cid)),
     );
+    child_states.seed(|cs, child| cs.offset = child.offset());
 
-    // -----------------------------------------------------------------------
-    // Phase 1b — seed child states while NO &mut to the parent slot is live.
-    //
-    // Symmetric with the Box path: child-seeding shared reads MUST complete
-    // before the parent's &mut (Phase 2) opens.  On a cyclic edge where
-    // child_id == id, `&*child_ptr.0` would alias the parent's Unique tag if
-    // taken while `&mut *node_ptr` were live → UB under SB and TB.
-    //
-    // SOUNDNESS CONSTRAINT — in-flight skip (same contract as Box Phase 1b):
-    // When this function is called recursively (e.g. P2 as a child of P1),
-    // an ancestor frame's Phase 2+3 block may hold a live `&mut` over a child
-    // id in our list.  Reading that child's memory while the ancestor's Unique
-    // tag is live is UB.  We detect such ids via `is_in_flight` and skip them.
-    //
-    // Parent-data: `ErasedSliverChildState.parent_data` starts as `None`;
-    // it is filled from persisted state so lazy sliver consumers (e.g.
-    // `RenderSliverList`) can read the logical index the element tree
-    // stamped on insertion (`stamp_sliver_logical_index` in
-    // `flui-view/src/element/behavior_commons.rs`) on a previous frame.
-    // The parent data is lent, not copied: it moves into the child's state and
-    // back when `child_states` drops (`LentChildren`).
-    //
-    // SAFETY: for children NOT in-flight, Phase 1's `parent_shared` has been
-    // dropped, each `child_ptr` addresses a DISTINCT slab slot from `id`'s
-    // slot, and no live `&mut` covers those slots.
-    // -----------------------------------------------------------------------
-    for cs in child_states.iter_mut() {
-        // Skip children whose &mut is live on an ancestor frame.
-        if arena.is_in_flight(cs.id) {
-            continue;
-        }
-        let seeded = arena.seed_child_parent_data(cs.id, &mut cs.parent_data);
-        if let Some(child_ptr) = arena.get(cs.id) {
-            // SAFETY: as in the box walk's Phase 1b: child `cs.id` is NOT in-flight (guard
-            // above), so it is neither `id` nor an ancestor, and this is the only live reference
-            // to its slot.
-            let child_node: &mut RenderNode = unsafe { &mut *child_ptr.0 };
-            cs.offset = child_node.offset();
-            if !seeded {
-                LentChildren::lend(arena, id, cs, child_node);
-            }
-        }
-    }
-    // All shared child reads complete; no borrow of any slot is live.
-
-    // -----------------------------------------------------------------------
-    // Phase 2 + 3 — exclusive reborrow of the parent slot for mutable work,
-    // scoped so it ends before Phase 4.
-    //
-    // SAFETY: Phase 1 and Phase 1b have both ended.  No live borrow of
-    // `id`'s slot or of any child slot exists.  The `LayoutCycleGuard`
-    // prevents concurrent re-entry into `id`'s slot via a layout callback.
-    // The `&mut` below is the ONLY live borrow of `id`'s slot.  Distinct
-    // child slots opened by recursive callbacks carry independent Unique tags.
-    //
-    // The closing brace of this block ends both `node_ref` and `entry`,
-    // releasing the parent slot's Unique tag before Phase 4 opens shared
-    // reads on child slots (which on a cyclic tree may alias `node_ptr`).
-    // -----------------------------------------------------------------------
     let geometry = {
-        // SAFETY: the cycle guard is held, so no other borrow of this slot is
-        // live. This unique reborrow is scoped to the block below, which ends
-        // it before Phase 4 opens shared reads that may alias `node_ptr`.
-        let node_ref: &mut crate::storage::RenderNode = unsafe { &mut *node_ptr };
-
-        let entry: &mut RenderEntry<SliverProtocol> = match node_ref.as_sliver_mut() {
-            Some(e) => e,
-            None => {
-                return Err(crate::error::RenderError::ProtocolMismatch {
-                    node_protocol,
-                    constraints_protocol: "Sliver",
-                });
-            }
+        let Some(entry) = frame.node_mut().as_sliver_mut() else {
+            return Err(crate::error::RenderError::ProtocolMismatch {
+                node_protocol,
+                constraints_protocol: "Sliver",
+            });
         };
 
-        let descendant_error_flag = std::cell::Cell::new(false);
-        let descendant_error_for_cb = &descendant_error_flag;
-        let descendant_error_for_box_cb = &descendant_error_flag;
-        let descendant_error_for_intrinsic_cb = &descendant_error_flag;
-        let arena_for_cb: &SubtreeArena<'_> = arena;
+        let descendant_error_flag = Cell::new(false);
+        let outcomes = ChildOutcomes {
+            arena,
+            parent: id,
+            descendant_failed: &descendant_error_flag,
+        };
 
         let cb_owned = move |child_id: RenderId,
                              child_constraints: SliverConstraints|
               -> crate::error::RenderResult<SliverGeometry> {
-            // SAFETY: `arena_for_cb` is alive for the whole dirty-root
-            // walk, and this callback reborrows a child slot distinct from
-            // the current sliver node.  `LayoutCycleGuard` rejects re-entry.
-            Ok(
-                match unsafe {
-                    layout_sliver_subtree_borrowed(arena_for_cb, child_id, child_constraints)
-                } {
-                    Ok(geometry) => {
-                        arena_for_cb.note_layout_success(child_id);
-                        geometry
-                    }
-                    Err(err) => {
-                        if err.is_recoverable_layout_error() {
-                            return Err(err);
-                        }
-                        arena_for_cb.note_layout_failure(
-                            id,
-                            child_id,
-                            &err,
-                            Some(child_constraints.into()),
-                        );
-                        descendant_error_for_cb.set(true);
-                        tracing::error!(
-                            parent = id.as_u64(),
-                            ?child_id,
-                            ?err,
-                            "layout_dirty_root: sliver descendant layout failed; \
-                             returning SliverGeometry::ZERO to caller's perform_layout. \
-                             The failure is recorded against the child's retry \
-                             budget (layout poison).",
-                        );
-                        SliverGeometry::ZERO
-                    }
-                },
+            outcomes.settle(
+                child_id,
+                Some(child_constraints.into()),
+                layout_sliver_subtree_borrowed(arena, child_id, child_constraints),
+                SliverGeometry::ZERO,
+                "layout_dirty_root: sliver descendant layout failed; \
+                 returning SliverGeometry::ZERO to caller's perform_layout. \
+                 The failure is recorded against the child's retry \
+                 budget (layout poison).",
             )
         };
         let cb_ref: SliverChildLayoutCallback<'_> = &cb_owned;
@@ -2221,46 +1591,24 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                 // read before the call because the walk's failure sink may
                 // change the record. A child laid out over a failed descendant
                 // is not substituted; its size is the one it paints at.
-                let substituted = arena_for_cb
+                let substituted = arena
                     .layout_poison
                     .serves_stand_in(child_id, child_constraints.into());
-                // SAFETY: same subtree-borrow contract as the sliver child
-                // callback, but routed through the Box layout walk.
-                Ok(
-                    match unsafe {
-                        layout_subtree_borrowed(arena_for_cb, child_id, child_constraints)
-                    } {
-                        Ok(size) if substituted => crate::protocol::BoxChildSize::StandIn(size),
-                        Ok(size) => {
-                            arena_for_cb.note_layout_success(child_id);
-                            crate::protocol::BoxChildSize::Measured(size)
-                        }
-                        Err(err) => {
-                            if err.is_recoverable_layout_error() {
-                                return Err(err);
-                            }
-                            arena_for_cb.note_layout_failure(
-                                id,
-                                child_id,
-                                &err,
-                                Some(child_constraints.into()),
-                            );
-                            descendant_error_for_box_cb.set(true);
-                            tracing::error!(
-                                parent = id.as_u64(),
-                                ?child_id,
-                                ?err,
-                                "layout_dirty_root: box descendant layout failed from sliver parent; \
-                                 returning Size::ZERO to caller's perform_layout. \
-                                 The failure is recorded against the child's retry \
-                                 budget (layout poison).",
-                            );
-                            crate::protocol::BoxChildSize::StandIn(
-                                flui_foundation::geometry::Size::ZERO,
-                            )
-                        }
-                    },
-                )
+                match layout_subtree_borrowed(arena, child_id, child_constraints) {
+                    Ok(size) if substituted => Ok(crate::protocol::BoxChildSize::StandIn(size)),
+                    outcome => outcomes.settle(
+                        child_id,
+                        Some(child_constraints.into()),
+                        outcome.map(crate::protocol::BoxChildSize::Measured),
+                        crate::protocol::BoxChildSize::StandIn(
+                            flui_foundation::geometry::Size::ZERO,
+                        ),
+                        "layout_dirty_root: box descendant layout failed from sliver parent; \
+                     returning Size::ZERO to caller's perform_layout. \
+                     The failure is recorded against the child's retry \
+                     budget (layout poison).",
+                    ),
+                }
             };
         let box_cb_ref: crate::protocol::sliver_protocol::ErasedBoxChildLayoutCallback<'_> =
             &box_cb_owned;
@@ -2269,34 +1617,15 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                                            dimension: crate::storage::IntrinsicDimension,
                                            extent: f64|
               -> crate::error::RenderResult<f64> {
-            // SAFETY: same subtree-borrow contract as the Sliver -> Box
-            // layout callback, routed through the Box intrinsic bridge.
-            Ok(
-                match unsafe {
-                    box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent)
-                } {
-                    Ok(value) => {
-                        arena_for_cb.note_layout_success(child_id);
-                        value
-                    }
-                    Err(err) => {
-                        if err.is_recoverable_layout_error() {
-                            return Err(err);
-                        }
-                        arena_for_cb.note_layout_failure(id, child_id, &err, None);
-                        descendant_error_for_intrinsic_cb.set(true);
-                        tracing::error!(
-                            parent = id.as_u64(),
-                            ?child_id,
-                            ?err,
-                            "layout_dirty_root: box intrinsic query failed from sliver parent; \
-                             returning 0.0 to caller's perform_layout. \
-                             The failure is recorded against the child's retry \
-                             budget (layout poison).",
-                        );
-                        0.0
-                    }
-                },
+            outcomes.settle(
+                child_id,
+                None,
+                box_intrinsic_query_borrowed(arena, child_id, dimension, extent),
+                0.0,
+                "layout_dirty_root: box intrinsic query failed from sliver parent; \
+                 returning 0.0 to caller's perform_layout. \
+                 The failure is recorded against the child's retry \
+                 budget (layout poison).",
             )
         };
         let box_intrinsic_cb_ref: crate::protocol::sliver_protocol::BoxChildIntrinsicCallback<'_> =
@@ -2332,28 +1661,11 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         let geometry = match unwind_result {
             Ok(inner) => inner?,
             Err(payload) => {
-                let msg = payload_text(&*payload).unwrap_or("(non-string panic payload)");
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a panic report runs tracing subscribers, contained"
-                )]
-                if let Err(reporting_payload) =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        tracing::error!(
-                            render_object = debug_name,
-                            panic_msg = msg,
-                            "perform_layout panicked in non-leaf sliver path — surfacing as \
-                         RenderError::Poisoned",
-                        );
-                    }))
-                {
-                    // Reporting is secondary; do not retire its opaque failure or report it again.
-                    flui_foundation::panic::discard_payload(reporting_payload);
-                }
-                flui_foundation::panic::discard_payload(payload);
-                return Err(crate::error::RenderError::poisoned(
+                return Err(poisoned_by_panic(
                     debug_name,
-                    crate::error::PoisonPhase::Layout,
+                    payload,
+                    "perform_layout panicked in non-leaf sliver path — surfacing as \
+                     RenderError::Poisoned",
                 ));
             }
         };
@@ -2385,56 +1697,13 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         } else {
             entry.state().clear_needs_layout();
         }
-
-        // `entry`, `node_ref`, and all callbacks drop here.
-        // The parent slot's Unique tag (`&mut *node_ptr`) is released.
         geometry
     };
 
-    // -----------------------------------------------------------------------
-    // Phase 4 — child-offset commit (no &mut to any slot is live AT THIS
-    // CALL LEVEL).
-    //
-    // Commit child paint offsets produced by sliver parents
-    // (`RenderSliverPadding` et al.) into the same parent-relative
-    // offset slot that paint / hit-test already consult.  The
-    // `ErasedSliverChildState` vec is per-walk transient; without
-    // this commit, child placement dies with the layout stack frame.
-    //
-    // SOUNDNESS CONSTRAINT — in-flight skip: identical contract to the
-    // Box path Phase 4 above.  A child whose in-flight flag is set has
-    // its `&mut RenderNode` live on an ancestor frame's Phase 2+3 block.
-    // Writing to that slot (even atomically) while the Unique tag is live is
-    // UB under SB and TB.  We skip such children; their next-frame layout
-    // will re-establish correct offsets.
-    //
-    // SAFETY: For children NOT in flight, the Phase 2+3 block has ended and
-    // their slots carry no live borrow from this call level.  `set_offset` is
-    // an atomic store through `&self`.
-    // -----------------------------------------------------------------------
-    // Advance HERE — see the box walk's commit for why this cannot move to
-    // layout entry.
-    let parent_generation = arena.get(id).map_or(0, |ptr| {
-        // SAFETY: as for the child reborrows below.
-        let node: &crate::storage::RenderNode = unsafe { &*ptr.0 };
-        node.advance_layout_generation()
-    });
-    for cs in child_states.iter() {
-        // Skip slots whose &mut is live on an ancestor frame.
-        if arena.is_in_flight(cs.id) {
-            continue;
-        }
-        if let Some(child_ptr) = arena.get(cs.id) {
-            // SAFETY: child `cs.id` is NOT in-flight (guard above).
-            let child_node: &crate::storage::RenderNode = unsafe { &*child_ptr.0 };
-            child_node.set_offset(cs.offset);
-            // See the box walk's commit: only children this pass laid out are
-            // stamped, and paint and hit-test skip the rest.
-            if cs.laid_out_this_pass {
-                child_node.set_placed_by(id, parent_generation);
-            }
-        }
-    }
+    // Commit child paint offsets produced by sliver parents (`RenderSliverPadding` et al.) into
+    // the parent-relative offset paint and hit-test consult; on the success path only, as in the
+    // Box walk.
+    child_states.commit_placement(&frame);
 
     Ok(geometry)
 }
@@ -2485,19 +1754,16 @@ mod tests {
             tree.remove_shallow(stale);
 
             let walk = QueryWalk::new(&mut tree);
-            let mut held = walk
-                .enter(root)
-                .ok()
-                .expect("BUG: first entry of a live node");
+            let held = walk.enter(root).expect("BUG: first entry of a live node");
             assert!(held.node().children().contains(&child));
-            assert!(matches!(walk.enter(root), Err(QueryRefusal::InFlight)));
+            assert!(matches!(walk.enter(root), Err(EnterRefusal::InFlight)));
             assert!(
                 walk.child_parent_data(root).is_none(),
                 "an entered node's parent data is not read"
             );
-            assert!(matches!(walk.enter(stale), Err(QueryRefusal::Missing)));
+            assert!(matches!(walk.enter(stale), Err(EnterRefusal::Missing)));
             // A different node is enterable beside the held one.
-            drop(walk.enter(child).ok().expect("BUG: a distinct node"));
+            drop(walk.enter(child).expect("BUG: a distinct node"));
 
             drop(held);
             assert!(
@@ -2507,61 +1773,11 @@ mod tests {
         }
     }
 
-    // There used to be a `check_thread_panics_on_wrong_thread` test proving
-    // a runtime assert fired when `SubtreeArena` was moved to another
-    // thread via `std::thread::scope`. Both the assert (`check_thread`) and
-    // `NodePtr`'s manual `unsafe impl Send/Sync` are gone now: the pipeline
-    // owner this arena serves was already confined to one thread by
-    // construction (`PipelineCell` wraps `Rc<RefCell<_>>`), and
-    // `ParentData` no longer requires `Send + Sync`, so `SubtreeArena` is
-    // `!Send + !Sync` by ordinary type-level inference -- no manual impl,
-    // no runtime check, nothing to bypass. `Scope::spawn` requires its
-    // closure to be `Send`, so the exact cross-thread misuse the old test
-    // constructed is now a compile error, one layer earlier than
-    // `check_thread`'s former assert -- the same class of improvement as
-    // `PipelineCell::with_mut`'s reentry panic: a documented strengthening,
-    // not a parity break. The two pins below are the primary evidence for
-    // this: `SubtreeArena` for the aggregate (every field, including the
-    // `RefCell` sinks), `NodePtr` for the raw pointer itself (so a future
-    // field addition that tried to re-derive `Send`/`Sync` some other way
-    // would be caught at the type it actually touches). Both types are
-    // private to this crate, so the externally observable half of this
-    // same fact is a `compile_fail` doctest on `LayoutChildCallback`'s own
-    // doc comment in `protocol/box_protocol.rs` (the nearest public type
-    // with the identical never-`Send` shape) -- cross-linked so neither
-    // half is deleted as "redundant" without checking the other.
+    // The arena never leaves the thread that took the lease: `Scope::spawn` requires a `Send`
+    // closure, so moving one is a compile error. Both types are private to this crate, so the
+    // externally observable half of the same fact is a `compile_fail` doctest on
+    // `LayoutChildCallback`'s doc comment in `protocol/box_protocol.rs` (the nearest public type
+    // with the same never-`Send` shape); the entry's own pin is in `storage/node_slab.rs`.
     static_assertions::assert_not_impl_any!(SubtreeArena<'_>: Send, Sync);
-    static_assertions::assert_not_impl_any!(NodePtr: Send, Sync);
-
-    // ========================================================================
-    // Real-NodePtr walks — the tests the miri gate actually needs
-    // ========================================================================
-    //
-    // The five tests above never dereference a real `NodePtr` (the one they
-    // construct is deliberately dangling), so on their own they give miri
-    // nothing to check about the layout walk's reborrow discipline.  The two
-    // tests below drive `PipelineOwner::layout_dirty_root` over heap-real
-    // nodes so miri interprets the full Phase 1 / 1b / 2+3 / 4 sequence,
-    // including the in-flight gate on the baseline callback (whose absence
-    // is provenance-only UB — invisible to a hardware test run).
-
-    // ========================================================================
-    // Reentrant layout — a mid-layout child-request against the checked-out
-    // owner (miri coverage widened alongside the two walks above; CI's
-    // `miri` job runs it).
-    // ========================================================================
-    //
-    // `RenderSliverList`'s request-strategy seam
-    // (`SliverLayoutContext::request_child_build`) records a child-build
-    // request into the arena's `pending_child_requests` sink WHILE a real
-    // `NodePtr` for the requesting sliver is live -- the walk has not
-    // returned, so the request is issued strictly mid-layout. The walk
-    // itself runs through a `PipelineCell` checkout (the production
-    // `with_mut { mem::take -> into_layout -> ... -> into_idle }` pattern
-    // from `flui-view/src/owner/layout_builder.rs`), and after
-    // `layout_dirty_root` returns, `mark_needs_layout` is called on the
-    // requesting sliver's id -- still inside the same checkout -- to prove
-    // the checked-out owner accepts an invalidation immediately after a
-    // walk that queued a request against it, with no aliasing hazard
-    // between the two.
+    static_assertions::assert_not_impl_any!(LayoutFrame<'_, '_>: Send, Sync);
 }

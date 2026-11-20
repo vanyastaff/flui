@@ -198,7 +198,7 @@ pub enum RenderError {
 
     /// A layout recursed (through `LayoutContext::layout_child`) back into a
     /// node whose layout was still in flight on the same frame. The layout
-    /// walk's `LayoutCycleGuard` marks each slot in flight while its frame
+    /// walk's `LayoutFrame` marks each slot in flight while its frame
     /// runs and refuses a second entry with this variant.
     #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
     LayoutCycle(RenderId),

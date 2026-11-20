@@ -1736,7 +1736,7 @@ lives in `flui-interaction` (`crates/flui-interaction/src/pointer/mouse_tracker.
 the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
 owning crate.
 
-`NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced).
+The layout walk reaches a node only through an `EnteredNode` (`src/storage/node_slab.rs`), which holds the slot's in-flight bit while it lives and wraps the one pointer into the slot; `src/pipeline/owner/subtree_arena.rs` has no `unsafe`. The entry and the walk types holding it are `!Send + !Sync` by the language default, with no manual impl, pinned by `static_assertions::assert_not_impl_any!` on `EnteredNode`, `SubtreeArena` and `LayoutFrame`; confinement to the constructing thread is structural, with no runtime thread check.
 
 ---
 
@@ -1757,7 +1757,7 @@ These items were listed as pending in earlier drafts; all are now shipped.
 
 **Files:** [`src/pipeline/owner/layout.rs`](src/pipeline/owner/layout.rs) (`layout_dirty_root`), [`src/pipeline/owner/subtree_arena.rs`](src/pipeline/owner/subtree_arena.rs) (`layout_subtree_borrowed`).
 
-`layout_dirty_root` is the dispatcher: it obtains disjoint `&mut`s via `SubtreeArena`, constructs a typed `RawBoxLayoutContext` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
+`layout_dirty_root` is the dispatcher: it enters each node through `SubtreeArena`, constructs a typed `RawBoxLayoutContext` with children + callback, and calls `perform_layout_raw` through the erased view. The pipeline-driven path was built directly into this entry point; the phantom stubs that earlier documentation described were never real functions.
 
 ### `layout_leaf_only` — SHIPPED
 

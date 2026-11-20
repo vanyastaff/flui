@@ -3322,7 +3322,7 @@ mod tests {
             );
             let mut builder = SceneBuilder::new();
             builder.add(PictureLayer::new(canvas.finish()));
-            let scene = Scene::new(builder.build());
+            let scene = builder.build();
             painter.begin_frame().expect("optimized FXC frame opens");
             let _recorded: crate::frame_protocol::RasterCounters = Renderer::record_frame_content(
                 &mut painter,

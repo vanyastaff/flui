@@ -60,7 +60,8 @@ fn child_depth(parent_depth: u16) -> u16 {
         .expect("BUG: render tree depth exceeds u16::MAX (or a parent cycle)")
 }
 
-/// What [`RenderTree::set_children`] changed.
+/// What a child-list edit of the render tree (`RenderTree::set_children`)
+/// changed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 #[must_use]
 pub struct ChildrenUpdate {
@@ -839,6 +840,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::*;
+    use crate::storage::EnterRefusal;
     use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
 
     // `RenderTree` stores `Box<dyn RenderObject>`, and `RenderObject` dropped
@@ -870,15 +872,21 @@ mod tests {
             "a parent is not its child's child"
         );
 
-        assert!(lease.try_enter(child));
-        assert!(!lease.try_enter(child), "a second enter is refused");
-        assert!(lease.is_in_flight(child));
+        let entered = lease.enter(child).expect("BUG: the child is live");
+        assert_eq!(
+            lease.enter(child).err(),
+            Some(EnterRefusal::InFlight),
+            "a second enter is refused"
+        );
         assert!(
             lease.is_child_of(grandchild, child),
             "headers read while the node is entered"
         );
-        lease.leave(child);
-        assert!(!lease.is_in_flight(child));
+        drop(entered);
+        assert!(
+            lease.enter(child).is_ok(),
+            "dropping the entry clears the bit"
+        );
     }
 
     #[test]
@@ -906,9 +914,13 @@ mod tests {
             .expect("reused slot");
 
         let lease = tree.lease();
-        assert!(lease.node(child).is_none(), "the old id fails resolution");
+        assert_eq!(
+            lease.enter(child).err(),
+            Some(EnterRefusal::Missing),
+            "the old id fails resolution"
+        );
         assert!(!lease.is_child_of(child, root));
-        assert!(lease.node(reused).is_some());
+        assert!(lease.enter(reused).is_ok());
         assert!(lease.is_child_of(reused, root));
     }
 
@@ -926,11 +938,18 @@ mod tests {
         let next = tree.insert_box_child(parent, make_leaf()).expect("next");
 
         let lease = tree.lease();
-        assert!(lease.node(last).is_none(), "the last id names no node");
+        assert_eq!(
+            lease.enter(last).err(),
+            Some(EnterRefusal::Missing),
+            "the last id names no node and claims nothing"
+        );
         assert!(!lease.is_child_of(last, parent));
-        assert!(!lease.try_enter(last), "the last id claims nothing");
-        assert!(!lease.is_in_flight(last));
-        assert!(lease.node(next).is_some());
+        assert_eq!(
+            lease.enter(last).err(),
+            Some(EnterRefusal::Missing),
+            "a refused id leaves no bit behind"
+        );
+        assert!(lease.enter(next).is_ok());
         assert!(matches!(removed, Ok(true)), "the last id is removed");
     }
 
