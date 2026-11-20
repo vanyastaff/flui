@@ -21,7 +21,8 @@
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = [
-    "--cfg", "fuzzing",
+    "--cfg",
+    "fuzzing",
     "-Cpasses=sancov-module",
     "-Cllvm-args=-sanitizer-coverage-level=4",
     "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
