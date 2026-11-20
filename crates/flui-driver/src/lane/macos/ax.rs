@@ -4,7 +4,7 @@
 //! and its bounds in screen device pixels.
 //!
 //! The window's element is walked through the bounded walk the Windows lane's reads use
-//! (`lane::windows::walk`, which is apart from any OS API): a walk cut short says so
+//! (`lane::walk`, which is apart from any OS API): a walk cut short says so
 //! (`Tree::truncated`), and the search for an identifier is bounded the same way. The client
 //! waits [`MESSAGING_TIMEOUT_SECONDS`] for the app, and the first attribute that does not answer
 //! fails the read with a typed timeout instead of a node of defaults. Text is cut while it is
@@ -32,7 +32,7 @@ use crate::lane::macos::frame;
 use crate::lane::macos::pointer::Point;
 use crate::lane::macos::roles;
 use crate::lane::macos::screen::{self, PointRect};
-use crate::lane::windows::walk::{self, Properties, Provider, ProviderError};
+use crate::lane::walk::{self, Properties, Provider, ProviderError};
 
 /// How long the client waits for the app to answer one call, in seconds.
 pub const MESSAGING_TIMEOUT_SECONDS: f32 = 5.0;

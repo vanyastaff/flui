@@ -10,6 +10,8 @@ mod launch;
 mod macos_desktop;
 mod macos_lane;
 mod policy;
+#[cfg(windows)]
+mod private_desktop;
 mod report;
 mod scenarios;
 #[cfg(any(unix, windows))]

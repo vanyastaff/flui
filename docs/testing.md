@@ -273,7 +273,11 @@ windows the cases before it opened: a dropped platform leaves its windows open
 (`no_case_leaves_a_window_shown` in `drag::windows::tests`). This holds for `cargo heli nextest run`,
 `cargo nextest run` and every `cargo xtask` task that runs nextest; plain `cargo test` starts its tests on the caller's desktop.
 `windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` fails when a test nextest
-starts is not there.
+starts is not there. The live tests of `flui-driver`'s Windows lane (`windows_desktop::`), which
+open windows and may send input, do not take plain `cargo test`'s start on the caller's desktop:
+their setup (`private_desktop::require`) fails a test that finds itself on the desktop taking the
+user's input unless `FLUI_TEST_VISIBLE_DESKTOP=1` is set, so cargo-gamma and `cargo test` stop
+before the first window.
 
 `FLUI_TEST_VISIBLE_DESKTOP=1` starts the tests on the caller's desktop instead, to watch them.
 

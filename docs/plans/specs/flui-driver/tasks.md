@@ -956,7 +956,7 @@ graph LR
   - The privacy permissions are preflighted from macOS 10.15 (below it, posting needs the
     accessibility trust and nothing guards listening or capture) and refused as `not_supported`
     naming `macos_permission_<name>`.
-  - The AX tree is walked through the Windows lane's bounded walk (`lane::windows::walk`), each
+  - The AX tree is walked through the bounded walk every reader shares (`lane::walk`), each
     child read alone by index (`AXUIElementCopyAttributeValues`) so the walk's budget bounds what
     is copied, the frame's close, minimize, zoom and full-screen buttons left out and the
     adapter's untitled root group lifted into the window. `native_role` reads `AXRole` or
@@ -1066,9 +1066,8 @@ graph LR
     `guard` and `X11Lane` Linux only), `lane::wayland` (`mapping` pure; `libei`, `portal` and
     `WaylandLane` Linux with the `wayland` feature) and `lane::atspi` (`roles` pure, the client
     Linux only), which both read through. The AT-SPI client walks through
-    `lane::windows::walk`, the Windows lane's bounded walk, and the lanes map with
-    `lane::windows::screen` and wait in `lane::windows::activity`'s slices: platform-neutral pieces
-    still under the Windows lane's module.
+    `lane::walk`, the bounded walk every accessibility reader shares, and the lanes map with
+    `lane::screen` and wait in `lane::pacing`'s slices.
   - A window is the app's by the process X-Resource reports for its client, else its
     `_NET_WM_PID`: an app outside the first PID namespace (WSL, a container) writes no
     `_NET_WM_PID`.

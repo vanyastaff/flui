@@ -10,6 +10,11 @@
 //! does that yet, and those runs are owed (`crates/flui-native/platform-parity.toml`).
 //! `FLUI_REQUIRE_INPUT_DESKTOP=1` makes a run off the input desktop fail instead of reporting
 //! `CANNOT_VERIFY`.
+//!
+//! A test that opens a window, installs the hooks or starts a job first asks
+//! [`private_desktop::require`] (through `session`, `live_guard` or `live_job`), which fails a run
+//! that is on the input desktop without `FLUI_TEST_VISIBLE_DESKTOP=1`: libtest (`cargo test`,
+//! cargo-gamma) starts a test there, where these tests open windows over the person's work.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -28,7 +33,7 @@ use flui_driver::{
     expect,
 };
 
-use crate::scenarios;
+use crate::{private_desktop, scenarios};
 
 /// The scenario app `app`, built from this crate's example in its debug profile, which carries
 /// the agent.
@@ -45,6 +50,7 @@ const WINDOW_WITHIN: Duration = Duration::from_secs(60);
 /// A session of the scenario app `app` with the Windows lane attached, its OS-input lock in
 /// `dir`, once the app shows its window.
 fn session(app: &str, dir: &tempfile::TempDir) -> Driver {
+    private_desktop::require();
     let mut driver = Driver::launch(scenario_app(app)).expect("the scenario app starts");
     let deadline = Instant::now() + WINDOW_WITHIN;
     while driver.windows().expect("the app answers").is_empty() {
@@ -62,6 +68,19 @@ fn session(app: &str, dir: &tempfile::TempDir) -> Driver {
                 .expect("the lane runs on the shared desktop"),
         )
         .expect("the lane starts")
+}
+
+/// A guard, on a desktop these tests may use: its hooks and raw-input window go on the calling
+/// thread's desktop.
+fn live_guard() -> WindowsGuard {
+    private_desktop::require();
+    WindowsGuard::new()
+}
+
+/// A kill-on-close job, on a desktop these tests may use: what runs in it may show a window.
+fn live_job() -> KillOnCloseJob {
+    private_desktop::require();
+    KillOnCloseJob::try_new().expect("a job")
 }
 
 /// Waits for the app's window to show its controls.
@@ -191,7 +210,7 @@ fn the_compositor_captures_the_apps_window_alone() {
 
 #[test]
 fn the_guard_watches_and_stops_on_a_desktop_of_its_own() {
-    let mut guard = WindowsGuard::new();
+    let mut guard = live_guard();
     guard
         .arm()
         .expect("the hooks and the raw-input window install");
@@ -308,7 +327,7 @@ fn the_lanes_check_allows_chords_whose_release_is_masked() {
 /// lane's: it says so, which ends the run as the person's input does, never as unguarded.
 #[test]
 fn a_guard_whose_watcher_died_ends_the_run() {
-    let mut guard = WindowsGuard::new();
+    let mut guard = live_guard();
     guard.arm().expect("the guard watches");
     assert!(
         flui_driver::testing::end_guard_watcher(&guard),
@@ -335,7 +354,7 @@ fn a_guard_whose_watcher_died_ends_the_run() {
 /// nothing until resumed, and then runs.
 #[test]
 fn a_process_joins_its_job_before_it_runs() {
-    let job = KillOnCloseJob::try_new().expect("a job");
+    let job = live_job();
     let mut command = Command::new("cmd");
     command
         .args(["/c", "exit", "7"])
@@ -357,7 +376,7 @@ fn a_process_joins_its_job_before_it_runs() {
 
 #[test]
 fn a_job_ends_its_processes_when_it_closes() {
-    let job = KillOnCloseJob::try_new().expect("a job");
+    let job = live_job();
     let mut command = Command::new("cmd");
     command
         .args(["/c", "ping", "-n", "60", "127.0.0.1"])
