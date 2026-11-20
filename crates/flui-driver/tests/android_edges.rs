@@ -207,6 +207,8 @@ fn a_window_is_cut_only_when_it_lies_inside_the_capture() {
             "{refused:?}"
         );
     }
+    // A buffer shorter than its size says is refused, not read past.
+    assert!(screencap::crop(width, height, rgba[..40].to_vec(), window(0, 0, 4, 3)).is_err());
 }
 
 #[test]
