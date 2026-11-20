@@ -618,14 +618,13 @@ pub struct InteractiveNodeState {
     tap: TapSlot,
     recognizers: RecognizerHost,
     focus: Option<FocusHost>,
-    /// The node's own bindings, as the latest view gave them.
-    own_actions: Option<Rc<Vec<(TypeId, ErasedAction)>>>,
-    /// The chain above the node, read in lifecycle hooks.
-    ambient_actions: Option<ActionChain>,
-    /// The node's bindings layered over the ambient chain. `None` while the
-    /// node binds nothing: the ambient chain is then the one in force, and
-    /// the node publishes none.
-    chain: Option<ActionChain>,
+    /// The chain in force at the node. While `layered`, it is the node's
+    /// own bindings, as the latest view gave them, hung under the chain
+    /// above the node, and the node publishes it; otherwise the node binds
+    /// nothing, this is the chain above it, and the node publishes none.
+    /// One field for the three, since a layered link holds the other two.
+    actions: Option<ActionChain>,
+    layered: bool,
     /// The platform convention the node is built under, recorded with the
     /// chain on the focus node. `None` before `init_state`.
     platform: Option<TargetPlatform>,
@@ -694,28 +693,54 @@ impl InteractiveNodeState {
         states.write(WRITTEN, values);
     }
 
-    fn layer_actions(&mut self) {
-        self.chain = self
-            .own_actions
-            .as_ref()
-            .map(|own| layered_chain(self.ambient_actions.clone(), Rc::clone(own)));
+    /// The chain above the node.
+    fn ambient_actions(&self) -> Option<ActionChain> {
+        if self.layered {
+            self.actions.as_ref().and_then(ActionChain::enclosing).cloned()
+        } else {
+            self.actions.clone()
+        }
+    }
+
+    /// The node's own chain, which it publishes: `None` while it binds
+    /// nothing.
+    fn own_chain(&self) -> Option<&ActionChain> {
+        self.actions.as_ref().filter(|_| self.layered)
+    }
+
+    /// Hang `own` under `ambient`, or take `ambient` as the chain in force
+    /// when the node binds nothing. Returns the chain this replaces, for the
+    /// caller to drop: its actions are user code.
+    fn layer_actions(
+        &mut self,
+        ambient: Option<ActionChain>,
+        own: Option<Rc<Vec<(TypeId, ErasedAction)>>>,
+    ) -> Option<ActionChain> {
+        self.layered = own.is_some();
+        let next = match own {
+            Some(own) => Some(layered_chain(ambient, own)),
+            None => ambient,
+        };
+        std::mem::replace(&mut self.actions, next)
     }
 
     /// What the hosted focus node records: the chain in force at the node
     /// and the platform convention (ADR-0079).
     fn focus_record(&self) -> Option<FocusRecord> {
-        let chain = self
-            .chain
-            .clone()
-            .or_else(|| self.ambient_actions.clone())?;
-        Some(FocusRecord::new(chain, self.platform?))
+        Some(FocusRecord::new(self.actions.clone()?, self.platform?))
     }
 
     fn read_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.ambient_actions = EnclosingActions::depend_on(ctx);
+        let ambient = EnclosingActions::depend_on(ctx);
         self.platform = Some(PlatformConvention::of(ctx));
         self.ring_style = DefaultFocusRingStyle::shared(ctx);
-        self.layer_actions();
+        // The node's link is rehung under the chain now above it: in place
+        // while nothing else holds it yet, as at `init_state`.
+        let outgoing = match self.actions.as_mut().filter(|_| self.layered) {
+            Some(own) => own.rehang(ambient),
+            None => std::mem::replace(&mut self.actions, ambient),
+        };
+        drop(outgoing);
     }
 
     fn focus_node(&self) -> Option<&Rc<FocusNode>> {
@@ -791,9 +816,13 @@ impl StatefulRenderView for InteractiveNode {
                 .focus_config()
                 .as_ref()
                 .map(|config| FocusHost::new(config, self.focus_edges(), ctx)),
-            own_actions: self.declared_actions(),
-            ambient_actions: None,
-            chain: None,
+            // Hung under nothing until `init_state` reads the chain above:
+            // the link is rehung there in place, so mounting allocates it
+            // once.
+            layered: self.actions.is_some(),
+            actions: self
+                .declared_actions()
+                .map(|own| layered_chain(None, own)),
             platform: None,
             ring_style: None,
             anchor: SubtreeAnchor::new(),
@@ -865,8 +894,8 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             self.recognizers.update(self.tap.factory().as_slice());
         });
         // The replaced bindings drop here; an action is user code.
-        failure.contain(|| self.own_actions = new.declared_actions());
-        self.layer_actions();
+        let ambient = self.ambient_actions();
+        failure.contain(|| drop(self.layer_actions(ambient, new.declared_actions())));
         let record = self.focus_record();
         if let (Some(focus), Some(config)) = (&mut self.focus, &new.focus_config()) {
             failure.contain(|| {
@@ -988,7 +1017,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         if let Some(focus) = &self.focus {
             focus.provide(values);
         }
-        if let Some(chain) = &self.chain {
+        if let Some(chain) = self.own_chain() {
             values.value(EnclosingActions::new(chain.clone()));
         }
     }
