@@ -536,7 +536,8 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
     pub(crate) fn end_frame(&mut self) {
         self.mask.release_retired();
         self.color.release_retired();
-        self.frame = self.frame.wrapping_add(1);
+        // A u64 frame count at one frame per microsecond lasts 584 000 years.
+        self.frame += 1;
         self.reported_full = false;
     }
 

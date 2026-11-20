@@ -332,7 +332,8 @@ impl BufferPool {
             }
         }
 
-        self.current_frame = self.current_frame.wrapping_add(1);
+        // A u64 frame count at one frame per microsecond lasts 584 000 years.
+        self.current_frame += 1;
     }
 
     /// Total byte capacity held across all three pools (live + free).

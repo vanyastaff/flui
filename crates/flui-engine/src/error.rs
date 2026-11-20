@@ -21,8 +21,8 @@
 //! lifetime of the process, and validation failures surface through wgpu's
 //! `on_uncaptured_error` host-level handler (which logs and aborts) rather
 //! than a `Result` the engine propagates. There is therefore no typed
-//! shader/pipeline error variant to wrap. Resource I/O failures (font/shader
-//! file loads) use [`EngineError::ResourceIo`]; GPU-side init failures use
+//! shader/pipeline error variant to wrap. The engine reads no files, so it has no
+//! I/O variant either; GPU-side init failures use
 //! [`EngineError::SurfaceCreation`] / [`EngineError::DeviceCreation`] /
 //! [`EngineError::AdapterRequest`].
 
@@ -305,23 +305,6 @@ pub enum EngineError {
     },
 
     // ========================================================================
-    // Resource errors
-    // ========================================================================
-    /// Filesystem-backed resource (font, shader file, asset) failed to load.
-    ///
-    /// Preserves the underlying `std::io::Error` via `#[source]` so callers can
-    /// match on `io::ErrorKind::{NotFound, PermissionDenied, ...}` without
-    /// re-parsing the formatted message.
-    #[error("Resource I/O failure ({context})")]
-    ResourceIo {
-        /// Caller-supplied context (e.g. `"font load /path/to/font.ttf"`).
-        context: String,
-        /// Underlying `std::io::Error`.
-        #[source]
-        source: std::io::Error,
-    },
-
-    // ========================================================================
     // Initialization errors
     // ========================================================================
     /// Failed to create surface from window
@@ -546,7 +529,6 @@ impl EngineError {
             | Self::PreparedResourceAllocation { .. }
             | Self::DeviceDomainMismatch
             | Self::FrameAlreadyActive
-            | Self::ResourceIo { .. }
             | Self::UnsupportedSurfaceColorConfiguration { .. } => Recoverability::Unrecoverable,
         }
     }
@@ -592,20 +574,6 @@ impl EngineError {
         E: Error + Send + Sync + 'static,
     {
         EngineError::AdapterRequest(Box::new(error))
-    }
-
-    /// Create a filesystem-resource-load error from an [`std::io::Error`].
-    ///
-    /// `context` is a caller-supplied free-form description (e.g.
-    /// `"font load /path/to/font.ttf"`); the underlying `io::Error` is
-    /// preserved via `#[source]` so callers can match on
-    /// [`std::io::ErrorKind`].
-    #[must_use]
-    pub fn resource_io<S: Into<String>>(context: S, source: std::io::Error) -> Self {
-        EngineError::ResourceIo {
-            context: context.into(),
-            source,
-        }
     }
 }
 
