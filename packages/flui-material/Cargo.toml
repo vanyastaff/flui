@@ -43,6 +43,12 @@ flui-layer = { workspace = true }
 # Key events (`events`, `testing::input::KeyEventBuilder`) and `FocusManager`,
 # which a few tests construct directly (`ink_well.rs`, `text_field.rs`).
 flui-interaction = { workspace = true, features = ["testing"] }
+# `tests/animated_icon_data.rs` regenerates the animated icon constants: kurbo reads the SVG
+# path data of the key frames, roxmltree the SVG files, and regex Flutter's generated Dart
+# data when `FLUI_FLUTTER_DIR` names a checkout.
+kurbo = { workspace = true }
+roxmltree = { workspace = true }
+regex = { workspace = true }
 
 [lints]
 workspace = true

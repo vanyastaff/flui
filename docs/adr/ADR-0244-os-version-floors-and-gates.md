@@ -83,7 +83,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
 2. **Declared once.** `platform-support.toml` at the repository root holds, per environment, the floor
    and what sets it (decision 1's last column). It is the only place a floor number is written by
    hand. `flui-native` and `flui-cli` are published crates whose package archives cannot read a
-   repository-root file, so `cargo xtask platform-floor --write` generates a committed Rust source in
+   repository-root file, so `flui-cli`'s `platform_floor` test (blessed with `FLUI_BLESS=1`) generates a committed Rust source in
    each (the floor constant of each version type; the packaging values: Android `minSdk`, the iOS and
    macOS deployment targets passed to rustc, the Windows manifest's `supportedOS`), and the check mode
    fails when a generated file differs from the root. CI reads the root file for
@@ -141,7 +141,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    same shape (`WebFeature` is the model). A version is never used to guess hardware or compositor
    support, and a browser version is never read.
 
-6. **The markers are the version map.** `cargo xtask platform-floor --write` generates
+6. **The markers are the version map.** the `platform_floor` test of `flui-cli`, blessed with `FLUI_BLESS=1`, generates
    the version-map page under `docs/` from `platform-support.toml` and the markers: per environment, the floor
    and what sets it, then each version that adds something, the markers it unlocks and what FLUI does
    below it. What differs from version to version is read from that page, and it cannot drift from the
@@ -155,14 +155,14 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
      covers it fails as an expected failure naming the gap, never a skip.
    A version below the floor is none of these: it is unsupported (decision 3).
 
-8. **Verified, not assumed.** `cargo xtask platform-floor` runs in `checks`: every packaging site and
+8. **Verified, not assumed.** `flui-cli`'s `platform_floor` test checks that every packaging site and
    template agrees with `platform-support.toml`; the built artifacts carry the floor (Mach-O `minos`,
    the APK manifest's `minSdk`, the highest `GLIBC_` symbol version of the Linux ELF, no Windows import
    newer than the floor build); no source outside the version modules compares a version; the version
    map is current. `docs/platform-parity.md` has a "Version floor" row per environment, ✅ only after
    an executed run on the floor version; the row links to the generated version map rather than
    repeating the numbers. The tests, written through each crate's public API from its `tests/`:
-   - `platform_floor_sources_agree` (xtask): the root file, the generated sources, the templates and
+   - `the_checked_in_files_agree` (flui-cli, module `platform_floor`): the root file, the generated sources, the templates and
      the version map agree, and a planted drift in each is reported;
    - `packaged_artifacts_carry_the_floor` (flui-cli): the generated `Info.plist`, Windows manifest,
      APK manifest and Gradle property carry the floor, and an application `min` below it is rejected;

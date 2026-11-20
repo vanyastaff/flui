@@ -13,8 +13,8 @@
 //!
 //! [`Driver::start_trace`](crate::Driver::start_trace) begins one and
 //! [`Driver::finish_trace`](crate::Driver::finish_trace) ends it; a session that ends without
-//! finishing leaves it incomplete, as a crash does. [`Trace::open`] reads one back, [`replay`]
-//! sends its commands again and reports where the results diverge, and [`codegen`] writes a Rust
+//! finishing leaves it incomplete, as a crash does. [`Trace::open`] reads one back, [`replay()`]
+//! sends its commands again and reports where the results diverge, and [`codegen()`] writes a Rust
 //! test from it. Text is redacted unless the session keeps it ([`TEXT_FIELDS`]).
 
 mod codegen;

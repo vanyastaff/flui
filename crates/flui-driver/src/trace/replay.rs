@@ -1,25 +1,4 @@
-//! Replaying a trace (ADR-0241 §6): each command is sent again, through the method table, and
-//! its result compared with the recorded one modulo what varies between runs.
-//!
-//! - **Handles** are renumbered by first appearance: the first element or window handle a result
-//!   names stands for the one the replay's result names in its place, and a later command's
-//!   parameters are sent with the replay's handle. Only the positions the method's own schema
-//!   types as a handle are read as handles (`handles`): a text, a locator's name or an input
-//!   source's id that looks like one (`e1`) is text. Locators are sent as written, so the replay
-//!   resolves them again.
-//! - **Redacted text** is never sent: a command of a redacted trace whose parameters hold the
-//!   redaction mark ends the replay there, refused (ADR-0215 §5, ADR-0241 §4); the trace does not
-//!   hold what was typed. A trace recorded with `keep_text` replays it.
-//! - **Times and frames** (`t_ms`, `frame`, `frames`) are left out of the comparison.
-//! - **Positions** (`rect`, `surface_rect`, `point`, `at`, `x`, `y`) are compared only when the
-//!   header's fidelity is exact.
-//! - **Text** in a redacted trace is compared redacted: the replay's result is redacted the same
-//!   way first.
-//! - A failure compares by its wire code.
-//!
-//! The first result that differs ends the replay with a [`Divergence`]. A command whose method is
-//! not in the protocol's table (a pixel check, whose row joins the table with the front ends) is
-//! listed as skipped, never compared.
+//! Replaying a trace against a target: [`replay()`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -91,7 +70,29 @@ pub struct Divergence {
     pub actual: Value,
 }
 
-/// Replay `trace` against `driver`'s target: see the [module docs](self).
+/// Replay `trace` against `driver`'s target (ADR-0241 §6): each command is sent again, through
+/// the method table, and its result compared with the recorded one modulo what varies between
+/// runs.
+///
+/// - **Handles** are renumbered by first appearance: the first element or window handle a result
+///   names stands for the one the replay's result names in its place, and a later command's
+///   parameters are sent with the replay's handle. Only the positions the method's own schema
+///   types as a handle are read as handles (`handles`): a text, a locator's name or an input
+///   source's id that looks like one (`e1`) is text. Locators are sent as written, so the replay
+///   resolves them again.
+/// - **Redacted text** is never sent: a command of a redacted trace whose parameters hold the
+///   redaction mark ends the replay there, refused (ADR-0215 §5, ADR-0241 §4); the trace does not
+///   hold what was typed. A trace recorded with `keep_text` replays it.
+/// - **Times and frames** (`t_ms`, `frame`, `frames`) are left out of the comparison.
+/// - **Positions** (`rect`, `surface_rect`, `point`, `at`, `x`, `y`) are compared only when the
+///   header's fidelity is exact.
+/// - **Text** in a redacted trace is compared redacted: the replay's result is redacted the same
+///   way first.
+/// - A failure compares by its wire code.
+///
+/// The first result that differs ends the replay with a [`Divergence`]. A command whose method is
+/// not in the protocol's table (a pixel check, whose row joins the table with the front ends) is
+/// listed as skipped, never compared.
 ///
 /// # Errors
 ///

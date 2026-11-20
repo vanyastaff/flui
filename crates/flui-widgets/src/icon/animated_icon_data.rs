@@ -232,8 +232,8 @@ struct Owned {
 /// Constant data (the Material pairs in `flui-material`) is built with
 /// [`from_static`](Self::from_static) and checked by a table test with
 /// [`check`](Self::check); data built at run time goes through [`try_new`](Self::try_new).
-/// `cargo xtask icon-import` turns an Android AnimatedVectorDrawable or SVG key frames into
-/// constant data.
+/// `flui-material` generates its constants from SVG key frames with the test
+/// `tests/animated_icon_data.rs`.
 #[derive(Debug, Clone)]
 pub struct AnimatedIconData {
     view_box: f64,

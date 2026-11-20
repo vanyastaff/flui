@@ -1,4 +1,4 @@
-# Written by `cargo xtask android-dex --write`; checked by `cargo xtask checks`.
+# Written by `.github/workflows/android-dex.yml` (mode: write); checked by the crate's `android_dex` test.
 # The dex is compiled from the sources under `java/` (ADR-0247).
 sources = "8363c0122915ad26ea0e6032547000a449603bc2296739753e0bc4fc314d96e5"
 dex = "26b1f72b34d6df12f296d15a5dcc908318b0a8e9a3bf47ffb36efcf55af4c42d"

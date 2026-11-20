@@ -40,6 +40,7 @@ mod cli_platform;
 mod cli_record;
 #[path = "cli_run.rs"]
 mod cli_run;
+mod platform_floor;
 
 #[path = "../src/test_cases.rs"]
 mod test_cases;

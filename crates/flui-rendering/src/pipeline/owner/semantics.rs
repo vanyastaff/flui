@@ -657,7 +657,7 @@ fn build_semantics_fragments<'f>(
 
 /// Everything the assembly walk decides about one node from its config and
 /// inherited context. Factored out so the graft's ancestor-chain context
-/// recomputation (`graft::assembly_inputs_for`) folds the EXACT rules the walk
+/// recomputation (`graft::assembly_inputs_for`, private to that module) folds the EXACT rules the walk
 /// applies — a divergence between the two would graft subtrees under a
 /// context the full rebuild would never have produced.
 struct NodeAssemblyDecisions {

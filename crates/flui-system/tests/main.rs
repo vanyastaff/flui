@@ -1,6 +1,9 @@
 //! Integration tests of the system services, through the public API on a
 //! headless host.
 
+// Reads the checkout's files, which a browser test cannot.
+#[cfg(not(target_arch = "wasm32"))]
+mod android_dex;
 mod capability;
 mod conformance;
 mod dialogs;

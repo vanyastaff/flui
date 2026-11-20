@@ -1591,8 +1591,8 @@ trait depends on `flui-platform` instead.
   What a version unlocks lives with the code that uses it: the virtual-mode
   display query's gate and its flags are the Windows display source's
   (`display::windows`). The floors are
-  `version/floor.rs`, generated from `platform-support.toml` by `cargo xtask
-  platform-floor`. An API newer than the floor is a marker type implementing
+  `version/floor.rs`, generated from `platform-support.toml` by `flui-cli`'s `platform_floor`
+  test. An API newer than the floor is a marker type implementing
   `Gate`, whose doc says what the code does without it; `version.since::<F>()`
   returns a `Since<F>` proof or `None`, and the gated call takes the proof. A
   gate at or below the floor fails to compile, so raising a floor turns the
@@ -6073,9 +6073,9 @@ touch, and a whole `flui-app` with two runtimes.
 ### Android's Java side is `FluiActivity`, its queue and `FluiView`, in the APK
 
 The Java classes (`FluiActivity`, `FluiHost`, `FluiView` and its helpers) are compiled from
-`android/java` into `android/classes.dex`, checked against the sources by `cargo xtask
-android-dex`, and declared in this crate's `[package.metadata.flui.declares.android]` (`dex`,
-`java`; ADR-0307 version 2), so `flui build` packs the dex of the `flui-native` an application
+`android/java` into `android/classes.dex` by the `Android dex` workflow, checked against the
+sources by `tests/android_dex.rs`, and declared in this crate's
+`[package.metadata.flui.declares.android]` (`dex`, `java`; ADR-0307 version 2), so `flui build` packs the dex of the `flui-native` an application
 links into its APK, and a Gradle build compiles the sources. The generated manifest names
 `FluiActivity`, a `NativeActivity` subclass, with `hasCode="true"` (ADR-0255 decisions 1 and 4).
 Before the platform starts, `owner::android::java_host` reads through the Activity's class loader

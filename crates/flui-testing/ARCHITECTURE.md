@@ -225,9 +225,9 @@ Its frame driver is `HeadlessHost`, which pumps a
   Lines; the vocabulary carries no serde. Unknown fields are skipped, an
   unknown variant (or key, code or action spelling) is
   `RecordingError::UnknownVariant`, never a skipped row. The conversions cannot
-  match the `#[non_exhaustive]` vocabulary exhaustively, so `cargo xtask
-  recording-vocabulary` generates `tests/generated/recording_variants.rs` from
-  the sources and `every_vocabulary_variant_round_trips_through_the_recording_dto`
+  match the `#[non_exhaustive]` vocabulary exhaustively, so the test
+  `recording_vocabulary_table` checks `tests/generated/recording_variants.rs`
+  against the sources (`FLUI_BLESS=1` regenerates it) and `every_vocabulary_variant_round_trips_through_the_recording_dto`
   needs a sample per entry that survives a write and a read. Text (key text,
   IME strings, assistive values, window titles, device names) is redacted
   unless the header keeps it, and a row that lost text is marked so replay

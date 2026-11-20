@@ -20,8 +20,8 @@
   when the decision was committed, which recorded decision rows carry; and
   `GestureObservation::{Won, Rejected}` carry `at`, the event time the arena
   committed the verdict, which stamps each recorded decision row.
-- `cargo xtask recording-vocabulary`, a `checks` gate that keeps the generated
-  table of recorded variants in step with the vocabulary.
+- The `recording_vocabulary_table` test keeps the generated table of recorded
+  variants in step with the vocabulary (`FLUI_BLESS=1` regenerates it).
 
 ### Changed
 

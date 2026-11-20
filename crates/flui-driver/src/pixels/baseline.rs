@@ -1,16 +1,4 @@
-//! Baselines: the PNG a capture is held to, one per source, backend and OS, since GPU and OS
-//! rasterization differ between them (kittest documents the sources: MSAA, filtering, float
-//! rounding).
-//!
-//! A baseline lives at `<dir>/<name>/<source>-<backend>-<os>.png`. A comparison that does not
-//! match leaves what it saw beside it, `<stem>.new.png`, and for a mismatch of one size the diff,
-//! `<stem>.diff.png`; a match removes both. A missing baseline is a failure, never a pass.
-//!
-//! The update modes are Playwright's: [`UpdateMode::None`] (the default), `missing` (create
-//! absent baselines only), `changed` (rewrite failing ones) and `all`. A check that wrote a
-//! baseline still fails, so a run that only created baselines is never green, and the
-//! `FLUI_DRIVER_UPDATE_BASELINES` variable that asks for one is refused when `CI` is set: no
-//! update runs implicitly in CI. The review of a written baseline is the git diff of its file.
+//! Baselines: the PNG files a capture is held to ([`Baselines`]).
 
 use std::fmt;
 use std::fs;
@@ -22,7 +10,7 @@ use flui_protocol::capture::CaptureSource;
 use super::{Capture, DeviceRect, Image, MASK_COLOR, Tolerance, codec, metric};
 use crate::error::{Error, Result};
 
-/// Which baselines a comparison may write: see the [module docs](self).
+/// Which baselines a comparison may write: see [`Baselines`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[expect(
     clippy::exhaustive_enums,
@@ -314,7 +302,19 @@ impl fmt::Display for Comparison {
     }
 }
 
-/// The baselines under one directory: see the [module docs](self).
+/// The baselines under one directory: the PNG a capture is held to, one per source, backend and
+/// OS, since GPU and OS rasterization differ between them (kittest documents the sources: MSAA,
+/// filtering, float rounding).
+///
+/// A baseline lives at `<dir>/<name>/<source>-<backend>-<os>.png`. A comparison that does not
+/// match leaves what it saw beside it, `<stem>.new.png`, and for a mismatch of one size the diff,
+/// `<stem>.diff.png`; a match removes both. A missing baseline is a failure, never a pass.
+///
+/// The update modes are Playwright's: [`UpdateMode::None`] (the default), `missing` (create
+/// absent baselines only), `changed` (rewrite failing ones) and `all`. A check that wrote a
+/// baseline still fails, so a run that only created baselines is never green, and the
+/// `FLUI_DRIVER_UPDATE_BASELINES` variable that asks for one is refused when `CI` is set: no
+/// update runs implicitly in CI. The review of a written baseline is the git diff of its file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Baselines {
     dir: PathBuf,
@@ -370,8 +370,8 @@ impl Baselines {
         Ok(self.dir.join(name).join(format!("{}.png", key.stem())))
     }
 
-    /// Compare `capture` with the baseline `name`, after painting `masks` over both: see the
-    /// [module docs](self) for what it writes.
+    /// Compare `capture` with the baseline `name`, after painting `masks` over both: see
+    /// [`Baselines`] for what it writes.
     ///
     /// # Errors
     ///

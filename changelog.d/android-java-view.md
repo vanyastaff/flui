@@ -13,5 +13,5 @@
   drag (`startDragAndDrop`, API 24); `InputCapabilities::outgoing_drag` says `Native` there.
 - **`flui-native` (Android)**: a stylus press inside the focused field starts the input
   method's handwriting (API 33).
-- **`cargo xtask android-dex`**: checks the checked-in dex of `FluiView` against its Java
-  sources; `--write` regenerates it with `javac` and `d8`.
+- **`flui-native`'s `android_dex` test**: checks the checked-in dex of `FluiView` against its
+  Java sources; the `Android dex` workflow regenerates it with `javac` and `d8`.

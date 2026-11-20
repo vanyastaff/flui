@@ -215,7 +215,7 @@ check) keeps its ivars in `ContainedIvars`, as in
 
 A feature newer than the floor is behind a gate of `apple::version` (ADR-0244 §4): a marker with its
 `SINCE`, a `Since` proof the call takes, and a compile error for a gate at or below the floor, which
-`apple/floor.rs` states, generated from `platform-support.toml` by `cargo xtask platform-floor`. The
+`apple/floor.rs` states, generated from `platform-support.toml` by the `platform_floor` test of `flui-cli`. The
 floor is 10.13 on x86_64 and 11.0 on arm64, so a gate between them exists on x86_64 only. macOS and
 iOS each have a version type and a floor of their own, so a gate written for one is never asked of
 the other. A class
@@ -487,9 +487,9 @@ a stand-in Activity and picker (`testing::android`); the JNI calls are the modul
   object is collected, a phantom reference hands its handle to `released` from a daemon thread of
   the class (a `Cleaner` does that from API 33, above the floor).
 
-Their dex is checked in (`android/classes.dex`, held to the sources by `cargo xtask android-dex`)
-and declared with the sources, the R8 rules and the provider in `[package.metadata.flui.declares]`
-(ADR-0307), so `flui build` packs it beside the core host's and writes the `<provider>` element;
+Their dex is checked in (`android/classes.dex`, compiled by the `Android dex` workflow and held to
+the sources by `tests/android_dex.rs`) and declared with the sources, the R8 rules and the
+provider in `[package.metadata.flui.declares]` (ADR-0307), so `flui build` packs it beside the core host's and writes the `<provider>` element;
 no user's build runs `javac`. Only the providers that call the classes read them, once per runtime:
 the launcher and the share sheet (`FluiDocuments`) and the message box (`FluiCallback`). The
 library reads `FluiCallback.PROTOCOL` before it binds anything, and an APK without the classes,

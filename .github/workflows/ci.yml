@@ -67,11 +67,10 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate: rustfmt, typos, taplo and lychee called
-  # directly, shell steps for the MSRV, unmounted test files and ADR numbers,
-  # then `cargo xtask checks` (changelog fragments, the generated files
-  # against their sources), xtask's own tests (which include each self-test), and
-  # the workflow linters. It builds only xtask, never the workspace, so a
-  # malformed PR fails before any workspace build starts. It has no `if:`: a
+  # directly, shell steps for the MSRV, unmounted test files, ADR numbers and
+  # changelog fragments, and the workflow linters. It builds nothing, so a
+  # malformed PR fails before any workspace build starts. The generated files
+  # are checked by tests of the crates that own them, in the `test` job. It has no `if:`: a
   # docs-only PR, which skips every compile job, still runs it, and the link
   # check is what such a PR most needs. Ubuntu only; clippy lives in its own
   # parallel job.
@@ -240,14 +239,6 @@ jobs:
                 --remap "^https://github\.com/vanyastaff/flui/(?:blob|tree)/main/(.*)\$ file://$PWD/\$1" \
                 --files-from -
 
-      - name: Rust cache (xtask)
-        if: ${{ !cancelled() }}
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       # Every place that states the MSRV states rust-toolchain.toml's minor:
       # the workspace `rust-version`, the `flui create` templates, the README
       # badge and llms.txt.
@@ -342,14 +333,63 @@ jobs:
             exit 1
           fi
 
-      # The generated files against their sources and the changelog fragments.
-      - name: cargo xtask checks
+      # A fragment (changelog.d/README.md) is named <branch-slug>.md and holds
+      # only `###` sections of Keep a Changelog's six, each once, each one `-`
+      # list; CHANGELOG.md has one `## [Unreleased]`, where the fragments are
+      # pasted at release. Links are lychee's, above.
+      - name: Changelog fragments
         if: ${{ !cancelled() }}
-        run: cargo xtask checks
-
-      - name: cargo test -p xtask
-        if: ${{ !cancelled() }}
-        run: cargo test -p xtask --locked
+        run: |
+          set -euo pipefail
+          shopt -s dotglob
+          failed=0
+          for f in changelog.d/*; do
+            name=$(basename "$f")
+            [ "$name" = README.md ] && continue
+            if [[ ! "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*\.md$ ]]; then
+              echo "::error file=$f::a fragment is named <branch-slug>.md: lowercase letters, digits and single dashes"
+              failed=1
+              continue
+            fi
+            awk -v f="$f" '
+              # A fragment is pasted into CHANGELOG.md, so a link resolves
+              # the same in both places only when root-relative or absolute.
+              /\]\((\.\.?\/|\/\/|#)/ { print "::error file=" f ",line=" NR "::a link is root-relative (/docs/x.md) or absolute; a relative, protocol-relative or #anchor-only one changes target once merged"; bad = 1 }
+              /^[[:space:]]*\[[^]]+\]:/ { print "::error file=" f ",line=" NR "::a reference definition changes target once merged; write the link inline"; bad = 1; next }
+              /^### / {
+                cur = substr($0, 5)
+                if (cur !~ /^(Added|Changed|Deprecated|Removed|Fixed|Security)$/) { print "::error file=" f ",line=" NR "::`" $0 "` is not one of Added, Changed, Deprecated, Removed, Fixed, Security"; bad = 1 }
+                if (seen[cur]++) { print "::error file=" f ",line=" NR "::`### " cur "` appears twice"; bad = 1 }
+                next
+              }
+              /^[[:space:]]*$/ { next }
+              cur == "" { print "::error file=" f ",line=" NR "::text above the first `###` section"; bad = 1; next }
+              /^- / { listed[cur] = 1; next }
+              /^[[:space:]]/ && listed[cur] { next }
+              { print "::error file=" f ",line=" NR "::a section holds one `-` list, not `" $0 "`"; bad = 1 }
+              END {
+                if (length(seen) == 0) { print "::error file=" f "::no `###` section"; bad = 1 }
+                for (s in seen) if (!listed[s]) { print "::error file=" f "::`### " s "` has no list under it"; bad = 1 }
+                exit bad
+              }' "$f" || failed=1
+          done
+          unreleased=$(grep -c '^## \[Unreleased\]$' CHANGELOG.md || true)
+          if [ "$unreleased" != 1 ]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md holds $unreleased \`## [Unreleased]\` headings, not one"
+            failed=1
+          fi
+          # The region the fragments are merged into holds only the six
+          # sections, each once.
+          awk '
+            /^## \[Unreleased\]$/ { inside = 1; next }
+            /^## / { inside = 0 }
+            inside && /^### / {
+              s = substr($0, 5)
+              if (s !~ /^(Added|Changed|Deprecated|Removed|Fixed|Security)$/) { print "::error file=CHANGELOG.md,line=" NR "::`" $0 "` in [Unreleased] is not one of the six sections"; bad = 1 }
+              if (seen[s]++) { print "::error file=CHANGELOG.md,line=" NR "::`" $0 "` appears twice in [Unreleased]"; bad = 1 }
+            }
+            END { exit bad }' CHANGELOG.md || failed=1
+          exit "$failed"
 
       - name: actionlint (workflow semantics)
         if: ${{ !cancelled() }}
@@ -367,8 +407,9 @@ jobs:
   # Documentation is a root `*.md` or licence text, anything under docs/ or
   # changelog.d/, a crate's ARCHITECTURE.md (or docs/ARCHITECTURE.md), CHANGELOG.md
   # or licence text (LICENSE, LICENSE-APACHE, LICENSE-MIT, NOTICE),
-  # and the issue templates and CODEOWNERS. docs/gaps.md and
-  # docs/platform-parity.md are not: flui-native's tests read them. Neither is
+  # and the issue templates and CODEOWNERS. docs/gaps.md,
+  # docs/platform-parity.md and docs/version-map.md are not: flui-native's and
+  # flui-cli's tests read them. Neither is
   # book/: the facade's unit tests check its chapters (src/book.rs; its doctests
   # run on main, in doc-test). Renames count
   # both paths, so a file moved into docs/ still runs the gate. A file another
@@ -418,7 +459,7 @@ jobs:
             while IFS= read -r file; do
               [ -n "$file" ] || continue
               case "$file" in
-                docs/gaps.md | docs/platform-parity.md) lane=wide ;;
+                docs/gaps.md | docs/platform-parity.md | docs/version-map.md) lane=wide ;;
                 docs/* | changelog.d/* | .github/ISSUE_TEMPLATE/* | .github/CODEOWNERS) ;;
                 crates/*/* | packages/*/*)
                   # a crate's own architecture notes, changelog and licence texts

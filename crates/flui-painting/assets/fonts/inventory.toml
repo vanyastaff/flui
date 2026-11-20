@@ -1,5 +1,7 @@
 # Offline provenance for every font distributed by flui-painting.
 # Hashes bind the reviewed bytes and complete license/attribution text.
+# The `font_assets` tests in crates/flui-painting/tests/font_assets.rs check
+# this file against the files, the generators and Cargo's package listing.
 
 [[notice]]
 file = "licenses/Cupertino-MIT.txt"

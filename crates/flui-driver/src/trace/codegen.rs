@@ -1,21 +1,4 @@
-//! A Rust test from a trace (ADR-0241 §6): the commands that act, written against the driver's
-//! API, and the waits that assert, written as expectations.
-//!
-//! - A gesture on a locator in the main window becomes `driver.main_window()?.locate(…).tap()?`,
-//!   its locator a builder when it names only an identifier and text matches, and the gesture's
-//!   own arguments (text, keys) as written.
-//! - A wait for a locator's name or value, its count or its absence becomes an `expect`.
-//! - Any other command that acts is sent as recorded, through `Driver::call_value`, its strings as
-//!   Rust literals; the file's header then says it needs `serde_json`.
-//! - Reads are left out: they change nothing, and the test reads what it asserts.
-//! - A command codegen cannot write (one not in the protocol's method table yet, a pixel check
-//!   among them; a session's start or end) is a `// not generated:` line where it was sent, and
-//!   the header counts them, so the reader sees what the test leaves out. A replay skips the same
-//!   commands and lists them.
-//!
-//! Locators are never resolved to coordinates or handles, so the test finds the elements again.
-//! A redacted trace writes its redacted text as recorded; a trace recorded with `keep_text`
-//! types what was typed.
+//! Codegen: the Rust test a trace replays as, written by [`codegen()`].
 
 use std::fmt::Write as _;
 
@@ -47,7 +30,24 @@ impl CodegenOptions {
     }
 }
 
-/// The Rust test `trace` replays as: see the [module docs](self).
+/// The Rust test `trace` replays as (ADR-0241 §6): the commands that act, written against the
+/// driver's API, and the waits that assert, written as expectations.
+///
+/// - A gesture on a locator in the main window becomes `driver.main_window()?.locate(…).tap()?`,
+///   its locator a builder when it names only an identifier and text matches, and the gesture's
+///   own arguments (text, keys) as written.
+/// - A wait for a locator's name or value, its count or its absence becomes an `expect`.
+/// - Any other command that acts is sent as recorded, through `Driver::call_value`, its strings as
+///   Rust literals; the file's header then says it needs `serde_json`.
+/// - Reads are left out: they change nothing, and the test reads what it asserts.
+/// - A command codegen cannot write (one not in the protocol's method table yet, a pixel check
+///   among them; a session's start or end) is a `// not generated:` line where it was sent, and
+///   the header counts them, so the reader sees what the test leaves out. A replay skips the same
+///   commands and lists them.
+///
+/// Locators are never resolved to coordinates or handles, so the test finds the elements again.
+/// A redacted trace writes its redacted text as recorded; a trace recorded with `keep_text`
+/// types what was typed.
 ///
 /// # Errors
 ///

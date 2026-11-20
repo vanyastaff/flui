@@ -1,23 +1,22 @@
 //! The OS version floors, declared once in `platform-support.toml` (ADR-0244).
 //!
-//! `flui-native`, `flui-system` and `flui-cli` are published crates whose package archives cannot read a
-//! repository-root file, so this command generates a committed Rust source in each holding the
-//! floors that crate compiles in, and the version map under `docs/`. Without arguments it checks
-//! that every generated file is what the root file generates and that every template stating a
-//! floor states the same one; `--write` regenerates the files and restates the template floors.
+//! `flui-native`, `flui-system` and `flui-cli` are published crates whose package archives cannot
+//! read a repository-root file, so a committed Rust source in each holds the floors that crate
+//! compiles in, beside the version map under `docs/`. [`the_checked_in_files_agree`] regenerates
+//! every one in memory and fails when a committed file differs or a template states another floor;
+//! with `FLUI_BLESS=1` it writes the files and restates the template floors instead:
+//!
+//! ```text
+//! FLUI_BLESS=1 cargo nextest run -p flui-cli --test cli_it -E 'test(platform_floor)'
+//! ```
 
 use std::fmt::Write as _;
-use std::process::ExitCode;
-use std::sync::LazyLock;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail, ensure};
-use regex::Regex;
 use serde::Deserialize;
 
-use crate::util::{read, repo_root};
-
 /// The hand-written source, relative to the repository root.
-pub(crate) const SOURCE: &str = "platform-support.toml";
+const SOURCE: &str = "platform-support.toml";
 
 /// The Rust source holding the floors `flui-native` compiles in.
 const PLATFORM_OUTPUT: &str = "crates/flui-native/src/version/floor.rs";
@@ -32,11 +31,51 @@ const MAP_OUTPUT: &str = "docs/version-map.md";
 /// them.
 const GRADLE_TEMPLATE: &str = "crates/flui-cli/templates/platforms/android/gradle.properties";
 
-/// A `flui.minSdk = N` or `flui.targetSdk = N` line: the prefix, the key, the value, the rest.
-static GRADLE_SDK_LINE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\s*(flui\.(?:minSdk|targetSdk))\s*=\s*)([0-9]+)(\s*)$")
-        .expect("BUG: static regex")
-});
+/// What a reader runs after editing `platform-support.toml`.
+const BLESS_COMMAND: &str =
+    "FLUI_BLESS=1 cargo nextest run -p flui-cli --test cli_it -E 'test(platform_floor)'";
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn read(path: &str) -> String {
+    std::fs::read_to_string(repo_root().join(path))
+        .unwrap_or_else(|error| panic!("reading {path}: {error}"))
+}
+
+/// A `flui.minSdk = N` or `flui.targetSdk = N` line, split around its value.
+struct SdkLine<'a> {
+    /// The indentation, the key and the `=` with its spaces.
+    prefix: &'a str,
+    key: &'static str,
+    value: u32,
+    /// The whitespace after the value.
+    suffix: &'a str,
+}
+
+/// The line, without its line ending, when it is a `flui.minSdk` or `flui.targetSdk` assignment
+/// of a number.
+fn sdk_line(body: &str) -> Option<SdkLine<'_>> {
+    let rest = body.trim_start();
+    let (key, after_key) = ["flui.minSdk", "flui.targetSdk"]
+        .into_iter()
+        .find_map(|key| Some((key, rest.strip_prefix(key)?)))?;
+    let after_equals = after_key.trim_start().strip_prefix('=')?.trim_start();
+    let digits = after_equals
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after_equals.len());
+    let (number, suffix) = after_equals.split_at(digits);
+    if number.is_empty() || !suffix.trim().is_empty() {
+        return None;
+    }
+    Some(SdkLine {
+        prefix: &body[..body.len() - after_equals.len()],
+        key,
+        value: number.parse().ok()?,
+        suffix,
+    })
+}
 
 /// Each Gradle property the template states, with the field of `platform-support.toml` it
 /// restates and that field's value.
@@ -49,56 +88,6 @@ fn gradle_properties(floors: &Floors) -> [(&'static str, &'static str, u32); 2] 
             floors.android.target_sdk,
         ),
     ]
-}
-
-/// Arguments for `cargo xtask platform-floor`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct PlatformFloorArgs {
-    /// Regenerate the floor sources and the version map instead of checking them.
-    #[arg(long)]
-    write: bool,
-}
-
-/// `cargo xtask platform-floor`: check (or `--write`) what `platform-support.toml` generates.
-pub(crate) fn platform_floor(args: &PlatformFloorArgs) -> anyhow::Result<ExitCode> {
-    let floors = Floors::parse(&read(SOURCE)?)?;
-    let generated = generate(&floors);
-    if args.write {
-        let root = repo_root();
-        for (path, contents) in &generated {
-            std::fs::write(root.join(path), contents).with_context(|| format!("writing {path}"))?;
-        }
-        let template = read(GRADLE_TEMPLATE)?;
-        let restated = restate_gradle_properties(&template, &floors);
-        if restated != template {
-            std::fs::write(root.join(GRADLE_TEMPLATE), restated)
-                .with_context(|| format!("writing {GRADLE_TEMPLATE}"))?;
-        }
-        println!(
-            "platform-floor: wrote {} file(s) and restated {GRADLE_TEMPLATE} from {SOURCE}",
-            generated.len()
-        );
-        return Ok(ExitCode::SUCCESS);
-    }
-    let mut committed = Vec::new();
-    for (path, _) in &generated {
-        committed.push((*path, read(path).unwrap_or_default()));
-    }
-    let templates = [(GRADLE_TEMPLATE, read(GRADLE_TEMPLATE)?)];
-    let findings = check(&floors, &committed, &templates);
-    if findings.is_empty() {
-        println!(
-            "platform-floor: {} generated file(s) and {} template(s) agree with {SOURCE}",
-            generated.len(),
-            templates.len()
-        );
-        return Ok(ExitCode::SUCCESS);
-    }
-    for finding in &findings {
-        eprintln!("platform-floor: {finding}");
-    }
-    eprintln!("platform-floor: run `cargo xtask platform-floor --write` after editing {SOURCE}");
-    Ok(ExitCode::FAILURE)
 }
 
 /// `platform-support.toml`.
@@ -164,8 +153,9 @@ struct Web {
 
 impl Floors {
     /// Parses and validates the file: every dotted version is numeric, and nothing is empty.
-    fn parse(text: &str) -> anyhow::Result<Self> {
-        let floors: Self = toml::from_str(text).with_context(|| format!("parsing {SOURCE}"))?;
+    fn parse(text: &str) -> Result<Self, String> {
+        let floors: Self =
+            toml::from_str(text).map_err(|error| format!("parsing {SOURCE}: {error}"))?;
         for (field, version) in [
             ("macos.x86_64", &floors.macos.x86_64),
             ("macos.aarch64", &floors.macos.aarch64),
@@ -176,7 +166,9 @@ impl Floors {
             if !(2..=3).contains(&parts.len())
                 || !parts.iter().all(|part| part.parse::<u32>().is_ok())
             {
-                bail!("{SOURCE}: {field} = \"{version}\" is not a dotted version like \"13.0\"");
+                return Err(format!(
+                    "{SOURCE}: {field} = \"{version}\" is not a dotted version like \"13.0\""
+                ));
             }
         }
         for (field, text) in [
@@ -189,18 +181,21 @@ impl Floors {
             ("linux.set-by", &floors.linux.set_by),
             ("web.set-by", &floors.web.set_by),
         ] {
-            ensure!(!text.trim().is_empty(), "{SOURCE}: {field} is empty");
+            if text.trim().is_empty() {
+                return Err(format!("{SOURCE}: {field} is empty"));
+            }
         }
-        ensure!(
-            floors.android.target_sdk >= floors.android.api,
-            "{SOURCE}: android.target-sdk = {} is below android.api = {}",
-            floors.android.target_sdk,
-            floors.android.api
-        );
-        ensure!(
-            !floors.linux.requires.is_empty() && !floors.web.requires.is_empty(),
-            "{SOURCE}: linux.requires and web.requires each name at least one requirement"
-        );
+        if floors.android.target_sdk < floors.android.api {
+            return Err(format!(
+                "{SOURCE}: android.target-sdk = {} is below android.api = {}",
+                floors.android.target_sdk, floors.android.api
+            ));
+        }
+        if floors.linux.requires.is_empty() || floors.web.requires.is_empty() {
+            return Err(format!(
+                "{SOURCE}: linux.requires and web.requires each name at least one requirement"
+            ));
+        }
         Ok(floors)
     }
 }
@@ -243,8 +238,8 @@ fn system_source(floors: &Floors) -> String {
     )
 }
 
-const GENERATED_HEADER: &str = "// Generated by `cargo xtask platform-floor --write` from `platform-support.toml`.\n\
-     // Edit that file, not this one.\n";
+const GENERATED_HEADER: &str = "// Generated by flui-cli's `platform_floor` test from `platform-support.toml`.\n\
+     // Edit that file, then run `FLUI_BLESS=1 cargo nextest run -p flui-cli --test cli_it -E 'test(platform_floor)'`.\n";
 
 fn platform_source(floors: &Floors) -> String {
     let (major, minor, patch) = dotted(&floors.ios.version);
@@ -323,7 +318,7 @@ fn version_map(floors: &Floors) -> String {
     let mut page = String::from(
         "# Version map\n\
          \n\
-         > Generated by `cargo xtask platform-floor --write` from\n\
+         > Generated by flui-cli's `platform_floor` test from\n\
          > [`platform-support.toml`](../platform-support.toml); edit that file, not this page.\n\
          \n\
          The lowest version of each environment FLUI runs on, and what sets it\n\
@@ -388,9 +383,9 @@ fn restate_gradle_properties(text: &str, floors: &Floors) -> String {
                     None => (line, ""),
                 },
             };
-            let stated = GRADLE_SDK_LINE.captures(body).and_then(|caps| {
-                let (_, _, value) = properties.iter().find(|(key, _, _)| *key == &caps[2])?;
-                Some(format!("{}{value}{}{ending}", &caps[1], &caps[4]))
+            let stated = sdk_line(body).and_then(|sdk| {
+                let (_, _, value) = properties.iter().find(|(key, _, _)| *key == sdk.key)?;
+                Some(format!("{}{value}{}{ending}", sdk.prefix, sdk.suffix))
             });
             stated.unwrap_or_else(|| line.to_owned())
         })
@@ -420,9 +415,9 @@ fn check(
         for (key, field, expected) in gradle_properties(floors) {
             let stated: Vec<u32> = text
                 .lines()
-                .filter_map(|line| GRADLE_SDK_LINE.captures(line))
-                .filter(|caps| &caps[2] == key)
-                .filter_map(|caps| caps[3].parse::<u32>().ok())
+                .filter_map(sdk_line)
+                .filter(|sdk| sdk.key == key)
+                .map(|sdk| sdk.value)
                 .collect();
             if stated.is_empty() {
                 findings.push(format!("{path} states no `{key} = N`"));
@@ -439,14 +434,52 @@ fn check(
     findings
 }
 
-#[cfg(test)]
-mod tests {
+/// The committed generated files and the floors of `platform-support.toml` agree; with
+/// `FLUI_BLESS=1` the files are regenerated and the template floors restated instead.
+#[test]
+fn the_checked_in_files_agree() {
+    let floors = Floors::parse(&read(SOURCE)).expect("BUG: platform-support.toml is malformed");
+    let root = repo_root();
+    if std::env::var("FLUI_BLESS").is_ok_and(|value| value == "1") {
+        for (path, contents) in generate(&floors) {
+            std::fs::write(root.join(path), contents)
+                .unwrap_or_else(|error| panic!("writing {path}: {error}"));
+        }
+        let template = read(GRADLE_TEMPLATE);
+        let restated = restate_gradle_properties(&template, &floors);
+        if restated != template {
+            std::fs::write(root.join(GRADLE_TEMPLATE), restated)
+                .unwrap_or_else(|error| panic!("writing {GRADLE_TEMPLATE}: {error}"));
+        }
+        return;
+    }
+    let committed: Vec<_> = generate(&floors)
+        .into_iter()
+        .map(|(path, _)| {
+            (
+                path,
+                std::fs::read_to_string(root.join(path)).unwrap_or_default(),
+            )
+        })
+        .collect();
+    let templates = [(GRADLE_TEMPLATE, read(GRADLE_TEMPLATE))];
+    let findings = check(&floors, &committed, &templates);
+    assert!(
+        findings.is_empty(),
+        "{}\nrun `{BLESS_COMMAND}` after editing {SOURCE}",
+        findings.join("\n")
+    );
+}
+
+mod checker {
     use super::*;
 
-    const ROOT: &str = include_str!("../../../platform-support.toml");
+    fn root_text() -> String {
+        read(SOURCE)
+    }
 
     fn floors() -> Floors {
-        Floors::parse(ROOT).expect("the root file parses")
+        Floors::parse(&root_text()).expect("the root file parses")
     }
 
     fn agreeing() -> (Files, Files) {
@@ -459,23 +492,54 @@ mod tests {
         (committed, vec![(GRADLE_TEMPLATE, gradle)])
     }
 
-    fn the_checked_in_files_agree() {
-        let floors = floors();
-        let root = repo_root();
-        let committed: Vec<_> = generate(&floors)
-            .into_iter()
-            .map(|(path, _)| {
-                (
-                    path,
-                    std::fs::read_to_string(root.join(path)).unwrap_or_default(),
-                )
-            })
-            .collect();
-        let gradle = std::fs::read_to_string(root.join(GRADLE_TEMPLATE)).expect("template");
-        let findings = check(&floors, &committed, &[(GRADLE_TEMPLATE, gradle)]);
-        assert!(findings.is_empty(), "{findings:?}");
+    /// The lines the retired `^(\s*(flui\.(?:minSdk|targetSdk))\s*=\s*)([0-9]+)(\s*)$` matched,
+    /// and the ones it did not.
+    #[test]
+    fn an_sdk_line_is_a_key_an_equals_and_a_number() {
+        for (line, key, value, prefix, suffix) in [
+            ("flui.minSdk=23", "flui.minSdk", 23, "flui.minSdk=", ""),
+            (
+                "  flui.targetSdk = 34\t",
+                "flui.targetSdk",
+                34,
+                "  flui.targetSdk = ",
+                "\t",
+            ),
+            ("flui.minSdk=23\r", "flui.minSdk", 23, "flui.minSdk=", "\r"),
+            (
+                "flui.minSdk\t=  4294967295",
+                "flui.minSdk",
+                u32::MAX,
+                "flui.minSdk\t=  ",
+                "",
+            ),
+        ] {
+            let sdk = sdk_line(line).unwrap_or_else(|| panic!("{line:?} is an sdk line"));
+            assert_eq!(
+                (sdk.key, sdk.value, sdk.prefix, sdk.suffix),
+                (key, value, prefix, suffix),
+                "{line:?}"
+            );
+        }
+        for line in [
+            "flui.minSdk=23 # note",
+            "flui.minSdk=",
+            "flui.minSdk=  ",
+            "flui.minSdkX=1",
+            "flui.minSdk=abc",
+            "flui.minSdk=2x",
+            "flui.minSdk=-1",
+            "flui.minSdk=4294967296",
+            "xflui.minSdk=1",
+            "# flui.minSdk=1",
+            "flui.minSdk 1",
+            "flui.sdk=1",
+        ] {
+            assert!(sdk_line(line).is_none(), "{line:?} is not an sdk line");
+        }
     }
 
+    #[test]
     fn agreeing_sources_report_nothing() {
         let (committed, templates) = agreeing();
         assert_eq!(
@@ -484,6 +548,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn a_crlf_checkout_still_agrees() {
         let (mut committed, templates) = agreeing();
         for (_, text) in &mut committed {
@@ -495,6 +560,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn a_planted_drift_in_each_generated_file_is_reported() {
         // Each file's plant changes a floor it states: the Android API level, or the
         // arm64 macOS floor in the file that states the Apple floors alone.
@@ -521,6 +587,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn a_missing_generated_file_is_reported() {
         let (mut committed, templates) = agreeing();
         committed.retain(|(path, _)| *path != CLI_OUTPUT);
@@ -531,18 +598,20 @@ mod tests {
         );
     }
 
+    #[test]
     fn a_template_floor_that_differs_is_reported() {
         let (committed, _) = agreeing();
-        let target = floors().android.target_sdk;
+        let floors = floors();
+        let (api, target) = (floors.android.api, floors.android.target_sdk);
         let drifted = [(
             GRADLE_TEMPLATE,
             "flui.minSdk=21\nflui.targetSdk=34\n".to_owned(),
         )];
         assert_eq!(
-            check(&floors(), &committed, &drifted),
+            check(&floors, &committed, &drifted),
             [
                 format!(
-                    "{GRADLE_TEMPLATE} states flui.minSdk = 21, but {SOURCE} has android.api = 23"
+                    "{GRADLE_TEMPLATE} states flui.minSdk = 21, but {SOURCE} has android.api = {api}"
                 ),
                 format!(
                     "{GRADLE_TEMPLATE} states flui.targetSdk = 34, but {SOURCE} has \
@@ -552,7 +621,7 @@ mod tests {
         );
         let silent = [(GRADLE_TEMPLATE, "android.useAndroidX=true\n".to_owned())];
         assert_eq!(
-            check(&floors(), &committed, &silent),
+            check(&floors, &committed, &silent),
             [
                 format!("{GRADLE_TEMPLATE} states no `flui.minSdk = N`"),
                 format!("{GRADLE_TEMPLATE} states no `flui.targetSdk = N`"),
@@ -560,85 +629,49 @@ mod tests {
         );
     }
 
-    fn write_restates_a_template_floor_that_differs() {
+    #[test]
+    fn bless_restates_a_template_floor_that_differs() {
         let (committed, _) = agreeing();
+        let floors = floors();
         let drifted = "android.useAndroidX=true\r\nflui.minSdk=21\r\nflui.targetSdk = 34\r\n\
                        org.gradle.caching=true";
-        let restated = restate_gradle_properties(drifted, &floors());
-        let target = floors().android.target_sdk;
+        let restated = restate_gradle_properties(drifted, &floors);
+        let (api, target) = (floors.android.api, floors.android.target_sdk);
         assert_eq!(
             restated,
             format!(
-                "android.useAndroidX=true\r\nflui.minSdk=23\r\nflui.targetSdk = {target}\r\n\
+                "android.useAndroidX=true\r\nflui.minSdk={api}\r\nflui.targetSdk = {target}\r\n\
                  org.gradle.caching=true"
             )
         );
         assert_eq!(
-            check(&floors(), &committed, &[(GRADLE_TEMPLATE, restated)]),
+            check(&floors, &committed, &[(GRADLE_TEMPLATE, restated)]),
             Vec::<String>::new()
         );
     }
 
+    #[test]
     fn a_malformed_root_file_is_refused() {
+        let root = root_text();
         for (plant, needle) in [
-            (ROOT.replace("version = \"13.0\"", "version = \"13\""), "ios.version"),
-            (ROOT.replace("glibc = \"2.17\"", "glibc = \"2.x\""), "linux.glibc"),
-            (ROOT.replace("[web]", "[web]\nmin = 1"), "unknown field"),
+            (root.replace("version = \"13.0\"", "version = \"13\""), "ios.version"),
+            (root.replace("glibc = \"2.17\"", "glibc = \"2.x\""), "linux.glibc"),
+            (root.replace("[web]", "[web]\nmin = 1"), "unknown field"),
             (
-                ROOT.replace("target-sdk = 36", "target-sdk = 22"),
+                root.replace("target-sdk = 36", "target-sdk = 22"),
                 "android.target-sdk = 22 is below android.api = 23",
             ),
             (
-                ROOT.replace(
+                root.replace(
                     "set-by = \"UIScene and UIWindowScene, through which the backend gets its window\"",
                     "set-by = \" \"",
                 ),
                 "ios.set-by is empty",
             ),
         ] {
+            assert_ne!(plant, root, "{needle}: the plant changed nothing");
             let error = Floors::parse(&plant).expect_err(needle);
-            assert!(format!("{error:#}").contains(needle), "{needle}: {error:#}");
+            assert!(error.contains(needle), "{needle}: {error}");
         }
-    }
-
-    #[test]
-    fn platform_floor_sources_agree() {
-        crate::table_test::run_table(
-            "platform_floor_sources_agree",
-            &[
-                (
-                    "the_checked_in_files_agree",
-                    the_checked_in_files_agree as fn(),
-                ),
-                (
-                    "agreeing_sources_report_nothing",
-                    agreeing_sources_report_nothing as fn(),
-                ),
-                (
-                    "a_crlf_checkout_still_agrees",
-                    a_crlf_checkout_still_agrees as fn(),
-                ),
-                (
-                    "a_planted_drift_in_each_generated_file_is_reported",
-                    a_planted_drift_in_each_generated_file_is_reported as fn(),
-                ),
-                (
-                    "a_missing_generated_file_is_reported",
-                    a_missing_generated_file_is_reported as fn(),
-                ),
-                (
-                    "a_template_floor_that_differs_is_reported",
-                    a_template_floor_that_differs_is_reported as fn(),
-                ),
-                (
-                    "write_restates_a_template_floor_that_differs",
-                    write_restates_a_template_floor_that_differs as fn(),
-                ),
-                (
-                    "a_malformed_root_file_is_refused",
-                    a_malformed_root_file_is_refused as fn(),
-                ),
-            ],
-        );
     }
 }

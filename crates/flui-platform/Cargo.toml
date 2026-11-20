@@ -44,6 +44,10 @@ serde_json = { workspace = true }
 flui-foundation = { workspace = true, features = ["testing"] }
 # Compile-fail fixtures: `DisplayId` cannot be built from a number.
 trybuild = { workspace = true }
+# `tests/key_vocabulary.rs` generates `NamedKey` and `Code` from the pinned keyboard-types (ADR-0089 §4).
+syn = { workspace = true, features = ["full", "parsing", "visit"] }
+cargo_metadata = { workspace = true }
+keyboard-types = { workspace = true }
 
 [[test]]
 name = "platform_api_it"

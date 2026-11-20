@@ -63,8 +63,7 @@ or a plan step) and counts exactly, as the `markers` and `file-length` gates do
 Test code is a `tests/` or `benches/` target, a `#[cfg(test)]` module, an item behind the crate's
 `testing` feature, or a file only such a module includes. Unconditional production items are not
 scanned, so `flui-engine`'s `RecordingBudget`, which `DrawSegment` uses at run time, is never an
-exception. The starting allowlist is built from the same scope. The gate joins
-`cargo heli xtask checks`.
+exception. The starting allowlist is built from the same scope. Before the first release no program checks it: a reader of "Before a merge" holds it (ADR-0371).
 
 ## Consequences
 
@@ -87,11 +86,7 @@ exception. The starting allowlist is built from the same scope. The gate joins
 
 ## Verification
 
-`testing_gate_fixture_rows` (xtask, run with `cargo heli nextest run -p xtask testing_gate`) walks a
-fixture tree in the style of the `ratchet` fixtures. Its rows pin a listed helper passing, an unlisted
-helper in `tests/` and in a `#[cfg(test)]` module failing, a feature named `test-support` failing, a
-double behind the `testing` feature failing, an unconditional production `Recording*` type ignored,
-and an allowlist count that grew or fell. `cargo heli xtask testing` on the tree reports the starting
-allowlist with every entry citing this ADR or a plan step. The feature rename is checked with
-`cargo heli check -p flui --features testing`. Each migration step lowers a count and keeps
+The gate and its fixture rows were removed with the other source gates (ADR-0371); a reader of
+"Before a merge" holds the rule (AGENTS.md, "Rules a reader holds"). The feature rename is checked
+with `cargo heli check -p flui --features testing`. Each migration step lowers a count and keeps
 `cargo heli nextest run` green on the changed crates.

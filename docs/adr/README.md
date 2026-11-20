@@ -75,7 +75,7 @@ convention a reviewer has to remember. -->
 ### Confirmation
 
 <!-- How compliance is checked, in this order of preference: the compiler (a bound, a sealed
-trait, a compile-fail fixture), a clippy lint, a `cargo xtask` gate, a test named here, an executed
+trait, a compile-fail fixture), a clippy lint, a CI step, a test named here, an executed
 run on the environment (`docs/platform-parity.md` names it). "Review" alone is not a confirmation. -->
 
 ## Pros and cons of the options
@@ -136,7 +136,7 @@ decision should be revisited, say what would trigger it. -->
   chain.
 - **Rust shapes, not conventions.** A decision that can be a type, a bound, a sealed trait, an
   error enum or a gate is written as that; a decision that can only be a convention says which
-  check (lint, `xtask` gate, test) makes the convention fail loudly.
+  check (the compiler, a lint, a CI step, a test) makes the convention fail loudly.
 - **Failure paths are part of the decision.** Where user code runs, where a hook can be missing,
   replaced or panic, where arithmetic can overflow: the ADR says what happens (`AGENTS.md`,
   "Recurring defects").

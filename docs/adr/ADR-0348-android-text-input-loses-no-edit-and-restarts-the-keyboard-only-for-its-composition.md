@@ -65,8 +65,8 @@ authoritative when both changed the text, and its rule is a pure function tested
 1. **FLUI ships Java code**, under `crates/flui-native/android/java` in the package
    `dev.flui.platform`, compiled to one checked-in dex, `crates/flui-native/android/classes.dex`,
    which reaches the APK as ADR-0255 decides; `classes.dex.toml` records the digests of the
-   sources and the dex and the tools that compiled them, `cargo xtask android-dex` checks both
-   digests (no JDK needed), and the `Android dex` workflow rebuilds them on a GitHub runner, so
+   sources and the dex and the tools that compiled them, the crate's `android_dex` test checks
+   both digests (no JDK needed), and the `Android dex` workflow rebuilds them on a GitHub runner, so
    building or changing FLUI for Android needs no local JDK. At platform start the backend posts
    the view's installation to the Java main thread. **One `FluiView` per Activity**, laid over the whole window as the decor view's first child,
    focusable and drawing nothing, so its pixels are the surface's (the caret and character boxes,
@@ -179,8 +179,8 @@ authoritative when both changed the text, and its rule is a pure function tested
   (`android_drag_mapping`).
 - `flui-widgets`: `a_tap_on_the_focused_field_asks_for_the_keyboard` and
   `a_fields_bounds_are_its_box`.
-- The Java side: `cargo xtask android-dex` (the dex is built from the sources) and the protocol
-  handshake. Device runs are rows of `crates/flui-native/platform-parity.toml`.
+- The Java side: `flui-native`'s `the_checked_in_dex_is_built_from_its_java_sources` and the
+  protocol handshake. Device runs are rows of `crates/flui-native/platform-parity.toml`.
 
 ## Pros and cons of the options
 
