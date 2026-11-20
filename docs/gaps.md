@@ -651,13 +651,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **No hover without `uinput`.** The pen goes only through the lane's `uinput` device; a device whose shell may not open `uinput` refuses the pen (`uinput_device`), and the touch screen and the mouse send no hover through `input`.
 - Each closes with a row of `android_lane` holding it: the dump read and projected once the identifier reaches UI Automator, a key held through a `uinput` keyboard, a touchpad gesture through the probed `uinput` touchpad and an `OsEvent` every other lane refuses before any event.
 
-### The driver's macOS and Linux lanes reach platform-neutral pieces through the Windows lane's module
-
-> **Environments:** macOS, Linux · **Who it hurts:** Contributors, who find the macOS and Linux lanes importing `lane::windows` · **Parity:** none (module graph)
-
-- `flui-driver`'s AT-SPI client and the macOS lane's AX reader walk through `lane::windows::walk`, the X11 and Wayland lanes map with `lane::windows::screen::window_geometry`, and the macOS, X11 and Wayland lanes wait in `lane::windows::activity`'s slices: platform-neutral code still under the Windows lane's module, and each Linux lane computes its window's device size (`window_target`) for itself.
-- The entry closes when those pieces move to lane-level modules and no lane imports another's (`rg 'lane::windows::(walk|screen|activity)' crates/flui-driver/src/lane/{macos,x11,wayland,atspi}` and `rg 'lane::windows::' crates/flui-driver/src/lane/macos.rs` find nothing).
-
 ### The CLI speaks to the driver agent through a client of its own
 
 > **Environments:** all · **Who it hurts:** Contributors, who keep two clients of one conversation in step · **Parity:** none (a tool's internals)

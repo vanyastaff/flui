@@ -721,7 +721,7 @@ where
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
+    ) -> crate::error::RenderResult<Size> {
         // The real bridge.
         //
         // The pipeline / `RenderEntry::layout_leaf_only` hands us a
@@ -764,12 +764,12 @@ where
 
     fn hit_test_raw(
         &self,
-        position: crate::protocol::ProtocolPosition<BoxProtocol>,
+        position: flui_foundation::geometry::Offset,
         child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
-            Option<crate::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<flui_foundation::geometry::Offset>,
             Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {
@@ -827,15 +827,15 @@ where
 
     fn dry_layout_raw(
         &self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        constraints: BoxConstraints,
         ctx: &mut crate::context::BoxDryLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
+    ) -> crate::error::RenderResult<Size> {
         T::compute_dry_layout(self, constraints, ctx)
     }
 
     fn dry_baseline_raw(
         &self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        constraints: BoxConstraints,
         baseline: crate::traits::TextBaseline,
         ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {

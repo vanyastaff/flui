@@ -1279,7 +1279,9 @@ fn home(ctx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) -
             )
         })
         .find_index_by_key(move |key| {
-            let id = key.as_any().downcast_ref::<ValueKey<NoteId>>()?.value();
+            let id = (key as &dyn Any)
+                .downcast_ref::<ValueKey<NoteId>>()?
+                .value();
             found.iter().position(|note| note.id == *id)
         })
         .controller(scroll)

@@ -1098,10 +1098,6 @@ impl flui_rendering::delegates::CustomPainter for StateReader {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(Rc::new(self.states.clone()))
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// A reader that takes a control's states at paint follows a hover with no

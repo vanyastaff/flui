@@ -20,9 +20,7 @@ use std::marker::PhantomData;
 
 use flui_foundation::RenderId;
 
-use crate::protocol::{
-    BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol,
-};
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 use crate::storage::flags::{RenderFlags, RenderFlagsCell};
 
 mod constraints;
@@ -291,8 +289,8 @@ impl<P: Protocol> Default for RenderState<P> {
 
 impl<P: Protocol> Clone for RenderState<P>
 where
-    ProtocolGeometry<P>: Clone,
-    ProtocolConstraints<P>: Clone,
+    P::Geometry: Clone,
+    P::Constraints: Clone,
 {
     fn clone(&self) -> Self {
         Self {

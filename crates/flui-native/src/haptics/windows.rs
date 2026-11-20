@@ -524,10 +524,6 @@ impl PlatformHaptics for WindowsHaptics {
     fn capabilities(&self, source: Option<DeviceId>) -> HapticCapabilities {
         windows_capabilities(self.pen(source).ok().as_ref().map(|pen| &pen.facts))
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// A real window's actuator on a host with no haptic pen: the window has

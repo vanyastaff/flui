@@ -16,8 +16,8 @@
 > what is behind it (a translucent hit). No id is passed —
 > the driver already has it.
 >
-> `HitTestCapability::Result` and `::Entry` survive as vocabulary with no
-> accumulator behind them; see their doc in `protocol/capabilities.rs` for the
+> `Protocol::HitResult` and `Protocol::HitEntry` survive as vocabulary with no
+> accumulator behind them; see their doc in `protocol/protocol.rs` for the
 > bar a future consumer must meet. The rest of this guide — position types,
 > protocol split, the walk's structure — is still current; read the code for the
 > accumulator sections rather than the snippets below.
@@ -64,23 +64,28 @@ The hit test system determines which render objects are under a given pointer po
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## HitTestCapability Trait
+## Hit-test types on `Protocol`
+
+The sealed `Protocol` trait (`protocol/protocol.rs`) names a protocol's hit-test
+types beside its layout types:
 
 ```rust
-pub trait HitTestCapability: Send + Sync + 'static {
+pub trait Protocol: Debug + Clone + Copy + sealed::Sealed + 'static {
     /// Position type for hit testing
-    type Position: Clone + Debug + Default;
-    
-    /// Result accumulator
-    type Result: HitTestResultApi + Default;
-    
+    type Position: Clone + Debug + Default + 'static;
+
+    /// Result accumulator (vocabulary only, see above)
+    type HitResult: Default + 'static;
+
     /// Individual hit entry
-    type Entry: Clone + Debug;
-    
+    type HitEntry: Clone + Debug + 'static;
+
     /// Context for hit test operations (GAT)
-    type Context<'ctx, A: Arity, P: ParentData>: HitTestContextApi<'ctx, Self, A, P>
+    type HitTestContext<'ctx, A: Arity, PD: ParentData>: HitTestContextApi<'ctx, Self, A, PD>
     where
         Self: 'ctx;
+
+    // … layout types and functions
 }
 ```
 
@@ -200,18 +205,17 @@ impl BoxHitTestEntry {
 }
 ```
 
-### BoxHitTest Capability
+### Box hit-test types
 
 ```rust
-pub struct BoxHitTest;
-
-impl HitTestCapability for BoxHitTest {
+impl Protocol for BoxProtocol {
     type Position = Offset;
-    type Result = BoxHitTestResult;
-    type Entry = BoxHitTestEntry;
-    type Context<'ctx, A: Arity, P: ParentData> = RawBoxHitTestContext<'ctx, A, P>
+    type HitResult = BoxHitTestResult;
+    type HitEntry = BoxHitTestEntry;
+    type HitTestContext<'ctx, A: Arity, PD: ParentData> = RawBoxHitTestContext<'ctx, A, PD>
     where
         Self: 'ctx;
+    // …
 }
 ```
 
@@ -314,35 +318,33 @@ pub struct SliverHitTestEntry {
 }
 ```
 
-### SliverHitTest Capability
+### Sliver hit-test types
 
 ```rust
-pub struct SliverHitTest;
-
-impl HitTestCapability for SliverHitTest {
-    type Position = SliverHitTestPosition;
-    type Result = SliverHitTestResult;
-    type Entry = SliverHitTestEntry;
-    type Context<'ctx, A: Arity, P: ParentData> = RawSliverHitTestContext<'ctx, A, P>
+impl Protocol for SliverProtocol {
+    type Position = MainAxisPosition;
+    type HitResult = SliverHitTestResult;
+    type HitEntry = SliverHitTestEntry;
+    type HitTestContext<'ctx, A: Arity, PD: ParentData> = RawSliverHitTestContext<'ctx, A, PD>
     where
         Self: 'ctx;
+    // …
 }
 ```
 
 ## Hit Test Context API
 
-Common interface for all hit test contexts:
+Common interface for all hit test contexts (`protocol/context_api.rs`):
 
 ```rust
-pub trait HitTestContextApi<'ctx, H: HitTestCapability, A: Arity, P: ParentData> {
-    /// Get current position
-    fn position(&self) -> &H::Position;
-    
-    /// Get mutable result
-    fn result(&mut self) -> &mut H::Result;
-    
-    /// Access children
-    fn children(&mut self) -> &mut ChildrenAccess<'ctx, A, P, HitTestPhase>;
+pub trait HitTestContextApi<'ctx, P: Protocol, A: Arity, PD: ParentData> {
+    fn position(&self) -> &P::Position;
+    fn is_hit(&self, bounds: Rect) -> bool;
+    fn hit_test_child(&mut self, index: usize, position: P::Position) -> bool;
+    fn hit_test_child_at_layout_offset(&mut self, _index: usize) -> bool { false }
+    fn push_transform(&mut self, transform: Matrix4);
+    fn pop_transform(&mut self);
+    fn push_offset(&mut self, offset: Offset) { /* push_transform(translation) */ }
 }
 ```
 

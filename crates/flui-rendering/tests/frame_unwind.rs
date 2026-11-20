@@ -12,7 +12,7 @@ use std::sync::{
 
 use flui_foundation::RenderId;
 use flui_foundation::Single;
-use flui_foundation::geometry::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_objects::{RenderColoredBox, RenderRepaintBoundary, RenderStack};
 use flui_rendering::{
     TextContextHandle,
@@ -21,7 +21,7 @@ use flui_rendering::{
     error::RenderError,
     parent_data::BoxParentData,
     pipeline::{PipelineCell, PipelineOwner},
-    protocol::{BoxProtocol, ProtocolGeometry},
+    protocol::BoxProtocol,
     testing::SceneHost,
     traits::{HitTestOutcome, RenderBox, RenderObject},
 };
@@ -108,7 +108,7 @@ impl RenderObject<BoxProtocol> for Rigged {
     fn perform_layout_raw(
         &mut self,
         _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+    ) -> flui_rendering::error::RenderResult<Size> {
         if self.fails_layout.load(Ordering::SeqCst) {
             return Err(RenderError::contract_violation(
                 "Rigged",
@@ -136,14 +136,10 @@ impl RenderObject<BoxProtocol> for Rigged {
 
     fn hit_test_raw(
         &self,
-        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut dyn FnMut(
-            usize,
-            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
-            Option<Matrix4>,
-        ) -> bool,
+        _hit_child: &mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }

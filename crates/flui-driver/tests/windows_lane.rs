@@ -5,6 +5,8 @@
 use std::time::Duration;
 
 use flui_driver::coordinates::{DevicePoint, to_device};
+use flui_driver::lane::pacing;
+use flui_driver::lane::walk::{self, Properties, Provider, ProviderError};
 use flui_driver::lane::windows::activity::{self, LANE_TAG, MouseMotion, Observed};
 use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
 use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK};
@@ -12,7 +14,7 @@ use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, Virt
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
 use flui_driver::lane::windows::safety::{self, Desk, Held, Landing, Refusal, check_event};
 use flui_driver::lane::windows::screen;
-use flui_driver::lane::windows::walk::{self, Properties, Provider, ProviderError};
+use flui_driver::lane::{release_outcome, windows};
 use flui_driver::projection::{Projection, ProjectionDifference};
 use flui_driver::protocol::error::ErrorCode;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
@@ -800,6 +802,282 @@ fn a_release_windows_refused_stays_held() {
     assert_eq!(buttons.bits(), 0b10, "the refused button is still held");
 }
 
+/// A release refused with `part` named, as a test injection answers.
+fn refused(part: &str) -> flui_driver::Result<()> {
+    Err(flui_driver::Error::Protocol {
+        message: format!("{part} refused"),
+    })
+}
+
+/// A failed release's lane, the names of what it left held and its message.
+fn release_failure(outcome: &flui_driver::Result<()>) -> Option<(String, Vec<String>, String)> {
+    match outcome {
+        Err(flui_driver::Error::ReleaseFailed {
+            lane,
+            held,
+            message,
+        }) => Some((lane.clone(), held.clone(), message.clone())),
+        _ => None,
+    }
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<String>>()
+}
+
+/// The lane's release of everything tries every part whatever the one before came to, and names
+/// what each still holds with each failed part's first failure, in order: a refused key does not
+/// hide the buttons and contacts left down, nor why they stayed.
+#[test]
+fn the_release_of_everything_names_what_every_part_still_holds() {
+    let mut keys = HeldKeys::new();
+    keys.apply(Keystroke::Press(keys::TAB));
+    let mut buttons = HeldButtons::default();
+    for button in 0..5 {
+        buttons.apply(button, true);
+    }
+    let mut contacts = Contacts::new();
+    let mut os = Injected::default();
+    for (pointer, kind) in [("a", PointerKind::Touch), ("p", PointerKind::Pen)] {
+        contacts
+            .move_to(pointer, kind, point(10, 10), |f| os.take(f))
+            .expect("a placement");
+        contacts
+            .down(pointer, kind, |f| os.take(f))
+            .expect("a press");
+    }
+    let mut refusing = Injected {
+        refuse: true,
+        ..Injected::default()
+    };
+    let everything = windows::release_held(
+        &mut keys,
+        &mut buttons,
+        &mut contacts,
+        |_| refused("the keys"),
+        |_| refused("the mouse"),
+        |f| refusing.take(f),
+    );
+    assert_eq!(
+        release_failure(&everything),
+        Some((
+            "windows".to_owned(),
+            names(&[
+                "Tab",
+                "the left mouse button",
+                "the right mouse button",
+                "the middle mouse button",
+                "the back mouse button",
+                "the forward mouse button",
+                "the touch contact a",
+                "the pen p",
+            ]),
+            "protocol: the keys refused; protocol: the mouse refused; \
+             protocol: Windows refused the frame"
+                .to_owned()
+        )),
+        "{everything:?}"
+    );
+    assert_eq!(keys.held(), [keys::TAB.code]);
+    assert_eq!(
+        buttons.bits(),
+        0b1_1111,
+        "every refused button is still held"
+    );
+
+    // Only what failed is named: a part that released everything adds nothing.
+    let mut buttons = HeldButtons::default();
+    buttons.apply(1, true);
+    buttons.apply(4, true);
+    let mouse = windows::release_held(
+        &mut HeldKeys::new(),
+        &mut buttons,
+        &mut Contacts::new(),
+        |_| Ok(()),
+        |button| {
+            if button == 1 {
+                refused("the mouse")
+            } else {
+                Ok(())
+            }
+        },
+        |f| os.take(f),
+    );
+    assert_eq!(
+        release_failure(&mouse),
+        Some((
+            "windows".to_owned(),
+            names(&["the right mouse button"]),
+            "protocol: the mouse refused".to_owned()
+        ))
+    );
+
+    // A pen whose lift went out but whose leave was refused is still in range.
+    let mut pen = Contacts::new();
+    pen.move_to("p", PointerKind::Pen, point(1, 1), |f| os.take(f))
+        .expect("in range");
+    pen.down("p", PointerKind::Pen, |f| os.take(f))
+        .expect("a pen press");
+    let in_range = pen.release_all(|f| match f.contacts.first().map(|c| c.phase) {
+        Some(Phase::Leave) => refused("the leave"),
+        _ => Ok(()),
+    });
+    assert_eq!(
+        release_failure(&in_range),
+        Some((
+            "windows".to_owned(),
+            names(&["the pen p in range"]),
+            "protocol: the leave refused".to_owned()
+        ))
+    );
+
+    // The mask refused while Control and Tab are held: both releases still go out, so the keys
+    // hold nothing and answer the mask's failure bare, and it leads the message of what the
+    // mouse left held.
+    let mut keys = HeldKeys::new();
+    send(&mut keys, &[down("Control"), down("Tab")]);
+    let mut buttons = HeldButtons::default();
+    buttons.apply(0, true);
+    let after_mask = windows::release_held(
+        &mut keys,
+        &mut buttons,
+        &mut Contacts::new(),
+        |stroke| {
+            if stroke == Keystroke::Press(MASK) {
+                refused("the mask")
+            } else {
+                Ok(())
+            }
+        },
+        |_| refused("the mouse"),
+        |f| os.take(f),
+    );
+    assert_eq!(keys.held(), [] as [u16; 0], "both keys were released");
+    assert_eq!(
+        release_failure(&after_mask),
+        Some((
+            "windows".to_owned(),
+            names(&["the left mouse button"]),
+            "protocol: the mask refused; protocol: the mouse refused".to_owned()
+        )),
+        "{after_mask:?}"
+    );
+    // With nothing held anywhere, the first bare failure is the answer.
+    assert!(matches!(
+        release_outcome([refused("the mask"), Ok(())]),
+        Err(flui_driver::Error::Protocol { message }) if message == "the mask refused"
+    ));
+    assert!(matches!(
+        release_outcome([Ok(()), refused("the first"), refused("the second")]),
+        Err(flui_driver::Error::Protocol { message }) if message == "the first refused"
+    ));
+    assert!(release_outcome([Ok(()), Ok(()), Ok(())]).is_ok());
+}
+
+/// The parts that panic, the part the OS refuses, the panic resumed, what the log names.
+type ReleaseRow<'a> = (&'a [&'a str], Option<&'a str>, &'a str, Option<&'a str>);
+
+/// A part whose release panics keeps no other part held: every part is tried, the first panic is
+/// resumed, and what a part that was refused leaves held is logged at error level first, since
+/// the panic is all the caller gets.
+#[test]
+fn a_panicking_part_of_the_release_still_lets_the_others_go() {
+    let rows: [ReleaseRow<'_>; 4] = [
+        (&["keys"], None, "the keys panic", None),
+        (&["buttons"], None, "the buttons panic", None),
+        (
+            &["contacts"],
+            Some("buttons"),
+            "the contacts panic",
+            Some("the left mouse button"),
+        ),
+        (
+            &["keys", "buttons"],
+            Some("contacts"),
+            "the keys panic",
+            Some("the touch contact a"),
+        ),
+    ];
+    for (panicking, refusing, resumed_text, logged) in rows {
+        let act = |part: &str| -> flui_driver::Result<()> {
+            assert!(!panicking.contains(&part), "the {part} panic");
+            if refusing == Some(part) {
+                return refused(part);
+            }
+            Ok(())
+        };
+        let mut keys = HeldKeys::new();
+        keys.apply(Keystroke::Press(keys::TAB));
+        let mut buttons = HeldButtons::default();
+        buttons.apply(0, true);
+        let mut contacts = Contacts::new();
+        let mut os = Injected::default();
+        contacts
+            .move_to("a", PointerKind::Touch, point(10, 10), |f| os.take(f))
+            .expect("a placement");
+        contacts
+            .down("a", PointerKind::Touch, |f| os.take(f))
+            .expect("a press");
+        let mut lifted = Injected::default();
+        let (resumed, captured) = flui_testing::log_capture::capture(|| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the test catches the resumed panic to assert on what ran before it"
+            )]
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                windows::release_held(
+                    &mut keys,
+                    &mut buttons,
+                    &mut contacts,
+                    |_| act("keys"),
+                    |_| act("buttons"),
+                    |f| {
+                        act("contacts")?;
+                        lifted.take(f)
+                    },
+                )
+            }))
+        });
+        let payload = resumed.expect_err("the first panic is resumed");
+        assert_eq!(
+            payload.downcast_ref::<String>().map(String::as_str),
+            Some(resumed_text),
+            "{panicking:?}"
+        );
+        let tried = |part: &str| !panicking.contains(&part) && refusing != Some(part);
+        if tried("keys") {
+            assert_eq!(
+                keys.held(),
+                [] as [u16; 0],
+                "{panicking:?}: the key was released"
+            );
+        }
+        if tried("buttons") {
+            assert_eq!(buttons.bits(), 0, "{panicking:?}: the button was released");
+        }
+        if tried("contacts") {
+            assert_eq!(
+                lifted.last_contacts(),
+                [(0, Phase::Up, true)],
+                "{panicking:?}: the touch contact was lifted"
+            );
+        }
+        let errors = captured
+            .at_level(tracing::Level::ERROR)
+            .filter(|record| record.contains("input stays held after a release that panicked"))
+            .collect::<Vec<_>>();
+        match logged {
+            None => assert!(errors.is_empty(), "{panicking:?}: {captured}"),
+            Some(name) => assert!(
+                errors.len() == 1 && errors[0].contains(name),
+                "{panicking:?}: {name} is logged: {captured}"
+            ),
+        }
+    }
+}
+
 /// A pause is waited out whole, in slices short enough to look at the guard between them.
 #[test]
 fn a_pause_is_waited_out_whole_in_watched_slices() {
@@ -809,9 +1087,9 @@ fn a_pause_is_waited_out_whole_in_watched_slices() {
         Duration::from_millis(120),
         Duration::from_secs(25),
     ] {
-        let slices: Vec<Duration> = activity::slices(pause).collect();
+        let slices: Vec<Duration> = pacing::slices(pause).collect();
         assert_eq!(slices.iter().sum::<Duration>(), pause, "{pause:?}");
-        assert!(slices.iter().all(|slice| *slice <= activity::WATCH_SLICE));
+        assert!(slices.iter().all(|slice| *slice <= pacing::WATCH_SLICE));
     }
 }
 
@@ -1170,7 +1448,7 @@ fn a_client_origin_maps_back_to_its_device_pixel_at_every_scale() {
     for dpi in [72, 96, 120, 144, 168, 192, 240, 288, 384, 768] {
         let scale = screen::scale_of(dpi);
         for device in (-7_681..7_681).step_by(13) {
-            let geometry = screen::window_geometry(
+            let geometry = flui_driver::lane::screen::window_geometry(
                 point(device, -device),
                 LogicalSize::new(800.0, 600.0),
                 scale,

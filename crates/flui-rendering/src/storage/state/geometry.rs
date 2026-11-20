@@ -16,7 +16,7 @@
 
 use super::{LayoutRecord as _, RenderState};
 use crate::constraints::SliverGeometry;
-use crate::protocol::{BoxProtocol, Protocol, ProtocolGeometry, SliverProtocol};
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
 
 // ============================================================================
 // GEOMETRY (PROTOCOL-SPECIFIC, WRITE-ONCE READ-MANY)
@@ -44,9 +44,9 @@ impl<P: Protocol> RenderState<P> {
     /// }
     /// ```
     #[inline]
-    pub fn geometry(&self) -> Option<ProtocolGeometry<P>>
+    pub fn geometry(&self) -> Option<P::Geometry>
     where
-        ProtocolGeometry<P>: Copy,
+        P::Geometry: Copy,
     {
         self.layout.geometry().copied()
     }
@@ -67,7 +67,7 @@ impl<P: Protocol> RenderState<P> {
     /// state.set_geometry(new_size); // re-layout (no panic)
     /// ```
     #[inline]
-    pub fn set_geometry(&mut self, geometry: ProtocolGeometry<P>) {
+    pub fn set_geometry(&mut self, geometry: P::Geometry) {
         self.layout.set_geometry(geometry);
     }
 

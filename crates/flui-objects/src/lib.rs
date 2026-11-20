@@ -34,6 +34,7 @@
 #![expect(clippy::too_many_arguments)]
 
 mod animation_sample;
+mod dynamic_type;
 mod image;
 mod interaction;
 mod layout;

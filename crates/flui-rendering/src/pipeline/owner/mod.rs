@@ -943,9 +943,7 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
-        ) -> crate::error::RenderResult<
-            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        > {
+        ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
             Ok(self.size)
         }
 
@@ -960,12 +958,12 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _position: flui_foundation::geometry::Offset,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
-                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+                Option<flui_foundation::geometry::Offset>,
                 Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
@@ -1003,9 +1001,7 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
-        ) -> crate::error::RenderResult<
-            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        > {
+        ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
             // Intentional unstructured panic — exercises the catch_unwind →
             // Poisoned path in `RenderEntry::layout_leaf_only`. This test
             // fixture is one explicit way to produce
@@ -1031,12 +1027,12 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _position: flui_foundation::geometry::Offset,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
-                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+                Option<flui_foundation::geometry::Offset>,
                 Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {

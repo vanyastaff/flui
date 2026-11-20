@@ -1,9 +1,9 @@
-use flui_foundation::geometry::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_rendering::{
     RenderResult,
     constraints::BoxConstraints,
     context::FragmentRecorder,
-    protocol::{BoxProtocol, Protocol, ProtocolPosition},
+    protocol::{BoxProtocol, Protocol},
     traits::{HitTestOutcome, RenderObject},
 };
 
@@ -27,12 +27,12 @@ impl RenderObject<BoxProtocol> for RawConsumer {
 
     fn hit_test_raw(
         &self,
-        _position: ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         _child_count: usize,
         _size: Size,
         _hit_child: &mut dyn FnMut(
             usize,
-            Option<ProtocolPosition<BoxProtocol>>,
+            Option<Offset>,
             Option<Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {

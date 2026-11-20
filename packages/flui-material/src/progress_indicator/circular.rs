@@ -166,12 +166,8 @@ impl CustomPainter for ArcPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             old.fraction != self.fraction || old.active != self.active || old.track != self.track
         })
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

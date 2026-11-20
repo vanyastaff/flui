@@ -458,9 +458,6 @@ impl CustomPainter for SliderPainter {
         canvas.restore();
     }
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>() != Some(self)
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        (old as &dyn Any).downcast_ref::<Self>() != Some(self)
     }
 }

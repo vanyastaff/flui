@@ -6,7 +6,7 @@
 //!   (`org.a11y.Bus`), finds the app among the bus's applications by the process that owns its
 //!   connection, and its window among the app's, and projects the window's tree onto the wire's
 //!   nodes through the bounded walk the Windows lane's UI Automation read uses
-//!   ([`walk`](crate::lane::windows::walk)): each node's role folded by [`roles::wire_role`], its
+//!   ([`walk`](crate::lane::walk)): each node's role folded by [`roles::wire_role`], its
 //!   name, description, `AccessibleId` (the ADR-0240 identifier the adapter publishes), text,
 //!   checked, expanded and selected states, and its extents on the screen.
 //!

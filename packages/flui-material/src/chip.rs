@@ -138,6 +138,7 @@
 //! - **Material elevation interplay, press elevation** — elevation is fixed
 //!   at `0.0` for both types in V1 (matches "flat only").
 
+use std::any::Any;
 use std::rc::Rc;
 
 use flui_sdk::painting::Canvas;
@@ -950,14 +951,9 @@ impl CustomPainter for ChipBorderPainter {
     }
 
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old != self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -999,13 +995,8 @@ impl CustomPainter for ChipCheckmarkPainter {
     }
 
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old != self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
