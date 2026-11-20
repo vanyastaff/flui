@@ -193,16 +193,16 @@ impl Notification {
 /// the whole point: an observer holds a `NavigatorHandle` and would otherwise
 /// panic on a second `RefCell` borrow the moment it read the stack it was told about.
 ///
-/// An observer that panics does not keep the others from hearing: `recovery`
+/// An observer that panics does not keep the others from hearing: `failure`
 /// holds the first failure.
 pub(crate) fn deliver(
     notifications: &[Notification],
     observers: &[Rc<dyn NavigatorObserver>],
-    recovery: &mut flui_foundation::panic::PanicRecovery,
+    failure: &mut flui_foundation::panic::FirstPanic,
 ) {
     for notification in notifications {
         for observer in observers {
-            recovery.run(|| notification.notify(observer.as_ref()));
+            failure.contain(|| notification.notify(observer.as_ref()));
         }
     }
 }

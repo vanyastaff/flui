@@ -489,12 +489,12 @@ impl FlushOutcome {
     /// Must run **after** the observers have been notified (the pop observation
     /// precedes disposal) and after the caller has removed each route's
     /// overlay entries. A panicking `dispose` does not keep the remaining
-    /// routes from being disposed: `recovery` holds the first failure.
-    pub(crate) fn dispose_routes(&mut self, recovery: &mut flui_foundation::panic::PanicRecovery) {
+    /// routes from being disposed: `failure` holds the first failure.
+    pub(crate) fn dispose_routes(&mut self, failure: &mut flui_foundation::panic::FirstPanic) {
         for mut entry in self.dying.drain(..) {
-            recovery.run(|| entry.route.dispose());
+            failure.contain(|| entry.route.dispose());
             entry.state = RouteLifecycle::Disposed;
-            recovery.retire(entry);
+            failure.retire(entry);
         }
     }
 }

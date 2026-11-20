@@ -930,7 +930,7 @@ impl Vsync {
             }
         }
         if let Some(profile) = profile {
-            profile.close(retirement);
+            profile.close();
         }
     }
 }

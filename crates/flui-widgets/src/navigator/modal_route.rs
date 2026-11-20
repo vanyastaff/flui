@@ -999,17 +999,17 @@ impl ModalHandle {
     /// the flush's own consequence: the rebuild it requests joins the frame
     /// the pop happened in, while the callbacks wait for that frame to end.
     /// Called by `NavigatorShared::apply` with **no borrow held** (ADR-0025);
-    /// each step is contained in `recovery` on its own.
+    /// each step is contained in `failure` on its own.
     pub(crate) fn drain_local_history(
         &self,
         post_frame: Option<&flui_scheduler::PostFrameHandle>,
-        recovery: &mut flui_foundation::panic::PanicRecovery,
+        failure: &mut flui_foundation::panic::FirstPanic,
     ) {
         let (callbacks, emptied) = self.inner.local_history.take_owed();
         if emptied {
-            recovery.run(|| changed_internal_state(&self.inner));
+            failure.contain(|| changed_internal_state(&self.inner));
         }
-        super::local_history::deliver_on_remove(post_frame, callbacks, recovery);
+        super::local_history::deliver_on_remove(post_frame, callbacks, failure);
     }
 
     /// Force the route offstage (or back), whole: the early return on an

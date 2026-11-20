@@ -688,12 +688,12 @@ impl MessengerCore {
         self.last_duration_status
             .set(AnimationStatus::ReverseSettled);
         let outgoing = self.duration_controller.borrow_mut().replace(owner);
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
-        recovery.run(|| {
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
+        failure.contain(|| {
             let _ = controller.forward();
         });
-        recovery.retire(outgoing);
-        recovery.finish();
+        failure.retire(outgoing);
+        failure.resume();
     }
 
     fn cancel_display_timer(&self) {
@@ -838,13 +838,13 @@ impl ScaffoldMessengerHandle {
         self.shared.vsync.replace(vsync.clone());
         let entry = self.shared.entry_owner.borrow_mut().take();
         let timer = self.shared.duration_controller.borrow_mut().take();
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
         for (slot, owner) in [
             (&self.shared.entry_owner, entry),
             (&self.shared.duration_controller, timer),
         ] {
             if let Some(mut owner) = owner {
-                recovery.run(|| {
+                failure.contain(|| {
                     if let Err(error) = owner.rebind(vsync.as_ref()) {
                         tracing::error!(%error, "ScaffoldMessenger lost its frame registry");
                     }
@@ -857,10 +857,10 @@ impl ScaffoldMessengerHandle {
                         Some(owner)
                     }
                 };
-                recovery.retire(outgoing);
+                failure.retire(outgoing);
             }
         }
-        recovery.finish();
+        failure.resume();
     }
 
     /// Release both owning handles.

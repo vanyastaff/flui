@@ -157,14 +157,14 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
         });
         // Each value retires on its own, so a second panicking destructor
         // cannot run while the first unwinds; the first failure resumes.
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some((retired_from, retired_to)) = outgoing {
-            recovery.retire(retired_from);
-            recovery.retire(retired_to);
+            failure.retire(retired_from);
+            failure.retire(retired_to);
         }
-        recovery.retire(incoming_from);
-        recovery.retire(incoming_to);
-        recovery.finish();
+        failure.retire(incoming_from);
+        failure.retire(incoming_to);
+        failure.resume();
     }
 
     fn dispose(&mut self) {

@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_foundation::InputSequenceId;
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::gesture::GestureArena;
 
 use super::ScrollSequence;
@@ -65,9 +65,9 @@ impl SequenceSource {
             return;
         };
         if let Some(sequence) = led(id) {
-            let mut recovery = PanicRecovery::new();
-            follow_latch(&sequence, &arena, end, &mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            follow_latch(&sequence, &arena, end, &mut failure);
+            failure.resume();
         }
     }
 }

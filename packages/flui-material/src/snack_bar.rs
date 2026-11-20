@@ -389,9 +389,9 @@ impl HoverLease {
 
 impl Drop for HoverLease {
     fn drop(&mut self) {
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
-        recovery.run(|| self.retire());
-        recovery.finish();
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
+        failure.contain(|| self.retire());
+        failure.resume();
     }
 }
 
@@ -431,10 +431,10 @@ impl ViewState<SnackBarPresenter> for SnackBarPresenterState {
             state: Cell::new(HoverState::Idle),
         });
         let outgoing = std::mem::replace(&mut self.hover, next);
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
-        recovery.run(|| self.hover.set(hovered));
-        recovery.retire(outgoing);
-        recovery.finish();
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
+        failure.contain(|| self.hover.set(hovered));
+        failure.retire(outgoing);
+        failure.resume();
     }
 
     fn dispose(&mut self) {

@@ -95,7 +95,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_sdk::animation::Vsync;
-use flui_sdk::foundation::panic::PanicRecovery;
+use flui_sdk::foundation::panic::FirstPanic;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{EdgeInsets, Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
@@ -858,14 +858,14 @@ fn build_tab_cell(
         .on_tap(move |ctx| {
             // A panicking position observer must not skip the caller's
             // callback: both run, then the first failure resumes.
-            let mut recovery = PanicRecovery::new();
-            recovery.run(|| {
+            let mut failure = FirstPanic::new();
+            failure.contain(|| {
                 let _ = tap_controller.animate_to(index);
             });
             if let Some(callback) = &tap_callback {
-                recovery.run(|| callback(ctx, index));
+                failure.contain(|| callback(ctx, index));
             }
-            recovery.finish();
+            failure.resume();
         });
 
     // One node per tab, as a navigation destination is: the well's tap and

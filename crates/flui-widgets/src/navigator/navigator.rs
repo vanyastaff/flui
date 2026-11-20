@@ -368,13 +368,13 @@ impl NavigatorShared {
             .map(|(id, peer)| (*id, Rc::clone(&peer.rebind_clock)))
             .collect();
         peers.sort_unstable_by_key(|(id, _)| *id);
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         for (_, rebind) in peers {
             let current = self.vsync.borrow().clone();
-            recovery.run(|| rebind(current.as_ref()));
+            failure.contain(|| rebind(current.as_ref()));
         }
-        recovery.retire(outgoing);
-        recovery.finish();
+        failure.retire(outgoing);
+        failure.resume();
     }
 
     /// Apply what a flush left behind, in this order:
@@ -387,7 +387,7 @@ impl NavigatorShared {
     /// Every step runs though user code in an earlier one panicked; the first
     /// panic propagates once all of them have run.
     fn apply(&self, mut outcome: FlushOutcome) {
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         // 0. Everything the flush owed to user code, **in the order it was
         //    produced** — a multi-pass flush must not deliver a later pass's
         //    refusal ahead of an earlier pass's pop — and before the observers
@@ -415,14 +415,14 @@ impl NavigatorShared {
                         let modals =
                             modals.get_or_insert_with(|| self.registries.modals.borrow().clone());
                         if let Some(modal) = modals.get(&route) {
-                            recovery.run(|| modal.notify_pop_invoked(did_pop));
+                            failure.contain(|| modal.notify_pop_invoked(did_pop));
                         }
                     }
                     DeferredEffect::LocalHistoryPopped(route) => {
                         let modals =
                             modals.get_or_insert_with(|| self.registries.modals.borrow().clone());
                         if let Some(modal) = modals.get(&route) {
-                            modal.drain_local_history(post_frame.as_ref(), &mut recovery);
+                            modal.drain_local_history(post_frame.as_ref(), &mut failure);
                         }
                     }
                     // **Load-bearing placement (ADR-0064).** Registered here,
@@ -444,7 +444,7 @@ impl NavigatorShared {
                     }
                 }
             }
-            recovery.retire(modals);
+            failure.retire(modals);
         }
 
         // 0b. The new top route takes the keyboard: its scope becomes active and
@@ -469,19 +469,19 @@ impl NavigatorShared {
             let modals = self.registries.modals.borrow().clone();
             if let Some(modal) = modals.get(&top) {
                 if replaces_a_route {
-                    recovery.run(|| modal.supersede_inner_first_focus());
+                    failure.contain(|| modal.supersede_inner_first_focus());
                 }
-                recovery.run(|| modal.set_focusable(true));
+                failure.contain(|| modal.set_focusable(true));
                 // The first route of a navigator takes no focus: the first Tab
                 // enters it.
-                recovery.run(|| modal.activate_focus_scope(replaces_a_route));
+                failure.contain(|| modal.activate_focus_scope(replaces_a_route));
             }
             for (route, modal) in &modals {
                 if *route != top {
-                    recovery.run(|| modal.set_focusable(false));
+                    failure.contain(|| modal.set_focusable(false));
                 }
             }
-            recovery.retire(modals);
+            failure.retire(modals);
         }
 
         // 1. Observers, with **no borrow held** — this is the whole reason the flush
@@ -489,13 +489,13 @@ impl NavigatorShared {
         //    through its `NavigatorHandle`, and may mutate it (which runs a fresh
         //    flush whose notifications land after this loop drains).
         let observers = self.observers();
-        deliver(&outcome.notifications, &observers, &mut recovery);
-        recovery.retire(observers);
+        deliver(&outcome.notifications, &observers, &mut failure);
+        failure.retire(observers);
 
         // 2. Each disposed route's overlay entries, then the route itself.
         self.registries
-            .retire_entries(&outcome.disposed, &mut recovery);
-        outcome.dispose_routes(&mut recovery);
+            .retire_entries(&outcome.disposed, &mut failure);
+        outcome.dispose_routes(&mut failure);
 
         if outcome.rearrange_overlay {
             // The entries of every route in history order, bottom → top.
@@ -506,10 +506,10 @@ impl NavigatorShared {
                     .filter_map(|id| entries.get(id).cloned())
                     .collect()
             };
-            recovery.run(|| self.overlay.rearrange(&ordered));
+            failure.contain(|| self.overlay.rearrange(&ordered));
         }
-        recovery.retire(outcome);
-        recovery.finish();
+        failure.retire(outcome);
+        failure.resume();
     }
 
     /// Register the continuation a

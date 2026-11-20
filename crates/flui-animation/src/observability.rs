@@ -1,33 +1,22 @@
 //! Optional tracing callouts never own animation failure or delivery custody.
 
-use flui_foundation::panic::PanicRecovery;
-use flui_foundation::panic::RecoveryScope;
+use flui_foundation::panic::FirstPanic;
 
-// Run only a subscriber callout, never the animation operation itself.
+// Run only a subscriber callout, never the animation operation itself. A
+// subscriber's panic is discarded when the collector drops: observability
+// cannot supersede a source or listener failure, nor stop accepted work.
 pub(crate) fn observe<T>(action: impl FnOnce() -> T) -> Option<T> {
-    let mut recovery = PanicRecovery::new();
-    let mut output = None;
-    recovery.run(|| output = Some(action()));
-    // The failure payload is dropped here.
-    // Observability cannot supersede a source/listener failure or prevent
-    // accepted work from being delivered.
-    drop(recovery.into_failure());
-    output
+    FirstPanic::new().contain(action)
 }
 
 #[cfg(feature = "diagnostics")]
-fn retire_span(span: tracing::Span, failed: bool) {
+fn retire_span(span: tracing::Span) {
     // Closing a span invokes try_close before its Dispatch field retires.
     // Keep a separate Dispatch alive so a failing close cannot unwind through
     // the last subscriber's arbitrary destructor inside Span::drop.
     let dispatch = span.with_subscriber(|(_, dispatch)| dispatch.clone());
-    let closed = observe(|| drop(span)).is_some();
-    let mut recovery = PanicRecovery::new();
-    if failed || !closed {
-        recovery.inherit_failure();
-    }
-    recovery.retire(dispatch);
-    drop(recovery.into_failure());
+    observe(|| drop(span));
+    observe(|| drop(dispatch));
 }
 
 /// A [`ProfileSpan`] named `$name`; an empty one without `diagnostics`.
@@ -49,42 +38,39 @@ macro_rules! profile_span {
 pub(crate) struct ProfileSpan {
     #[cfg(feature = "diagnostics")]
     span: Option<tracing::Span>,
-    #[cfg(feature = "diagnostics")]
-    failed: bool,
 }
 
 impl ProfileSpan {
     #[cfg(feature = "diagnostics")]
     fn new(make_span: impl FnOnce() -> tracing::Span) -> Self {
         let span = observe(make_span);
-        let mut failed = span.is_none();
         if let Some(span) = &span {
-            failed |=
-                observe(|| span.with_subscriber(|(id, dispatch)| dispatch.enter(id))).is_none();
+            observe(|| span.with_subscriber(|(id, dispatch)| dispatch.enter(id)));
         }
-        Self { span, failed }
+        Self { span }
     }
 
-    /// Caught animation failures remain authoritative during observer cleanup.
+    /// Exit and close the span here rather than where the value drops. A
+    /// subscriber that panics is discarded ([`observe`]), so a caught
+    /// animation failure stays the one its recovery resumes.
     #[inline]
-    pub(crate) fn close(self, recovery: &RecoveryScope<'_>) {
+    pub(crate) fn close(self) {
         #[cfg(feature = "diagnostics")]
         {
             let mut profile = self;
-            profile.finish(recovery.has_failure());
+            profile.finish();
         }
         #[cfg(not(feature = "diagnostics"))]
         {
-            let _ = (self, recovery);
+            let _ = self;
         }
     }
 
     #[cfg(feature = "diagnostics")]
-    fn finish(&mut self, failed: bool) {
+    fn finish(&mut self) {
         if let Some(span) = self.span.take() {
-            let exited =
-                observe(|| span.with_subscriber(|(id, dispatch)| dispatch.exit(id))).is_some();
-            retire_span(span, failed || self.failed || !exited);
+            observe(|| span.with_subscriber(|(id, dispatch)| dispatch.exit(id)));
+            retire_span(span);
         }
     }
 
@@ -107,7 +93,7 @@ impl ProfileSpan {
 #[cfg(feature = "diagnostics")]
 impl Drop for ProfileSpan {
     fn drop(&mut self) {
-        self.finish(std::thread::panicking());
+        self.finish();
     }
 }
 
@@ -143,7 +129,7 @@ impl ControllerTrace {
 impl Drop for ControllerTrace {
     fn drop(&mut self) {
         if let Some(span) = self.span.take() {
-            retire_span(span, std::thread::panicking());
+            retire_span(span);
         }
     }
 }

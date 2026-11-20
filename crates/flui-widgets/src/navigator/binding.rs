@@ -373,12 +373,12 @@ impl RouteRegistries {
     /// Take the overlay entries of `routes` out of the registry, then remove
     /// each from its overlay with the registry's lock released: an entry's
     /// builder may own captures whose `Drop` is user code. Each removal runs,
-    /// and each entry retires, through `recovery`, which holds the first
+    /// and each entry retires, through `failure`, which holds the first
     /// failure.
     pub(crate) fn retire_entries(
         &self,
         routes: &[RouteId],
-        recovery: &mut flui_foundation::panic::PanicRecovery,
+        failure: &mut flui_foundation::panic::FirstPanic,
     ) {
         let removed: Vec<OverlayEntry> = {
             let mut entries = self.entries.borrow_mut();
@@ -386,9 +386,9 @@ impl RouteRegistries {
         };
         for entry in removed {
             if entry.is_attached() {
-                recovery.run(|| entry.remove());
+                failure.contain(|| entry.remove());
             }
-            recovery.retire(entry);
+            failure.retire(entry);
         }
     }
 
