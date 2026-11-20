@@ -377,7 +377,10 @@ impl LineMetrics {
     /// Creates new line metrics.
     #[must_use]
     #[inline]
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per `LineMetrics` field"
+    )]
     pub fn new(
         hard_break: bool,
         ascent: f64,

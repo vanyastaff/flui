@@ -357,7 +357,10 @@ impl ChildEntry {
     /// attach the dismissal status-listener — [`ChildEntry::register`] does
     /// that once a [`BuildContext`] is available (`create_state` has none;
     /// see `AnimatedSwitcherState::init_state`).
-    #[expect(clippy::too_many_arguments)] // one argument per entry parameter
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per entry parameter; the entry is built from loose values with no struct that already carries them"
+    )]
     fn new(
         child: BoxedView,
         child_number: u64,

@@ -539,7 +539,10 @@ impl ClipMaskPipeline {
         })
     }
 
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the device, resources and encoder are independent borrows of the frame's GPU state; the mask graph arrives as separate slices"
+    )]
     pub(crate) fn prepare(
         &mut self,
         device: &wgpu::Device,

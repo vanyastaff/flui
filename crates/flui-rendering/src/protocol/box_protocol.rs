@@ -236,7 +236,10 @@ impl Protocol for BoxProtocol {
 // The `_bits` postfix is load-bearing: each field is the `f64::to_bits` image
 // of the same-named `BoxConstraints` field, and dropping it would suggest the
 // fields hold pixel values.
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "every field keeps the `_bits` postfix of the bound it hashes"
+)]
 pub struct BoxConstraintsCacheKey {
     min_width_bits: u64,
     max_width_bits: u64,
@@ -1275,6 +1278,10 @@ impl<'ctx> DriverBoxLayoutContext<'ctx> {
     /// from within the layout walk.
     ///
     /// `text` is the pipeline's text context the node measures with.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per walk-side seam the constructor's callers wire; grouping them would only move the list into a struct"
+    )]
     pub fn new(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ErasedChildState>,

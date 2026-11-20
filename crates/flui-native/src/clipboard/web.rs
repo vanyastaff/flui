@@ -16,7 +16,10 @@
 // The page has one thread, so the clipboard claims `Send`/`Sync` by hand: the
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the page has one thread, so the clipboard claims `Send`/`Sync` by hand"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

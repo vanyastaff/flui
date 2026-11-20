@@ -819,9 +819,15 @@ fn implied_stops(colors: &[Color], stops: Option<&[f64]>) -> Option<Vec<f64>> {
         Some(stops) => Some(stops.to_vec()),
         None if colors.len() == 1 => Some(vec![0.0]),
         None => {
-            #[expect(clippy::cast_precision_loss)] // a colour count
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a colour count is far below 2^53"
+            )]
             let separation = 1.0 / (colors.len() - 1) as f64;
-            #[expect(clippy::cast_precision_loss)]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "an index below the colour count is far below 2^53"
+            )]
             Some((0..colors.len()).map(|i| i as f64 * separation).collect())
         }
     }

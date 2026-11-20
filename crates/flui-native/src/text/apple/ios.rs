@@ -7,7 +7,10 @@
 // UIKit's font and text-style constants are extern statics read through
 // objc, and the responder's classes are defined through objc2: no safe
 // wrapper. Every `unsafe` block carries its own `// SAFETY:`.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "UIKit's font and text-style constants are extern statics, and the responder's classes are defined through objc2, which has no safe wrapper"
+)]
 
 mod responder;
 

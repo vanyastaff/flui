@@ -27,7 +27,10 @@ mod session {
 
     // Win32 calls: each window's session notification. Each `unsafe` block
     // states its invariant.
-    #![expect(unsafe_code)]
+    #![expect(
+        unsafe_code,
+        reason = "calls the Win32 session-notification APIs, which have no safe wrapper"
+    )]
 
     use std::rc::{Rc, Weak};
 
@@ -157,7 +160,10 @@ mod host_events {
 
     // Win32 calls: the shutdown block, the session notification, the low-memory
     // wait and its pool-thread callback. Each `unsafe` block states its invariant.
-    #![expect(unsafe_code)]
+    #![expect(
+        unsafe_code,
+        reason = "calls the Win32 shutdown-block, session-notification and low-memory-wait APIs, which have no safe wrapper"
+    )]
 
     use std::{
         cell::{Cell, RefCell},

@@ -18,7 +18,10 @@
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary; every `unsafe` block still carries its own `// SAFETY:` comment
 // stating the invariant that makes it sound.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "direct Win32 calls have no safe wrapper; each `unsafe` block carries its own SAFETY comment"
+)]
 
 pub(crate) mod broadcast;
 pub(crate) mod com_apartment;

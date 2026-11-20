@@ -213,6 +213,7 @@ are checked by `cargo heli nextest run` of the crates that own them.
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
+| A lint exception says why it is right at its site: `#[expect(lint, reason = "…")]`, or `#[allow]` with its reason where the lint fires only under some configuration | clippy `allow_attributes_without_reason` (workspace lints) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | a step of CI's `checks` job (ADR-0383 §9) |
 | No two records in `docs/adr/` share a number | a step of CI's `checks` job (ADR-0383 §9) |

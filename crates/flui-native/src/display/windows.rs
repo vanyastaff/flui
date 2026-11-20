@@ -429,7 +429,10 @@ pub(crate) mod sample {
 // Direct Win32 calls have no safe wrapper; every `unsafe` block carries its
 // own `// SAFETY:` comment stating the invariant that makes it sound.
 #[cfg(windows)]
-#[expect(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "direct Win32 calls have no safe wrapper; each `unsafe` block carries its own SAFETY comment"
+)]
 pub(crate) mod source {
     //! Windows display source.
     //!

@@ -200,7 +200,10 @@ fn axis_roundoff(off_axis: f64, on_axis: f64) -> bool {
 }
 
 impl GpuReplay {
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, queue, pipelines, resources and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     pub(crate) fn replay_backdrop(
         &mut self,
         op: BackdropOp,

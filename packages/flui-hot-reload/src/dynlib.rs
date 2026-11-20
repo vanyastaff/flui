@@ -26,7 +26,10 @@ use std::{
 ///
 /// Wraps platform-specific `dlopen`/`LoadLibraryW` and provides
 /// symbol resolution via `dlsym`/`GetProcAddress`.
-#[expect(missing_debug_implementations)]
+#[expect(
+    missing_debug_implementations,
+    reason = "`DynLib` holds a raw library handle with nothing meaningful to print"
+)]
 pub struct DynLib {
     handle: *mut c_void,
     path: PathBuf,
@@ -46,7 +49,7 @@ pub struct DynLib {
 // What this impl does NOT establish, and what callers must not assume: that
 // code or data resolved out of the library outlives `Drop`. See the module
 // note on the plugin boundary.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "`DynLib`'s raw handle is not auto-`Send`")]
 unsafe impl Send for DynLib {}
 
 impl DynLib {
@@ -68,7 +71,10 @@ impl DynLib {
     ///
     /// The caller must ensure the returned pointer is transmuted to the
     /// correct function signature. Calling with a wrong signature is UB.
-    #[expect(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "an `unsafe fn`: the caller must transmute the returned pointer to the right signature, stated under `# Safety`"
+    )]
     pub unsafe fn symbol(&self, name: &str) -> Option<*mut c_void> {
         sys::get_symbol(self.handle, name)
     }
@@ -84,7 +90,7 @@ impl Drop for DynLib {
         // SAFETY: `self.handle` is the non-null value `load_library` returned
         // (it returns `None` on a null handle), `DynLib` is not `Clone`, and
         // `Drop` runs once — so this is neither a null nor a double close.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "`dlclose` of the handle this `DynLib` owns")]
         unsafe {
             sys::close_library(self.handle);
         }
@@ -115,7 +121,7 @@ mod sys {
         // SAFETY: `c_path` is a NUL-terminated `CString` that outlives the
         // `dlopen` call, and the returned handle is null-checked before it
         // escapes this block.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "`dlopen` of a NUL-terminated path")]
         unsafe {
             // RTLD_LOCAL prevents the plugin's symbols from polluting the global
             // symbol table. Without it, duplicate symbols between the host and
@@ -139,7 +145,7 @@ mod sys {
         // NUL-terminated `CString` that outlives it. The result is only
         // null-checked here — turning it into a callable is the caller's
         // obligation, documented on `DynLib::symbol`.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "`dlsym` on a live handle")]
         unsafe {
             let ptr = libc::dlsym(handle, c_name.as_ptr());
             if ptr.is_null() { None } else { Some(ptr) }
@@ -149,7 +155,10 @@ mod sys {
     /// # Safety
     ///
     /// `handle` must be a valid library handle returned by `load_library`.
-    #[expect(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "an `unsafe fn`: `handle` must be a live handle from `load_library`, stated under `# Safety`"
+    )]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
         // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
         // call still needs its own block. `handle` is the value `dlopen`
@@ -182,7 +191,7 @@ mod sys {
         // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the
         // `LoadLibraryW` call; a failed load is an `Err` turned into `None`
         // before any handle escapes this block.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "`LoadLibraryW` of a NUL-terminated path")]
         unsafe {
             let handle = LoadLibraryW(windows::core::PCWSTR(wide.as_ptr())).ok()?;
             Some(handle.0)
@@ -198,7 +207,7 @@ mod sys {
         // NUL-terminated `CString` that outlives it. The result is only an
         // address — turning it into a callable is the caller's obligation,
         // documented on `DynLib::symbol`.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "`GetProcAddress` on a live module")]
         unsafe {
             let addr = GetProcAddress(module, windows::core::PCSTR(c_name.as_ptr().cast()));
             addr.map(|f| f as *mut c_void)
@@ -208,7 +217,10 @@ mod sys {
     /// # Safety
     ///
     /// `handle` must be a valid library handle returned by `load_library`.
-    #[expect(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "an `unsafe fn`: `handle` must be a live handle from `load_library`, stated under `# Safety`"
+    )]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
         // SAFETY: `handle` is the module `LoadLibraryW` returned in
         // `load_library` (the caller-side contract is the `# Safety` doc

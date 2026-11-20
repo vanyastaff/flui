@@ -146,6 +146,10 @@ impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstru
 ///
 /// Converts vector paths into triangle meshes using Lyon.
 /// Provides both fill and stroke tessellation.
+#[expect(
+    clippy::struct_field_names,
+    reason = "`fill_tessellator` and `stroke_tessellator` name the two lyon tessellators the struct wraps"
+)]
 pub(crate) struct Tessellator {
     /// Lyon fill tessellator
     fill_tessellator: FillTessellator,
@@ -471,7 +475,10 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
-    #[expect(clippy::similar_names)] // tl_x/tl_y, tr_x/tr_y, etc. are intentional corner names
+    #[expect(
+        clippy::similar_names,
+        reason = "tl_x/tl_y, tr_x/tr_y and the other corner pairs are the geometry's own names"
+    )]
     pub(crate) fn tessellate_drrect(
         &mut self,
         outer: &RRect,

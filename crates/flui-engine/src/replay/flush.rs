@@ -139,7 +139,10 @@ fn set_clamped_scissor(
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts; flush methods also carry
 // many GPU-handle parameters.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the flush methods take device, queue, pipelines, resources and encoder as independent borrows of the frame's GPU state that the caller holds as separate locals"
+)]
 impl GpuReplay {
     // =========================================================================
     // Segment-flush entry point
@@ -206,7 +209,10 @@ impl GpuReplay {
         }))
     }
 
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, pipelines and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     fn flush_tessellated_geometry(
         &mut self,
         segment: &DrawSegment,

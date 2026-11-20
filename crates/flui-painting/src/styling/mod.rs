@@ -4,7 +4,10 @@
 //! styling.
 
 // Colour maths: r, g, b, a, h, s, l, v are the domain's names.
-#![expect(clippy::many_single_char_names)]
+#![expect(
+    clippy::many_single_char_names,
+    reason = "r, g, b, a, h, s, l, v are the colour maths' domain names"
+)]
 
 mod border;
 mod border_radius;

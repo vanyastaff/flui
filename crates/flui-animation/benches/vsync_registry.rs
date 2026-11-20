@@ -11,7 +11,10 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in bench code: a panic IS the failure report
 // (docs/PANIC-POLICY.md).
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic in a benchmark is the failure report"
+)]
 
 use flui_animation::__runtime::VsyncDriver;
 use std::hint::black_box;

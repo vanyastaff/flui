@@ -38,7 +38,10 @@ mod history;
 pub(crate) mod lifecycle;
 pub(crate) mod local_history;
 pub(crate) mod modal_route;
-#[expect(clippy::module_inception)]
+#[expect(
+    clippy::module_inception,
+    reason = "`navigator::navigator` follows the one-type family module naming of the catalog"
+)]
 pub(crate) mod navigator;
 pub(crate) mod observer;
 pub(crate) mod overlay_route;

@@ -9,10 +9,10 @@
 //! font in a collection file (`.ttc`) is named by its family, since CoreText
 //! gives a face's file but not its index in the file.
 
-// This module calls the operating system directly, which has no safe wrapper:
-// the workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "calls the operating system directly, which has no safe wrapper"
+)]
 
 use std::ffi::c_void;
 

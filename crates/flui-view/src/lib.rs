@@ -75,9 +75,10 @@
 #![deny(missing_docs)]
 // Hash tables on the owner and frame paths are FxHash (clippy.toml `disallowed-types`).
 #![warn(clippy::disallowed_types)]
-// `element/element.rs`, `view/view.rs`: a one-type family module named after
-// its type is the catalog's house style (matches flui-widgets/flui-objects).
-#![expect(clippy::module_inception)]
+#![expect(
+    clippy::module_inception,
+    reason = "a one-type family module named after its type (`element/element.rs`, `view/view.rs`) is the catalog's house style"
+)]
 
 // ============================================================================
 // Modules

@@ -637,7 +637,10 @@ pub trait ElementBase: Downcast + 'static {
     /// `owner` carries the split-borrow build handle so the typed hook can
     /// resolve the same live tree-backed `BuildContext` the rebuild uses
     /// (PR-K).
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn notify_dependency_change(&mut self, owner: &mut crate::ElementOwner<'_>) {}
 
     // ========================================================================

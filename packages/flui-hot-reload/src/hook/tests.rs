@@ -146,7 +146,7 @@ fn scene_frame_without_a_loaded_plugin_draws_nothing() {
     let mut hook = ScenePluginHook::new(&path);
     let mut renders = 0;
     // SAFETY: no image is loaded, and this callback retains no scene data.
-    #[expect(unsafe_code)]
+    #[expect(unsafe_code, reason = "`scene_frame` is an `unsafe fn`")]
     let rendered = unsafe {
         hook.scene_frame(100.0, 100.0, &mut |_scene, _reset_fonts| {
             renders += 1;

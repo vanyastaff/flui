@@ -43,10 +43,10 @@
 //!
 //! See [`MemoryAccounting`] for the public surface.
 
-// Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![expect(clippy::struct_field_names)]
+#![expect(
+    clippy::struct_field_names,
+    reason = "`MemoryAccounting` names each measured quantity with its `_bytes` unit"
+)]
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -155,7 +155,7 @@ impl KeyInterner {
         let bucket = self.forward.entry(hash).or_default();
         for &candidate in bucket.iter() {
             // SAFETY of indexing: `KeyId` values are 1..=`next_id-1`
-            // mapping to `reverse[id-1]`; `mint()` enforces this invariant.
+            // mapping to `reverse[id-1]`; `mint_impl()` enforces this invariant.
             let existing = &*self.reverse[candidate.0.get() as usize - 1];
             if existing.key_eq(&*key) {
                 return candidate;
@@ -167,14 +167,7 @@ impl KeyInterner {
         id
     }
 
-    /// Mint the next `KeyId`. Bench-only: a production interner would mint
-    /// from an `IdMint`.
-    #[expect(dead_code)] // kept on the impl surface; intern() now uses mint_impl
-    fn mint(&mut self) -> KeyId {
-        Self::mint_impl(&mut self.next_id)
-    }
-
-    /// Split-borrow form of [`Self::mint`] that takes the counter directly so
+    /// Mint the next `KeyId` from the counter directly, so
     /// callers holding a `&mut Vec<KeyId>` borrow (e.g., `entry().or_default()`
     /// chain in [`Self::intern`]) can still mint without re-borrowing `self`.
     fn mint_impl(next_id: &mut u64) -> KeyId {
@@ -196,7 +189,10 @@ impl KeyInterner {
     /// this field so accounting stays a pure function of `NODE_COUNT`.
     #[inline]
     #[must_use]
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "`key_storage_shape` includes this module and never calls it"
+    )]
     pub fn len(&self) -> usize {
         self.reverse.len()
     }
@@ -220,10 +216,16 @@ pub struct MockNode {
     /// Per-node id. `usize` not `ElementId` — the mock skips the production
     /// `NonZeroUsize` discipline because the bench never threads ids back
     /// through a real lifecycle.
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "never read: the field exists so `size_of::<MockNode>()` matches the production node shape"
+    )]
     pub id: usize,
     /// 0..=7 in the production enum.
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "never read: the field exists so `size_of::<MockNode>()` matches the production node shape"
+    )]
     pub kind: u8,
     /// `Option<Box<dyn ViewKey>>` — 16 bytes, fat pointer, heap-backed when
     /// `Some`. This is the baseline shape spec FR-022 commits to, pending
@@ -233,7 +235,10 @@ pub struct MockNode {
     /// `Vec` so the mock matches the production `Variable`-arity shape — the
     /// keyed reconciler's hot path walks a `&[ElementId]` slice over this
     /// vector's contents.
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "never read: the field exists so `size_of::<MockNode>()` matches the production node shape"
+    )]
     pub child_indices: Vec<usize>,
 }
 
@@ -265,13 +270,22 @@ impl MockNode {
 /// has been hoisted into the [`KeyInterner`].
 #[derive(Debug)]
 pub struct MockNodeInterned {
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "never read: the field exists so `size_of::<MockNodeInterned>()` matches the production node shape"
+    )]
     pub id: usize,
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "never read: the field exists so `size_of::<MockNodeInterned>()` matches the production node shape"
+    )]
     pub kind: u8,
     /// `Option<KeyId>` — 8 bytes via `NonZeroU64` niche.
     pub key: Option<KeyId>,
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "never read: the field exists so `size_of::<MockNodeInterned>()` matches the production node shape"
+    )]
     pub child_indices: Vec<usize>,
 }
 

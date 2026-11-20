@@ -15,7 +15,10 @@
 //! (`Static`, not `Dynamic`) — not just the final color — is what makes both
 //! mutants observable.
 
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic from `unwrap` is the test failure report (docs/PANIC-POLICY.md)"
+)]
 
 use crate::common;
 

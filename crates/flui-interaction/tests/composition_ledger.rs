@@ -661,7 +661,10 @@ fn check(text: &str, composition: Option<(Range<usize>, &str)>, ops: &[Op]) -> R
 /// The cases a property run found against the range-based ledger, and the
 /// narrowing rule (ADR-0142 item 1), each a sequence and the
 /// committed text it ends with.
-#[allow(clippy::type_complexity)]
+#[expect(
+    clippy::type_complexity,
+    reason = "a table of cases whose tuple fields are each read once by the single runner"
+)]
 fn named_cases() -> Vec<(
     &'static str,
     &'static str,

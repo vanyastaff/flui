@@ -279,7 +279,10 @@ impl GpuReplay {
     /// The binding through which the draws of `segment` under `clip` read
     /// their coverage, resolved over `footprint`, the attachment pixels those
     /// draws can write (see [`MaskFootprint`]).
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, pipelines, resources and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     pub(crate) fn prepare_clip_binding(
         &mut self,
         segment: &DrawSegment,

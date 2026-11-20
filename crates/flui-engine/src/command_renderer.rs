@@ -134,7 +134,10 @@ pub(crate) trait CommandRenderer {
     );
 
     /// Render a texture atlas with sprites
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors `Canvas::draw_atlas`, whose sprites, transforms and colors are parallel slices"
+    )]
     fn render_atlas(
         &mut self,
         image: &Image,

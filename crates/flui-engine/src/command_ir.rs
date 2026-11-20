@@ -161,6 +161,10 @@ pub(crate) enum MorphOp {
 /// eight production call sites pass the spec by value or match by reference, so
 /// removing `Copy` has no impact on them.
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a short-lived per-frame value dominated by one variant; boxing it would add an allocation on the frame path"
+)]
 pub(crate) enum ImageFilterSpec {
     /// Morphological dilate or erode with the given per-axis radius in physical
     /// pixels.
@@ -1331,6 +1335,10 @@ pub(crate) struct SsaaPathOp {
 /// An item in the draw order list: either a segment of batched commands,
 /// an offscreen texture to composite, an opacity layer, or an advanced shape,
 /// or an SSAA-supersampled path tile.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a short-lived per-frame value dominated by one variant; boxing it would add an allocation on the frame path"
+)]
 pub(crate) enum DrawItem {
     /// An ordered read/filter/write of the current attachment, before subsequent children.
     Backdrop(BackdropOp),
@@ -1363,9 +1371,13 @@ pub(crate) enum DrawItem {
     /// Z-order is the insertion position in `draw_order` (R1 arm order). This
     /// arm is placed LAST in `GpuReplay::submit` so all prior draw-order items
     /// are flushed to the target before the filter result is composited on top.
-    // No production producer until a public painter API (for example,
-    // `push_image_filter`) is wired; only test builds construct it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "only test builds construct it; no production painter call records an image filter"
+        )
+    )]
     Filter(FilterOp),
 }
 

@@ -87,7 +87,7 @@ macro_rules! scene_plugin {
             if !ptr.is_null() {
                 // SAFETY: the caller guarantees this image allocated the still-live box
                 // and transfers its unique ownership here; the null case was excluded.
-                #[expect(unsafe_code)]
+                #[expect(unsafe_code, reason = "drops a box this image allocated; the SAFETY comment above states the ownership invariant")]
                 unsafe {
                     drop(::std::boxed::Box::from_raw(ptr as *mut $crate::Scene));
                 }
@@ -115,7 +115,7 @@ macro_rules! scene_plugin {
             if !ptr.is_null() {
                 // SAFETY: the caller guarantees this image allocated the still-live box
                 // and transfers its unique ownership here; the null case was excluded.
-                #[expect(unsafe_code)]
+                #[expect(unsafe_code, reason = "frees a box this image allocated; the SAFETY comment above states the ownership invariant")]
                 unsafe {
                     // MaybeUninit has Scene's layout and suppresses drop after the move.
                     drop(::std::boxed::Box::from_raw(
@@ -459,7 +459,7 @@ macro_rules! app_plugin {
             if !ptr.is_null() {
                 // SAFETY: the caller guarantees this image allocated the still-live box
                 // and transfers its unique ownership here; the null case was excluded.
-                #[expect(unsafe_code)]
+                #[expect(unsafe_code, reason = "drops a box this image allocated; the SAFETY comment above states the ownership invariant")]
                 unsafe {
                     drop(::std::boxed::Box::from_raw(ptr.cast::<$crate::Scene>()));
                 }
@@ -482,7 +482,7 @@ macro_rules! app_plugin {
             if !ptr.is_null() {
                 // SAFETY: the caller guarantees this image allocated the still-live box
                 // and transfers its unique ownership here; the null case was excluded.
-                #[expect(unsafe_code)]
+                #[expect(unsafe_code, reason = "frees a box this image allocated; the SAFETY comment above states the ownership invariant")]
                 unsafe {
                     // MaybeUninit has Scene's layout and suppresses drop after the move.
                     drop(::std::boxed::Box::from_raw(
@@ -516,7 +516,10 @@ mod thread_affinity_tests {
     // in-crate (as opposed to in a downstream cdylib, where these symbols
     // normally live) — same allowance the macro's own `unsafe {}` bodies
     // already carry elsewhere in this file.
-    #![expect(unsafe_code)]
+    #![expect(
+        unsafe_code,
+        reason = "expanding `app_plugin!` in-crate generates `#[unsafe(no_mangle)]` extern fns and `unsafe` blocks"
+    )]
 
     #[derive(Clone)]
     struct ThreadAffinityProbeRoot;

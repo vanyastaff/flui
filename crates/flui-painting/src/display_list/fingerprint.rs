@@ -375,6 +375,10 @@ impl Fingerprint {
     }
 
     /// An op's own values; the payload it names is fed apart, by content.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "one arm per `DrawOp` variant family keeps the hashed fields of each op readable and in step with its definition"
+    )]
     fn op(&mut self, op: &DrawOp) {
         self.tag(op);
         match op {

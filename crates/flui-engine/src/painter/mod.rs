@@ -118,6 +118,10 @@ pub struct WgpuPainter {
 }
 
 /// What [`WgpuPainter::begin_chunk`] did with a chunk.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a short-lived per-frame value dominated by one variant; boxing it would add an allocation on the frame path"
+)]
 pub(crate) enum ChunkStart {
     /// Its kept recording was spliced into the segment: nothing to record.
     Replayed,

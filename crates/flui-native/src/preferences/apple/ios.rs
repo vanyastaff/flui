@@ -9,7 +9,10 @@
 
 // The notification names are UIKit's and Foundation's statics, and observer
 // registration and removal are Objective-C messages.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the notification names are UIKit's and Foundation's statics, and observer registration and removal are Objective-C messages"
+)]
 
 use std::cell::RefCell;
 use std::ptr::NonNull;

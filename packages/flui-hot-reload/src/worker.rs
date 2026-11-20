@@ -55,11 +55,11 @@ struct BuildPtr(*const ());
 // process lifetime (ADR-0111). Registry pruning stops fresh dispatch to obsolete
 // workers without invalidating previously returned addresses or plugin-backed
 // view values and callbacks that escaped into the host tree.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "`BuildPtr`'s raw address is not auto-`Send`")]
 unsafe impl Send for BuildPtr {}
 // SAFETY: the `Send` argument above: a shared `&BuildPtr` only reads the
 // address, never what it points to.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "`BuildPtr`'s raw address is not auto-`Sync`")]
 unsafe impl Sync for BuildPtr {}
 
 /// Host entry point wired into [`WorkerPlugin::load`].
@@ -122,7 +122,10 @@ type WorkerFingerprintFn = extern "C" fn() -> u64;
 type WorkerAbiTokenFn = extern "C" fn() -> u64;
 
 /// A loaded hot-reload worker dylib (`my_app_logic.dll`).
-#[expect(missing_debug_implementations)]
+#[expect(
+    missing_debug_implementations,
+    reason = "`WorkerPlugin` holds raw library handles and has no `Debug`"
+)]
 pub struct WorkerPlugin {
     // Admission is permanent: arbitrary Rust-ABI descendants can escape the
     // tree and carry image-owned code, vtables or storage (ADR-0111).
@@ -150,7 +153,7 @@ impl WorkerPlugin {
         // is the worker ABI symbol this crate defines, so a library built by the
         // matching macro exports it with `WorkerInitFn`'s signature; the pointer
         // is null-checked before the transmute.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "calls the worker init symbol")]
         unsafe {
             let init_ptr = lib.symbol("flui_worker_init")?;
             if init_ptr.is_null() {
@@ -369,7 +372,10 @@ pub fn worker_artifact_stamp(lib_path: &Path) -> (PathBuf, Option<std::time::Sys
 }
 
 /// Polls a worker dylib path and reloads on mtime changes.
-#[expect(missing_debug_implementations)]
+#[expect(
+    missing_debug_implementations,
+    reason = "`WorkerReloadDriver` owns a `WorkerPlugin`, which holds raw library handles and has no `Debug`"
+)]
 pub struct WorkerReloadDriver {
     plugin: Option<WorkerPlugin>,
     /// Canonical path (used for manifest lookup).

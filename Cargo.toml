@@ -628,6 +628,8 @@ undocumented_unsafe_blocks = "warn"
 # AGENTS.md's stated exception) carry a per-site
 # `#[expect(clippy::unimplemented, reason = "...")]` instead of a blanket
 # allow, so a *new* one anywhere else still fails CI.
+# A lint exception says why: `#[expect(lint, reason = "…")]` (AGENTS.md, "Rules are types").
+allow_attributes_without_reason = "warn"
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"

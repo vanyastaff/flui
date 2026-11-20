@@ -346,6 +346,10 @@ pub(super) struct SubtreeArena<'tree> {
     /// carries the failure identity to `layout_dirty_root`, which feeds
     /// the poison counters after the walk.  Same `RefCell` discipline as
     /// the other sinks.  Empty unless a descendant errored this walk.
+    #[expect(
+        clippy::type_complexity,
+        reason = "a private sink whose tuple is pushed and drained in this module only"
+    )]
     layout_failures: RefCell<
         Vec<(
             flui_foundation::RenderId,
@@ -562,36 +566,6 @@ impl<'tree> SubtreeArena<'tree> {
         constraints: BoxConstraints,
     ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
         layout_subtree_borrowed(self, id, constraints)
-    }
-
-    /// Lays out the sliver node identified by `id` under `constraints`.
-    ///
-    /// Called from the sliver-child callback inside `layout_subtree_borrowed_impl`
-    /// (Box parent → Sliver child cross-protocol path) — not called directly
-    /// from `owner/mod.rs`.
-    #[expect(dead_code)]
-    pub(super) fn layout_sliver_child(
-        &self,
-        id: RenderId,
-        constraints: SliverConstraints,
-    ) -> crate::error::RenderResult<SliverGeometry> {
-        layout_sliver_subtree_borrowed(self, id, constraints)
-    }
-
-    /// Queries the box intrinsic dimension of `id` through the walk's lease, so no fresh
-    /// `&mut RenderTree` is needed.
-    ///
-    /// Called from the box-intrinsic callback inside `layout_sliver_subtree_borrowed_impl`
-    /// (Sliver parent querying Box child intrinsics) — not called directly from
-    /// `owner/mod.rs`, so the dead_code lint fires through `dyn Fn` indirection.
-    #[expect(dead_code)]
-    pub(super) fn box_intrinsic(
-        &self,
-        id: RenderId,
-        dimension: crate::storage::IntrinsicDimension,
-        extent: f64,
-    ) -> crate::error::RenderResult<f64> {
-        box_intrinsic_query_borrowed(self, id, dimension, extent)
     }
 
     /// Constructs a `SubtreeArena` from a `RenderTree` for the walk rooted at `id`, returning

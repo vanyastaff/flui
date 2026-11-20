@@ -19,7 +19,10 @@
 // the few sends that API marks so (an initializer, `setReleasedWhenClosed:`)
 // and the raw pointers handed to other features: one of the crate's `unsafe`
 // FFI islands, opted out at its module boundary.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the few objc2 sends marked `unsafe` (an initializer, `setReleasedWhenClosed:`) and the raw pointers handed to other features have no safe form"
+)]
 
 pub(crate) mod backdrop;
 pub(crate) mod cursor;

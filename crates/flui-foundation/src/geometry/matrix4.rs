@@ -259,7 +259,10 @@ impl Matrix4 {
     ///
     /// Parameters are named as `mRC` where R is row and C is column
     /// (0-indexed).
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the sixteen entries of a 4x4 matrix in row-major order"
+    )]
     pub fn new(
         m00: f64,
         m01: f64,
