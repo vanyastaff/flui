@@ -20,6 +20,9 @@
 
 pub mod atspi;
 pub mod macos;
+pub mod pacing;
+pub mod screen;
+pub mod walk;
 pub mod wayland;
 pub mod windows;
 pub mod x11;

@@ -10,6 +10,7 @@ use atspi::proxy::accessible::AccessibleProxy;
 use atspi::proxy::bus::{BusProxy, StatusProxy};
 use atspi::{CoordType, Interface, ObjectRefOwned, State, StateSet, zbus};
 use flui_protocol::error::{ErrorCode, Retry};
+use flui_protocol::session::Placement;
 use flui_protocol::tree::{ElementId, Node, OUTLINE_TEXT_LIMIT, Rect, Tree};
 use flui_protocol::wire::Checked;
 use futures_lite::future::block_on;
@@ -17,7 +18,7 @@ use futures_lite::future::block_on;
 use super::CALL_TIMEOUT;
 use super::roles::{self, AtspiRole};
 use crate::error::{Error, Result};
-use crate::lane::windows::walk::{self, Properties, Provider, ProviderError};
+use crate::lane::walk::{self, Properties, Provider, ProviderError};
 
 /// The registry's root, whose children are the applications on the bus.
 const REGISTRY: &str = "org.a11y.atspi.Registry";
@@ -34,6 +35,32 @@ pub(crate) struct WindowTarget {
     pub(crate) pid: u32,
     /// The window's width and height in device pixels.
     pub(crate) size: (u32, u32),
+}
+
+impl WindowTarget {
+    /// The window of process `pid` that `placement` describes: its logical size times its scale,
+    /// rounded to whole device pixels; a size that is not a finite number inside `u32`'s range
+    /// reads as 0, which no window has.
+    pub(crate) fn of(pid: u32, placement: &Placement) -> Self {
+        let device = |logical: f64| {
+            let device = (logical * placement.scale).round();
+            if device.is_finite() && device >= 0.0 && device <= f64::from(u32::MAX) {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a whole, finite, non-negative number checked inside u32's range"
+                )]
+                let device = device as u32;
+                device
+            } else {
+                0
+            }
+        };
+        Self {
+            pid,
+            size: (device(placement.size.width), device(placement.size.height)),
+        }
+    }
 }
 
 /// A connection to the accessibility bus.

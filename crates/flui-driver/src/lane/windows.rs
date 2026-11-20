@@ -23,12 +23,12 @@
 //!   own input ends the run, since it would no longer see the person's.
 //! - **Reading.** [`roles`] is the role table UI Automation is read against; the lane projects the
 //!   window's UI Automation tree onto the wire's nodes (`Lane::read_tree`) through the bounded
-//!   [`walk`].
+//!   [`walk`](crate::lane::walk).
 //! - **Process.** A launched app runs in a kill-on-close job (`job`, on Windows), which it joins
 //!   before its first instruction.
 //!
 //! The pure parts (the key, role, coordinate and activity tables, the safety rules, the held keys
-//! and buttons, the contact frames and the walk) build on every host, so their tables run on Linux
+//! and buttons and the contact frames) build on every host, so their tables run on Linux
 //! CI; the parts that call Windows are `cfg(windows)`.
 
 pub mod activity;
@@ -38,7 +38,6 @@ pub mod keys;
 pub mod roles;
 pub mod safety;
 pub mod screen;
-pub mod walk;
 
 #[cfg(windows)]
 mod capture;
@@ -102,7 +101,6 @@ mod lane {
     use flui_protocol::session::{Isolation, Placement};
     use flui_protocol::tree::Tree;
 
-    use super::activity::{self, ECHO_WITHIN};
     use super::contacts::{Contacts, PointerKind};
     use super::guard::WindowsGuard;
     use super::held::{HeldButtons, HeldKeys, KeyInput, Keystroke};
@@ -112,6 +110,7 @@ mod lane {
     use super::{capture, screen, uia};
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
+    use crate::lane::pacing::{ECHO_WITHIN, slices};
     use crate::lane::{
         AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
     };
@@ -445,7 +444,7 @@ mod lane {
         /// Wait out `pause` whole, looking at the guard between slices: the person's input ends
         /// the run before the next event, never a pause cut short.
         fn pause(&mut self, pause: std::time::Duration) -> Result<()> {
-            for slice in activity::slices(pause) {
+            for slice in slices(pause) {
                 if let Some(foreign) = self.guard.foreign_input() {
                     return Err(Error::InterruptedByUser {
                         lane: safety::LANE.to_owned(),
@@ -504,7 +503,7 @@ mod lane {
         fn locate_window(&mut self, placement: &Placement) -> Result<WindowGeometry> {
             let _units = DeviceUnits::enter();
             let (_, origin) = self.find(placement)?;
-            Ok(screen::window_geometry(
+            Ok(crate::lane::screen::window_geometry(
                 origin,
                 placement.size,
                 placement.scale,
