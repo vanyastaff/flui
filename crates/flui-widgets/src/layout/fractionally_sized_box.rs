@@ -2,9 +2,11 @@
 //! space.
 
 use flui_objects::{FractionFactor, RenderFractionallySizedBox};
-use flui_painting::Alignment;
+use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+
+use crate::Directionality;
 
 /// Sizes its child to a fraction of the available space along each axis.
 ///
@@ -15,7 +17,7 @@ use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 pub struct FractionallySizedBox {
     width_factor: Option<f64>,
     height_factor: Option<f64>,
-    alignment: Option<Alignment>,
+    alignment: AlignmentGeometry,
     child: Child,
     site: CreationSite,
 }
@@ -27,7 +29,7 @@ impl FractionallySizedBox {
         Self {
             width_factor: None,
             height_factor: None,
-            alignment: None,
+            alignment: Alignment::CENTER.into(),
             child: Child::empty(),
             site: CreationSite::here(),
         }
@@ -47,10 +49,12 @@ impl FractionallySizedBox {
         self
     }
 
-    /// Set how the sized child is aligned within the box.
+    /// Set how the sized child is aligned within the box: an [`Alignment`] is
+    /// absolute, an [`AlignmentDirectional`](flui_painting::AlignmentDirectional)
+    /// resolves against the ambient [`Directionality`].
     #[must_use]
-    pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = Some(alignment);
+    pub fn alignment(mut self, alignment: impl Into<AlignmentGeometry>) -> Self {
+        self.alignment = alignment.into();
         self
     }
 
@@ -65,11 +69,12 @@ impl FractionallySizedBox {
         value.map(FractionFactor::new_unchecked)
     }
 
-    fn build_render_object(&self) -> RenderFractionallySizedBox {
-        let mut render_object = RenderFractionallySizedBox::new();
-        if let Some(alignment) = self.alignment {
-            render_object = render_object.with_alignment(alignment);
-        }
+    fn build_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> RenderFractionallySizedBox {
+        let mut render_object = RenderFractionallySizedBox::new()
+            .with_alignment(Directionality::resolve_alignment(ctx, self.alignment));
         if let Some(factor) = Self::factor(self.width_factor) {
             render_object = render_object.with_width_factor(factor);
         }
@@ -91,22 +96,20 @@ impl RenderView for FractionallySizedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFractionallySizedBox;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.build_render_object()
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.build_render_object(ctx)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_width_factor(Self::factor(self.width_factor));
         impact |= render_object.set_height_factor(Self::factor(self.height_factor));
-        impact |= render_object.set_alignment(self.alignment.unwrap_or(Alignment::CENTER));
+        impact |=
+            render_object.set_alignment(Directionality::resolve_alignment(ctx, self.alignment));
         impact
     }
 

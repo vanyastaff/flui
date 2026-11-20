@@ -3,9 +3,11 @@
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderTransform;
-use flui_painting::Alignment;
+use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+
+use crate::Directionality;
 
 /// Applies a [`Matrix4`] transform to its child before painting.
 ///
@@ -23,7 +25,7 @@ use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct Transform {
     transform: Matrix4,
-    alignment: Option<Alignment>,
+    alignment: Option<AlignmentGeometry>,
     origin: Option<Offset>,
     transform_hit_tests: bool,
     child: Child,
@@ -64,10 +66,12 @@ impl Transform {
 
     /// Sets the alignment of the transform's pivot, relative to the child's
     /// size. Combines additively with
-    /// [`origin`](Self::origin) when both are set.
+    /// [`origin`](Self::origin) when both are set. An [`Alignment`] is absolute,
+    /// an [`AlignmentDirectional`](flui_painting::AlignmentDirectional)
+    /// resolves against the ambient [`Directionality`].
     #[must_use]
-    pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = Some(alignment);
+    pub fn alignment(mut self, alignment: impl Into<AlignmentGeometry>) -> Self {
+        self.alignment = Some(alignment.into());
         self
     }
 
@@ -98,13 +102,19 @@ impl Transform {
         self
     }
 
-    fn build_render_object(&self) -> RenderTransform {
+    /// The pivot alignment resolved against the ambient [`Directionality`].
+    fn resolved_alignment(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Option<Alignment> {
+        self.alignment
+            .map(|alignment| Directionality::resolve_alignment(ctx, alignment))
+    }
+
+    fn build_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> RenderTransform {
         // Order is load-bearing: `RenderTransform::with_alignment` clears
         // `origin` back to `None` (it's a "set the pivot mode to alignment"
         // call, not a field-merge), so it must run BEFORE `with_origin`.
         // Reversing this — `.with_origin(..)` then `.with_alignment(..)` —
         // would silently drop any explicit `origin` this widget was given.
-        let render_object = match self.alignment {
+        let render_object = match self.resolved_alignment(ctx) {
             Some(alignment) => RenderTransform::new(self.transform).with_alignment(alignment),
             None => RenderTransform::new(self.transform),
         }
@@ -120,20 +130,17 @@ impl RenderView for Transform {
     type Protocol = BoxProtocol;
     type RenderObject = RenderTransform;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.build_render_object()
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.build_render_object(ctx)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         render_object.set_transform(self.transform)
-            | render_object.set_alignment(self.alignment)
+            | render_object.set_alignment(self.resolved_alignment(ctx))
             | render_object.set_origin(self.origin)
             | render_object.set_transform_hit_tests(self.transform_hit_tests)
     }
