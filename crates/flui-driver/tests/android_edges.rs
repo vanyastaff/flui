@@ -142,6 +142,39 @@ fn a_raw_header_is_read_word_by_word_and_a_side_of_exactly_the_bound_is_taken() 
 
 #[test]
 fn a_png_past_the_bound_is_refused_before_it_is_decoded() {
+    let mut at_bound = Vec::new();
+    image::RgbaImage::new(screencap::MAX_SIDE, 1)
+        .write_to(
+            &mut std::io::Cursor::new(&mut at_bound),
+            image::ImageFormat::Png,
+        )
+        .expect("a PNG");
+    assert!(
+        screencap::parse_png(&at_bound).is_ok(),
+        "a side of exactly the bound"
+    );
+    let mut tall_at_bound = Vec::new();
+    image::RgbaImage::new(1, screencap::MAX_SIDE)
+        .write_to(
+            &mut std::io::Cursor::new(&mut tall_at_bound),
+            image::ImageFormat::Png,
+        )
+        .expect("a PNG");
+    assert!(
+        screencap::parse_png(&tall_at_bound).is_ok(),
+        "a height of exactly the bound"
+    );
+    // A format word read whole: its high byte makes it another format.
+    let header = [1_u32.to_le_bytes(), 1_u32.to_le_bytes(), [1, 0, 0, 1]].concat();
+    assert_eq!(
+        screencap::parse_raw(&header),
+        Ok(Raw::OtherFormat(0x0100_0001))
+    );
+    let header = [1_u32.to_le_bytes(), 1_u32.to_le_bytes(), [1, 0, 1, 0]].concat();
+    assert_eq!(
+        screencap::parse_raw(&header),
+        Ok(Raw::OtherFormat(0x0001_0001))
+    );
     let mut png = Vec::new();
     image::RgbaImage::new(screencap::MAX_SIDE + 1, 1)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -171,6 +204,8 @@ fn a_window_is_cut_only_when_it_lies_inside_the_capture() {
     };
     let whole = screencap::crop(width, height, &rgba, window(0, 0, 4, 3)).expect("the whole");
     assert_eq!((whole.width, whole.height, whole.rgba.len()), (4, 3, 48));
+    let inner = screencap::crop(width, height, &rgba, window(0, 0, 2, 2)).expect("inside");
+    assert_eq!((inner.width, inner.height), (2, 2));
     let corner = screencap::crop(width, height, &rgba, window(3, 2, 4, 3)).expect("a corner");
     assert_eq!(corner.rgba, rgba[44..48].to_vec());
     for refused in [
@@ -215,6 +250,10 @@ fn the_dump_is_bounded_in_size_depth_and_rotation_and_reads_no_dtd() {
     assert!(
         UiDump::parse(&padded).is_ok(),
         "a dump of exactly the bound is read"
+    );
+    assert!(
+        UiDump::parse(&format!("{padded} ")).is_err(),
+        "a well-formed dump past the bound is refused"
     );
     assert_eq!(
         Bounds::parse("[10,20][5,8]").map(|bounds| (bounds.width(), bounds.height())),
@@ -428,6 +467,11 @@ fn device_output_at_its_edges() {
     );
     assert_eq!(device::parse_focus("  mCurrentFocus=Window{1 u0 }\n"), None);
     assert_eq!(
+        device::parse_focus("  mCurrentFocus=Window{9e u0 Application Error: x}\n").as_deref(),
+        Some("Application Error: x"),
+        "a title with spaces is read whole"
+    );
+    assert_eq!(
         device::parse_focus(FOCUSED).as_deref(),
         Some("dev.flui.scenario/android.app.NativeActivity")
     );
@@ -481,17 +525,22 @@ fn a_failure_is_read_from_its_first_words_and_a_vanished_device_is_unavailable()
             ..
         }
     ));
-    let long = "x".repeat(400);
+    let long = "z".repeat(400);
     let failure = AdbReply::new(3, "")
         .stderr(long)
         .failure(Printed::Data)
         .expect("a failure");
-    assert!(
-        failure.chars().count() < 340,
-        "a message is cut: {}",
-        failure.len()
+    assert_eq!(
+        failure.matches('z').count(),
+        300,
+        "a message is cut at 300 characters"
     );
     assert!(failure.ends_with('…'));
+    let exact = AdbReply::new(3, "")
+        .stderr("y".repeat(300))
+        .failure(Printed::Data)
+        .expect("a failure");
+    assert!(!exact.ends_with('…'), "300 characters are kept whole");
     assert_eq!(
         AdbReply::new(2, "").failure(Printed::Data).as_deref(),
         Some("it exited with 2")
@@ -511,6 +560,13 @@ fn a_failure_is_read_from_its_first_words_and_a_vanished_device_is_unavailable()
         records,
         vec![r#"{"a":1}"#.to_owned(), r#"{"b":"\\"}"#.to_owned()]
     );
+    // A string that opens with an escaped quote ends at its own closing quote.
+    let mut splitter = Splitter::new(Framing::JsonObjects);
+    let records: Vec<String> = br#"{"\"x":"}"}"#
+        .iter()
+        .filter_map(|&byte| splitter.push(byte).expect("in bounds"))
+        .collect();
+    assert_eq!(records, vec![r#"{"\"x":"}"}"#.to_owned()]);
 }
 
 #[test]
@@ -787,7 +843,20 @@ fn what_each_part_holds_is_named_and_released_on_its_own() {
     assert_eq!(held.held_by(Part::Pen), vec!["the pen, in range"]);
     held.pen_device_gone();
     assert!(!held.holds_anything());
-    // The end of a sequence forgets its keys and pointers.
+    // The end of a sequence forgets where each pointer is.
+    let mut placed = HeldInput::new();
+    run(&mut placed, &tap(PointerDevice::Touch, AT)[..1], &abilities).expect("placed");
+    placed.forget_plans();
+    assert!(
+        run(
+            &mut placed,
+            &tap(PointerDevice::Touch, AT)[1..2],
+            &abilities
+        )
+        .is_err(),
+        "the pointer is forgotten"
+    );
+    // It forgets a modifier held, so a press is no longer refused for it.
     let mut keys_held = HeldInput::new();
     run(
         &mut keys_held,
@@ -797,17 +866,67 @@ fn what_each_part_holds_is_named_and_released_on_its_own() {
     .expect("held here");
     keys_held.forget_plans();
     assert!(
-        run(
-            &mut keys_held,
-            &tap(PointerDevice::Touch, AT)[1..2],
-            &abilities
-        )
-        .is_err(),
-        "the pointer is forgotten"
-    );
-    assert!(
         run(&mut keys_held, &tap(PointerDevice::Touch, AT), &abilities).is_ok(),
         "no key is held"
+    );
+    // It forgets a key held, so another key is no second key at once.
+    let mut pending = HeldInput::new();
+    run(
+        &mut pending,
+        &[OsEvent::KeyDown("a".to_owned())],
+        &abilities,
+    )
+    .expect("held here");
+    pending.forget_plans();
+    assert!(
+        run(
+            &mut pending,
+            &[OsEvent::KeyDown("b".to_owned())],
+            &abilities
+        )
+        .is_ok()
+    );
+    // It forgets that a chord used its modifiers, so a modifier tapped next is a tap.
+    let mut used = HeldInput::new();
+    run(
+        &mut used,
+        &[
+            OsEvent::KeyDown("Control".to_owned()),
+            OsEvent::KeyDown("a".to_owned()),
+            OsEvent::KeyUp("a".to_owned()),
+        ],
+        &abilities,
+    )
+    .expect("a chord");
+    used.forget_plans();
+    assert_eq!(
+        run(
+            &mut used,
+            &[
+                OsEvent::KeyDown("Shift".to_owned()),
+                OsEvent::KeyUp("Shift".to_owned())
+            ],
+            &abilities
+        ),
+        Ok(vec![Command::Key(keys::SHIFT)])
+    );
+    // A modifier pressed twice is held once.
+    let a = match keys::resolve("a") {
+        keys::KeyName::Key(code) => code,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        run(
+            &mut HeldInput::new(),
+            &[
+                OsEvent::KeyDown("Control".to_owned()),
+                OsEvent::KeyDown("Control".to_owned()),
+                OsEvent::KeyDown("a".to_owned()),
+                OsEvent::KeyUp("a".to_owned()),
+            ],
+            &abilities
+        ),
+        Ok(vec![Command::Chord(vec![keys::CONTROL, a])])
     );
     // Only a press, a key, text or a scroll asks for the focus.
     let needs: Vec<bool> = [
@@ -899,6 +1018,8 @@ fn the_rules_name_what_takes_each_refusal() {
         Refusal::WindowGone.into_error(),
         Error::Gone {
             kind: Some(flui_driver::protocol::error::HandleKind::Window),
+            handle: None,
+            exit: None,
             ..
         }
     ));
@@ -1087,4 +1208,32 @@ fn a_rotated_display_turns_the_gesture_edges_with_it() {
         &tap(PointerDevice::Touch, DevicePoint::new(1500, 600)),
     )
     .expect("inside the turned display");
+}
+
+#[test]
+fn an_app_in_front_without_a_surface_of_the_windows_size_is_no_refusal_of_focus() {
+    let adb = scripted(true, true);
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let window: flui_driver::protocol::tree::WindowId = "w1".parse().expect("a window");
+    let other_size = flui_driver::protocol::session::Placement::new(
+        window,
+        flui_driver::protocol::geometry::LogicalSize::new(100.0, 100.0),
+        2.0,
+    );
+    match lane.locate_window(&other_size) {
+        Err(Error::Lane { message, .. }) => {
+            assert!(message.contains("200 x 200"), "{message}");
+        }
+        other => panic!("expected the size named, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_key_left_held_at_the_end_of_a_sequence_is_forgotten_with_it() {
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    lane::send_guarded(&mut lane, &[OsEvent::KeyDown("Shift".to_owned())])
+        .expect("a key held here alone");
+    lane::send_guarded(&mut lane, &tap(PointerDevice::Touch, AT))
+        .expect("the next sequence holds no key");
 }

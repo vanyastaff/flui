@@ -905,6 +905,11 @@ graph LR
     `a_window_the_device_does_not_show_is_not_in_front`,
     `starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port`,
     `an_app_that_does_not_start_is_stopped_and_reports_why`, `a_device_gone_mid_run_is_unavailable`;
+    `android_edges::*` (the exact `uinput` lines, the bounds of every parser at their edges, the
+    plan's orders of events, the parts of a release, a late `uinput` answer refused by its token,
+    a guard that waits for and loses `getevent`, a pause cut short by the person's input);
+    on every Unix host `android_host::*` (`HostAdb` against a stand-in program: output, exit code,
+    the output bound, the deadline, a missing `adb`, streams cut into records);
     `policy::a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send` (a device in
     someone's hands without a guard is refused); `policy::input_left_held_outranks_why_the_run_ended`
     (a run that failed or was interrupted and then left input held answers `ReleaseFailed`, on
