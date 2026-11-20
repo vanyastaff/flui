@@ -11,7 +11,7 @@ use flui_driver::lane::android::adb::{self, AdbReply, Printed, Splitter};
 use flui_driver::lane::android::device::{self, DeviceEntry};
 use flui_driver::lane::android::getevent::{self, Line, Watch};
 use flui_driver::lane::android::held::{
-    Abilities, Command, HeldInput, MotionAction, MotionSource, PenChange,
+    Abilities, Command, HeldInput, MotionAction, MotionSource, Part, PenChange,
 };
 use flui_driver::lane::android::keys::{self, KeyName, TextStroke};
 use flui_driver::lane::android::safety::{self, Display, Refusal};
@@ -482,7 +482,7 @@ fn a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies() {
             width,
             height,
             rgba,
-        }) = screencap::parse_raw(&raw_capture(3, 2, 1, header))
+        }) = screencap::parse_raw(raw_capture(3, 2, 1, header))
         else {
             panic!("a {header}-byte header reads");
         };
@@ -490,29 +490,26 @@ fn a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies() {
         assert_eq!(&rgba[..4], &[0, 1, 2, 3]);
     }
     // RGBX: the fourth byte is no alpha.
-    let Ok(Raw::Rgba { rgba, .. }) = screencap::parse_raw(&raw_capture(2, 1, 2, 16)) else {
+    let Ok(Raw::Rgba { rgba, .. }) = screencap::parse_raw(raw_capture(2, 1, 2, 16)) else {
         panic!("RGBX reads");
     };
     assert_eq!(&rgba[..4], &[0, 1, 2, 255]);
     assert_eq!(
-        screencap::parse_raw(&raw_capture(2, 1, 4, 16)),
+        screencap::parse_raw(raw_capture(2, 1, 4, 16)),
         Ok(Raw::OtherFormat(4))
     );
     let mut short = raw_capture(3, 2, 1, 16);
     short.pop();
-    assert!(screencap::parse_raw(&short).is_err());
-    assert!(screencap::parse_raw(&[1, 0, 0]).is_err());
+    assert!(screencap::parse_raw(short).is_err());
+    assert!(screencap::parse_raw(vec![1, 0, 0]).is_err());
     let huge = [
         (screencap::MAX_SIDE + 1).to_le_bytes(),
         1_u32.to_le_bytes(),
         1_u32.to_le_bytes(),
     ]
     .concat();
-    assert!(
-        screencap::parse_raw(&huge).is_err(),
-        "a side past the bound"
-    );
-    assert!(screencap::parse_raw(&raw_capture(0, 2, 1, 16)).is_err());
+    assert!(screencap::parse_raw(huge).is_err(), "a side past the bound");
+    assert!(screencap::parse_raw(raw_capture(0, 2, 1, 16)).is_err());
 }
 
 #[test]
@@ -535,12 +532,12 @@ fn a_png_capture_decodes_and_a_window_is_cut_from_it() {
         right: 3,
         bottom: 3,
     };
-    let cut = screencap::crop(width, height, &rgba, window).expect("inside");
+    let cut = screencap::crop(width, height, rgba.clone(), window).expect("inside");
     assert_eq!((cut.width, cut.height), (2, 2));
     assert_eq!(cut.pixel(0, 0), Some([5, 0, 0, 255]));
     assert_eq!(cut.pixel(1, 1), Some([10, 0, 0, 255]));
     let past = Bounds { right: 5, ..window };
-    assert!(screencap::crop(width, height, &rgba, past).is_err());
+    assert!(screencap::crop(width, height, rgba, past).is_err());
 }
 
 #[test]
@@ -876,15 +873,19 @@ fn a_contact_is_held_only_once_the_device_took_it() {
             at,
         }]
     );
-    assert!(
-        !held.holds_anything(),
+    assert_eq!(
+        held.held_by(Part::Contact),
+        Vec::<String>::new(),
         "nothing is held before the device took it"
     );
-    assert_eq!(held.release_plan(), Vec::new());
+    assert_eq!(held.release_plan_of(Part::Contact), Vec::new());
     held.took(&down[0]);
-    assert_eq!(held.held_names(), vec!["the touch contact scenario.touch"]);
     assert_eq!(
-        held.release_plan(),
+        held.held_by(Part::Contact),
+        vec!["the touch contact scenario.touch"]
+    );
+    assert_eq!(
+        held.release_plan_of(Part::Contact),
         vec![Command::Motion {
             pointer: "scenario.touch".to_owned(),
             source: MotionSource::Touchscreen,
@@ -897,12 +898,13 @@ fn a_contact_is_held_only_once_the_device_took_it() {
     unsure.plan(&events[0], &abilities).expect("a move");
     let down = unsure.plan(&events[1], &abilities).expect("a press");
     unsure.unsure(&down[0]);
-    assert!(unsure.holds_anything());
-    // A key a timed-out command may have left down is named, never pressed again.
+    assert_eq!(unsure.held_by(Part::Contact).len(), 1);
+    // A key a timed-out command may have left down is named once, never pressed again.
     let mut keys_held = HeldInput::new();
     keys_held.unsure(&Command::Key(keys::ENTER));
-    assert_eq!(keys_held.release_plan(), Vec::new());
-    assert_eq!(keys_held.held_names(), vec!["KEYCODE_ENTER"]);
+    assert_eq!(keys_held.release_plan_of(Part::Contact), Vec::new());
+    assert_eq!(keys_held.take_unsure(), vec!["KEYCODE_ENTER"]);
+    assert_eq!(keys_held.take_unsure(), Vec::<String>::new());
 }
 
 #[test]
@@ -989,9 +991,9 @@ fn a_pen_needs_uinput_and_hovers_presses_and_leaves() {
         changes,
         [PenChange::Enter, PenChange::Press, PenChange::Lift]
     );
-    assert_eq!(held.held_names(), vec!["the pen, in range"]);
+    assert_eq!(held.held_by(Part::Pen), vec!["the pen, in range"]);
     assert!(matches!(
-        held.release_plan().as_slice(),
+        held.release_plan_of(Part::Pen).as_slice(),
         [Command::Pen {
             change: PenChange::Leave,
             ..
@@ -1003,9 +1005,8 @@ fn a_pen_needs_uinput_and_hovers_presses_and_leaves() {
 fn the_lane_connects_reading_the_device_and_probing_uinput() {
     let adb = scripted(true, true);
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
-    assert_eq!(lane.facts().sdk, 34);
-    assert_eq!(lane.facts().isolation, Isolation::Emulator);
-    assert!(lane.uinput_device());
+    assert_eq!(lane.capabilities().isolation, Isolation::Emulator);
+    assert!(lane.capabilities().pointers.contains(&PointerDevice::Pen));
     let capabilities = lane.capabilities();
     assert_eq!(capabilities.fidelity, PositionFidelity::OrderOnly);
     assert_eq!(capabilities.isolation, Isolation::Emulator);
@@ -1050,7 +1051,7 @@ fn the_lane_connects_reading_the_device_and_probing_uinput() {
 fn a_device_without_root_uinput_reports_the_capability_missing_and_refuses_the_pen() {
     let adb = scripted(true, false);
     let mut lane = connected(&adb);
-    assert!(!lane.uinput_device());
+    assert!(!lane.capabilities().pointers.contains(&PointerDevice::Pen));
     assert!(!lane.capabilities().pointers.contains(&PointerDevice::Pen));
     let refused = lane::send_guarded(
         &mut lane,
@@ -1172,6 +1173,7 @@ fn a_release_failure_names_the_contact_still_held() {
             lane: name,
             held,
             message,
+            ..
         }) => {
             assert_eq!(name, "android");
             assert_eq!(held, vec!["the touch contact scenario.touch".to_owned()]);
@@ -1392,17 +1394,20 @@ fn starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port() {
         .reply("shell 'am' 'force-stop'", AdbReply::new(0, ""))
         .reply("shell 'am' 'start'", AdbReply::new(0, "Status: ok\n"))
         .reply("install", AdbReply::new(0, "Success\n"))
-        .reply("forward tcp:0", AdbReply::new(0, "41234\n"))
-        .reply("forward --remove", AdbReply::new(0, ""));
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply("forward tcp:", AdbReply::new(0, ""));
     let app = AndroidApp::try_new(PACKAGE, "android.app.NativeActivity")
         .expect("an app")
         .apk("app.apk");
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     let started = lane.start(&app).expect("started");
-    assert_eq!(
-        started.endpoint,
-        Endpoint::Forwarded("127.0.0.1:41234".parse().expect("an address"))
-    );
+    // The lane forwards a loopback port it picked: the one its endpoint names.
+    let Endpoint::Forwarded(address) = &started.endpoint else {
+        panic!("{:?}", started.endpoint);
+    };
+    assert!(address.ip().is_loopback());
+    let port = address.port();
+    assert_ne!(port, 0);
     assert!(started.token.len() >= 32);
     let log = adb.log();
     let at = |prefix: &str| {
@@ -1413,7 +1418,7 @@ fn starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port() {
     assert!(at("install -r -t app.apk") < at("shell 'am' 'force-stop'"));
     assert!(at("shell 'am' 'force-stop'") < at("shell 'am' 'start'"));
     let start = &log[at("shell 'am' 'start'")];
-    let name = log[at("forward tcp:0 localabstract:")]
+    let name = log[at(&format!("forward tcp:{port} localabstract:"))]
         .rsplit(':')
         .next()
         .expect("a name")
@@ -1442,7 +1447,7 @@ fn starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port() {
     assert!(
         ended
             .iter()
-            .any(|line| line == "forward --remove tcp:41234")
+            .any(|line| *line == format!("forward --remove tcp:{port}"))
     );
     assert!(AndroidApp::try_new("a b", "x").is_err());
     let other = AndroidApp::try_new("other.app", "x").expect("an app");

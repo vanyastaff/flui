@@ -117,24 +117,24 @@ fn a_raw_header_is_read_word_by_word_and_a_side_of_exactly_the_bound_is_taken() 
         5_u32.to_le_bytes(),
     ]
     .concat();
-    assert_eq!(screencap::parse_raw(&header), Ok(Raw::OtherFormat(5)));
+    assert_eq!(screencap::parse_raw(header), Ok(Raw::OtherFormat(5)));
     // A width whose high byte is set is past the bound, whatever its low bytes.
     let wide = [[1, 0, 0, 1], 1_u32.to_le_bytes(), 1_u32.to_le_bytes()].concat();
-    assert!(screencap::parse_raw(&wide).is_err());
+    assert!(screencap::parse_raw(wide).is_err());
     let Ok(Raw::Rgba { width, height, .. }) =
-        screencap::parse_raw(&raw_capture(screencap::MAX_SIDE, 1, 1, 12))
+        screencap::parse_raw(raw_capture(screencap::MAX_SIDE, 1, 1, 12))
     else {
         panic!("a side of exactly the bound is read");
     };
     assert_eq!((width, height), (screencap::MAX_SIDE, 1));
     let Ok(Raw::Rgba { rgba, .. }) =
-        screencap::parse_raw(&raw_capture(1, screencap::MAX_SIDE, 1, 16))
+        screencap::parse_raw(raw_capture(1, screencap::MAX_SIDE, 1, 16))
     else {
         panic!("a tall side of exactly the bound is read");
     };
     assert_eq!(rgba.len(), screencap::MAX_SIDE as usize * 4);
     // Every pixel of an RGBX capture is opaque, and no colour byte is touched.
-    let Ok(Raw::Rgba { rgba, .. }) = screencap::parse_raw(&raw_capture(3, 1, 2, 16)) else {
+    let Ok(Raw::Rgba { rgba, .. }) = screencap::parse_raw(raw_capture(3, 1, 2, 16)) else {
         panic!("RGBX reads");
     };
     assert_eq!(rgba, vec![0, 1, 2, 255, 1, 1, 2, 255, 2, 1, 2, 255]);
@@ -167,12 +167,12 @@ fn a_png_past_the_bound_is_refused_before_it_is_decoded() {
     // A format word read whole: its high byte makes it another format.
     let header = [1_u32.to_le_bytes(), 1_u32.to_le_bytes(), [1, 0, 0, 1]].concat();
     assert_eq!(
-        screencap::parse_raw(&header),
+        screencap::parse_raw(header),
         Ok(Raw::OtherFormat(0x0100_0001))
     );
     let header = [1_u32.to_le_bytes(), 1_u32.to_le_bytes(), [1, 0, 1, 0]].concat();
     assert_eq!(
-        screencap::parse_raw(&header),
+        screencap::parse_raw(header),
         Ok(Raw::OtherFormat(0x0001_0001))
     );
     let mut png = Vec::new();
@@ -202,11 +202,13 @@ fn a_window_is_cut_only_when_it_lies_inside_the_capture() {
         right,
         bottom,
     };
-    let whole = screencap::crop(width, height, &rgba, window(0, 0, 4, 3)).expect("the whole");
+    let whole =
+        screencap::crop(width, height, rgba.clone(), window(0, 0, 4, 3)).expect("the whole");
     assert_eq!((whole.width, whole.height, whole.rgba.len()), (4, 3, 48));
-    let inner = screencap::crop(width, height, &rgba, window(0, 0, 2, 2)).expect("inside");
+    let inner = screencap::crop(width, height, rgba.clone(), window(0, 0, 2, 2)).expect("inside");
     assert_eq!((inner.width, inner.height), (2, 2));
-    let corner = screencap::crop(width, height, &rgba, window(3, 2, 4, 3)).expect("a corner");
+    let corner =
+        screencap::crop(width, height, rgba.clone(), window(3, 2, 4, 3)).expect("a corner");
     assert_eq!(corner.rgba, rgba[44..48].to_vec());
     for refused in [
         window(-1, 0, 2, 2),
@@ -218,7 +220,7 @@ fn a_window_is_cut_only_when_it_lies_inside_the_capture() {
         window(2, 1, 1, 3),
     ] {
         assert!(
-            screencap::crop(width, height, &rgba, refused).is_err(),
+            screencap::crop(width, height, rgba.clone(), refused).is_err(),
             "{refused:?}"
         );
     }
@@ -842,7 +844,7 @@ fn what_each_part_holds_is_named_and_released_on_its_own() {
     });
     assert_eq!(held.held_by(Part::Pen), vec!["the pen, in range"]);
     held.pen_device_gone();
-    assert!(!held.holds_anything());
+    assert_eq!(held.held_by(Part::Pen), Vec::<String>::new());
     // The end of a sequence forgets where each pointer is.
     let mut placed = HeldInput::new();
     run(&mut placed, &tap(PointerDevice::Touch, AT)[..1], &abilities).expect("placed");
@@ -1008,7 +1010,7 @@ fn the_rules_name_what_takes_each_refusal() {
     assert_eq!(safety::system_chord(&[keys::CONTROL], keys::TAB), None);
     assert_eq!(
         safety::system_chord(&[keys::CONTROL], keys::SPACE),
-        Some("the keyboard layout switch")
+        Some("LANGUAGE_SWITCH, which switches the keyboard layout (Control and Space)")
     );
     assert_eq!(
         safety::chord_name(&[keys::CONTROL, keys::SHIFT], a),
@@ -1045,7 +1047,6 @@ fn the_lane_answers_its_capabilities_from_the_device() {
     assert_eq!(capabilities.pointers, Vec::<PointerDevice>::new());
     assert!(capabilities.keys);
     assert!(format!("{lane:?}").contains(PACKAGE));
-    assert_eq!(lane.facts().display.density, 420);
     lane.locate_window(&crate::android_lane::placement())
         .expect("the window is found");
     let refused =
@@ -1162,7 +1163,7 @@ fn a_probe_whose_command_ends_at_once_finds_no_uinput() {
         );
     let lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     assert!(
-        !lane.uinput_device(),
+        !lane.capabilities().pointers.contains(&PointerDevice::Pen),
         "a device the kernel lists from before is not the probe's"
     );
 }
@@ -1173,17 +1174,34 @@ fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
     drop(connected(&adb));
     assert_eq!(adb.commands("shell 'am'"), Vec::<String>::new());
     assert_eq!(adb.commands("forward"), Vec::<String>::new());
-    // A forward that printed no port is refused, and the app it started is still stopped.
+    // A forward `adb` refused still has its rule removed by the port the lane picked, and the
+    // app it started is still stopped.
     let adb = scripted(true, true)
         .reply("shell 'am'", AdbReply::new(0, ""))
-        .reply("forward tcp:0", AdbReply::new(0, "0\n"));
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply(
+            "forward tcp:",
+            AdbReply::new(1, "").stderr("error: cannot bind listener: Address already in use"),
+        );
     let app = AndroidApp::try_new(PACKAGE, "a.B").expect("an app");
     assert_eq!(app.package(), PACKAGE);
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     assert!(lane.start(&app).is_err());
+    let asked = adb.commands("forward tcp:");
+    let [asked] = asked.as_slice() else {
+        panic!("one forward: {asked:?}");
+    };
+    let local = asked
+        .split_whitespace()
+        .nth(1)
+        .expect("the local spec")
+        .to_owned();
     drop(lane);
     assert_eq!(adb.commands("shell 'am' 'force-stop'").len(), 2);
-    assert_eq!(adb.commands("forward --remove"), Vec::<String>::new());
+    assert_eq!(
+        adb.commands("forward --remove"),
+        vec![format!("forward --remove {local}")]
+    );
 }
 
 #[test]
@@ -1229,11 +1247,49 @@ fn an_app_in_front_without_a_surface_of_the_windows_size_is_no_refusal_of_focus(
 }
 
 #[test]
-fn a_key_left_held_at_the_end_of_a_sequence_is_forgotten_with_it() {
+fn a_sequence_that_ends_with_a_key_down_is_refused_naming_it() {
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
-    lane::send_guarded(&mut lane, &[OsEvent::KeyDown("Shift".to_owned())])
-        .expect("a key held here alone");
+    for (events, named) in [
+        (vec![OsEvent::KeyDown("a".to_owned())], "KEYCODE_A"),
+        (
+            vec![OsEvent::KeyDown("Shift".to_owned())],
+            "KEYCODE_SHIFT_LEFT",
+        ),
+        (
+            vec![
+                OsEvent::KeyDown("Control".to_owned()),
+                OsEvent::KeyDown("a".to_owned()),
+                OsEvent::KeyUp("a".to_owned()),
+            ],
+            "KEYCODE_CTRL_LEFT",
+        ),
+    ] {
+        let refused = lane::send_guarded(&mut lane, &events).expect_err("a key left down");
+        assert_eq!(capability(&refused), Some("os_held_key"), "{refused}");
+        assert!(refused.to_string().contains(named), "{refused}");
+    }
+    assert_eq!(inputs(&adb), Vec::<String>::new(), "nothing was sent");
+    // A sequence that releases what it pressed is taken.
+    lane::send_guarded(
+        &mut lane,
+        &[
+            OsEvent::KeyDown("a".to_owned()),
+            OsEvent::KeyUp("a".to_owned()),
+        ],
+    )
+    .expect("a tap");
+}
+
+#[test]
+fn a_key_an_aborted_sequence_left_held_is_forgotten_with_it() {
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    // Sent event by event, as a run cut short leaves it: the key is held here and never sent.
+    lane.send(&OsEvent::KeyDown("Shift".to_owned()))
+        .expect("held here alone");
+    lane.release_all().expect("nothing is down on the device");
+    assert_eq!(inputs(&adb), Vec::<String>::new());
     lane::send_guarded(&mut lane, &tap(PointerDevice::Touch, AT))
         .expect("the next sequence holds no key");
 }

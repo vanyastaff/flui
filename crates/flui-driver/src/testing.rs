@@ -239,6 +239,7 @@ impl Lane for ScriptedLane {
                 lane: self.name().to_owned(),
                 held: vec!["Control".to_owned()],
                 message: "the scripted OS refused the release".into(),
+                first: None,
             });
         }
         Ok(())

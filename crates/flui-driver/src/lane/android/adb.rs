@@ -297,23 +297,36 @@ pub(crate) fn command_failed(command: &AdbCommand, reply: &AdbReply, failure: &s
 #[derive(Debug, Clone)]
 pub struct HostAdb {
     program: PathBuf,
-    serial: Option<String>,
+    serial: String,
 }
 
 impl HostAdb {
-    /// `adb` at `program`, against no device yet: it lists them.
-    #[must_use]
-    pub fn new(program: impl Into<PathBuf>) -> Self {
-        Self {
-            program: program.into(),
-            serial: None,
+    /// `adb` at `program` against the device `serial`: there is no `HostAdb` for no device, so
+    /// every command it runs names the device someone named (`devices` alone lists them all).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for an empty serial.
+    pub fn try_new(program: impl Into<PathBuf>, serial: impl Into<String>) -> Result<Self> {
+        let serial = serial.into();
+        if serial.trim().is_empty() {
+            return Err(Error::invalid_argument(
+                "an adb serial names a device; an empty one names none",
+            ));
         }
+        Ok(Self {
+            program: program.into(),
+            serial,
+        })
     }
 
-    /// The host's `adb`: `platform-tools` of the SDK `ANDROID_HOME` or `ANDROID_SDK_ROOT` names,
-    /// else `adb` on the `PATH`.
-    #[must_use]
-    pub fn locate() -> Self {
+    /// The host's `adb` against the device `serial`: `platform-tools` of the SDK `ANDROID_HOME`
+    /// or `ANDROID_SDK_ROOT` names, else `adb` on the `PATH`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_new`].
+    pub fn locate(serial: impl Into<String>) -> Result<Self> {
         let sdk = std::env::var_os("ANDROID_HOME").or_else(|| std::env::var_os("ANDROID_SDK_ROOT"));
         let program = sdk
             .map(|sdk| Path::new(&sdk).join("platform-tools"))
@@ -324,20 +337,13 @@ impl HostAdb {
                     .find(|path| path.is_file())
             })
             .unwrap_or_else(|| PathBuf::from("adb"));
-        Self::new(program)
-    }
-
-    /// The same `adb` against the device `serial`.
-    #[must_use]
-    pub fn device(mut self, serial: impl Into<String>) -> Self {
-        self.serial = Some(serial.into());
-        self
+        Self::try_new(program, serial)
     }
 
     fn command(&self, command: &AdbCommand) -> Command {
         let mut process = Command::new(&self.program);
-        if let (Some(serial), true) = (&self.serial, command.names_device()) {
-            process.args(["-s", serial.as_str()]);
+        if command.names_device() {
+            process.args(["-s", self.serial.as_str()]);
         }
         process.args(command.args());
         process

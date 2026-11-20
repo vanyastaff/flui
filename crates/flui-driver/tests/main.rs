@@ -6,6 +6,7 @@ mod android_edges;
 #[cfg(unix)]
 mod android_host;
 mod android_lane;
+mod android_rules;
 mod apps;
 mod coordinates;
 mod failure_matrix;

@@ -47,13 +47,14 @@ pub enum Raw {
     OtherFormat(u32),
 }
 
-/// The raw capture `bytes` holds.
+/// The raw capture `bytes` holds, its pixels read in place: the header is cut off the same
+/// buffer, never copied out of it.
 ///
 /// # Errors
 ///
 /// Why it is none: a header too short, a side of zero or past [`MAX_SIDE`], or a length that is
 /// neither header plus pixels for a 12- nor a 16-byte header.
-pub fn parse_raw(bytes: &[u8]) -> Result<Raw, String> {
+pub fn parse_raw(mut bytes: Vec<u8>) -> Result<Raw, String> {
     let word = |at: usize| -> Option<u32> {
         let slice = bytes.get(at..at + 4)?;
         Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
@@ -81,16 +82,16 @@ pub fn parse_raw(bytes: &[u8]) -> Result<Raw, String> {
             bytes.len()
         ));
     };
-    let mut rgba = bytes[header..].to_vec();
+    bytes.drain(..header);
     if format == RGBX_8888 {
-        for alpha in rgba.iter_mut().skip(3).step_by(4) {
+        for alpha in bytes.iter_mut().skip(3).step_by(4) {
             *alpha = u8::MAX;
         }
     }
     Ok(Raw::Rgba {
         width,
         height,
-        rgba,
+        rgba: bytes,
     })
 }
 
@@ -115,12 +116,18 @@ pub fn parse_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((width, height, decoded.into_raw()))
 }
 
-/// The part of a `width` by `height` capture of `rgba` that `window` covers.
+/// The part of a `width` by `height` capture of `rgba` that `window` covers, cut in the same
+/// buffer: each row of the window moved to the front, the rest truncated.
 ///
 /// # Errors
 ///
 /// When the window is empty or reaches past the capture.
-pub fn crop(width: u32, height: u32, rgba: &[u8], window: Bounds) -> Result<OsCapture, String> {
+pub fn crop(
+    width: u32,
+    height: u32,
+    mut rgba: Vec<u8>,
+    window: Bounds,
+) -> Result<OsCapture, String> {
     let inside = window.left >= 0
         && window.top >= 0
         && window.width() > 0
@@ -137,18 +144,21 @@ pub fn crop(width: u32, height: u32, rgba: &[u8], window: Bounds) -> Result<OsCa
     let (left, top) = (to_usize(window.left), to_usize(window.top));
     let (cut_width, cut_height) = (to_usize(window.width()), to_usize(window.height()));
     let stride = width as usize * 4;
-    let mut cut = Vec::with_capacity(cut_width * cut_height * 4);
-    for row in top..top + cut_height {
-        let start = row * stride + left * 4;
-        let line = rgba
-            .get(start..start + cut_width * 4)
-            .ok_or_else(|| "the capture holds fewer rows than its header says".to_owned())?;
-        cut.extend_from_slice(line);
+    let line = cut_width * 4;
+    if rgba.len() < (top + cut_height) * stride {
+        return Err("the capture holds fewer rows than its header says".to_owned());
     }
+    // Row `n` of the window lands at `n * line`, never past where it was read from, so each move
+    // reads bytes no earlier move overwrote.
+    for (index, row) in (top..top + cut_height).enumerate() {
+        let start = row * stride + left * 4;
+        rgba.copy_within(start..start + line, index * line);
+    }
+    rgba.truncate(cut_height * line);
     OsCapture::try_new(
         u32::try_from(cut_width).unwrap_or_default(),
         u32::try_from(cut_height).unwrap_or_default(),
-        cut,
+        rgba,
     )
     .map_err(|error| error.to_string())
 }

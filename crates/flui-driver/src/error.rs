@@ -248,6 +248,9 @@ pub enum Error {
         held: Vec<String>,
         /// The first release each part could not make, in the order the parts ran, for people.
         message: String,
+        /// The failure that ended the run before the release, when one did: what the run's
+        /// effect and verdict are read from ([`Error::effect`], [`Error::is_cannot_verify`]).
+        first: Option<Box<Error>>,
     },
     /// The conversation with the app broke its protocol: a line that is not one, an answer to
     /// nothing asked.
@@ -491,13 +494,17 @@ impl Error {
         }
     }
 
-    /// How much of an acting call reached the app, when the failure says.
+    /// How much of an acting call reached the app, when the failure says; for a release that
+    /// failed after the run did, what that first failure says.
     #[must_use]
     pub fn effect(&self) -> Option<&Effect> {
         match self {
             Self::Timeout { effect, .. }
             | Self::Platform { effect, .. }
             | Self::Gone { effect, .. } => effect.as_ref(),
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.effect(),
             _ => None,
         }
     }
@@ -511,25 +518,34 @@ impl Error {
 
     /// Whether this failure means the check could not be made rather than that it failed: a
     /// capability the target lacks, a lane the host cannot run, or the user taking the desktop
-    /// back during an OS-input run. A report turns such a check into `cannot_verify`, never a
-    /// failure and never a pass.
+    /// back during an OS-input run; for a release that failed after the run did, whether that
+    /// first failure means so. A report turns such a check into `cannot_verify`, never a failure
+    /// and never a pass.
     #[must_use]
     pub fn is_cannot_verify(&self) -> bool {
-        matches!(
-            self,
-            Self::NotSupported { .. }
-                | Self::InterruptedByUser { .. }
-                | Self::Lane {
-                    unavailable: true,
-                    ..
-                }
-        )
+        match self {
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.is_cannot_verify(),
+            _ => matches!(
+                self,
+                Self::NotSupported { .. }
+                    | Self::InterruptedByUser { .. }
+                    | Self::Lane {
+                        unavailable: true,
+                        ..
+                    }
+            ),
+        }
     }
 
     /// The capability a cannot-verify failure names, for a report's list.
     #[must_use]
     pub fn missing_capability(&self) -> Option<String> {
         match self {
+            Self::ReleaseFailed {
+                first: Some(first), ..
+            } => first.missing_capability(),
             Self::NotSupported { capability, .. } => {
                 Some(capability.clone().unwrap_or_else(|| "unnamed".to_owned()))
             }

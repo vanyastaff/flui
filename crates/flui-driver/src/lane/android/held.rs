@@ -15,11 +15,14 @@
 //!   with [`HeldInput::took`], once the device took a command (a `motionevent` returns once the
 //!   app finished with it), or [`HeldInput::unsure`] when the command timed out and may have
 //!   happened: a press that may have gone down is held, so it is released.
-//! - **Released on every exit.** [`HeldInput::release_plan`] is what releases it: the contact
-//!   cancelled where it is (`motionevent CANCEL`, which acts on nothing), the pen lifted and taken
-//!   out of range. What stays held after it is named by [`HeldInput::held_names`]: a key a
-//!   timed-out command may have left down cannot be released through `input` without pressing it,
-//!   so it is named, never pressed again.
+//! - **Released on every exit, part by part.** [`HeldInput::release_plan_of`] is what releases a
+//!   [`Part`]: the contact cancelled where it is (`motionevent CANCEL`, which acts on nothing),
+//!   the pen lifted and taken out of range; what a part still holds after it is named by
+//!   [`HeldInput::held_by`]. A key a timed-out command may have left down cannot be released
+//!   through `input` without pressing it, so [`HeldInput::take_unsure`] names it once, and it is
+//!   never pressed again.
+//! - **No key held past a sequence.** A key pressed and not released by the sequence's end would
+//!   never be sent, so `Lane::check` refuses the sequence naming it ([`HeldInput::keys_down`]).
 //! - **Refused before any event.** `Lane::check` plans the whole sequence on a copy, so a second
 //!   contact, a press with a key held, a key or chord the system takes, a character the device
 //!   cannot type or a command its `input` lacks is refused before the first event goes out.
@@ -303,7 +306,8 @@ impl HeldInput {
                     })
                     .collect())
             }
-            _ => Ok(Vec::new()),
+            // The lane waits a pause out itself (`AndroidLane::send`).
+            OsEvent::Pause(_) => Ok(Vec::new()),
         }
     }
 
@@ -374,9 +378,9 @@ impl HeldInput {
                 what: format!("a press of {pointer} before it moved anywhere"),
             })?;
         let display = abilities.display.ok_or(Refusal::WindowGone)?;
-        if device != PointerDevice::Mouse
-            && let Some(gesture) = safety::gesture_edge(at, &display)
-        {
+        // Every pointer: with three-button navigation the bottom edge is the bar's Home button, and
+        // a mouse dragged down from the top pulls the shade as a finger does.
+        if let Some(gesture) = safety::gesture_edge(at, &display) {
             return Err(Refusal::SystemGesture { point: at, gesture });
         }
         match device {
@@ -455,14 +459,14 @@ impl HeldInput {
         let code = resolve(name)?;
         if self.pending == Some(code) {
             self.pending = None;
-            if self.modifiers.is_empty() {
-                return Ok(vec![Command::Key(code)]);
-            }
             if let Some(effect) = safety::system_chord(&self.modifiers, code) {
                 return Err(Refusal::SystemChord {
                     chord: safety::chord_name(&self.modifiers, code),
                     effect,
                 });
+            }
+            if self.modifiers.is_empty() {
+                return Ok(vec![Command::Key(code)]);
             }
             if !abilities.input.key_combination {
                 return Err(Refusal::NeedsCommand {
@@ -585,15 +589,6 @@ impl HeldInput {
         }
     }
 
-    /// The commands that release what the device holds of the lane's, in order: the contact's,
-    /// then the pen's.
-    #[must_use]
-    pub fn release_plan(&self) -> Vec<Command> {
-        let mut commands = self.release_plan_of(Part::Contact);
-        commands.extend(self.release_plan_of(Part::Pen));
-        commands
-    }
-
     /// The commands that release what `part` holds, in order.
     #[must_use]
     pub fn release_plan_of(&self, part: Part) -> Vec<Command> {
@@ -641,13 +636,15 @@ impl HeldInput {
         self.pen = None;
     }
 
-    /// What the device still holds of the lane's, by name.
+    /// The keys pressed here and not released, by their key code's name: what a sequence that
+    /// ends now would never send.
     #[must_use]
-    pub fn held_names(&self) -> Vec<String> {
-        let mut names = self.held_by(Part::Contact);
-        names.extend(self.held_by(Part::Pen));
-        names.extend(self.unsure.iter().cloned());
-        names
+    pub fn keys_down(&self) -> Vec<&'static str> {
+        self.modifiers
+            .iter()
+            .chain(self.pending.iter())
+            .map(|code| code.name)
+            .collect()
     }
 
     /// What `part` still holds on the device, by name.
@@ -680,12 +677,6 @@ impl HeldInput {
     /// has no release for them, so they are named once.
     pub fn take_unsure(&mut self) -> Vec<String> {
         std::mem::take(&mut self.unsure)
-    }
-
-    /// Whether the device holds anything of the lane's.
-    #[must_use]
-    pub fn holds_anything(&self) -> bool {
-        self.contact.is_some() || self.pen.is_some() || !self.unsure.is_empty()
     }
 
     /// Whether the pen is in range.

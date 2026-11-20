@@ -38,6 +38,10 @@ pub const ALT: Keycode = key("KEYCODE_ALT_LEFT", 57);
 pub const META: Keycode = key("KEYCODE_META_LEFT", 117);
 /// `KEYCODE_SPACE`.
 pub const SPACE: Keycode = key("KEYCODE_SPACE", 62);
+/// `KEYCODE_ESCAPE`.
+pub const ESCAPE: Keycode = key("KEYCODE_ESCAPE", 111);
+/// `KEYCODE_DEL`, the key W3C names `Backspace`.
+pub const BACKSPACE: Keycode = key("KEYCODE_DEL", 67);
 
 /// The modifiers `input keycombination` holds while it presses the keys after them
 /// (`InputShellCommand`'s `MODIFIER` table).
@@ -45,7 +49,7 @@ pub const MODIFIERS: [Keycode; 4] = [SHIFT, CONTROL, ALT, META];
 
 /// The W3C key names the lane sends, with their key codes.
 const NAMED: &[(&str, Keycode)] = &[
-    ("Backspace", key("KEYCODE_DEL", 67)),
+    ("Backspace", BACKSPACE),
     ("Tab", TAB),
     ("Enter", ENTER),
     ("Shift", SHIFT),
@@ -53,7 +57,7 @@ const NAMED: &[(&str, Keycode)] = &[
     ("Alt", ALT),
     ("Meta", META),
     ("CapsLock", key("KEYCODE_CAPS_LOCK", 115)),
-    ("Escape", key("KEYCODE_ESCAPE", 111)),
+    ("Escape", ESCAPE),
     (" ", SPACE),
     ("PageUp", key("KEYCODE_PAGE_UP", 92)),
     ("PageDown", key("KEYCODE_PAGE_DOWN", 93)),

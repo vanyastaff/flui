@@ -398,6 +398,7 @@ mod lane {
                         )
                         .collect::<Vec<String>>(),
                     message: first.to_string(),
+                    first: None,
                 }),
             }
         }

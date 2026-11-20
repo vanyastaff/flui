@@ -14,7 +14,7 @@ const STAND_IN: &str = r#"#!/bin/sh
 serial=""
 if [ "$1" = "-s" ]; then serial="$2"; shift 2; fi
 case "$1" in
-  devices) printf 'List of devices attached\nemulator-5554\tdevice\n' ;;
+  devices) printf 'List of devices attached\nemulator-5554\tdevice\n%s' "$serial" ;;
   shell|exec-out)
     shift
     if [ "$1" = "-tt" ]; then shift; fi
@@ -48,13 +48,21 @@ fn shell(line: &str) -> AdbCommand {
 #[test]
 fn a_command_answers_what_it_printed_and_how_it_exited() {
     let (_dir, path) = stand_in();
-    let mut host = HostAdb::new(&path);
+    let mut host = HostAdb::try_new(&path, "emulator-5554").expect("a named device");
     let listing = host
         .run(&AdbCommand::Devices, 4096, Duration::from_secs(10))
         .expect("the devices");
     assert_eq!(listing.exit, Some(0));
-    assert!(listing.text().contains("emulator-5554\tdevice"));
-    let mut device = HostAdb::new(&path).device("emulator-5554");
+    assert_eq!(
+        listing.text(),
+        "List of devices attached\nemulator-5554\tdevice\n",
+        "the listing names no device"
+    );
+    assert!(
+        HostAdb::try_new(&path, " ").is_err(),
+        "a serial names a device"
+    );
+    let mut device = HostAdb::try_new(&path, "emulator-5554").expect("a named device");
     let serial = device
         .run(&shell("serial"), 4096, Duration::from_secs(10))
         .expect("the serial");
@@ -69,7 +77,7 @@ fn a_command_answers_what_it_printed_and_how_it_exited() {
 #[test]
 fn output_past_its_bound_and_a_command_past_its_deadline_are_ended() {
     let (_dir, path) = stand_in();
-    let mut host = HostAdb::new(&path).device("x");
+    let mut host = HostAdb::try_new(&path, "x").expect("a named device");
     match host.run(&shell("flood"), 1000, Duration::from_secs(10)) {
         Err(Error::Lane { message, .. }) => assert!(message.contains("1000 bytes"), "{message}"),
         other => panic!("{other:?}"),
@@ -84,7 +92,7 @@ fn output_past_its_bound_and_a_command_past_its_deadline_are_ended() {
         started.elapsed() < Duration::from_secs(10),
         "ended, not waited out"
     );
-    let mut missing = HostAdb::new("/nonexistent/adb");
+    let mut missing = HostAdb::try_new("/nonexistent/adb", "x").expect("a named device");
     match missing.run(&AdbCommand::Devices, 4096, Duration::from_secs(1)) {
         Err(Error::Lane {
             unavailable: true, ..
@@ -97,7 +105,7 @@ fn output_past_its_bound_and_a_command_past_its_deadline_are_ended() {
 #[test]
 fn a_stream_hands_over_its_records_and_says_when_it_ended() {
     let (_dir, path) = stand_in();
-    let mut host = HostAdb::new(&path).device("x");
+    let mut host = HostAdb::try_new(&path, "x").expect("a named device");
     let mut lines = host
         .open(
             &AdbCommand::ShellTerminal("lines".to_owned()),

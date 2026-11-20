@@ -816,6 +816,7 @@ fn release_failure(outcome: &flui_driver::Result<()>) -> Option<(String, Vec<Str
             lane,
             held,
             message,
+            ..
         }) => Some((lane.clone(), held.clone(), message.clone())),
         _ => None,
     }

@@ -20,14 +20,22 @@ pub const MAX_NODES: u32 = 100_000;
 /// The deepest a node of a dump may sit.
 pub const MAX_DEPTH: usize = 256;
 
-/// Where the lane has the dump written on the device: a directory the shell may write.
-pub const DUMP_PATH: &str = "/data/local/tmp/flui-driver-window.xml";
-
-/// The line that dumps the active window and prints the dump: the file is removed whatever the
-/// dump's outcome.
+/// Where a session has its dumps written on the device: a directory the shell may write, a file
+/// named for the session (`session` is lowercase hex), so two sessions on one device never read
+/// each other's dump.
 #[must_use]
-pub fn dump_line() -> String {
-    format!("uiautomator dump {DUMP_PATH} >/dev/null 2>&1 && cat {DUMP_PATH}; rm -f {DUMP_PATH}")
+pub fn dump_path(session: &str) -> String {
+    format!("/data/local/tmp/flui-driver-{session}.xml")
+}
+
+/// The line that dumps the active window to `path` and prints the dump: the file is removed
+/// whatever the dump's outcome.
+///
+/// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
+/// services running (TalkBack among them) until it ends.
+#[must_use]
+pub fn dump_line(path: &str) -> String {
+    format!("uiautomator dump {path} >/dev/null 2>&1 && cat {path}; rm -f {path}")
 }
 
 /// A rectangle in display pixels.

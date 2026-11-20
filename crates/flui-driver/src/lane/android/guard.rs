@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::adb::{AdbStream, RECORD_ROOM, lane_error};
+use super::adb::{AdbStream, lane_error};
 use super::getevent::Watch;
 use crate::error::Result;
 use crate::lane::{ActivityGuard, ForeignInput};
@@ -14,6 +14,13 @@ pub const STOPPED_WATCHING: &str = "the getevent guard stopped watching";
 
 /// How long arming waits for `getevent` to name its first device.
 pub const ARM_WITHIN: Duration = Duration::from_secs(5);
+
+/// How long arming reads the lines that came while the guard was disarmed, until none is
+/// waiting.
+pub const BACKLOG_WITHIN: Duration = Duration::from_secs(1);
+
+/// How long a look for foreign input before an event reads the lines waiting.
+pub const LOOK_WITHIN: Duration = Duration::from_millis(100);
 
 /// The guard over a device: see the [module docs](self).
 pub struct GeteventGuard {
@@ -33,12 +40,11 @@ impl GeteventGuard {
         }
     }
 
-    /// Read every line that already came, at most a stream's room of them.
-    fn drain(&mut self) {
-        for _ in 0..RECORD_ROOM {
-            if self.stopped.is_some() {
-                return;
-            }
+    /// Read the lines that already came until none is waiting, or until `within` has passed: a
+    /// device whose sensors print without pause is read for that long and no longer.
+    fn drain(&mut self, within: Duration) {
+        let deadline = Instant::now() + within;
+        while self.stopped.is_none() && Instant::now() < deadline {
             match self.stream.next_record(Duration::ZERO) {
                 Ok(Some(line)) => self.watch.read(&line),
                 Ok(None) => return,
@@ -50,7 +56,7 @@ impl GeteventGuard {
 
 impl ActivityGuard for GeteventGuard {
     fn arm(&mut self) -> Result<()> {
-        self.drain();
+        self.drain(BACKLOG_WITHIN);
         let deadline = Instant::now() + ARM_WITHIN;
         while !self.watch.started() && self.stopped.is_none() {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -72,13 +78,15 @@ impl ActivityGuard for GeteventGuard {
         if let Some(why) = &self.stopped {
             return Err(lane_error(format!("{STOPPED_WATCHING}: {why}")));
         }
-        self.drain();
+        // What came between two runs (the person's touches while the lane was idle) is read and
+        // forgotten here: only input after the guard armed ends a run.
+        self.drain(BACKLOG_WITHIN);
         self.watch.arm();
         Ok(())
     }
 
     fn foreign_input(&mut self) -> Option<ForeignInput> {
-        self.drain();
+        self.drain(LOOK_WITHIN);
         if let Some(why) = &self.stopped {
             return Some(ForeignInput::new(format!("{STOPPED_WATCHING}: {why}")));
         }

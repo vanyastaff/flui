@@ -292,6 +292,7 @@ pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()
         lane,
         held,
         message,
+        first: None,
     })
 }
 
@@ -417,11 +418,13 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
                 lane,
                 held,
                 message,
+                ..
             }),
         ) => Err(Error::ReleaseFailed {
             lane,
             held,
             message: format!("{message}; the run had failed first: {failure}"),
+            first: Some(Box::new(failure)),
         }),
         (sent, released) => sent.and(released),
     }

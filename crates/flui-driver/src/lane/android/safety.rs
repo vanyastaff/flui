@@ -6,11 +6,14 @@
 //! - **keys** that do (`keys::SYSTEM_KEYS`: the launcher, recent apps, back, power, volume,
 //!   brightness, the shade, settings, media), and a lone tap of Meta, which opens the app drawer;
 //! - **chords** the window manager takes before the app ([`system_chord`]): any with Meta, Alt and
-//!   Tab, Control or Meta and Space;
-//! - **gestures**: a contact put down within [`GESTURE_EDGE_DP`] of an edge of the display
-//!   ([`gesture_edge`]), where the system reads a swipe as its own (the shade and quick settings
-//!   from the top, home and recents from the bottom, back from the sides). The rule reads where
-//!   the contact goes down, since that is where the system decides.
+//!   Tab, and every key or chord whose fallback in AOSP's key character maps leaves the app or
+//!   changes the device ([`FALLBACKS`]): Escape, Alt and Space, Control and Space, Control, Alt
+//!   and Backspace;
+//! - **gestures**: a press of any pointer (a finger, the pen, the mouse) put down within
+//!   [`GESTURE_EDGE_DP`] of an edge of the display ([`gesture_edge`]), where the system takes it
+//!   as its own (the shade and quick settings from the top, home and recents from the bottom or
+//!   the navigation bar's buttons there, back from the sides). The rule reads where the press
+//!   goes down, since that is where the system decides.
 //!
 //! Before every press, key and text the app's window must hold the input focus
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
@@ -53,6 +56,11 @@ pub enum Refusal {
         chord: String,
         /// What takes it.
         effect: &'static str,
+    },
+    /// A sequence that ends with keys pressed and not released, which `input` would never send.
+    KeyLeftDown {
+        /// The keys, by their key code's name.
+        keys: Vec<String>,
     },
     /// A contact going down where the system reads a gesture.
     SystemGesture {
@@ -125,8 +133,16 @@ impl Refusal {
             Self::SystemChord { chord, effect } => Error::not_supported(
                 "os_shell_hotkey",
                 format!(
-                    "{effect} takes {chord} before the app sees it, so no focus check holds for \
-                     it; it is refused"
+                    "{chord} is refused: it reaches {effect} rather than the app, so no focus \
+                     check holds for it"
+                ),
+            ),
+            Self::KeyLeftDown { keys } => Error::not_supported(
+                "os_held_key",
+                format!(
+                    "the sequence ends with {} still down; `input` holds no key between commands, \
+                     so a key is sent at its release and this one never would be",
+                    keys.join(", ")
                 ),
             ),
             Self::SystemGesture { point, gesture } => Error::not_supported(
@@ -189,18 +205,83 @@ pub fn admit_isolation(isolation: Isolation) -> Result<(), Refusal> {
     }
 }
 
-/// What takes the chord of `held` modifiers and `key`, when the window manager does.
+/// A key, with the modifiers held, whose press Android turns into another key the app does not
+/// keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fallback {
+    /// The modifiers that must all be held; none for the key alone.
+    pub held: &'static [Keycode],
+    /// The key.
+    pub key: Keycode,
+    /// What it becomes and does.
+    pub becomes: &'static str,
+}
+
+/// The keys and chords whose fallback leaves the app or changes the device. A key the app does not
+/// handle is replaced by its `fallback` in the device's key character map; `input` sends through
+/// the virtual keyboard, whose map is `Virtual.kcm`, and a hardware keyboard reads `Generic.kcm`
+/// (AOSP `frameworks/base/data/keyboards`). Every fallback of both is here but those that stay in
+/// the app: the numeric keypad's and the gamepad's to the arrows, `DPAD_CENTER` and Enter, and
+/// Control and Escape's to `MENU`. The gamepad's to Back, Menu and Home (`BUTTON_B`, `BUTTON_Y`,
+/// `BUTTON_SELECT`, `BUTTON_MODE`) name keys the lane has no name for, so they never reach it.
+///
+/// Escape alone has no fallback in either map, but an Activity finishes on an Escape it leaves
+/// unhandled when it closes on a touch outside (`Activity.onKeyDown`), so the lane refuses it with
+/// any modifiers.
+pub const FALLBACKS: &[Fallback] = &[
+    Fallback {
+        held: &[keys::ALT],
+        key: keys::SPACE,
+        becomes: "SEARCH, which opens the assistant's search (Alt and Space)",
+    },
+    Fallback {
+        held: &[keys::META],
+        key: keys::SPACE,
+        becomes: "SEARCH, which opens the assistant's search (Meta and Space)",
+    },
+    Fallback {
+        held: &[keys::CONTROL],
+        key: keys::SPACE,
+        becomes: "LANGUAGE_SWITCH, which switches the keyboard layout (Control and Space)",
+    },
+    Fallback {
+        held: &[keys::ALT],
+        key: keys::ESCAPE,
+        becomes: "HOME, which goes to the launcher (Alt and Escape)",
+    },
+    Fallback {
+        held: &[keys::META],
+        key: keys::ESCAPE,
+        becomes: "HOME, which goes to the launcher (Meta and Escape)",
+    },
+    Fallback {
+        held: &[keys::CONTROL, keys::ALT],
+        key: keys::BACKSPACE,
+        becomes: "BACK, which leaves a root activity (Control, Alt and Backspace)",
+    },
+    Fallback {
+        held: &[],
+        key: keys::ESCAPE,
+        becomes: "an Escape that finishes an Activity closing on a touch outside",
+    },
+];
+
+/// What takes the chord of `held` modifiers and `key` (no modifiers for a key alone), when the
+/// system does: a fallback of [`FALLBACKS`], a shortcut with Meta, the app switcher.
 #[must_use]
 pub fn system_chord(held: &[Keycode], key: Keycode) -> Option<&'static str> {
-    let holds = |modifier: Keycode| held.contains(&modifier);
-    if holds(keys::META) {
+    let holds = |modifier: &Keycode| held.contains(modifier);
+    if let Some(fallback) = FALLBACKS
+        .iter()
+        .find(|fallback| fallback.key == key && fallback.held.iter().all(holds))
+    {
+        return Some(fallback.becomes);
+    }
+    if holds(&keys::META) {
         return Some("Android's window manager, whose system shortcuts all hold Meta,");
     }
-    if holds(keys::ALT) && key == keys::TAB {
+    if holds(&keys::ALT) && key == keys::TAB {
         return Some("the app switcher");
-    }
-    if holds(keys::CONTROL) && key == keys::SPACE {
-        return Some("the keyboard layout switch");
     }
     None
 }

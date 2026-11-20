@@ -159,6 +159,8 @@ pub struct AndroidLane {
     app_started: bool,
     /// The loopback port the lane forwarded to the app, which it removes at its end.
     forwarded: Option<u16>,
+    /// Where this session's window dumps are written on the device.
+    dump_path: String,
 }
 
 impl AndroidLane {
@@ -198,6 +200,7 @@ impl AndroidLane {
             None
         };
         let uinput = probe_uinput(adb.as_mut());
+        let dump_path = uiautomator::dump_path(&crate::launch::launch_token()?[..16]);
         Ok(Self {
             adb,
             package,
@@ -214,19 +217,8 @@ impl AndroidLane {
             screen: None,
             app_started: false,
             forwarded: None,
+            dump_path,
         })
-    }
-
-    /// What the lane read of the device.
-    #[must_use]
-    pub fn facts(&self) -> &DeviceFacts {
-        &self.facts
-    }
-
-    /// Whether the device lets the lane register `uinput` devices, as the probe found it.
-    #[must_use]
-    pub fn uinput_device(&self) -> bool {
-        self.uinput
     }
 
     /// Install `app` when it names an APK, start it afresh with a new endpoint and token as its
@@ -281,19 +273,18 @@ impl AndroidLane {
             EXIT_ON_DISCONNECT_EXTRA,
             "1",
         ]))?;
+        // The lane picks the loopback port, so the forward it asks for is the one it removes at
+        // its end whatever `adb` answers: a port the OS just handed out and let go of.
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .and_then(|listener| listener.local_addr())
+            .map(|address| address.port())?;
+        self.forwarded = Some(port);
         let forward = AdbCommand::Host(vec![
             "forward".to_owned(),
-            "tcp:0".to_owned(),
+            format!("tcp:{port}"),
             format!("localabstract:{name}"),
         ]);
-        let printed = checked(self.adb.as_mut(), &forward, STATUS)?.text();
-        let port: u16 = printed
-            .trim()
-            .parse()
-            .ok()
-            .filter(|port| *port != 0)
-            .ok_or_else(|| lane_error(format!("`adb forward` printed no port: {printed:?}")))?;
-        self.forwarded = Some(port);
+        checked(self.adb.as_mut(), &forward, STATUS)?;
         Ok(Started {
             endpoint: crate::Endpoint::Forwarded(std::net::SocketAddr::from((
                 [127, 0, 0, 1],
@@ -329,7 +320,7 @@ impl AndroidLane {
 
     /// The active window, dumped and read.
     fn dump(&mut self) -> Result<UiDump> {
-        let command = AdbCommand::ExecOut(uiautomator::dump_line());
+        let command = AdbCommand::ExecOut(uiautomator::dump_line(&self.dump_path));
         let run = Run {
             printed: Printed::Data,
             limit: uiautomator::MAX_DUMP,
@@ -471,6 +462,7 @@ impl AndroidLane {
                 || "the release left it held".to_owned(),
                 |error| error.to_string(),
             ),
+            first: None,
         })
     }
 
@@ -626,6 +618,13 @@ impl Lane for AndroidLane {
                 held.took(&command);
             }
         }
+        let down = held.keys_down();
+        if !down.is_empty() {
+            return Err(Refusal::KeyLeftDown {
+                keys: down.into_iter().map(str::to_owned).collect(),
+            }
+            .into_error());
+        }
         Ok(())
     }
 
@@ -660,6 +659,7 @@ impl Lane for AndroidLane {
                 lane: LANE.to_owned(),
                 held: unsure,
                 message: "`input` cannot release a key without pressing it".to_owned(),
+                first: None,
             })
         };
         self.held.forget_plans();
@@ -673,12 +673,15 @@ impl Lane for AndroidLane {
             limit: screencap::MAX_CAPTURE,
             timeout: LONG,
         };
+        // One full-screen buffer at a time: the raw reply is read in place and cut in place; in
+        // another pixel format it is dropped before the PNG is asked for, and the PNG's bytes
+        // before its decoded image is cut.
         let raw = checked(
             self.adb.as_mut(),
             &AdbCommand::ExecOut(screencap::RAW.to_owned()),
             capture,
         )?;
-        let raw = screencap::parse_raw(&raw.stdout).map_err(lane_error)?;
+        let raw = screencap::parse_raw(raw.stdout).map_err(lane_error)?;
         let (width, height, rgba) = if let screencap::Raw::Rgba {
             width,
             height,
@@ -687,7 +690,6 @@ impl Lane for AndroidLane {
         {
             (width, height, rgba)
         } else {
-            // A pixel format the lane does not read raw: the device encodes it.
             let png = checked(
                 self.adb.as_mut(),
                 &AdbCommand::ExecOut(screencap::PNG.to_owned()),
@@ -695,7 +697,7 @@ impl Lane for AndroidLane {
             )?;
             screencap::parse_png(&png.stdout).map_err(lane_error)?
         };
-        screencap::crop(width, height, &rgba, screen.surface).map_err(lane_error)
+        screencap::crop(width, height, rgba, screen.surface).map_err(lane_error)
     }
 }
 
@@ -745,13 +747,13 @@ impl std::fmt::Debug for AndroidLane {
 /// ready.
 pub fn host_device() -> Result<adb::HostAdb> {
     let serial = std::env::var(device::SERIAL_ENV).ok();
-    let Some(serial) = serial.filter(|serial| !serial.is_empty()) else {
+    let Some(serial) = serial.filter(|serial| !serial.trim().is_empty()) else {
         return Err(device::unnamed());
     };
-    let mut host = adb::HostAdb::locate();
+    let mut host = adb::HostAdb::locate(serial.clone())?;
     let listing = checked(&mut host, &AdbCommand::Devices, DATA)?;
-    let entry = device::choose(&device::parse_devices(&listing.text()), Some(&serial))?;
-    Ok(host.device(entry.serial))
+    device::choose(&device::parse_devices(&listing.text()), Some(&serial))?;
+    Ok(host)
 }
 
 /// Start `app` on the device `adb` drives and drive it: the lane connected, the app started
