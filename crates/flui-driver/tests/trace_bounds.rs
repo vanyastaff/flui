@@ -278,6 +278,23 @@ fn a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction() {
         .expect("the replay runs");
     let refused = report.refused.expect("the input sequence is refused");
     assert_eq!(refused.method, "input.perform");
+
+    // One redacted text among sources that hold none is enough; the refusal comes before
+    // anything is sent, so the trace need not have come from this app.
+    let dir = root.path().join("written.flui-trace");
+    std::fs::create_dir_all(&dir).expect("the directory");
+    let header = r#"{"flui_trace":1,"protocol":"0.28","target":{"kind":"headless","os":"any"},"isolation":"in_process","fidelity":{"positions":"exact"},"started_unix_ms":0,"privacy":"redact"}"#;
+    let perform = serde_json::json!({ "command": { "seq": 1, "t_ms": 0, "method": "input.perform", "params": {
+        "actions": { "sources": [
+            { "type": "pointer", "id": "p", "device": "mouse", "actions": [] },
+            { "type": "text", "text": flui_driver::protocol::input_recording::REDACTED },
+        ] },
+    } } });
+    std::fs::write(dir.join("trace.jsonl"), format!("{header}\n{perform}\n")).expect("the rows");
+    let report = trace::replay(&Trace::open(&dir).expect("it reads"), &mut counter())
+        .expect("the replay runs");
+    assert_eq!(report.replayed, 0);
+    assert_eq!(report.refused.map(|refused| refused.seq), Some(1));
 }
 
 #[cfg(any(unix, windows))]
@@ -338,25 +355,32 @@ mod scripted {
     fn events_lost_mid_trace_mark_every_stream_and_the_callers_count() {
         let lost = 6;
         let mut listed = 0;
+        // More events than the connection keeps, arriving before an answer: the oldest are
+        // dropped, and which they were is not known.
+        let overflow = move || -> Vec<Value> {
+            (0..1024 + lost)
+                .map(|_| json!({ "event": "gap", "params": { "missed": 0 } }))
+                .collect()
+        };
         let agent = ScriptedAgent::start_with(
             capabilities(),
             Box::new(move |method, _| match method {
                 "windows.list" => {
                     listed += 1;
                     // The first is the trace's own read of the main window, the second takes
-                    // the stream's first lines.
-                    if listed == 3 {
-                        // More events than the connection keeps arrive before the answer: the
-                        // oldest are dropped, and which they were is not known.
-                        let events = (0..1024 + lost)
-                            .map(|_| json!({ "event": "gap", "params": { "missed": 0 } }))
-                            .collect();
-                        Reply::LinesThenResult {
-                            lines: events,
-                            result: json!({ "windows": ["w1"] }),
-                        }
-                    } else {
-                        Reply::Result(json!({ "windows": ["w1"] }))
+                    // the stream's first lines; then a loss, the app ending its recording
+                    // (its window closed), and a loss after that end.
+                    let lines = match listed {
+                        3 | 5 => overflow(),
+                        4 => vec![json!({
+                            "event": "record",
+                            "params": { "recording": 1, "window": "w1", "row": { "end": { "lost_rows": 0 } } },
+                        })],
+                        _ => Vec::new(),
+                    };
+                    Reply::LinesThenResult {
+                        lines,
+                        result: json!({ "windows": ["w1"] }),
                     }
                 }
                 "window.placement" => Reply::Result(placement()),
@@ -389,31 +413,38 @@ mod scripted {
         assert_eq!(dropped, lost, "the caller's count has the loss");
         assert_eq!(events.len(), 1024);
         assert!(events.iter().all(|event| matches!(event, Event::Gap(_))));
+        driver.windows().expect("the recording's end");
+        driver.windows().expect("a loss after the end");
         driver.finish_trace(&mut Report::new()).expect("finished");
 
         let trace = Trace::open(&dir).expect("it reads");
-        let gap = trace
+        let gaps: Vec<_> = trace
             .rows()
             .iter()
-            .find_map(|row| match row {
-                Row::Gap(gap) => Some(gap.clone()),
+            .filter_map(|row| match row {
+                Row::Gap(gap) => Some((gap.rows, gap.reason)),
                 _ => None,
             })
-            .expect("a gap row");
-        assert_eq!((gap.rows, gap.reason), (lost, GapReason::EventsDropped));
+            .collect();
+        assert_eq!(gaps, [(lost, GapReason::EventsDropped); 2]);
         let input = std::fs::read_to_string(trace.input_recording().expect("input.jsonl"))
             .expect("it reads");
-        assert!(
-            input.contains(&format!("{{\"gap\":{{\"rows\":{lost}}}}}")),
-            "{input}"
+        let lines: Vec<&str> = input.lines().collect();
+        assert_eq!(
+            lines[1..],
+            [
+                format!("{{\"gap\":{{\"rows\":{lost}}}}}").as_str(),
+                "{\"end\":{\"lost_rows\":0}}"
+            ],
+            "the loss before the end is marked, and nothing follows the end: {input}"
         );
         let native = trace.native_recordings().expect("the native layer reads");
         assert_eq!(native.len(), 1);
         assert_eq!(native[0].rows().count(), 1);
         assert_eq!(
             native[0].lost_rows(),
-            lost,
-            "the native stream is not read as whole"
+            2 * lost,
+            "the native stream, which has no end of its own, is marked at both losses"
         );
         drop(driver);
         agent

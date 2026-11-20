@@ -684,7 +684,23 @@ fn codegen_marks_what_it_cannot_write_and_writes_the_main_window_as_the_tests_ow
                 "pixels.check",
                 serde_json::json!({ "window": "w5", "source": "os" }),
             ),
+            command(
+                5,
+                "input.release",
+                serde_json::json!({ "note": "no window" }),
+            ),
+            ok(5, serde_json::json!({})),
         ],
+    );
+    assert!(
+        marked.contains(
+            "    driver.call_value(\"input.release\", serde_json::json!({\"note\": \"no window\"}))?;"
+        ) && !marked.contains("id();\n    driver.call_value(\"input.release\""),
+        "a command that names no window does not read one: {marked}"
+    );
+    assert!(
+        marked.contains("session.close (seq 3): it begins or ends a session"),
+        "{marked}"
     );
     assert!(
         marked.contains("let window = driver.main_window()?.id();"),
