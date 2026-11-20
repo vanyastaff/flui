@@ -108,10 +108,20 @@ fn text_is_typed_in_runs_of_at_most_twenty_units_and_line_breaks_as_keys() {
         ["x".repeat(20), "x".repeat(5)]
     );
     // A chunk is its units: what an earlier run left in the buffer past them does not count.
-    assert_eq!(
-        keys::text_strokes(&format!("{}b", "a".repeat(20)))[1],
-        keys::text_strokes("b")[0]
-    );
+    let after_a_run = keys::text_strokes(&format!("{}b", "a".repeat(20)))[1];
+    let alone = keys::text_strokes("b")[0];
+    assert_eq!(after_a_run, alone);
+    assert_ne!(alone, keys::text_strokes("c")[0]);
+    let hash = |stroke: &TextStroke| -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(stroke, &mut hasher);
+        std::hash::Hasher::finish(&hasher)
+    };
+    assert_eq!(hash(&after_a_run), hash(&alone));
+    let TextStroke::Text(chunk) = alone else {
+        panic!("a run of text: {alone:?}");
+    };
+    assert_eq!(format!("{chunk:?}"), "TextChunk(\"b\")");
     // A pair of surrogates is never split between two events.
     let edge = format!("{}😀", "x".repeat(19));
     assert_eq!(
@@ -619,12 +629,13 @@ fn lone_modifier_taps_that_toggle_a_system_feature_are_refused() {
     let mut pending = taps("Shift", 4);
     pending.push(input_down("Shift"));
     assert_eq!(quiet.system_shortcut(&pending), Some(safety::STICKY_KEYS));
-    // One down after fewer taps is not the fifth.
+    // One down after fewer taps is not the fifth, nor a first Command the second.
     for count in [0, 3] {
         let mut early = taps("Shift", count);
         early.push(input_down("Shift"));
         assert_eq!(quiet.system_shortcut(&early), None, "{count} taps");
     }
+    assert_eq!(quiet.system_shortcut(&[input_down("Meta")]), None);
     // A Shift pressed while another key is held is no tap.
     let mut under_a = vec![input_down("a")];
     under_a.extend(taps("Shift", 5));
@@ -1398,6 +1409,8 @@ fn a_window_capture_is_cut_to_its_content() {
     let half = screen::crop_content(&frame, LogicalSize::new(1.0, 1.0), 2.0).expect("fits");
     assert_eq!((half.width, half.height), (2, 2));
     assert_eq!(half.pixel(1, 0), Some([1, 3, 0, 255]));
+    let empty = screen::crop_content(&frame, LogicalSize::new(0.0, 0.0), 1.0).expect("fits");
+    assert_eq!((empty.width, empty.height), (0, 0));
     // A frame with no title bar is all content.
     let whole = screen::crop_content(&frame, LogicalSize::new(3.0, 5.0), 1.0).expect("fits");
     assert_eq!((whole.width, whole.height), (3, 5));
@@ -1681,7 +1694,13 @@ fn each_mouse_button_is_pressed_once_and_released_where_the_pointer_is() {
     // A button recorded down on a pointer that never moved has nowhere to be released: it stays
     // held and is named.
     let mut lost = Pointer::new();
-    lost.apply(&pointer.plan(down(PointerButton::Middle)).expect("a press")[0]);
+    for button in [
+        PointerButton::Middle,
+        PointerButton::Back,
+        PointerButton::Forward,
+    ] {
+        lost.apply(&pointer.plan(down(button)).expect("a press")[0]);
+    }
     let mut posted = 0;
     let stranded = lost.release_all(|_| {
         posted += 1;
@@ -1689,7 +1708,11 @@ fn each_mouse_button_is_pressed_once_and_released_where_the_pointer_is() {
     });
     assert!(
         matches!(&stranded, Err(Error::ReleaseFailed { held, .. })
-            if held == &["the middle mouse button"]),
+        if held == &[
+            "the middle mouse button",
+            "the back mouse button",
+            "the forward mouse button",
+        ]),
         "{stranded:?}"
     );
     assert_eq!(posted, 0);
