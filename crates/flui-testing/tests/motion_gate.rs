@@ -831,10 +831,6 @@ impl FlowDelegate for FadingFlow {
     fn should_repaint(&self, _old: &dyn FlowDelegate) -> bool {
         true
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// A square at `opacity` that keeps its element across reorders.

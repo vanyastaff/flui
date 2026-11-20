@@ -115,8 +115,4 @@ impl BuildDuringLayoutCell for HeaderShrinkCell {
         state.needs_build = false;
         self.state.set(state);
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

@@ -5,7 +5,6 @@
 //! this consumer from compiling. It names only paths `flui` and `flui-sdk`
 //! share, so the same source checks both.
 
-use std::any::Any;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -65,9 +64,6 @@ impl CustomPainter for PainterWithState {
         false
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug)]
@@ -98,9 +94,6 @@ impl FlowDelegate for FlowWithState {
         false
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug)]
@@ -116,9 +109,6 @@ impl SingleChildLayoutDelegate for SingleWithState {
         false
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[derive(Debug)]
@@ -138,9 +128,6 @@ impl MultiChildLayoutDelegate for MultiWithState {
         false
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 #[test]

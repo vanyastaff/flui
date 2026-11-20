@@ -221,7 +221,7 @@ fn painter_update_impact(
                 | flui_rendering::RenderUpdateImpact::SEMANTICS
         }
         (Some(old), Some(new)) if Rc::ptr_eq(old, new) => flui_rendering::RenderUpdateImpact::NONE,
-        (Some(old), Some(new)) if old.as_any().type_id() != new.as_any().type_id() => {
+        (Some(old), Some(new)) if !crate::dynamic_type::same_concrete_type(&**old, &**new) => {
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS
         }

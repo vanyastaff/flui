@@ -147,7 +147,7 @@ impl SliverGridLayout {
 ///     }
 ///
 ///     fn should_relayout(&self, old_delegate: &dyn SliverGridDelegate) -> bool {
-///         if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+///         if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
 ///             self.cross_axis_count != old.cross_axis_count
 ///         } else {
 ///             true
@@ -155,7 +155,7 @@ impl SliverGridLayout {
 ///     }
 /// }
 /// ```
-pub trait SliverGridDelegate: Debug {
+pub trait SliverGridDelegate: Any + Debug {
     /// Get the grid layout for the given constraints.
     ///
     /// # Arguments
@@ -177,9 +177,6 @@ pub trait SliverGridDelegate: Debug {
     ///
     /// `true` if layout should be recalculated, `false` otherwise.
     fn should_relayout(&self, old_delegate: &dyn SliverGridDelegate) -> bool;
-
-    /// Returns self as `Any` for downcasting.
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// A grid delegate with a fixed number of columns.
@@ -266,7 +263,7 @@ impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SliverGridDelegate) -> bool {
-        if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+        if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
             self.cross_axis_count != old.cross_axis_count
                 || (self.main_axis_spacing - old.main_axis_spacing).abs() > f64::EPSILON
                 || (self.cross_axis_spacing - old.cross_axis_spacing).abs() > f64::EPSILON
@@ -277,10 +274,6 @@ impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
         } else {
             true
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -376,7 +369,7 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SliverGridDelegate) -> bool {
-        if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+        if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
             (self.max_cross_axis_extent - old.max_cross_axis_extent).abs() > f64::EPSILON
                 || (self.main_axis_spacing - old.main_axis_spacing).abs() > f64::EPSILON
                 || (self.cross_axis_spacing - old.cross_axis_spacing).abs() > f64::EPSILON
@@ -385,9 +378,5 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
         } else {
             true
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

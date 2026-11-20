@@ -902,13 +902,8 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // `min_insets` is the only field this narrowed delegate captures, so
         // comparing it covers every relayout trigger this substrate has
         // (chiefly: the keyboard showing/hiding).
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| self != old)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

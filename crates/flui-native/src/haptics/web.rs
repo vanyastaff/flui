@@ -124,8 +124,4 @@ impl PlatformHaptics for WebHaptics {
             Err(_) => HapticCapabilities::NONE,
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

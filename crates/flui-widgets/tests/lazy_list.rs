@@ -415,7 +415,7 @@ fn keyed_list(
     if with_callback {
         let rows = snapshot;
         list.find_index_by_key(move |key| {
-            key.as_any()
+            (key as &dyn std::any::Any)
                 .downcast_ref::<flui_foundation::ValueKey<u32>>()
                 .and_then(|k| rows.iter().position(|id| id == k.value()))
         })

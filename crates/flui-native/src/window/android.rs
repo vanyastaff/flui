@@ -1604,10 +1604,6 @@ pub(crate) mod system_chrome {
                 },
             );
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     /// Must run on the Java main thread.
