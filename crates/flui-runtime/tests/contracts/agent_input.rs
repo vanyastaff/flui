@@ -11,6 +11,7 @@ use flui_interaction::events::{
     Code, InputValueError, PointerEvent, PointerKind, make_down_event, make_move_event,
     make_up_event,
 };
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::PlatformInput;
 use flui_protocol::method::{self, InputInject, InputRelease};
@@ -23,7 +24,6 @@ use flui_protocol::{
     input::PointerButton, input::PointerDevice, input::Released, input::TrackpadAction,
     session::WindowParams,
 };
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_widgets::{Listener, SizedBox};

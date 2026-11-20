@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::FocusNode;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::{
     gesture::{TapDetails, TapDownDetails, TapUpDetails},
     pointer::PointerDispatch,
@@ -33,7 +34,6 @@ use flui_interaction::{
 use flui_objects::{FocusRingStyle, RenderInteractive, RenderListener, SubtreeAnchor};
 use flui_platform::TargetPlatform;
 use flui_rendering::RenderUpdateImpact;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::environment::PlatformConvention;
 use flui_view::prelude::*;

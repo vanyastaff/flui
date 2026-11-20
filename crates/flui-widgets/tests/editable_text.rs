@@ -2923,9 +2923,9 @@ pub(crate) mod text_store {
     }
 
     pub(crate) fn editable_paint_places_long_text_under_the_viewport_clip() {
+        use flui_layer::Layer;
         use flui_painting::DrawOp;
         use flui_painting::paint::Clip;
-        use flui_rendering::layer::Layer;
         use flui_widgets::SizedBox;
         let controller = TextEditingController::new();
         let focus = FocusNode::new();
@@ -3522,8 +3522,8 @@ pub(crate) fn enter_moves_the_focus_as_the_fields_enter_key_says() {
 
 /// The colours of the rectangles the frame paints, in layer order.
 fn painted_rect_colors(laid: &crate::common::LaidOut) -> Vec<flui_painting::styling::Color> {
+    use flui_layer::Layer;
     use flui_painting::DrawOp;
-    use flui_rendering::layer::Layer;
     let tree = laid.layer_tree().expect("a painted frame");
     tree.iter()
         .filter_map(|(_, node)| match node.layer() {

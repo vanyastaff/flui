@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use flui_animation::{Linear, SharedCurve, Vsync, curves};
 use flui_foundation::geometry::{Matrix4, Rect};
+use flui_layer::Layer;
 use flui_painting::{DrawOp, styling::Color};
-use flui_rendering::{layer::Layer, pipeline::PipelineOwner};
+use flui_rendering::pipeline::PipelineOwner;
 use flui_testing::widgets::{LaidOut, SharedSignal, lay_out_animated, tight};
 use flui_view::ViewExt;
 use flui_view::environment::VsyncScope;

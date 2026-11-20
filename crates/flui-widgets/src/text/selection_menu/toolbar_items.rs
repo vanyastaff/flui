@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use flui_foundation::TextDirection;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
+use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::{RenderToolbarItems, ToolbarItemsSplit};
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;

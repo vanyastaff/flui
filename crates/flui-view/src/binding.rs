@@ -1248,8 +1248,8 @@ impl WidgetsBinding {
     /// This is the **production entry point** for lazy `SliverList` /
     /// `ListView::builder` child building, on a platform runner and a headless
     /// host alike, and must be called immediately after
-    /// `PipelineOwner::run_frame` releases its write-lock so no `NodePtr`
-    /// alias is live.
+    /// `PipelineOwner::run_frame` releases its write-lock so no node of the
+    /// render tree is entered.
     ///
     /// `UiRuntime::draw_frame` (`flui-app`) calls this method after the
     /// `run_frame` write-guard drops, passing the same shared `PipelineOwner`
@@ -1299,7 +1299,7 @@ impl WidgetsBinding {
     pub fn run_frame_with_layout_builders(
         &self,
         pipeline: &PipelineCell,
-        writer: &mut flui_rendering::layer::SceneWriter<'_>,
+        writer: &mut flui_layer::SceneWriter<'_>,
     ) -> Result<bool, flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {

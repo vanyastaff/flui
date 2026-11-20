@@ -9,8 +9,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use flui_foundation::Leaf;
 use flui_foundation::geometry::Size;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
+use flui_rendering::{
+    BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+};
 use flui_testing::widgets::{lay_out, tight};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{
@@ -456,11 +459,11 @@ fn secondary_window_preserves_its_text_store_backend() {
 /// the shared registration.
 #[derive(Clone)]
 struct VideoSurface {
-    shared: Rc<RefCell<Option<flui_rendering::layer::TextureRegistration>>>,
+    shared: Rc<RefCell<Option<flui_layer::TextureRegistration>>>,
 }
 
 struct VideoSurfaceState {
-    shared: Rc<RefCell<Option<flui_rendering::layer::TextureRegistration>>>,
+    shared: Rc<RefCell<Option<flui_layer::TextureRegistration>>>,
     id: Option<flui_painting::paint::TextureId>,
 }
 

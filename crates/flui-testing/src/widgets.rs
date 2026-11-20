@@ -1635,7 +1635,7 @@ impl LaidOut {
     /// single-child *container chain* and asserting `first_child == last_child`
     /// at every step, which a flattened list cannot express. It is the scene the UI runtime last submitted to its sink, retained
     /// across frames that painted nothing.
-    pub fn layer_tree(&self) -> Option<&flui_rendering::layer::LayerTree> {
+    pub fn layer_tree(&self) -> Option<&flui_layer::LayerTree> {
         self.host.ui_runtime().sink().layer_tree()
     }
 
@@ -1708,7 +1708,7 @@ impl LaidOut {
         };
         let mut ops = Vec::new();
         for (_, node) in tree.iter() {
-            if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+            if let flui_layer::Layer::Picture(picture) = node.layer() {
                 ops.extend(picture.picture().iter().map(|command| command.to_buf()));
             }
         }
@@ -1876,8 +1876,8 @@ impl LaidOut {
         &self,
         position: Offset,
         kind: flui_interaction::events::PointerKind,
-    ) -> flui_rendering::hit_testing::HitTestResult {
-        use flui_rendering::hit_testing::HitTestResult;
+    ) -> flui_interaction::pointer::HitTestResult {
+        use flui_interaction::pointer::HitTestResult;
 
         self.host.ui_runtime().enter(|_| {
             let mut result = HitTestResult::new();

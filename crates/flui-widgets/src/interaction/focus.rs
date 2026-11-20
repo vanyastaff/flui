@@ -41,7 +41,7 @@ use flui_interaction::focus::{
 };
 use flui_objects::SubtreeAnchor;
 use flui_platform::input::keyboard::KeyEvent;
-use flui_rendering::semantics::SemanticsConfiguration;
+use flui_semantics::SemanticsConfiguration;
 use flui_view::element::ElementKind;
 use flui_view::environment::FocusTreeRoot;
 use flui_view::prelude::*;

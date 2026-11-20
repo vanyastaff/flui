@@ -422,7 +422,7 @@ mod tests {
     // `BuildOwner::run_frame_with_layout_builders` uses
     // (`flui-view/src/owner/layout_builder.rs`) is `PipelineCell::run_layout`
     // then `PipelineCell::run_frame`, both running the owner in place (layout
-    // -> compositing -> paint -> semantics, all real `NodePtr` reborrows inside
+    // -> compositing -> paint -> semantics, every node entered for real inside
     // `layout_dirty_root`), so miri interprets the whole frame through the
     // checkout seam, not just the raw `layout_dirty_root` call the older
     // `subtree_arena` walks use.

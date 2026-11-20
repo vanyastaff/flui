@@ -14,12 +14,12 @@ use crate::testing::parent_data::ParentDataSeed;
 use crate::parent_data::ParentData;
 use crate::pipeline::TextLender;
 use crate::pipeline::phase::PipelinePhase;
-use crate::storage::RenderTree;
+use crate::storage::{EnterRefusal, RenderTree};
 
 use super::{
     PipelineOwner,
     poison::{LayoutFailureKind, LayoutPoison},
-    subtree_arena::{QueryRefusal, QueryWalk, ensure_stack},
+    subtree_arena::{QueryWalk, ensure_stack},
 };
 
 // ============================================================================
@@ -392,8 +392,8 @@ fn intrinsic_query_impl(
 ) -> crate::error::RenderResult<f64> {
     let mut held = match walk.enter(id) {
         Ok(held) => held,
-        Err(QueryRefusal::Missing) => return Err(crate::error::RenderError::NodeNotFound(id)),
-        Err(QueryRefusal::InFlight) => {
+        Err(EnterRefusal::Missing) => return Err(crate::error::RenderError::NodeNotFound(id)),
+        Err(EnterRefusal::InFlight) => {
             // Only reachable through a cyclic child link: the node's own
             // computation is still on the stack. Degenerate-but-defined in
             // release; loud in debug.
@@ -404,7 +404,7 @@ fn intrinsic_query_impl(
             return Ok(0.0);
         }
     };
-    let node = held.node();
+    let node = held.node_mut();
 
     // Layout-poison skip: do not re-measure a node that exhausted its
     // retry budget until it is freshly invalidated. The cache is only
@@ -518,8 +518,8 @@ fn dry_layout_query_impl(
 ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
     let mut held = match walk.enter(id) {
         Ok(held) => held,
-        Err(QueryRefusal::Missing) => return Err(crate::error::RenderError::NodeNotFound(id)),
-        Err(QueryRefusal::InFlight) => {
+        Err(EnterRefusal::Missing) => return Err(crate::error::RenderError::NodeNotFound(id)),
+        Err(EnterRefusal::InFlight) => {
             debug_assert!(
                 false,
                 "dry-layout query re-entered node {id:?} mid-computation — cyclic child links"
@@ -527,7 +527,7 @@ fn dry_layout_query_impl(
             return Ok(flui_foundation::geometry::Size::ZERO);
         }
     };
-    let node = held.node();
+    let node = held.node_mut();
     let children = node.children().to_vec();
 
     (|| {
@@ -624,8 +624,8 @@ fn dry_baseline_query_impl(
 ) -> crate::error::RenderResult<Option<f64>> {
     let mut held = match walk.enter(id) {
         Ok(held) => held,
-        Err(QueryRefusal::Missing) => return Err(crate::error::RenderError::NodeNotFound(id)),
-        Err(QueryRefusal::InFlight) => {
+        Err(EnterRefusal::Missing) => return Err(crate::error::RenderError::NodeNotFound(id)),
+        Err(EnterRefusal::InFlight) => {
             debug_assert!(
                 false,
                 "dry-baseline query re-entered node {id:?} mid-computation — cyclic child links"
@@ -633,7 +633,7 @@ fn dry_baseline_query_impl(
             return Ok(None);
         }
     };
-    let node = held.node();
+    let node = held.node_mut();
     let children = node.children().to_vec();
 
     (|| {

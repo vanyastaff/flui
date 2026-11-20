@@ -29,17 +29,17 @@ pub struct PresentationCapabilities {
     pub capabilities: Option<std::rc::Rc<dyn CapabilitySource>>,
     /// The presentation's announcer, over its semantics pipeline's
     /// announcement queue. Absent on a headless tree.
-    pub announcer: Option<flui_rendering::semantics::Announcer>,
+    pub announcer: Option<flui_semantics::Announcer>,
     /// Whether the presentation's accessibility adapter says where the
     /// assistive technology's cursor is. `Unreported` on a headless tree.
-    pub assistive_focus: flui_rendering::semantics::platform::AssistiveFocusSupport,
+    pub assistive_focus: flui_semantics::platform::AssistiveFocusSupport,
     /// The presentation's haptics host. Widgets acquire it through
     /// `LifecycleContext::haptics`, which applies the enclosing `HapticsMode`.
     pub haptics: Option<flui_interaction::haptics::HapticsHandle>,
     /// The presentation's drag-and-drop over its runtime's drag sessions.
     pub drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
     /// The presentation's external-texture registry.
-    pub textures: Option<flui_rendering::layer::TextureRegistry>,
+    pub textures: Option<flui_layer::TextureRegistry>,
     /// The factory that renders a recovered failure in this presentation's
     /// tree, or `None` for the default [`ErrorView`](crate::ErrorView). It
     /// applies from the next recovery on.

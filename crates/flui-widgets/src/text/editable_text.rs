@@ -18,10 +18,12 @@ use flui_interaction::focus::{
     FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::pointer::{PointerDispatch, PressProbe};
 use flui_interaction::text_input::{
     ClientToken, ClipboardCapability, ClipboardHandle, TextInputClient, TextInputHandle,
 };
+use flui_layer::LayerLink;
 use flui_objects::RenderEditable;
 use flui_painting::{
     styling::Color,
@@ -32,11 +34,9 @@ use flui_platform::input::keyboard::{
     ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey,
 };
 use flui_platform::text::store::{EnterAction, OwnerCalls, TextInputOptions};
-use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
-use flui_rendering::semantics::TextSelection;
+use flui_semantics::TextSelection;
 use flui_view::environment::MediaQuery;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, CreationSite, RenderView, impl_render_view};

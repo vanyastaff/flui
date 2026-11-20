@@ -289,9 +289,9 @@ impl LayoutCapability for BoxLayout {
 ///
 /// Layout invokes its borrowed callback synchronously on the owner thread.
 /// The trait object has no [`Sync`] bound, so its reference cannot be sent
-/// to another thread. The private `NodePtr` and `SubtreeArena` types have
+/// to another thread. The private `SubtreeArena`, `LayoutFrame` and `EnteredNode` types have
 /// separate `assert_not_impl_any!(...: Send, Sync)` assertions in
-/// `pipeline::owner::subtree_arena`; these examples exercise the public
+/// `pipeline::owner::subtree_arena` and `storage::node_slab`; these examples exercise the public
 /// callback boundary.
 ///
 /// ```compile_fail

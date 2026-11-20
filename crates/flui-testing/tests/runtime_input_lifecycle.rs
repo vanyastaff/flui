@@ -12,9 +12,9 @@ use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event, make_move_event, make_move_event_for_id,
     make_up_event,
 };
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::{gesture::GestureArenaMember, ids::PointerId};
 use flui_platform::{PlatformInput, PlatformWindow, WindowExecutionState};
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_runtime::sink::SubmitVerdict;
 use flui_runtime::testing::ScriptedSink;
 use flui_runtime::ui_runtime::UiRuntime;

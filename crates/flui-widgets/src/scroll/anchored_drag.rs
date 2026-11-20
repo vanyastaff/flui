@@ -60,9 +60,9 @@ use crate::{
     Action, ActionOutcome, Actions, Directionality, GestureAlternatives, Intent, Listener,
     Semantics, SemanticsRole, Shortcuts, SingleActivator,
 };
+use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::TransformMotion;
 use flui_platform::input::keyboard::NamedKey;
-use flui_rendering::hit_testing::HitTestBehavior;
 
 /// The largest distance from zero an anchor may lie at, in logical pixels:
 /// far past any display, and small enough that spans, velocities and their

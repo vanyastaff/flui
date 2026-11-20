@@ -62,10 +62,10 @@ use crate::{
     AnimatedBuilder, DecoratedBox, DefaultFocusRingStyle, Opacity, PhysicalModel, Transform,
 };
 use flui_foundation::TextDirection;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_platform::input::keyboard::NamedKey;
 use flui_platform::transfer::data::TransferActions;
-use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::semantics::{Announcer, Urgency};
+use flui_semantics::{Announcer, Urgency};
 use flui_view::element::ElementKind;
 use flui_view::environment::GestureArenaScope;
 use flui_view::environment::VsyncScope;

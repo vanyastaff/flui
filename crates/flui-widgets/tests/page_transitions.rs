@@ -11,8 +11,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{MotionOverride, Vsync};
+use flui_layer::Layer;
 use flui_painting::{DrawOp, styling::Color};
-use flui_rendering::layer::Layer;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};

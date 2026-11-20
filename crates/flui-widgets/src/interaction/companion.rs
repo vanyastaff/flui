@@ -31,7 +31,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::{Rc, Weak};
 
-use flui_rendering::semantics::SemanticsAnchor;
+use flui_semantics::SemanticsAnchor;
 use smallvec::SmallVec;
 
 use super::actions::Intent;

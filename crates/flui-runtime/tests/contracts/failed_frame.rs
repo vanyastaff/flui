@@ -262,7 +262,7 @@ fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_pres
     runtime
         .attach_root_widget_with_size(
             &flui_widgets::Listener::new()
-                .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+                .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                 .on_pointer_down(move |_, _| seen.set(seen.get() + 1))
                 .child(flui_widgets::SizedBox::new(400.0, 400.0)),
             400.0,

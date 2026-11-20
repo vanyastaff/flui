@@ -2307,8 +2307,8 @@ impl BuildOwner {
     ///
     /// Called by the layout↔build fixpoint and `WidgetsBinding::service_child_requests`
     /// immediately **after** `PipelineOwner::run_frame` and the pipeline lock
-    /// is released, so the render tree is quiescent and no `NodePtr` alias is
-    /// live.
+    /// is released, so the render tree is quiescent and no node of it is
+    /// entered.
     ///
     /// # Ordering
     ///

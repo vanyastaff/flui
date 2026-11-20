@@ -48,11 +48,11 @@ use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::Single;
 use flui_foundation::geometry::Size;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::{RenderColoredBox, RenderFlex};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::HitTestBehavior,
     parent_data::{BoxParentData, FlexParentData},
     pipeline::{Layout, PipelineOwner},
     testing::{box_node, tree},

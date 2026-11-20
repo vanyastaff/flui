@@ -55,7 +55,6 @@ mod layout;
 mod paint;
 pub mod proxy_queries;
 
-pub use flui_painting::{Canvas, DisplayList, paint::Paint, paint::PaintStyle};
 pub use hit_test::HitTestContext;
 pub use intrinsics::{
     BoxDryBaselineContext, BoxDryLayoutContext, BoxIntrinsicsContext, DryBaselineChildRequest,

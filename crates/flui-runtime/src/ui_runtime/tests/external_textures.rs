@@ -134,16 +134,16 @@ impl flui_foundation::inspect::Inspect for WidthGateBox {
     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
 }
 
-impl flui_rendering::prelude::RenderBox for WidthGateBox {
-    type Arity = flui_rendering::prelude::Leaf;
-    type ParentData = flui_rendering::prelude::BoxParentData;
+impl flui_rendering::traits::RenderBox for WidthGateBox {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut flui_rendering::prelude::BoxLayoutContext<
+        ctx: &mut flui_rendering::BoxLayoutContext<
             '_,
-            flui_rendering::prelude::Leaf,
-            flui_rendering::prelude::BoxParentData,
+            flui_foundation::Leaf,
+            flui_rendering::parent_data::BoxParentData,
         >,
     ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
         #[expect(
@@ -156,11 +156,7 @@ impl flui_rendering::prelude::RenderBox for WidthGateBox {
         Ok(flui_foundation::geometry::Size::new(10.0, 10.0))
     }
 
-    fn paint(
-        &self,
-        _ctx: &mut flui_rendering::prelude::PaintContext<'_, flui_rendering::prelude::Leaf>,
-    ) {
-    }
+    fn paint(&self, _ctx: &mut flui_rendering::PaintContext<'_, flui_foundation::Leaf>) {}
 }
 
 #[derive(Clone, Copy)]
