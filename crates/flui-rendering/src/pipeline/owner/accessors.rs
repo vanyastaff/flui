@@ -1510,7 +1510,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// 3. Adds the node to the dirty paint list (since new nodes need paint)
     ///
     /// The tree's own insert does none of this; outside this crate this is the
-    /// way to add an unparented node with proper dirty
+    /// way to add a parentless node with proper dirty
     /// tracking.
     ///
     /// # Returns
