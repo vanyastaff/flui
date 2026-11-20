@@ -517,6 +517,12 @@ impl Driver {
         self.lane.as_ref().map(LaneWorker::name)
     }
 
+    /// What the session's OS lane can do, when it has one.
+    #[must_use]
+    pub fn lane_capabilities(&self) -> Option<&crate::lane::LaneCapabilities> {
+        self.lane.as_ref().map(LaneWorker::capabilities)
+    }
+
     pub(crate) fn lane(&self) -> Option<&LaneWorker> {
         self.lane.as_ref()
     }

@@ -4,8 +4,13 @@
 //! A launched process gets a fresh endpoint, a token of [`MIN_TOKEN_LEN`] random bytes written as
 //! hex (twice the shortest an app takes) and [`EXIT_ON_DISCONNECT_ENV`], so it exits when the
 //! driver's connection closes, however the driver went. The driver also owns the child: dropping the session kills a process that is still
-//! running. Building is not the driver's business, except [`Launch::cargo_example`], which builds
-//! one example of this workspace for host-desktop tests.
+//! running, on Windows with everything in its kill-on-close job and on Linux with its process
+//! group, where it also dies with the driver (`linux`). Building is not the driver's business,
+//! except [`Launch::cargo_example`], which builds one example of this workspace for host-desktop
+//! tests.
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -186,10 +191,12 @@ impl Launch {
             })?
             .resume()?;
         // On Unix the app leads a process group of its own, which the session ends whole
-        // (`AppProcess::end`).
-        #[cfg(unix)]
+        // (`AppProcess::end`); on Linux it also dies with the session's starter thread.
+        #[cfg(target_os = "linux")]
+        let (child, starter) = linux::spawn(command).map_err(started)?;
+        #[cfg(all(unix, not(target_os = "linux")))]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         let child = command.spawn().map_err(started)?;
         Ok(Launched {
             endpoint: place.address.clone(),
@@ -198,6 +205,8 @@ impl Launch {
                 child,
                 #[cfg(windows)]
                 _job: job,
+                #[cfg(target_os = "linux")]
+                _starter: starter,
                 _place: place,
             },
         })
@@ -237,6 +246,9 @@ pub(crate) struct AppProcess {
     child: Child,
     #[cfg(windows)]
     _job: crate::lane::windows::job::KillOnCloseJob,
+    /// The thread it was started from, whose end kills it: dropped after the process ended.
+    #[cfg(target_os = "linux")]
+    _starter: linux::Starter,
     /// Where its agent listens: the private directory its socket lives in (Unix), removed with the
     /// session, after the process ended.
     _place: EndpointPlace,
@@ -248,9 +260,24 @@ impl AppProcess {
         self.child.id()
     }
 
+    /// How the process is. On Linux it is left unreaped until [`Self::end`], so its id names its
+    /// group until the group is killed.
+    fn state(&mut self) -> ProcessState {
+        #[cfg(target_os = "linux")]
+        {
+            linux::state(&self.child)
+        }
+        #[cfg(not(target_os = "linux"))]
+        match self.child.try_wait() {
+            Ok(Some(status)) => ProcessState::Ended(status.code()),
+            Ok(None) => ProcessState::Running,
+            Err(_) => ProcessState::Ended(None),
+        }
+    }
+
     /// Whether the process still runs.
     pub(crate) fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        self.state() == ProcessState::Running
     }
 
     /// The exit code, waiting a little for a process whose connection just broke to finish
@@ -258,23 +285,27 @@ impl AppProcess {
     pub(crate) fn exit_code(&mut self) -> Option<i32> {
         let deadline = Instant::now() + EXIT_WAIT;
         loop {
-            match self.child.try_wait() {
-                Ok(Some(status)) => return status.code(),
-                Ok(None) if Instant::now() < deadline => {
+            match self.state() {
+                ProcessState::Ended(code) => return code,
+                ProcessState::Running if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Ok(None) | Err(_) => return None,
+                ProcessState::Running => return None,
             }
         }
     }
 
-    /// End the process if it still runs, and reap it. On Unix the process group it leads ends
-    /// with it: while the leader runs unreaped, the group's id is still its own, so the signal
-    /// reaches nothing else. A leader that already exited leaves its group to
-    /// [`EXIT_ON_DISCONNECT_ENV`].
+    /// End the process if it still runs, and reap it, with the process group it leads on Unix.
+    /// On Linux the group ends whether or not the app itself still runs, while `waitid` answers
+    /// for the unreaped app (`linux::kill_group`). On other Unix hosts it ends while the leader
+    /// runs unreaped, when the group's id is still its own, so the signal reaches nothing else; a
+    /// leader that already exited leaves its group to [`EXIT_ON_DISCONNECT_ENV`].
     pub(crate) fn end(&mut self) {
-        if matches!(self.child.try_wait(), Ok(None)) {
-            #[cfg(unix)]
+        // Before the app is reaped, while its id still names its group.
+        #[cfg(target_os = "linux")]
+        linux::kill_group(&self.child);
+        if self.state() == ProcessState::Running {
+            #[cfg(all(unix, not(target_os = "linux")))]
             {
                 let group = rustix::process::Pid::from_child(&self.child);
                 let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
@@ -283,6 +314,15 @@ impl AppProcess {
         }
         let _ = self.child.wait();
     }
+}
+
+/// How a launched process is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProcessState {
+    /// It runs.
+    Running,
+    /// It ended, with its exit code, or none when a signal ended it.
+    Ended(Option<i32>),
 }
 
 impl Drop for AppProcess {

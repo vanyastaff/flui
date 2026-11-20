@@ -663,6 +663,52 @@ fn an_app_that_exits_before_its_agent_answers_reports_its_exit_code() {
     );
 }
 
+/// What a launched app started dies with its session on Linux, even after the app itself exited:
+/// the session kills the app's whole process group before it reaps the app.
+#[cfg(target_os = "linux")]
+#[test]
+fn what_an_app_started_ends_with_its_session_after_the_app_exited() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let pid_file = dir.path().join("grandchild");
+    // The app starts a long sleep in its own group and exits before any agent answers.
+    let launch = Launch::executable("/bin/sh")
+        .arg("-c")
+        .arg("sleep 60 & echo $! > \"$0\"; exit 0")
+        .arg(&pid_file)
+        .connect_wait(Duration::from_secs(30));
+    let launched = Driver::launch(launch);
+    assert!(
+        matches!(
+            launched,
+            Err(Error::Gone {
+                kind: Some(HandleKind::Process),
+                ..
+            })
+        ),
+        "{launched:?}"
+    );
+    let grandchild: u32 = std::fs::read_to_string(&pid_file)
+        .expect("the app wrote its child's id")
+        .trim()
+        .parse::<u32>()
+        .expect("a process id");
+    let alive = |pid: u32| {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .is_some_and(|state| state != "Z")
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while alive(grandchild) {
+        assert!(
+            Instant::now() < deadline,
+            "process {grandchild}, which the app started, outlived the session"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn an_artifact_without_its_lane_is_named_as_the_capability_missing() {
     let launched = Driver::launch(Launch::artifact(flui_driver::Artifact::Apk(
