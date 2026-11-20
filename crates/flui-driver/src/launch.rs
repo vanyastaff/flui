@@ -51,7 +51,8 @@ impl Artifact {
     }
 }
 
-/// What to start and how: see the [module docs](self).
+/// What to start and how: an app built for this host, an artifact a lane installs, or a view
+/// hosted in process, with the arguments, environment and connect wait it starts with.
 #[must_use]
 pub struct Launch {
     pub(crate) target: Target,
@@ -166,22 +167,26 @@ impl Launch {
             .env(TOKEN_ENV, &token)
             .env(EXIT_ON_DISCONNECT_ENV, "1")
             .stdin(Stdio::null());
-        // The job comes first: a job Windows refuses to make leaves nothing started.
-        #[cfg(windows)]
-        let job = crate::lane::windows::job::KillOnCloseJob::try_new()?;
-        let child = command.spawn().map_err(|error| {
+        let started = |error: io::Error| {
             Error::Io(io::Error::new(
                 error.kind(),
                 format!("could not start {}: {error}", executable.display()),
             ))
-        })?;
+        };
+        // The job comes first, and the app joins it before its first instruction: nothing it
+        // starts escapes the job.
         #[cfg(windows)]
-        if let Err(error) = job.assign(&child) {
-            let mut child = child;
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
+        let job = crate::lane::windows::job::KillOnCloseJob::try_new()?;
+        #[cfg(windows)]
+        let child = job
+            .spawn_suspended(&mut command)
+            .map_err(|error| match error {
+                Error::Io(error) => started(error),
+                other => other,
+            })?
+            .resume()?;
+        #[cfg(not(windows))]
+        let child = command.spawn().map_err(started)?;
         Ok(Launched {
             endpoint: place.address.clone(),
             token,

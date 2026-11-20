@@ -3,7 +3,8 @@
 //! answers kept aside.
 //!
 //! A [`Connection`] is a transport for that conversation: a local socket to a launched or attached
-//! app ([`socket`]), or the headless target's agent served in process ([`in_process`]). It is
+//! app ([`socket`]), or the headless target's agent served in process (`in_process`, feature
+//! `headless`). It is
 //! private: front ends see the `Driver`.
 
 #[cfg(feature = "headless")]

@@ -6,8 +6,6 @@
     reason = "Win32 FFI; each call takes plain values or pointers to locals"
 )]
 
-use std::time::Duration;
-
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, POINT, RECT, RPC_E_CHANGED_MODE};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
@@ -526,8 +524,7 @@ impl PointerDevice {
         let infos: Vec<POINTER_TYPE_INFO> = frame
             .contacts
             .iter()
-            .enumerate()
-            .map(|(index, contact)| {
+            .map(|contact| {
                 let mut flags = match contact.phase {
                     Phase::Down => {
                         POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT
@@ -539,7 +536,7 @@ impl PointerDevice {
                     Phase::Hover => POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE,
                     _ => POINTER_FLAG_UPDATE,
                 };
-                if index == 0 {
+                if contact.primary {
                     flags |= POINTER_FLAG_PRIMARY;
                 }
                 pointer_info(self.kind, contact.id, contact.at, flags, contact.phase)
@@ -626,10 +623,6 @@ fn pointer_info(
         },
     }
 }
-
-/// How long a pause between events waits at most, so a scripted pause cannot hold the lane's
-/// thread past a frame budget a person would notice.
-pub(super) const LONGEST_PAUSE: Duration = Duration::from_secs(10);
 
 fn platform(what: &str, error: &windows::core::Error) -> Error {
     lane_error(format!("{what}: {error}"))

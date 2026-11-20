@@ -2,21 +2,25 @@
 //! the guard takes for the person's input, touch and pen frames, screen mapping, and the
 //! projection of a tree.
 
+use std::time::Duration;
+
 use flui_driver::coordinates::{DevicePoint, to_device};
 use flui_driver::lane::windows::activity::{self, LANE_TAG, MouseMotion, Observed};
-use flui_driver::lane::windows::contacts::{Contacts, Phase, PointerKind};
+use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
+use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke};
 use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, VirtualKey};
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
 use flui_driver::lane::windows::safety::{
-    self, Desk, Held, KeyEdge, Landing, Refusal, check_event,
+    self, Desk, Held, KeyEdge, Landing, Refusal, ShortcutWatch, check_event,
 };
 use flui_driver::lane::windows::screen;
+use flui_driver::lane::windows::walk::{self, Provider, ProviderError};
 use flui_driver::projection::{Projection, ProjectionDifference};
 use flui_driver::protocol::error::ErrorCode;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::semantics::SemanticsRole;
 use flui_driver::protocol::session::Isolation;
-use flui_driver::protocol::tree::{ElementId, Node, Tree, normalized_outline};
+use flui_driver::protocol::tree::{ElementId, Node, OUTLINE_TEXT_LIMIT, Tree, normalized_outline};
 use flui_driver::protocol::wire::Role;
 
 fn virtual_key(code: u16, extended: bool) -> KeyName {
@@ -421,15 +425,15 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
         &["Control", "Alt", "Delete"],
         &["Alt", "Shift"],
         &["Control", "Shift"],
-        &["Shift"],
         &["CapsLock"],
         &["NumLock"],
         &["PrintScreen"],
         &["AudioVolumeUp"],
     ];
+    let quiet = ShortcutWatch::new();
     for keys in shell {
         assert!(
-            safety::shell_hotkey(&chord(keys)).is_some(),
+            safety::shell_hotkey(&quiet, &chord(keys)).is_some(),
             "{keys:?} is the shell's"
         );
     }
@@ -443,13 +447,161 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
         &["Alt", "d"],
         &["Control", "a"],
         &["Enter"],
+        // One Shift tap is a key the app reads; Sticky Keys takes five in a row.
+        &["Shift"],
     ];
     for keys in app {
         assert_eq!(
-            safety::shell_hotkey(&chord(keys)),
+            safety::shell_hotkey(&quiet, &chord(keys)),
             None,
             "{keys:?} is the app's"
         );
+    }
+}
+
+/// Sticky Keys turns on at the fifth Shift tapped alone in a row, counted across the lane's sends
+/// as the OS counts it, and any other key starts the count again.
+#[test]
+fn only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut() {
+    let tap = chord(&["Shift"]);
+    let taps = |count: usize| -> Vec<KeyEdge> {
+        tap.iter()
+            .copied()
+            .cycle()
+            .take(tap.len() * count)
+            .collect()
+    };
+    let quiet = ShortcutWatch::new();
+    assert_eq!(safety::shell_hotkey(&quiet, &taps(4)), None);
+    assert_eq!(
+        safety::shell_hotkey(&quiet, &taps(5)),
+        Some("the accessibility shortcut (Sticky Keys)")
+    );
+    // Four taps sent before, then one more: the OS counts on.
+    let mut watch = ShortcutWatch::new();
+    for edge in taps(4) {
+        watch.observe(edge).expect("four taps are no shortcut");
+    }
+    assert!(safety::shell_hotkey(&watch, &tap).is_some());
+    // Another key between restarts the count.
+    let mut broken = taps(4);
+    broken.extend(chord(&["a"]));
+    broken.extend(taps(4));
+    assert_eq!(safety::shell_hotkey(&quiet, &broken), None);
+}
+
+/// Typed text reaches the keyboard as keys too: its Tab under a held Alt is the task switcher, and
+/// the check reads it from the same plan the lane sends.
+#[test]
+fn typed_text_goes_through_the_shell_hotkey_check_as_the_keys_it_sends() {
+    let alt = KeyInput::Down {
+        key: keys::ALT,
+        shift: false,
+    };
+    let release_alt = KeyInput::Up { key: keys::ALT };
+    let quiet = ShortcutWatch::new();
+    for (text, expected) in [
+        ("\t", Some("the Windows task switcher")),
+        ("a\tb", Some("the Windows task switcher")),
+        ("plain", None),
+    ] {
+        let edges = HeldKeys::new().sequence_edges(&[
+            alt.clone(),
+            KeyInput::Text(text.to_owned()),
+            release_alt.clone(),
+        ]);
+        assert_eq!(safety::shell_hotkey(&quiet, &edges), expected, "{text:?}");
+    }
+}
+
+/// A capital letter holds Shift around its key unless Shift is already held, and the Shift it
+/// added is released with the key.
+#[test]
+fn keys_and_text_are_planned_against_what_the_lane_holds() {
+    let a = VirtualKey {
+        code: 0x41,
+        extended: false,
+    };
+    let mut held = HeldKeys::new();
+    let down = held.plan(&KeyInput::Down {
+        key: a,
+        shift: true,
+    });
+    assert_eq!(down, [Keystroke::ShiftFor(0x41), Keystroke::Press(a)]);
+    for stroke in down {
+        held.apply(stroke);
+    }
+    assert_eq!(held.held(), [keys::SHIFT.code, 0x41]);
+    let up = held.plan(&KeyInput::Up { key: a });
+    assert_eq!(up, [Keystroke::Release(a), Keystroke::UnshiftFor(0x41)]);
+    for stroke in up {
+        held.apply(stroke);
+    }
+    assert_eq!(held.held(), [] as [u16; 0]);
+    assert_eq!(
+        held.plan(&KeyInput::Text("x\n".to_owned())),
+        [
+            Keystroke::Unit(u16::from(b'x')),
+            Keystroke::Press(keys::ENTER),
+            Keystroke::Release(keys::ENTER),
+        ]
+    );
+}
+
+/// A key or button whose release Windows refused stays held, for the next release to try again,
+/// and the failure is reported.
+#[test]
+fn a_release_windows_refused_stays_held() {
+    let mut held = HeldKeys::new();
+    for stroke in [Keystroke::Press(keys::CONTROL), Keystroke::Press(keys::TAB)] {
+        held.apply(stroke);
+    }
+    let refused = held.release_all(|key| {
+        if key == keys::TAB {
+            Err(flui_driver::Error::Protocol {
+                message: "refused".into(),
+            })
+        } else {
+            Ok(())
+        }
+    });
+    assert!(refused.is_err(), "the refusal is reported");
+    assert_eq!(
+        held.held(),
+        [keys::TAB.code],
+        "the refused key is still held"
+    );
+    held.release_all(|_| Ok(())).expect("released this time");
+    assert_eq!(held.held(), [] as [u16; 0]);
+
+    let mut buttons = HeldButtons::default();
+    buttons.apply(0, true);
+    buttons.apply(1, true);
+    let refused = buttons.release_all(|button| {
+        if button == 1 {
+            Err(flui_driver::Error::Protocol {
+                message: "refused".into(),
+            })
+        } else {
+            Ok(())
+        }
+    });
+    assert!(refused.is_err());
+    assert_eq!(buttons.bits(), 0b10, "the refused button is still held");
+}
+
+/// A pause is waited out whole, in slices short enough to look at the guard between them.
+#[test]
+fn a_pause_is_waited_out_whole_in_watched_slices() {
+    for pause in [
+        Duration::ZERO,
+        Duration::from_millis(1),
+        Duration::from_millis(120),
+        Duration::from_secs(25),
+    ] {
+        let slices: Vec<Duration> = activity::slices(pause).collect();
+        assert_eq!(slices.iter().sum::<Duration>(), pause, "{pause:?}");
+        assert!(slices.iter().all(|slice| *slice <= activity::WATCH_SLICE));
     }
 }
 
@@ -559,77 +711,110 @@ fn point(x: i32, y: i32) -> DevicePoint {
     DevicePoint::new(x, y)
 }
 
+/// The frames a test injection was handed, and whether it accepts the next one.
+#[derive(Default)]
+struct Injected {
+    frames: Vec<Frame>,
+    refuse: bool,
+}
+
+impl Injected {
+    fn take(&mut self, frame: &Frame) -> flui_driver::Result<()> {
+        if self.refuse {
+            return Err(flui_driver::Error::Protocol {
+                message: "Windows refused the frame".into(),
+            });
+        }
+        self.frames.push(frame.clone());
+        Ok(())
+    }
+
+    fn last(&self) -> &Frame {
+        self.frames.last().expect("a frame was injected")
+    }
+
+    /// The last frame's contacts as (id, phase, primary).
+    fn last_contacts(&self) -> Vec<(u32, Phase, bool)> {
+        self.last()
+            .contacts
+            .iter()
+            .map(|c| (c.id, c.phase, c.primary))
+            .collect()
+    }
+}
+
 #[test]
 fn touch_and_pen_frames_carry_every_contact_and_their_phases() {
     let mut contacts = Contacts::new();
-    assert_eq!(
-        contacts.move_to("a", PointerKind::Touch, point(10, 10)),
-        None,
+    let mut os = Injected::default();
+    contacts
+        .move_to("a", PointerKind::Touch, point(10, 10), |f| os.take(f))
+        .expect("a placement");
+    assert!(
+        os.frames.is_empty(),
         "a touch that is not down only places itself"
     );
-    let down = contacts
-        .down("a", PointerKind::Touch)
+    contacts
+        .down("a", PointerKind::Touch, |f| os.take(f))
         .expect("a touch press");
-    assert_eq!(down.contacts.len(), 1);
-    assert_eq!(down.contacts[0].phase, Phase::Down);
-    assert_eq!(down.contacts[0].id, 0);
-    contacts.move_to("b", PointerKind::Touch, point(50, 10));
-    let second = contacts
-        .down("b", PointerKind::Touch)
+    assert_eq!(os.last_contacts(), [(0, Phase::Down, true)]);
+    contacts
+        .move_to("b", PointerKind::Touch, point(50, 10), |f| os.take(f))
+        .expect("a placement");
+    contacts
+        .down("b", PointerKind::Touch, |f| os.take(f))
         .expect("a second press");
-    let phases: Vec<(u32, Phase)> = second.contacts.iter().map(|c| (c.id, c.phase)).collect();
-    assert_eq!(phases, [(0, Phase::Update), (1, Phase::Down)]);
-    let moved = contacts
-        .move_to("a", PointerKind::Touch, point(12, 10))
-        .expect("a contact that is down moves");
-    assert_eq!(moved.contacts[0].at, point(12, 10));
-    assert_eq!(moved.contacts[1].phase, Phase::Update);
-    let lifted = contacts.up("a", PointerKind::Touch).expect("a release");
-    let phases: Vec<(u32, Phase)> = lifted.contacts.iter().map(|c| (c.id, c.phase)).collect();
-    assert_eq!(phases, [(0, Phase::Up), (1, Phase::Update)]);
-    // The freed id is the lowest, and the next finger takes it.
-    contacts.move_to("c", PointerKind::Touch, point(90, 10));
-    let third = contacts
-        .down("c", PointerKind::Touch)
-        .expect("a third press");
-    assert!(
-        third
-            .contacts
-            .iter()
-            .any(|c| c.id == 0 && c.phase == Phase::Down)
+    assert_eq!(
+        os.last_contacts(),
+        [(0, Phase::Update, true), (1, Phase::Down, false)]
     );
+    contacts
+        .move_to("a", PointerKind::Touch, point(12, 10), |f| os.take(f))
+        .expect("a contact that is down moves");
+    assert_eq!(os.last().contacts[0].at, point(12, 10));
+    contacts
+        .up("a", PointerKind::Touch, |f| os.take(f))
+        .expect("a release");
+    assert_eq!(
+        os.last_contacts(),
+        [(0, Phase::Up, true), (1, Phase::Update, false)]
+    );
+    // The freed id is the lowest, and the next finger takes it.
+    contacts
+        .move_to("c", PointerKind::Touch, point(90, 10), |f| os.take(f))
+        .expect("a placement");
+    contacts
+        .down("c", PointerKind::Touch, |f| os.take(f))
+        .expect("a third press");
+    assert!(os.last_contacts().contains(&(0, Phase::Down, false)));
     assert!(
-        contacts.up("a", PointerKind::Touch).is_err(),
+        contacts
+            .up("a", PointerKind::Touch, |f| os.take(f))
+            .is_err(),
         "a lifted contact is up"
     );
     assert!(
-        contacts.down("never-moved", PointerKind::Touch).is_err(),
+        contacts
+            .down("never-moved", PointerKind::Touch, |f| os.take(f))
+            .is_err(),
         "a press with no position is refused"
     );
 
-    let hover = contacts
-        .move_to("pen", PointerKind::Pen, point(5, 5))
+    contacts
+        .move_to("pen", PointerKind::Pen, point(5, 5), |f| os.take(f))
         .expect("a pen in range hovers");
-    assert_eq!(hover.contacts[0].phase, Phase::Hover);
-    assert_eq!(
-        contacts
-            .down("pen", PointerKind::Pen)
-            .expect("a pen press")
-            .contacts[0]
-            .phase,
-        Phase::Down
-    );
-    assert_eq!(
-        contacts
-            .move_to("pen", PointerKind::Pen, point(6, 5))
-            .expect("a pen stroke")
-            .contacts[0]
-            .phase,
-        Phase::Update
-    );
+    assert_eq!(os.last_contacts(), [(0, Phase::Hover, true)]);
+    contacts
+        .down("pen", PointerKind::Pen, |f| os.take(f))
+        .expect("a pen press");
+    assert_eq!(os.last_contacts(), [(0, Phase::Down, true)]);
 
-    let released = contacts.release_all();
+    let mut released = Injected::default();
+    contacts
+        .release_all(|f| released.take(f))
+        .expect("everything lifts");
     let summary: Vec<(PointerKind, Vec<Phase>)> = released
+        .frames
         .iter()
         .map(|frame| (frame.kind, frame.contacts.iter().map(|c| c.phase).collect()))
         .collect();
@@ -641,21 +826,132 @@ fn touch_and_pen_frames_carry_every_contact_and_their_phases() {
             (PointerKind::Pen, vec![Phase::Leave]),
         ]
     );
-    assert!(
-        contacts.release_all().is_empty(),
-        "nothing is left to release"
-    );
+    let mut again = Injected::default();
+    contacts
+        .release_all(|f| again.take(f))
+        .expect("nothing left");
+    assert!(again.frames.is_empty(), "nothing is left to release");
 
     let mut many = Contacts::new();
+    let mut os = Injected::default();
     for finger in 0..10 {
         let id = format!("f{finger}");
-        many.move_to(&id, PointerKind::Touch, point(finger, 0));
-        many.down(&id, PointerKind::Touch).expect("ten fingers fit");
+        many.move_to(&id, PointerKind::Touch, point(finger, 0), |f| os.take(f))
+            .expect("a placement");
+        many.down(&id, PointerKind::Touch, |f| os.take(f))
+            .expect("ten fingers fit");
     }
-    many.move_to("f10", PointerKind::Touch, point(10, 0));
+    many.move_to("f10", PointerKind::Touch, point(10, 0), |f| os.take(f))
+        .expect("a placement");
     assert!(
-        many.down("f10", PointerKind::Touch).is_err(),
+        many.down("f10", PointerKind::Touch, |f| os.take(f))
+            .is_err(),
         "an eleventh contact is refused"
+    );
+}
+
+/// What Windows refused is not what it holds: a refused press is never lifted, a refused release
+/// is lifted again, and `release_all` lifts only what the OS took.
+#[test]
+fn a_contact_is_held_only_once_windows_took_it() {
+    let mut contacts = Contacts::new();
+    let mut os = Injected::default();
+    contacts
+        .move_to("a", PointerKind::Touch, point(10, 10), |f| os.take(f))
+        .expect("a placement");
+    os.refuse = true;
+    assert!(
+        contacts
+            .down("a", PointerKind::Touch, |f| os.take(f))
+            .is_err()
+    );
+    os.refuse = false;
+    let mut released = Injected::default();
+    contacts
+        .release_all(|f| released.take(f))
+        .expect("nothing held");
+    assert!(released.frames.is_empty(), "a refused press is not held");
+
+    contacts
+        .move_to("a", PointerKind::Touch, point(10, 10), |f| os.take(f))
+        .expect("a placement");
+    contacts
+        .down("a", PointerKind::Touch, |f| os.take(f))
+        .expect("a press");
+    os.refuse = true;
+    assert!(
+        contacts
+            .up("a", PointerKind::Touch, |f| os.take(f))
+            .is_err()
+    );
+    let mut lifted = Injected::default();
+    contacts
+        .release_all(|f| lifted.take(f))
+        .expect("the release");
+    assert_eq!(
+        lifted.last_contacts(),
+        [(0, Phase::Up, true)],
+        "a refused release is still held, and lifted again"
+    );
+
+    let mut pen = Contacts::new();
+    let mut os = Injected::default();
+    pen.move_to("p", PointerKind::Pen, point(1, 1), |f| os.take(f))
+        .expect("in range");
+    pen.down("p", PointerKind::Pen, |f| os.take(f))
+        .expect("a pen press");
+    let mut refusing = Injected {
+        refuse: true,
+        ..Injected::default()
+    };
+    assert!(pen.release_all(|f| refusing.take(f)).is_err());
+    let mut lifted = Injected::default();
+    pen.release_all(|f| lifted.take(f))
+        .expect("lifted this time");
+    assert_eq!(
+        lifted.frames.len(),
+        2,
+        "the pen is lifted, then leaves range"
+    );
+}
+
+/// The first contact down while none is down is primary for its whole life; once it lifts, no
+/// remaining contact becomes primary until every contact has lifted (Microsoft Learn, "Pointer
+/// Flags", `POINTER_FLAG_PRIMARY`).
+#[test]
+fn the_primary_contact_is_the_first_down_and_stays_so() {
+    let mut contacts = Contacts::new();
+    let mut os = Injected::default();
+    let press = |contacts: &mut Contacts, os: &mut Injected, id: &str, x: i32| {
+        contacts
+            .move_to(id, PointerKind::Touch, point(x, 0), |f| os.take(f))
+            .expect("a placement");
+        contacts
+            .down(id, PointerKind::Touch, |f| os.take(f))
+            .expect("a press");
+    };
+    press(&mut contacts, &mut os, "a", 0);
+    press(&mut contacts, &mut os, "b", 10);
+    contacts
+        .up("a", PointerKind::Touch, |f| os.take(f))
+        .expect("the primary lifts");
+    press(&mut contacts, &mut os, "c", 20);
+    assert_eq!(
+        os.last_contacts(),
+        [(1, Phase::Update, false), (0, Phase::Down, false)],
+        "after the primary lifts, no contact is primary while any is down"
+    );
+    contacts
+        .up("b", PointerKind::Touch, |f| os.take(f))
+        .expect("a release");
+    contacts
+        .up("c", PointerKind::Touch, |f| os.take(f))
+        .expect("the last release");
+    press(&mut contacts, &mut os, "d", 30);
+    assert_eq!(
+        os.last_contacts(),
+        [(0, Phase::Down, true)],
+        "the first contact down after every contact lifted is primary"
     );
 }
 
@@ -781,4 +1077,175 @@ fn the_projection_drops_what_one_backend_reports_and_names_the_differences() {
             ProjectionDifference::MissingFromOs("- button \"Like\" [identifier=\"like\"]".into()),
         ]
     );
+}
+
+/// A reader of an OS tree keeps the first `OUTLINE_TEXT_LIMIT` characters of a text, and the
+/// projection cuts the app's at the same place, so a long label compares equal.
+#[test]
+fn a_long_text_is_cut_at_the_same_place_on_both_sides() {
+    let long: String = "é".repeat(OUTLINE_TEXT_LIMIT + 500);
+    let cut: String = long.chars().take(OUTLINE_TEXT_LIMIT).collect();
+    let mut app_root = node(1, Role::Window, "app");
+    app_root.children = vec![node(2, Role::Label, &long)];
+    let mut os_root = node(10, Role::Window, "os");
+    os_root.children = vec![node(11, Role::Label, &cut)];
+    let projection = Projection::of(
+        &Tree::new(vec![app_root], false),
+        &Tree::new(vec![os_root], false),
+    );
+    assert!(projection.is_equal(), "{:?}", projection.differences());
+}
+
+/// A tree a test lays out: each element's node, its children, and how the provider answers.
+struct FakeTree {
+    nodes: Vec<(Node, Vec<usize>)>,
+    /// The element whose properties time out.
+    hung: Option<usize>,
+    /// The element that went away.
+    gone: Option<usize>,
+    /// The elements whose properties were read, in order.
+    read: Vec<usize>,
+}
+
+impl FakeTree {
+    fn new(nodes: Vec<(Node, Vec<usize>)>) -> Self {
+        Self {
+            nodes,
+            hung: None,
+            gone: None,
+            read: Vec::new(),
+        }
+    }
+
+    fn parent_of(&self, element: usize) -> Option<usize> {
+        self.nodes
+            .iter()
+            .position(|(_, children)| children.contains(&element))
+    }
+}
+
+impl Provider for FakeTree {
+    type Element = usize;
+
+    fn first_child(&mut self, element: &usize) -> Result<Option<usize>, ProviderError> {
+        Ok(self.nodes[*element].1.first().copied())
+    }
+
+    fn next_sibling(&mut self, element: &usize) -> Result<Option<usize>, ProviderError> {
+        let Some(parent) = self.parent_of(*element) else {
+            // A root's sibling is another window: present, and not the app's.
+            return Ok(Some(self.nodes.len() - 1));
+        };
+        let siblings = &self.nodes[parent].1;
+        let at = siblings
+            .iter()
+            .position(|sibling| sibling == element)
+            .expect("BUG: a child is among its parent's children");
+        Ok(siblings.get(at + 1).copied())
+    }
+
+    fn node(&mut self, element: &usize, id: ElementId) -> Result<Node, ProviderError> {
+        self.read.push(*element);
+        if self.hung == Some(*element) {
+            return Err(ProviderError::Timeout);
+        }
+        if self.gone == Some(*element) {
+            return Err(ProviderError::Gone);
+        }
+        let mut node = self.nodes[*element].0.clone();
+        node.id = id;
+        Ok(node)
+    }
+}
+
+/// A window with a button and a list of three items, and, last, another window beside it.
+fn fake_window() -> FakeTree {
+    let mut like = node(1, Role::Button, "Like");
+    like.automation_id = Some("like".into());
+    let mut third = node(1, Role::ListItem, "third");
+    third.automation_id = Some("third".into());
+    let mut other = node(1, Role::Window, "another app");
+    other.automation_id = Some("like".into());
+    FakeTree::new(vec![
+        (node(1, Role::Window, "app"), vec![1, 2]),
+        (like, vec![]),
+        (node(1, Role::List, "items"), vec![3, 4, 5]),
+        (node(1, Role::ListItem, "first"), vec![]),
+        (node(1, Role::ListItem, "second"), vec![]),
+        (third, vec![]),
+        (other, vec![]),
+    ])
+}
+
+const UIA_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[test]
+fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
+    let mut tree = fake_window();
+    tree.gone = Some(4);
+    let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("the window reads");
+    assert!(!read.truncated);
+    let outline = normalized_outline(&read.roots);
+    assert_eq!(
+        outline,
+        "- button \"Like\" [identifier=\"like\"]\n- list \"items\"\n  - list_item \"first\"\n  \
+         - list_item \"third\" [identifier=\"third\"]\n"
+    );
+    assert!(
+        !tree.read.contains(&6),
+        "the window beside the app's is not read"
+    );
+}
+
+/// A provider that does not answer fails the read with a timeout at once, never a node of
+/// defaults.
+#[test]
+fn a_provider_that_times_out_fails_the_read_with_a_timeout() {
+    let mut tree = fake_window();
+    tree.hung = Some(2);
+    let refused = walk::read(&mut tree, &0, UIA_TIMEOUT).expect_err("a hung provider");
+    assert_eq!(refused.code(), Some(ErrorCode::Timeout), "{refused:?}");
+    assert_eq!(
+        tree.read,
+        [0, 1, 2],
+        "the walk stopped at the element that hung"
+    );
+}
+
+/// The search for an automation id walks the app's window only, within its budgets, and tells a
+/// hung provider apart from an id nobody has.
+#[test]
+fn the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart() {
+    let mut tree = fake_window();
+    assert_eq!(
+        walk::find(&mut tree, 0, "third", UIA_TIMEOUT).expect("found"),
+        5
+    );
+    let mut tree = fake_window();
+    let missing = walk::find(&mut tree, 0, "nobody", UIA_TIMEOUT).expect_err("absent");
+    assert_eq!(missing.code(), Some(ErrorCode::NotFound), "{missing:?}");
+    assert!(
+        !tree.read.contains(&6),
+        "another window's element is not the app's"
+    );
+    let mut tree = fake_window();
+    tree.hung = Some(3);
+    let hung = walk::find(&mut tree, 0, "third", UIA_TIMEOUT).expect_err("hung");
+    assert_eq!(hung.code(), Some(ErrorCode::Timeout), "{hung:?}");
+
+    // A chain deeper than the walk goes is cut, and said to be.
+    let depth = walk::MAX_DEPTH + 10;
+    let mut chain: Vec<(Node, Vec<usize>)> = (0..depth)
+        .map(|level| (node(1, Role::Group, "level"), vec![level + 1]))
+        .collect();
+    let mut deepest = node(1, Role::Button, "deep");
+    deepest.automation_id = Some("deep".into());
+    chain.push((deepest, vec![]));
+    chain.push((node(1, Role::Window, "another app"), vec![]));
+    let mut tree = FakeTree::new(chain);
+    let cut = walk::find(&mut tree, 0, "deep", UIA_TIMEOUT).expect_err("too deep");
+    assert_eq!(cut.code(), Some(ErrorCode::NotFound));
+    assert!(cut.to_string().contains("levels"), "{cut}");
+    let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("a read");
+    assert!(read.truncated, "a read cut by depth says so");
 }

@@ -710,7 +710,16 @@ graph LR
     `touch_and_pen_frames_carry_every_contact_and_their_phases`,
     `a_client_origin_maps_back_to_its_device_pixel_at_every_scale`,
     `an_absolute_move_lands_on_the_pixel_it_names`,
-    `the_projection_drops_what_one_backend_reports_and_names_the_differences`;
+    `the_projection_drops_what_one_backend_reports_and_names_the_differences`,
+    `only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut`,
+    `typed_text_goes_through_the_shell_hotkey_check_as_the_keys_it_sends`,
+    `keys_and_text_are_planned_against_what_the_lane_holds`, `a_release_windows_refused_stays_held`,
+    `a_pause_is_waited_out_whole_in_watched_slices`, `a_contact_is_held_only_once_windows_took_it`,
+    `the_primary_contact_is_the_first_down_and_stays_so`,
+    `a_long_text_is_cut_at_the_same_place_on_both_sides`,
+    `the_walk_reads_the_window_and_leaves_a_gone_element_out`,
+    `a_provider_that_times_out_fails_the_read_with_a_timeout`,
+    `the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart`;
     `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`.
   - The scenarios on the headless target (CI): `scenarios::the_gallery_scenario_passes_on_the_headless_target`,
     `the_accessibility_scenario_passes_on_the_headless_target`,
@@ -723,7 +732,9 @@ graph LR
     (the scenario app's UI Automation tree projects equal to its semantics, `AutomationId` is the
     identifier, an `InvokePattern` invoke acts, an unknown id is `not_found`),
     `every_role_reads_back_as_its_control_type_through_ui_automation`,
-    `the_guard_watches_and_stops_on_a_desktop_of_its_own`, `a_job_ends_its_processes_when_it_closes`,
+    `the_guard_watches_and_stops_on_a_desktop_of_its_own`,
+    `a_guard_whose_watcher_died_ends_the_run`, `a_job_ends_its_processes_when_it_closes`,
+    `a_process_joins_its_job_before_it_runs`,
     `a_launched_app_ends_with_its_session`; `the_conformance_scenario_runs_through_the_os_lane` and
     `the_device_check_scenarios_run_through_the_os_lane` announce their OS run and come out
     `cannot_verify` (`windows_lane`) with nothing sent, `windows-a11y`, which sends no OS input,
@@ -733,14 +744,21 @@ graph LR
   - Taken out one at a time, each fails a test above: the check before the first event, the
     millionth-of-a-pixel origin lift, the headless window's text input and the framework
     namespace in the projection.
-  - Owed on W, on the desktop that takes the user's input (`FLUI_TEST_VISIBLE_DESKTOP=1`, or the
-    nightly Windows runner under `FLUI_REQUIRE_INPUT_DESKTOP=1`): the gallery, input and notes
-    scenarios and the conformance scenario passing through the OS lane, a foreign mouse move ending
-    a run `cannot_verify` with its contact released, Windows Graphics Capture of the app's window,
-    a Narrator session over the scenario app, and the isolation spikes below.
+  - Owed on W, by hand on the desktop that takes the user's input (`FLUI_TEST_VISIBLE_DESKTOP=1`;
+    no automated run reaches that desktop: `nightly-platforms.yml` runs only `flui-native`
+    there): the gallery, input and notes scenarios and the conformance scenario passing through the
+    OS lane, a foreign mouse move ending a run `cannot_verify` with its contact released
+    (`a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input`), the guard's hook seeing the
+    lane's own input come back, the foreground read again before each typed stroke, Windows
+    Graphics Capture of the app's window, a Narrator session over the scenario app, and the
+    isolation spikes below.
 - **As built:**
-  - The lane is `lane::windows`: `keys`, `roles`, `safety`, `contacts`, `screen` and `activity`
-    are pure; `win32`, `guard`, `uia`, `capture` and `job` call Windows. UI Automation, Windows
+  - The lane is `lane::windows`: `keys`, `roles`, `safety`, `held`, `contacts`, `screen`,
+    `activity` and `walk` are pure; `win32`, `guard`, `uia`, `capture` and `job` call Windows. Key
+    events and typed text go through one plan (`held::HeldKeys`), which the shell-hotkey check
+    reads and the lane sends stroke by stroke; held keys, buttons and contacts are recorded once
+    Windows took them; a pause is waited out whole; a launched app starts suspended and joins its
+    job before its first instruction. UI Automation, Windows
     Graphics Capture and the job object go through the `windows` crate the workspace already pins,
     not `uiautomation` and `windows-capture`.
   - `Lane` gains `check` (asked by `send_guarded` before the guard arms), `read_tree`, `invoke` and

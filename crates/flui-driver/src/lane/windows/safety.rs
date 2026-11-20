@@ -15,7 +15,8 @@
 //!
 //! Before a sequence's first event ([`shell_hotkey`]): a chord the OS shell takes before the
 //! foreground window sees it (the Windows key, the task switcher, the input-language switch, the
-//! Sticky Keys shortcut) is refused, since no foreground check can hold for it.
+//! Sticky Keys shortcut) is refused, since no foreground check can hold for it. The rule reads the
+//! key edges the lane will send, typed text's Tab and Enter included (`held::HeldKeys`).
 
 use flui_protocol::session::Isolation;
 
@@ -311,77 +312,123 @@ pub enum KeyEdge {
     Up(VirtualKey),
 }
 
-/// What takes a chord in `edges` before the foreground window sees it, if anything does: see the
-/// [module docs](self). The sequence is read as the OS reads it, key by key, with what is held at
-/// each press.
-#[must_use]
-pub fn shell_hotkey(edges: &[KeyEdge]) -> Option<&'static str> {
-    let mut held: Vec<VirtualKey> = Vec::new();
-    // The input-language switch fires when Shift and Alt or Control are released together with
-    // no other key pressed between; Sticky Keys counts Shift pressed and released alone.
-    let mut modifier_chord = false;
-    let mut lone_shift = false;
-    for edge in edges {
-        match *edge {
-            KeyEdge::Down(key) => {
-                let has =
-                    |modifier: Modifier| held.iter().any(|k| Modifier::of(*k) == Some(modifier));
-                let (shift, control, alt) = (
-                    has(Modifier::Shift),
-                    has(Modifier::Control),
-                    has(Modifier::Alt),
-                );
-                let modifier = Modifier::of(key);
-                if modifier == Some(Modifier::Meta) {
-                    return Some("the Windows shell (the Windows key)");
-                }
-                match key.code {
-                    // Caps, Num and Scroll Lock change a state every window shares.
-                    0x14 | 0x90 | 0x91 => {
-                        return Some("the keyboard's lock state, shared by every window");
-                    }
-                    0x2C => return Some("the screenshot tool"),
-                    0xAD..=0xB3 => return Some("the system's volume and media controls"),
-                    0x09 | 0x1B if alt => return Some("the Windows task switcher"),
-                    0x1B if control && shift => return Some("Task Manager"),
-                    0x1B if control => return Some("the Start menu"),
-                    0x2E if control && alt => {
-                        return Some("the Windows secure attention sequence");
-                    }
-                    _ => {}
-                }
-                if !held.contains(&key) {
-                    held.push(key);
-                }
-                match modifier {
-                    Some(Modifier::Shift) => {
-                        lone_shift = held.len() == 1;
-                        modifier_chord |= alt || control;
-                    }
-                    Some(Modifier::Alt | Modifier::Control) => {
-                        lone_shift = false;
-                        modifier_chord |= shift;
-                    }
-                    _ => {
-                        lone_shift = false;
-                        modifier_chord = false;
-                    }
-                }
-            }
-            KeyEdge::Up(key) => {
-                held.retain(|k| *k != key);
-                match Modifier::of(key) {
-                    Some(Modifier::Shift) if lone_shift => {
-                        return Some("the accessibility shortcut (Sticky Keys)");
-                    }
-                    Some(Modifier::Shift | Modifier::Alt | Modifier::Control) if modifier_chord => {
-                        return Some("the Windows input-language switch");
-                    }
-                    _ => {}
-                }
-                lone_shift = false;
-            }
+/// How many times in a row Shift pressed and released alone turns on the Sticky Keys shortcut
+/// (Microsoft Support, "Make your keyboard easier to use": press Shift five times).
+pub const STICKY_KEYS_TAPS: u8 = 5;
+
+/// The shell's shortcuts as the keyboard has seen them so far: what is held, and the counts the
+/// OS keeps across chords (Shift tapped alone in a row). The lane keeps one across its sends, so
+/// four taps in one call and a fifth in the next are the shortcut, as the OS counts them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShortcutWatch {
+    held: Vec<VirtualKey>,
+    /// Shift and Alt or Control held together with no other key pressed since: releasing them
+    /// switches the input language (the default "Left Alt+Shift" and "Ctrl+Shift" hotkeys of
+    /// Windows' advanced keyboard settings).
+    modifier_chord: bool,
+    /// Shift pressed with nothing else held, and nothing pressed since.
+    lone_shift: bool,
+    /// Shift taps alone in a row.
+    shift_taps: u8,
+}
+
+impl ShortcutWatch {
+    /// A keyboard nothing has touched.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// See `edge`; what takes the shortcut it completes, when it completes one.
+    ///
+    /// # Errors
+    ///
+    /// The handler that takes the chord, for people.
+    pub fn observe(&mut self, edge: KeyEdge) -> Result<(), &'static str> {
+        match edge {
+            KeyEdge::Down(key) => self.press(key),
+            KeyEdge::Up(key) => self.release(key),
         }
     }
-    None
+
+    fn has(&self, modifier: Modifier) -> bool {
+        self.held.iter().any(|k| Modifier::of(*k) == Some(modifier))
+    }
+
+    fn press(&mut self, key: VirtualKey) -> Result<(), &'static str> {
+        let (shift, control, alt) = (
+            self.has(Modifier::Shift),
+            self.has(Modifier::Control),
+            self.has(Modifier::Alt),
+        );
+        let modifier = Modifier::of(key);
+        if modifier == Some(Modifier::Meta) {
+            return Err("the Windows shell (the Windows key)");
+        }
+        match key.code {
+            // Caps, Num and Scroll Lock change a state every window shares.
+            0x14 | 0x90 | 0x91 => return Err("the keyboard's lock state, shared by every window"),
+            0x2C => return Err("the screenshot tool"),
+            0xAD..=0xB3 => return Err("the system's volume and media controls"),
+            0x09 | 0x1B if alt => return Err("the Windows task switcher"),
+            0x1B if control && shift => return Err("Task Manager"),
+            0x1B if control => return Err("the Start menu"),
+            0x2E if control && alt => return Err("the Windows secure attention sequence"),
+            _ => {}
+        }
+        if !self.held.contains(&key) {
+            self.held.push(key);
+        }
+        match modifier {
+            Some(Modifier::Shift) => {
+                self.lone_shift = self.held.len() == 1;
+                self.modifier_chord |= alt || control;
+            }
+            Some(Modifier::Alt | Modifier::Control) => {
+                self.lone_shift = false;
+                self.shift_taps = 0;
+                self.modifier_chord |= shift;
+            }
+            _ => {
+                self.lone_shift = false;
+                self.shift_taps = 0;
+                self.modifier_chord = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn release(&mut self, key: VirtualKey) -> Result<(), &'static str> {
+        self.held.retain(|k| *k != key);
+        let modifier = Modifier::of(key);
+        if modifier == Some(Modifier::Shift) && self.lone_shift {
+            self.lone_shift = false;
+            self.shift_taps = self.shift_taps.saturating_add(1);
+            if self.shift_taps >= STICKY_KEYS_TAPS {
+                return Err("the accessibility shortcut (Sticky Keys)");
+            }
+            return Ok(());
+        }
+        if matches!(
+            modifier,
+            Some(Modifier::Shift | Modifier::Alt | Modifier::Control)
+        ) && self.modifier_chord
+        {
+            return Err("the Windows input-language switch");
+        }
+        self.lone_shift = false;
+        if self.held.is_empty() {
+            self.modifier_chord = false;
+        }
+        Ok(())
+    }
+}
+
+/// What takes a chord in `edges`, sent after what `watch` has seen, before the foreground window
+/// sees it, if anything does: see the [module docs](self). The sequence is read as the OS reads
+/// it, key by key, with what is held at each press.
+#[must_use]
+pub fn shell_hotkey(watch: &ShortcutWatch, edges: &[KeyEdge]) -> Option<&'static str> {
+    let mut watch = watch.clone();
+    edges.iter().find_map(|edge| watch.observe(*edge).err())
 }

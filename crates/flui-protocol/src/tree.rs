@@ -739,6 +739,10 @@ pub fn outline(roots: &[Node]) -> String {
 /// identifier begins with it.
 pub const FRAMEWORK_IDENTIFIER_PREFIX: &str = "flui:";
 
+/// The most characters of a name, value, description or identifier the normalized outline keeps,
+/// and so the most a reader of an OS accessibility tree needs to read of one.
+pub const OUTLINE_TEXT_LIMIT: usize = 1024;
+
 /// The normalized outline of ADR-0095 §4: what is left of `roots` when what only one backend
 /// reports is taken out, so the in-process tree and an OS accessibility tree of the same app
 /// state project to the same text.
@@ -755,7 +759,8 @@ pub const FRAMEWORK_IDENTIFIER_PREFIX: &str = "flui:";
 /// - Handles, native names (`native_role`, `class_name`), rectangles, focus and actions are left
 ///   out: they differ by backend or by the moment of the read.
 /// - One node per line, indented by depth: `- role "name" [identifier="…"] [value="…"]
-///   [description="…"] [true|false|mixed] [expanded|collapsed] [selected] [disabled]`.
+///   [description="…"] [true|false|mixed] [expanded|collapsed] [selected] [disabled]`, each text
+///   cut to its first [`OUTLINE_TEXT_LIMIT`] characters, where a reader of an OS tree cuts it.
 ///
 /// ```
 /// use flui_protocol::{tree::ElementId, tree::Node, tree::normalized_outline, wire::Role};
@@ -780,18 +785,19 @@ pub fn normalized_outline(roots: &[Node]) -> String {
         if node.role == Role::TitleBar || framework {
             return;
         }
+        let cut = |text: &str| -> String { text.chars().take(OUTLINE_TEXT_LIMIT).collect() };
         let _ = write!(out, "{}- {}", "  ".repeat(depth), node.role.name());
         if let Some(name) = &node.name {
-            let _ = write!(out, " {name:?}");
+            let _ = write!(out, " {:?}", cut(name));
         }
         if let Some(identifier) = identifier {
-            let _ = write!(out, " [identifier={identifier:?}]");
+            let _ = write!(out, " [identifier={:?}]", cut(identifier));
         }
         if let Some(value) = &node.value {
-            let _ = write!(out, " [value={value:?}]");
+            let _ = write!(out, " [value={:?}]", cut(value));
         }
         if let Some(description) = &node.description {
-            let _ = write!(out, " [description={description:?}]");
+            let _ = write!(out, " [description={:?}]", cut(description));
         }
         if let Some(checked) = node.checked {
             let _ = write!(out, " [{checked}]");

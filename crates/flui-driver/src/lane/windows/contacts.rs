@@ -6,8 +6,19 @@
 //! lowest one free, as a digitizer numbers fingers. A pen is one contact that hovers in range
 //! before and after it touches, and leaves range when the lane releases everything. A move of a
 //! touch contact that is not down only places it: touch has no hover.
+//!
+//! The contacts are what the OS holds: each change is handed to an injection and recorded only
+//! once it succeeds, so a press Windows refused is not lifted later and a release it refused is
+//! lifted again by [`Contacts::release_all`].
+//!
+//! The primary contact follows Windows' rule (Microsoft Learn, "Pointer Flags",
+//! `POINTER_FLAG_PRIMARY`): the first contact to come down while no other is down is primary for
+//! its whole life; while it is down no other contact is, and once it lifts no remaining contact
+//! becomes primary: the next primary is the first contact down after every contact has lifted. A
+//! pen is its device's only contact, so it is always primary.
 
 use crate::coordinates::DevicePoint;
+use crate::error::Result;
 use crate::lane::windows::safety::Refusal;
 
 /// The most touch contacts the lane's synthetic touch device carries at once.
@@ -49,6 +60,8 @@ pub struct ContactFrame {
     pub at: DevicePoint,
     /// What it does.
     pub phase: Phase,
+    /// Whether it is the primary contact (`POINTER_FLAG_PRIMARY`).
+    pub primary: bool,
 }
 
 /// One injection: every contact of one device.
@@ -66,16 +79,30 @@ struct Contact {
     pointer: String,
     id: u32,
     at: DevicePoint,
+    primary: bool,
+}
+
+#[derive(Debug, Clone)]
+struct Pen {
+    pointer: String,
+    at: DevicePoint,
     down: bool,
 }
 
-/// The touch and pen contacts the lane holds: see the [module docs](self).
+/// The touch and pen contacts the OS holds for the lane: see the [module docs](self).
 #[derive(Debug, Clone, Default)]
 pub struct Contacts {
     touch: Vec<Contact>,
     /// Touch sources placed by a move and not yet pressed.
     placed: Vec<(String, DevicePoint)>,
-    pen: Option<Contact>,
+    pen: Option<Pen>,
+}
+
+fn unsent(what: &str, pointer: &str) -> crate::error::Error {
+    Refusal::UnsentInput {
+        what: format!("{what} ({pointer})"),
+    }
+    .into_error()
 }
 
 impl Contacts {
@@ -108,140 +135,158 @@ impl Contacts {
         }
     }
 
-    /// Move `pointer` of `kind` to `at`: the frame that injects it, or `None` for a touch contact
-    /// that is not down, which only places it.
-    pub fn move_to(&mut self, pointer: &str, kind: PointerKind, at: DevicePoint) -> Option<Frame> {
+    /// Move `pointer` of `kind` to `at`, injecting the frame through `inject` when the contact is
+    /// down or a pen; a touch contact that is not down is only placed.
+    ///
+    /// # Errors
+    ///
+    /// The injection's failure; the contact keeps its place then.
+    pub fn move_to(
+        &mut self,
+        pointer: &str,
+        kind: PointerKind,
+        at: DevicePoint,
+        inject: impl FnOnce(&Frame) -> Result<()>,
+    ) -> Result<()> {
         match kind {
             PointerKind::Touch => {
-                let Some(contact) = self.touch.iter_mut().find(|c| c.pointer == pointer) else {
+                let Some(index) = self.touch.iter().position(|c| c.pointer == pointer) else {
                     self.placed.retain(|(placed, _)| placed != pointer);
                     self.placed.push((pointer.to_owned(), at));
-                    return None;
+                    return Ok(());
                 };
-                contact.at = at;
-                Some(self.touch_frame(pointer, Phase::Update))
+                let mut next = self.touch.clone();
+                next[index].at = at;
+                inject(&touch_frame(&next, pointer, Phase::Update))?;
+                self.touch = next;
+                Ok(())
             }
             PointerKind::Pen => {
-                let pen = self.pen.get_or_insert_with(|| Contact {
-                    pointer: pointer.to_owned(),
-                    id: 0,
-                    at,
-                    down: false,
-                });
-                pen.at = at;
-                let phase = if pen.down {
-                    Phase::Update
-                } else {
-                    Phase::Hover
-                };
-                Some(Frame {
-                    kind: PointerKind::Pen,
-                    contacts: vec![ContactFrame {
-                        id: pen.id,
-                        at,
-                        phase,
-                    }],
-                })
+                let down = self
+                    .pen
+                    .as_ref()
+                    .is_some_and(|pen| pen.pointer == pointer && pen.down);
+                let phase = if down { Phase::Update } else { Phase::Hover };
+                inject(&pen_frame(at, phase))?;
+                match &mut self.pen {
+                    Some(pen) if pen.pointer == pointer => pen.at = at,
+                    _ => {
+                        self.pen = Some(Pen {
+                            pointer: pointer.to_owned(),
+                            at,
+                            down: false,
+                        });
+                    }
+                }
+                Ok(())
             }
         }
     }
 
-    /// Put `pointer` of `kind` down where it was moved to.
+    /// Put `pointer` of `kind` down where it was moved to, through `inject`.
     ///
     /// # Errors
     ///
-    /// [`Refusal::UnsentInput`] for a contact never moved anywhere, one already down, or an
-    /// eleventh touch contact.
-    pub fn down(&mut self, pointer: &str, kind: PointerKind) -> Result<Frame, Refusal> {
-        let unsent = |what: &str| Refusal::UnsentInput {
-            what: format!("{what} ({pointer})"),
-        };
+    /// `not_supported` for a contact never moved anywhere, one already down, or an eleventh touch
+    /// contact; the injection's failure, after which the contact is not down.
+    pub fn down(
+        &mut self,
+        pointer: &str,
+        kind: PointerKind,
+        inject: impl FnOnce(&Frame) -> Result<()>,
+    ) -> Result<()> {
         match kind {
             PointerKind::Touch => {
                 if self.touch.iter().any(|c| c.pointer == pointer) {
-                    return Err(unsent("a touch press of a contact already down"));
+                    return Err(unsent("a touch press of a contact already down", pointer));
                 }
                 let at = self
                     .placed
                     .iter()
-                    .position(|(placed, _)| placed == pointer)
-                    .map(|index| self.placed.remove(index).1)
-                    .ok_or_else(|| unsent("a touch press with no position"))?;
+                    .find(|(placed, _)| placed == pointer)
+                    .map(|(_, at)| *at)
+                    .ok_or_else(|| unsent("a touch press with no position", pointer))?;
                 let id = (0..MAX_TOUCH_CONTACTS)
                     .find(|id| self.touch.iter().all(|c| c.id != *id))
-                    .ok_or_else(|| unsent("more than ten touch contacts at once"))?;
-                self.touch.push(Contact {
+                    .ok_or_else(|| unsent("more than ten touch contacts at once", pointer))?;
+                let mut next = self.touch.clone();
+                next.push(Contact {
                     pointer: pointer.to_owned(),
                     id,
                     at,
-                    down: true,
+                    primary: self.touch.is_empty(),
                 });
-                Ok(self.touch_frame(pointer, Phase::Down))
+                inject(&touch_frame(&next, pointer, Phase::Down))?;
+                self.touch = next;
+                self.placed.retain(|(placed, _)| placed != pointer);
+                Ok(())
             }
             PointerKind::Pen => {
                 let pen = self
                     .pen
-                    .as_mut()
+                    .as_ref()
                     .filter(|pen| pen.pointer == pointer)
-                    .ok_or_else(|| unsent("a pen press with no position"))?;
+                    .ok_or_else(|| unsent("a pen press with no position", pointer))?;
                 if pen.down {
-                    return Err(unsent("a pen press while the pen is down"));
+                    return Err(unsent("a pen press while the pen is down", pointer));
                 }
-                pen.down = true;
-                Ok(Frame {
-                    kind: PointerKind::Pen,
-                    contacts: vec![ContactFrame {
-                        id: pen.id,
-                        at: pen.at,
-                        phase: Phase::Down,
-                    }],
-                })
+                inject(&pen_frame(pen.at, Phase::Down))?;
+                if let Some(pen) = &mut self.pen {
+                    pen.down = true;
+                }
+                Ok(())
             }
         }
     }
 
-    /// Lift `pointer` of `kind`.
+    /// Lift `pointer` of `kind` through `inject`.
     ///
     /// # Errors
     ///
-    /// [`Refusal::UnsentInput`] for a contact that is not down.
-    pub fn up(&mut self, pointer: &str, kind: PointerKind) -> Result<Frame, Refusal> {
-        let unsent = || Refusal::UnsentInput {
-            what: format!("a release of a contact that is not down ({pointer})"),
-        };
+    /// `not_supported` for a contact that is not down; the injection's failure, after which the
+    /// contact is still down.
+    pub fn up(
+        &mut self,
+        pointer: &str,
+        kind: PointerKind,
+        inject: impl FnOnce(&Frame) -> Result<()>,
+    ) -> Result<()> {
+        let not_down = || unsent("a release of a contact that is not down", pointer);
         match kind {
             PointerKind::Touch => {
                 if !self.touch.iter().any(|c| c.pointer == pointer) {
-                    return Err(unsent());
+                    return Err(not_down());
                 }
-                let frame = self.touch_frame(pointer, Phase::Up);
+                inject(&touch_frame(&self.touch, pointer, Phase::Up))?;
                 self.touch.retain(|c| c.pointer != pointer);
-                Ok(frame)
+                Ok(())
             }
             PointerKind::Pen => {
                 let pen = self
                     .pen
-                    .as_mut()
+                    .as_ref()
                     .filter(|pen| pen.pointer == pointer && pen.down)
-                    .ok_or_else(unsent)?;
-                pen.down = false;
-                Ok(Frame {
-                    kind: PointerKind::Pen,
-                    contacts: vec![ContactFrame {
-                        id: pen.id,
-                        at: pen.at,
-                        phase: Phase::Up,
-                    }],
-                })
+                    .ok_or_else(not_down)?;
+                inject(&pen_frame(pen.at, Phase::Up))?;
+                if let Some(pen) = &mut self.pen {
+                    pen.down = false;
+                }
+                Ok(())
             }
         }
     }
 
-    /// The frames that lift every touch contact and take the pen out of range, and forget them.
-    pub fn release_all(&mut self) -> Vec<Frame> {
-        let mut frames = Vec::new();
+    /// Lift every touch contact the OS holds and take the pen out of range, through `inject`;
+    /// what an injection failed to lift stays held, and placements are forgotten.
+    ///
+    /// # Errors
+    ///
+    /// The first injection that failed, after every frame was tried.
+    pub fn release_all(&mut self, mut inject: impl FnMut(&Frame) -> Result<()>) -> Result<()> {
+        let mut first = None;
+        self.placed.clear();
         if !self.touch.is_empty() {
-            frames.push(Frame {
+            let frame = Frame {
                 kind: PointerKind::Touch,
                 contacts: self
                     .touch
@@ -250,53 +295,71 @@ impl Contacts {
                         id: c.id,
                         at: c.at,
                         phase: Phase::Up,
+                        primary: c.primary,
                     })
                     .collect(),
-            });
-        }
-        if let Some(pen) = self.pen.take() {
-            if pen.down {
-                frames.push(Frame {
-                    kind: PointerKind::Pen,
-                    contacts: vec![ContactFrame {
-                        id: pen.id,
-                        at: pen.at,
-                        phase: Phase::Up,
-                    }],
-                });
+            };
+            match inject(&frame) {
+                Ok(()) => self.touch.clear(),
+                Err(error) => first = Some(error),
             }
-            frames.push(Frame {
-                kind: PointerKind::Pen,
-                contacts: vec![ContactFrame {
-                    id: pen.id,
-                    at: pen.at,
-                    phase: Phase::Leave,
-                }],
-            });
         }
-        self.touch.clear();
-        self.placed.clear();
-        frames
+        if let Some(pen) = self.pen.clone() {
+            let mut lifted = !pen.down;
+            if pen.down {
+                match inject(&pen_frame(pen.at, Phase::Up)) {
+                    Ok(()) => {
+                        lifted = true;
+                        if let Some(pen) = &mut self.pen {
+                            pen.down = false;
+                        }
+                    }
+                    Err(error) => {
+                        first.get_or_insert(error);
+                    }
+                }
+            }
+            if lifted {
+                match inject(&pen_frame(pen.at, Phase::Leave)) {
+                    Ok(()) => self.pen = None,
+                    Err(error) => {
+                        first.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        first.map_or(Ok(()), Err)
     }
+}
 
-    /// A touch frame: `pointer` with `phase`, every other contact down as an update.
-    fn touch_frame(&self, pointer: &str, phase: Phase) -> Frame {
-        Frame {
-            kind: PointerKind::Touch,
-            contacts: self
-                .touch
-                .iter()
-                .filter(|c| c.down)
-                .map(|c| ContactFrame {
-                    id: c.id,
-                    at: c.at,
-                    phase: if c.pointer == pointer {
-                        phase
-                    } else {
-                        Phase::Update
-                    },
-                })
-                .collect(),
-        }
+/// A touch frame of `contacts`: `pointer` with `phase`, every other contact as an update.
+fn touch_frame(contacts: &[Contact], pointer: &str, phase: Phase) -> Frame {
+    Frame {
+        kind: PointerKind::Touch,
+        contacts: contacts
+            .iter()
+            .map(|c| ContactFrame {
+                id: c.id,
+                at: c.at,
+                phase: if c.pointer == pointer {
+                    phase
+                } else {
+                    Phase::Update
+                },
+                primary: c.primary,
+            })
+            .collect(),
+    }
+}
+
+fn pen_frame(at: DevicePoint, phase: Phase) -> Frame {
+    Frame {
+        kind: PointerKind::Pen,
+        contacts: vec![ContactFrame {
+            id: 0,
+            at,
+            phase,
+            primary: true,
+        }],
     }
 }

@@ -8,28 +8,37 @@
 //!   aware and maps with [`screen`]. A scroll of `n` device pixels turns the wheel by `n` wheel
 //!   units (120 a notch), which the app turns into a distance of its own, so a scroll's distance
 //!   is not compared, only that it arrived. An input-method composition goes through the app's own
-//!   input path (`input.inject`): a text service's composition is out of the lane's reach.
-//! - **Safety.** Before every event the rules of [`safety`] are read again: the desktop takes
-//!   input, the window is the app's and in front, the point reaches it, nothing physical is held;
-//!   before a sequence, [`WindowsLane::check`](crate::Lane::check) refuses a key the lane has no
-//!   code for, a device or button it does not send, and a chord the OS shell takes. What the lane
-//!   pressed is released on every exit.
-//! - **The guard** ([`WindowsGuard`]) watches the low-level hooks and the digitizers'
-//!   raw input for input the lane did not send ([`activity`]).
+//!   input path (`input.inject`): a text service's composition is out of the lane's reach. A pause
+//!   is waited out whole, watching the guard as it waits.
+//! - **One path for keys.** A key event and typed text alike become keystrokes planned against
+//!   what the lane holds ([`held`]): the shell-hotkey rule reads those strokes before a sequence,
+//!   and the lane sends them, reading the desktop again before each one.
+//! - **Safety.** Before every event, and every keystroke, the rules of [`safety`] are read again:
+//!   the desktop takes input, the window is the app's and in front, the point reaches it, nothing
+//!   physical is held; before a sequence, `Lane::check` refuses a key the lane has no code for, a
+//!   device or button it does not send, and a chord the OS shell takes. What the lane pressed is
+//!   released on every exit, and what Windows refused to release stays held to be released again.
+//! - **The guard** (`WindowsGuard`, on Windows) watches the low-level hooks and the digitizers' raw
+//!   input for input the lane did not send ([`activity`]); a guard that stopped seeing the lane's
+//!   own input ends the run, since it would no longer see the person's.
 //! - **Reading.** [`roles`] is the role table UI Automation is read against; the lane projects the
-//!   window's UI Automation tree onto the wire's nodes (`Lane::read_tree`).
-//! - **Process.** A launched app runs in a kill-on-close job ([`job`]).
+//!   window's UI Automation tree onto the wire's nodes (`Lane::read_tree`) through the bounded
+//!   [`walk`].
+//! - **Process.** A launched app runs in a kill-on-close job (`job`, on Windows), which it joins
+//!   before its first instruction.
 //!
-//! The pure parts (the key, role, coordinate and activity tables, the safety rules and the
-//! contact frames) build on every host, so their tables run on Linux CI; the parts that call
-//! Windows are `cfg(windows)`.
+//! The pure parts (the key, role, coordinate and activity tables, the safety rules, the held keys
+//! and buttons, the contact frames and the walk) build on every host, so their tables run on Linux
+//! CI; the parts that call Windows are `cfg(windows)`.
 
 pub mod activity;
 pub mod contacts;
+pub mod held;
 pub mod keys;
 pub mod roles;
 pub mod safety;
 pub mod screen;
+pub mod walk;
 
 #[cfg(windows)]
 mod capture;
@@ -43,7 +52,7 @@ mod uia;
 mod win32;
 
 #[cfg(windows)]
-pub use guard::WindowsGuard;
+pub use guard::{STOPPED_WATCHING, WindowsGuard};
 #[cfg(windows)]
 pub use lane::WindowsLane;
 
@@ -59,14 +68,18 @@ pub fn desktop_takes_input() -> bool {
 
 #[cfg(windows)]
 mod lane {
+    use std::time::Instant;
+
     use flui_protocol::input::{PointerButton, PointerDevice};
     use flui_protocol::session::{Isolation, Placement};
     use flui_protocol::tree::Tree;
 
+    use super::activity::{self, ECHO_WITHIN};
     use super::contacts::{Contacts, PointerKind};
     use super::guard::WindowsGuard;
-    use super::keys::{self, KeyName, TextStroke, VirtualKey};
-    use super::safety::{self, Desk, Held, KeyEdge, Landing, Refusal};
+    use super::held::{HeldButtons, HeldKeys, KeyInput, Keystroke};
+    use super::keys::{self, KeyName, VirtualKey};
+    use super::safety::{self, Desk, Held, Landing, Refusal, ShortcutWatch};
     use super::win32::{self, DeviceUnits, Hwnd, PointerDevice as SyntheticDevice};
     use super::{capture, screen, uia};
     use crate::coordinates::{DevicePoint, WindowGeometry};
@@ -81,12 +94,21 @@ mod lane {
         pid: u32,
         window: Option<Hwnd>,
         guard: WindowsGuard,
-        held: Held,
-        /// The keys pressed with a Shift the lane added, by virtual-key code.
-        shifted: Vec<u16>,
+        keys: HeldKeys,
+        buttons: HeldButtons,
+        /// The shell's shortcuts as the keyboard has seen the lane's keys, across its sends.
+        shortcuts: ShortcutWatch,
         contacts: Contacts,
         touch: Option<SyntheticDevice>,
         pen: Option<SyntheticDevice>,
+    }
+
+    /// The synthetic device of `kind` in `slot`, made on first use.
+    fn device(slot: &mut Option<SyntheticDevice>, kind: PointerKind) -> Result<&SyntheticDevice> {
+        if slot.as_ref().is_none_or(|device| device.kind() != kind) {
+            *slot = Some(SyntheticDevice::create(kind)?);
+        }
+        Ok(slot.as_ref().expect("BUG: the device was made just above"))
     }
 
     impl WindowsLane {
@@ -109,8 +131,9 @@ mod lane {
                 pid,
                 window: None,
                 guard: WindowsGuard::new(),
-                held: Held::default(),
-                shifted: Vec::new(),
+                keys: HeldKeys::new(),
+                buttons: HeldButtons::default(),
+                shortcuts: ShortcutWatch::new(),
                 contacts: Contacts::new(),
                 touch: None,
                 pen: None,
@@ -175,18 +198,35 @@ mod lane {
             desk.foreground = front.map(win32::describe);
             desk.buttons = win32::buttons_down();
             desk.modifiers = win32::modifiers_down();
-            desk.other_key = win32::other_key_down(&self.held.keys);
+            desk.other_key = win32::other_key_down(self.keys.held());
             desk
         }
 
-        fn landing(window: Hwnd, point: DevicePoint) -> Landing {
-            let under = win32::root_at(point);
-            Landing::new(point, under == Some(window), under.map(win32::describe))
+        /// What the lane holds, as the safety rules read it.
+        fn held(&self) -> Held {
+            Held {
+                buttons: self.buttons.bits(),
+                keys: self.keys.held().to_vec(),
+            }
         }
 
-        /// Where `event` lands, for a pointer event.
-        fn landing_of(&self, window: Hwnd, event: &OsEvent) -> Option<Landing> {
-            let point = match event {
+        /// The safety rules over the desktop as it is now, for an event landing at `landing`.
+        fn checked(&self, window: Hwnd, landing: Option<DevicePoint>) -> Result<()> {
+            let desk = self.desk(window);
+            let landing = if desk.input_desktop {
+                landing.map(|point| {
+                    let under = win32::root_at(point);
+                    Landing::new(point, under == Some(window), under.map(win32::describe))
+                })
+            } else {
+                None
+            };
+            safety::check_event(&desk, landing.as_ref(), &self.held()).map_err(Refusal::into_error)
+        }
+
+        /// Where a pointer `event` lands.
+        fn landing_of(&self, event: &OsEvent) -> Option<DevicePoint> {
+            match event {
                 OsEvent::PointerMove { to, .. } => Some(*to),
                 OsEvent::Scroll { at, .. } => Some(*at),
                 OsEvent::PointerDown {
@@ -199,82 +239,87 @@ mod lane {
                     None => win32::cursor(),
                 },
                 _ => None,
-            }?;
-            Some(Self::landing(window, point))
+            }
         }
 
-        fn device(&mut self, kind: PointerKind) -> Result<&SyntheticDevice> {
-            let slot = match kind {
-                PointerKind::Touch => &mut self.touch,
-                _ => &mut self.pen,
+        /// Send one `SendInput` event through `send`, then wait for the guard's hooks to see it
+        /// come back: a hook Windows removed sees no more input, the person's included.
+        fn echoed(&self, send: impl FnOnce() -> Result<()>) -> Result<()> {
+            let before = self.guard.echoes();
+            send()?;
+            let Some(before) = before else {
+                return Ok(());
             };
-            if slot.as_ref().is_none_or(|device| device.kind() != kind) {
-                *slot = Some(SyntheticDevice::create(kind)?);
-            }
-            Ok(slot
-                .as_ref()
-                .expect("BUG: the device was created just above"))
-        }
-
-        fn inject(&mut self, frame: Option<super::contacts::Frame>) -> Result<()> {
-            match frame {
-                Some(frame) => {
-                    let kind = frame.kind;
-                    self.device(kind)?.inject(&frame)
+            let deadline = Instant::now() + ECHO_WITHIN;
+            while self.guard.echoes().is_some_and(|seen| seen <= before) {
+                if Instant::now() >= deadline {
+                    return Err(Error::Lane {
+                        lane: safety::LANE.to_owned(),
+                        unavailable: true,
+                        message: format!(
+                            "the user-activity guard's hook did not see the lane's own input \
+                             within {} ms: Windows may have removed it, and it would not see \
+                             yours",
+                            ECHO_WITHIN.as_millis()
+                        ),
+                    });
                 }
-                None => Ok(()),
-            }
-        }
-
-        fn press(&mut self, key: VirtualKey) -> Result<()> {
-            win32::key(key, true)?;
-            if !self.held.keys.contains(&key.code) {
-                self.held.keys.push(key.code);
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Ok(())
         }
 
-        /// Release `key`; one whose release Windows refused stays held, for `release_all` to try
-        /// again.
-        fn release(&mut self, key: VirtualKey) -> Result<()> {
-            win32::key(key, false)?;
-            self.held.keys.retain(|code| *code != key.code);
-            Ok(())
+        /// The key event or text `event` is, its keys resolved on the app's layout.
+        fn key_input(&self, event: &OsEvent) -> Result<Option<KeyInput>> {
+            Ok(match event {
+                OsEvent::KeyDown(name) => {
+                    let (key, shift) = self.key_of(name)?;
+                    Some(KeyInput::Down { key, shift })
+                }
+                OsEvent::KeyUp(name) => Some(KeyInput::Up {
+                    key: self.key_of(name)?.0,
+                }),
+                OsEvent::Text(text) => Some(KeyInput::Text(text.clone())),
+                _ => None,
+            })
         }
 
         /// The key `name` names and whether it needs Shift, the layout of the app's window
         /// deciding a character's key.
         fn key_of(&self, name: &str) -> Result<(VirtualKey, bool)> {
-            let unknown = || Refusal::UnknownKey {
-                name: name.to_owned(),
-            };
-            match keys::resolve(name).ok_or_else(unknown) {
-                Ok(KeyName::Virtual { key, shift }) => Ok((key, shift)),
-                Ok(KeyName::Character(c)) => {
-                    let window = self.target()?;
-                    win32::character_key(c, window).ok_or_else(|| unknown().into_error())
+            let unknown = || {
+                Refusal::UnknownKey {
+                    name: name.to_owned(),
                 }
-                Err(refusal) => Err(refusal.into_error()),
+                .into_error()
+            };
+            match keys::resolve(name).ok_or_else(unknown)? {
+                KeyName::Virtual { key, shift } => Ok((key, shift)),
+                KeyName::Character(c) => {
+                    win32::character_key(c, self.target()?).ok_or_else(unknown)
+                }
             }
         }
 
-        fn key_down(&mut self, name: &str) -> Result<()> {
-            let (key, shift) = self.key_of(name)?;
-            if shift && !self.held.keys.contains(&keys::SHIFT.code) {
-                self.press(keys::SHIFT)?;
-                self.shifted.push(key.code);
+        /// Send the keystrokes of `input` one by one, the desktop read again before each, each
+        /// recorded once Windows took it.
+        fn type_keys(&mut self, window: Hwnd, input: &KeyInput) -> Result<()> {
+            for stroke in self.keys.plan(input) {
+                self.checked(window, None)?;
+                self.echoed(|| match stroke {
+                    Keystroke::Press(key) => win32::key(key, true),
+                    Keystroke::Release(key) => win32::key(key, false),
+                    Keystroke::ShiftFor(_) => win32::key(keys::SHIFT, true),
+                    Keystroke::UnshiftFor(_) => win32::key(keys::SHIFT, false),
+                    Keystroke::Unit(unit) => win32::unicode(unit),
+                })?;
+                self.keys.apply(stroke);
+                for edge in stroke.edges() {
+                    // The sequence passed `check`; the watch only counts what the OS has seen.
+                    let _ = self.shortcuts.observe(edge);
+                }
             }
-            self.press(key)
-        }
-
-        fn key_up(&mut self, name: &str) -> Result<()> {
-            let (key, _) = self.key_of(name)?;
-            let released = self.release(key);
-            if let Some(index) = self.shifted.iter().position(|code| *code == key.code) {
-                self.shifted.remove(index);
-                self.release(keys::SHIFT)?;
-            }
-            released
+            Ok(())
         }
 
         fn mouse_button(&mut self, button: PointerButton, pressed: bool) -> Result<()> {
@@ -292,53 +337,42 @@ mod lane {
                     .into_error());
                 }
             };
-            win32::mouse_button(physical, pressed)?;
-            if pressed {
-                self.held.buttons |= 1 << physical;
-            } else {
-                self.held.buttons &= !(1 << physical);
-            }
+            self.echoed(|| win32::mouse_button(physical, pressed))?;
+            self.buttons.apply(physical, pressed);
             Ok(())
         }
 
-        fn perform(&mut self, event: &OsEvent) -> Result<()> {
+        fn pointer(&mut self, event: &OsEvent) -> Result<()> {
             match event {
                 OsEvent::PointerMove {
                     pointer,
-                    device,
+                    device: kind,
                     to,
-                } => match kind_of(*device) {
-                    Some(kind) => {
-                        let frame = self.contacts.move_to(pointer, kind, *to);
-                        self.inject(frame)
-                    }
-                    None => win32::move_pointer(*to),
+                } => match kind_of(*kind) {
+                    Some(kind) => self.inject_move(pointer, kind, *to),
+                    None => self.echoed(|| win32::move_pointer(*to)),
                 },
                 OsEvent::PointerDown {
                     pointer,
-                    device,
+                    device: kind,
                     button,
-                } => match kind_of(*device) {
+                } => match kind_of(*kind) {
                     Some(kind) => {
-                        let frame = self
-                            .contacts
-                            .down(pointer, kind)
-                            .map_err(Refusal::into_error)?;
-                        self.inject(Some(frame))
+                        let (contacts, slot) = self.contacts_and(kind);
+                        let device = device(slot, kind)?;
+                        contacts.down(pointer, kind, |frame| device.inject(frame))
                     }
                     None => self.mouse_button(*button, true),
                 },
                 OsEvent::PointerUp {
                     pointer,
-                    device,
+                    device: kind,
                     button,
-                } => match kind_of(*device) {
+                } => match kind_of(*kind) {
                     Some(kind) => {
-                        let frame = self
-                            .contacts
-                            .up(pointer, kind)
-                            .map_err(Refusal::into_error)?;
-                        self.inject(Some(frame))
+                        let (contacts, slot) = self.contacts_and(kind);
+                        let device = device(slot, kind)?;
+                        contacts.up(pointer, kind, |frame| device.inject(frame))
                     }
                     None => self.mouse_button(*button, false),
                 },
@@ -347,25 +381,44 @@ mod lane {
                     delta_x,
                     delta_y,
                 } => {
-                    win32::move_pointer(*at)?;
-                    win32::wheel(*delta_x, *delta_y)
-                }
-                OsEvent::KeyDown(name) => self.key_down(name),
-                OsEvent::KeyUp(name) => self.key_up(name),
-                OsEvent::Text(text) => {
-                    for stroke in keys::text_strokes(text) {
-                        match stroke {
-                            TextStroke::Key(key) => {
-                                self.press(key)?;
-                                self.release(key)?;
-                            }
-                            TextStroke::Unit(unit) => win32::unicode(unit)?,
-                        }
-                    }
-                    Ok(())
+                    self.echoed(|| win32::move_pointer(*at))?;
+                    self.echoed(|| win32::wheel(*delta_x, *delta_y))
                 }
                 _ => Ok(()),
             }
+        }
+
+        fn inject_move(&mut self, pointer: &str, kind: PointerKind, to: DevicePoint) -> Result<()> {
+            let (contacts, slot) = self.contacts_and(kind);
+            let device = device(slot, kind)?;
+            contacts.move_to(pointer, kind, to, |frame| device.inject(frame))
+        }
+
+        /// The contacts and the device slot of `kind`, borrowed apart.
+        fn contacts_and(
+            &mut self,
+            kind: PointerKind,
+        ) -> (&mut Contacts, &mut Option<SyntheticDevice>) {
+            let slot = match kind {
+                PointerKind::Touch => &mut self.touch,
+                _ => &mut self.pen,
+            };
+            (&mut self.contacts, slot)
+        }
+
+        /// Wait out `pause` whole, looking at the guard between slices: the person's input ends
+        /// the run before the next event, never a pause cut short.
+        fn pause(&mut self, pause: std::time::Duration) -> Result<()> {
+            for slice in activity::slices(pause) {
+                if let Some(foreign) = self.guard.foreign_input() {
+                    return Err(Error::InterruptedByUser {
+                        lane: safety::LANE.to_owned(),
+                        event: foreign.description,
+                    });
+                }
+                std::thread::sleep(slice);
+            }
+            Ok(())
         }
     }
 
@@ -411,25 +464,9 @@ mod lane {
         }
 
         fn check(&mut self, events: &[OsEvent]) -> Result<()> {
-            let mut edges = Vec::new();
+            let mut inputs = Vec::new();
             for event in events {
                 match event {
-                    OsEvent::KeyDown(name) | OsEvent::KeyUp(name) => {
-                        let (key, shift) = self.key_of(name)?;
-                        let down = matches!(event, OsEvent::KeyDown(_));
-                        match (down, shift) {
-                            (true, true) => {
-                                edges.push(KeyEdge::Down(keys::SHIFT));
-                                edges.push(KeyEdge::Down(key));
-                            }
-                            (true, false) => edges.push(KeyEdge::Down(key)),
-                            (false, true) => {
-                                edges.push(KeyEdge::Up(key));
-                                edges.push(KeyEdge::Up(keys::SHIFT));
-                            }
-                            (false, false) => edges.push(KeyEdge::Up(key)),
-                        }
-                    }
                     OsEvent::PointerDown { device, button, .. }
                     | OsEvent::PointerUp { device, button, .. }
                         if kind_of(*device).is_some() && *button != PointerButton::Primary =>
@@ -439,10 +476,13 @@ mod lane {
                         }
                         .into_error());
                     }
-                    _ => {}
+                    _ => inputs.extend(self.key_input(event)?),
                 }
             }
-            match safety::shell_hotkey(&edges) {
+            // The strokes the lane will send, typed text's Tab and Enter included, read as the OS
+            // reads them after what it has already seen of the lane's keys.
+            let edges = self.keys.sequence_edges(&inputs);
+            match safety::shell_hotkey(&self.shortcuts, &edges) {
                 Some(handler) => Err(Refusal::ShellHotkey { handler }.into_error()),
                 None => Ok(()),
             }
@@ -450,51 +490,32 @@ mod lane {
 
         fn send(&mut self, event: &OsEvent) -> Result<()> {
             if let OsEvent::Pause(duration) = event {
-                std::thread::sleep((*duration).min(win32::LONGEST_PAUSE));
-                return Ok(());
+                return self.pause(*duration);
             }
             let _units = DeviceUnits::enter();
             let window = self.target()?;
-            let desk = self.desk(window);
-            let landing = if desk.input_desktop {
-                self.landing_of(window, event)
-            } else {
-                None
-            };
-            safety::check_event(&desk, landing.as_ref(), &self.held)
-                .map_err(Refusal::into_error)?;
-            self.perform(event)
+            if let Some(input) = self.key_input(event)? {
+                return self.type_keys(window, &input);
+            }
+            self.checked(window, self.landing_of(event))?;
+            self.pointer(event)
         }
 
         fn release_all(&mut self) -> Result<()> {
             let _units = DeviceUnits::enter();
-            let mut first: Option<Error> = None;
-            let mut keep = |result: Result<()>| {
-                if let Err(error) = result {
-                    first.get_or_insert(error);
-                }
-            };
-            for code in std::mem::take(&mut self.held.keys).into_iter().rev() {
-                keep(win32::key(
-                    VirtualKey {
-                        code,
-                        extended: keys::is_extended(code),
-                    },
-                    false,
-                ));
-            }
-            self.shifted.clear();
-            for physical in 0..5_u8 {
-                if self.held.buttons & (1 << physical) != 0 {
-                    keep(win32::mouse_button(physical, false));
-                }
-            }
-            self.held.buttons = 0;
-            for frame in self.contacts.release_all() {
-                let injected = self.inject(Some(frame));
-                keep(injected);
-            }
-            first.map_or(Ok(()), Err)
+            let keys = self.keys.release_all(|key| win32::key(key, false));
+            let buttons = self
+                .buttons
+                .release_all(|button| win32::mouse_button(button, false));
+            let (contacts, touch, pen) = (&mut self.contacts, &mut self.touch, &mut self.pen);
+            let lifted = contacts.release_all(|frame| {
+                let slot = match frame.kind {
+                    PointerKind::Touch => &mut *touch,
+                    _ => &mut *pen,
+                };
+                device(slot, frame.kind)?.inject(frame)
+            });
+            keys.and(buttons).and(lifted)
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {

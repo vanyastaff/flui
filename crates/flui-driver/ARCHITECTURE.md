@@ -56,14 +56,23 @@ app's trees, frames and input, and this crate composes that with what only the O
   (`cannot_verify`); then the window, the foreground, the window under the point and the physical
   input held, each refusal with its wire code (`safety::Refusal`). Every event carries the lane's
   tag, which is how its guard tells the lane's input from anyone else's.
+- **Every key goes through one checked plan.** A key event and typed text become keystrokes
+  planned against what the lane holds (`lane::windows::held::HeldKeys`): the shell-hotkey rule
+  reads those strokes before a sequence, and the lane sends them, reading the desktop again before
+  each. What the lane holds (keys, buttons, contacts) is recorded once Windows took the press and
+  forgotten once it took the release, so a refused release is released again.
+- **A pause is waited out whole,** in slices with the guard looked at between them; a guard whose
+  watcher is gone, or whose hook no longer sees the lane's own input, ends the run, never reads as
+  a quiet desktop.
 - **No trampoline for the guard.** A low-level hook procedure gets no context, and a process-global
   cell would be a trampoline only `flui-app` and `flui-native` may hold (ADR-0097): the procedure
   posts what it saw to its own thread's queue, and the loop that owns the state classifies it.
 - **A lane stays `Send` without a new `unsafe impl`.** OS handles a lane keeps (a window, a
   synthetic pointer device) are kept as integers; a COM object (UI Automation, Direct3D, a
   capture session) and its apartment live for one call on the lane's thread.
-- **A launched Windows app runs in a kill-on-close job.** The job is made before the app starts,
-  and its handle closes with the session or with the driver's process, however that ends.
+- **A launched Windows app runs in a kill-on-close job.** The app starts suspended and joins the
+  job before its first instruction, and the job's handle closes with the session or with the
+  driver's process, however that ends.
 - **The OS tree is read against the app's through one projection.** A lane projects its OS tree
   onto the wire's nodes, and `projection::Projection` compares the two through
   `flui_protocol::tree::normalized_outline` (ADR-0095 §4), the one definition of what only one

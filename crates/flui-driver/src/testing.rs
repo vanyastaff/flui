@@ -208,6 +208,13 @@ impl Lane for ScriptedLane {
     }
 }
 
+/// End an armed Windows guard's watching thread from outside, as a watcher that dies under the
+/// guard does; whether there was one to end.
+#[cfg(windows)]
+pub fn end_guard_watcher(guard: &crate::lane::windows::WindowsGuard) -> bool {
+    guard.end_watcher()
+}
+
 /// How a [`ScriptedAgent`] answers one request.
 #[derive(Debug, Clone)]
 #[non_exhaustive]

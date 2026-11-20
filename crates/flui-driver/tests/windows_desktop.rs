@@ -5,9 +5,10 @@
 //! nextest starts each test on a desktop of its own (`docs/testing.md`, "The Windows test
 //! desktop"): windows, UI Automation, hooks and the compositor work there, and no injected input
 //! does, since only the desktop that takes the user's input takes it. The lane reads that and
-//! sends nothing there: a run through it is `cannot_verify`. On the input desktop
-//! (`FLUI_TEST_VISIBLE_DESKTOP=1`, the nightly Windows runner) the same tests send real input and
-//! must pass; `FLUI_REQUIRE_INPUT_DESKTOP=1` makes a run off it fail instead of reporting
+//! sends nothing there: a run through it is `cannot_verify`. Run by hand on the input desktop
+//! (`FLUI_TEST_VISIBLE_DESKTOP=1`) the same tests send real input and must pass; no automated run
+//! does that yet, and those runs are owed (`crates/flui-native/platform-parity.toml`).
+//! `FLUI_REQUIRE_INPUT_DESKTOP=1` makes a run off the input desktop fail instead of reporting
 //! `CANNOT_VERIFY`.
 
 use std::process::{Command, Stdio};
@@ -15,7 +16,9 @@ use std::time::{Duration, Instant};
 
 use flui_driver::lane::ActivityGuard;
 use flui_driver::lane::windows::job::KillOnCloseJob;
-use flui_driver::lane::windows::{WindowsGuard, WindowsLane, desktop_takes_input};
+use flui_driver::lane::windows::{
+    STOPPED_WATCHING, WindowsGuard, WindowsLane, desktop_takes_input,
+};
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::input::{DeviceClass, InputKind};
 use flui_driver::protocol::wire::Role;
@@ -197,17 +200,71 @@ fn the_guard_watches_and_stops_on_a_desktop_of_its_own() {
     guard.disarm();
 }
 
+/// A guard whose watcher is gone while armed can no longer tell the person's input from the
+/// lane's: it says so, which ends the run as the person's input does, never as unguarded.
+#[test]
+fn a_guard_whose_watcher_died_ends_the_run() {
+    let mut guard = WindowsGuard::new();
+    guard.arm().expect("the guard watches");
+    assert!(
+        flui_driver::testing::end_guard_watcher(&guard),
+        "the watcher was there to end"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let reported = loop {
+        if let Some(foreign) = guard.foreign_input() {
+            break Some(foreign);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        reported.map(|foreign| foreign.description),
+        Some(STOPPED_WATCHING.to_owned())
+    );
+    guard.disarm();
+}
+
+/// A launched process joins its job before its first instruction: it starts suspended, runs
+/// nothing until resumed, and then runs.
+#[test]
+fn a_process_joins_its_job_before_it_runs() {
+    let job = KillOnCloseJob::try_new().expect("a job");
+    let mut command = Command::new("cmd");
+    command
+        .args(["/c", "exit", "7"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut suspended = job
+        .spawn_suspended(&mut command)
+        .expect("started suspended");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        suspended.try_wait().expect("a status").is_none(),
+        "a suspended process has not run"
+    );
+    let mut child = suspended.resume().expect("resumed");
+    let status = child.wait().expect("it ran");
+    assert_eq!(status.code(), Some(7));
+}
+
 #[test]
 fn a_job_ends_its_processes_when_it_closes() {
     let job = KillOnCloseJob::try_new().expect("a job");
-    let mut child = Command::new("cmd")
+    let mut command = Command::new("cmd");
+    command
         .args(["/c", "ping", "-n", "60", "127.0.0.1"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("a child that would run a minute");
-    job.assign(&child).expect("the child joins the job");
+        .stderr(Stdio::null());
+    let mut child = job
+        .spawn_suspended(&mut command)
+        .expect("a child that would run a minute, in the job")
+        .resume()
+        .expect("resumed");
     assert!(child.try_wait().expect("a status").is_none(), "it runs");
     drop(job);
     let deadline = Instant::now() + Duration::from_secs(10);
