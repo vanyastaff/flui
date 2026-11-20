@@ -5,8 +5,8 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [filter_chip_over_text]
-allocations = 178
-bytes = 26467
+allocations = 176
+bytes = 26435
 elements = 15
 reallocations = 7
 render_nodes = 10

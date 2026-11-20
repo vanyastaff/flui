@@ -138,7 +138,7 @@ fn custom_sources_can_construct_removal_authority() {
         source: &Notifier<AnimationStatus>,
         token: ListenerId,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
-    ) -> Option<Rc<flui_foundation::NotificationCallback<AnimationStatus>>> {
+    ) -> Option<flui_foundation::NotificationCallback<AnimationStatus>> {
         source.inherit_failure(recovery);
         source.take_callback(token)
     }
