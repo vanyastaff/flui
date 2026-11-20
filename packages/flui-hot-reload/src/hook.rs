@@ -226,7 +226,8 @@ impl Drop for ArtifactWatcher {
     }
 }
 
-/// Lets an Android scene plugin (`flui run --scene`) draw whole frames.
+/// Lets a scene plugin draw whole frames on every native host (`flui run
+/// --scene` pushes one to an Android device).
 ///
 /// Each frame it checks the plugin library for an update, reloading it on
 /// the owner thread, and, while a plugin is loaded, has it build the frame's

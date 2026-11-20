@@ -787,10 +787,27 @@ public raw-platform capability. Root configurations can retain application-owned
 state while a new session creates fresh `ViewState`. See ADR-0073 for native
 attachment lifetime, panic containment and platform limits.
 
-### Android scene rendering discharges the plugin payload lifetime obligation
+### Every native host lets the scene plugin own a frame, through one seam
 
-The Android host calls unsafe `DevReloadHook::scene_frame` with only its
-synchronous callback that lends the scene to the window's slot (`RasterHost::render_lent`, ADR-0108, ADR-0305 §10). The engine walks
+Every native runner (Windows, macOS, Linux, iOS and Android) asks
+`ScenePlugin::own_frame` (`app/hot_reload.rs`) at the start of each
+presentation's frame, after the owner-inbox drain and before the dirty gate
+(ADR-0391). It answers `None` with no hook installed, while the presentation's
+frames are off, on a window whose executor turns on a raster thread (the
+Wayland desktop host: a lent scene is drawn within the call) and when the hook
+drew nothing or panicked; the widget frame then runs. Its `Some(PluginFrame)`
+is spent by `PluginFrame::finish` in place of the widget frame: the runtime's
+background pump consumes the frame request and serves commands, tasks and due
+input deadlines, then the window reports a panic of the lent render. The
+desktop also counts the frame as presented for its pacing fallback and its
+first reveal. Pinned by
+`a_desktop_window_draws_its_scene_plugins_frame_in_place_of_the_widget_frame`.
+
+### Scene rendering discharges the plugin payload lifetime obligation
+
+The host calls unsafe `DevReloadHook::scene_frame` with only its synchronous
+callback that lends the scene to the window's slot (`RasterSlot::render_lent`,
+`RasterHost::render_lent`, ADR-0108, ADR-0305 §10). The engine walks
 borrowed layers and ignores annotated-region payloads. Cached image bytes
 are concrete `Arc<Vec<u8>>`; glyph face admission copies source bytes into the
 host registry's concrete `Arc<[u8]>`. The callback therefore retains no

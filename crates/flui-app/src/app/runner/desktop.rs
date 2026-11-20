@@ -1,4 +1,5 @@
-use crate::app::hot_reload::WorkerReload;
+use crate::app::hot_reload::{ScenePlugin, WorkerReload};
+use flui_foundation::panic::FirstPanic;
 use flui_native::HostWindow;
 use flui_platform::PlatformWindow;
 use flui_scheduler::AppLifecycleState;
@@ -316,6 +317,7 @@ where
         .frame_driver(super::frame_driver::FrameDriver::Desktop(
             DesktopFrameDriver {
                 raster,
+                scene_plugin: worker_reload.scene_plugin(),
                 worker_reload,
                 deadlines,
                 reveal_window: Rc::downgrade(&window),
@@ -438,10 +440,13 @@ where
 
 pub(super) struct DesktopFrameDriver {
     pub(super) deadlines: Rc<DesktopWakeDeadlines>,
-    raster: RasterSlot,
-    worker_reload: WorkerReload,
-    reveal_window: std::rc::Weak<dyn PlatformWindow>,
-    device_retry: Option<crate::app::application_control::DeviceRetryWatch>,
+    pub(super) raster: RasterSlot,
+    pub(super) worker_reload: WorkerReload,
+    /// The same hook's scene plugin, which may draw this window's frame in
+    /// place of the widget tree (ADR-0391).
+    pub(super) scene_plugin: ScenePlugin,
+    pub(super) reveal_window: std::rc::Weak<dyn PlatformWindow>,
+    pub(super) device_retry: Option<crate::app::application_control::DeviceRetryWatch>,
 }
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.
@@ -586,12 +591,14 @@ impl DesktopFrameDriver {
             .as_mut()
             .is_some_and(crate::app::application_control::DeviceRetryWatch::take_request);
         let worker_reload_frame = &self.worker_reload;
+        let scene_plugin = &self.scene_plugin;
+        let raster = &self.raster;
         let fallback = &self.deadlines.fallback;
         let first_reveal = &self.deadlines.first_reveal;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
         let raster_deadline = self.raster.frame_deadline();
-        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color, plugin_frame) = ui_runtime.enter(|ui_runtime| {
             worker_reload_frame.poll_and_apply(ui_runtime);
 
             let scheduler = ui_runtime.scheduler();
@@ -613,6 +620,15 @@ impl DesktopFrameDriver {
             // state, which asks for the frame the executor rebuilds it in.
             if retry_requested {
                 ui_runtime.retry_render_device();
+            }
+
+            // A live scene plugin owns this window's frame
+            // (`ScenePlugin::own_frame`, the rule every native runner
+            // follows, ADR-0391). It comes before the pacing gate: the
+            // plugin's present stands the fallback down below, so the gate is
+            // left no deferral to consume.
+            if let Some(owned) = scene_plugin.own_frame(ui_runtime, raster) {
+                return (WakeAction::Skip, now, None, Some(owned));
             }
 
             // The device's next rebuild is a dirty source as well as a wake
@@ -643,8 +659,21 @@ impl DesktopFrameDriver {
                 ui_runtime
                     .window_display(presentation)
                     .and_then(|display| display.color),
+                None,
             )
         });
+
+        // The plugin's scene is on the window: a presented frame for its
+        // pacing and its first reveal, and the runtime's background work runs
+        // in place of the widget frame. The reveal runs platform code, so
+        // each is contained and the first panic resumes once both ran.
+        if let Some(owned) = plugin_frame {
+            let mut caught = FirstPanic::new();
+            let _paced = caught.contain(|| self.after_presented(web_time::Instant::now()));
+            let _served = caught.contain(|| owned.finish(ui_runtime, &self.raster));
+            caught.resume();
+            return;
+        }
 
         // A window whose frames are off cannot be seen: its slot is not
         // drawn, and draws in full when frames come back (ADR-0305).

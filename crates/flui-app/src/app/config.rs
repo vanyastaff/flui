@@ -162,11 +162,12 @@ pub struct AppConfig {
     ///
     /// `None` (the default): nothing reloads, and no reload tool is in the
     /// application's graph. `Some`: the desktop and iOS runners attach the
-    /// hook once per event loop and poll it at every UI runtime's frame boundary;
-    /// the Android runner lets its scene plugin own a frame. Every window
-    /// opened with a clone of this configuration shares the one hook, so a
-    /// secondary window reloads only when opened with the application's
-    /// configuration. The web runner drives no hook.
+    /// hook once per event loop and poll it at every UI runtime's frame
+    /// boundary, and every native runner (the desktop, iOS and Android) lets
+    /// its scene plugin own a window's frame (ADR-0391). Every window opened
+    /// with a clone of this configuration shares the one hook, so a secondary
+    /// window reloads only when opened with the application's configuration.
+    /// The web runner drives no hook.
     pub dev_reload: Option<DevReload>,
 
     /// The development agent hooks the application installed with

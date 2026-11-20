@@ -664,10 +664,10 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   Windows and macOS stay inline until a run on each meets the budget; the headless host and
   every run of `flui_app::testing` stay inline. No switch chooses the placement.
 - `render_lent` serves the hot-reload plugin's scene, lent by reference for the length of one
-  call (`ScenePlugin::try_render_frame` in `crates/flui-app/src/app/hot_reload.rs`, through
-  `RasterHost::render_lent` on Android).
+  call (`ScenePlugin::own_frame` in `crates/flui-app/src/app/hot_reload.rs`, through
+  `RasterHost::render_lent` on every native host, ADR-0391).
   It exists only on the executor the owner holds, which a threaded placement does not have, so a
-  lent scene cannot cross a thread.
+  lent scene cannot cross a thread: a window on a raster thread does not ask the plugin for one.
 
 §11. **wgpu is the only rasteriser.** There is no CPU raster backend; the single-rasteriser stance
 of `crates/flui-engine/ARCHITECTURE.md:8-13` stands. A machine without a usable GPU gets

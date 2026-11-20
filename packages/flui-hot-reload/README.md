@@ -35,14 +35,19 @@ The hooks sit behind the `host-hook` feature, which only the host crate's
 development build turns on (an application adds this package itself, ADR-0311
 §6; the host `flui create --hot-reload` writes turns it on through its own
 `reload` feature, which `flui run` builds with); a scene plugin or worker crate
-leaves it off. The desktop and iOS runners drive `WorkerReloadHook`; the
-Android runner drives only `ScenePluginHook`:
+leaves it off. The desktop and iOS runners drive `WorkerReloadHook`; every
+native runner (Windows, macOS, Linux, iOS and Android) asks `ScenePluginHook`
+for each window's frame, and the Android runner drives only that hook
+(ADR-0391):
 
 ```rust,ignore
 use flui_hot_reload::{ScenePluginHook, WorkerReloadHook};
 
 // Desktop host/worker split (`flui create --hot-reload`):
 let config = AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
+
+// A scene plugin on the desktop or iOS:
+let config = AppConfig::new().dev_reload(ScenePluginHook::new(scene_path));
 
 // Android `flui run --scene`:
 let path = ScenePluginHook::device_library_path(app.internal_data_path().as_deref());
