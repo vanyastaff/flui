@@ -910,6 +910,15 @@ graph LR
     a guard that waits for and loses `getevent`, a pause cut short by the person's input);
     on every Unix host `android_host::*` (`HostAdb` against a stand-in program: output, exit code,
     the output bound, the deadline, a missing `adb`, streams cut into records);
+    `android_rules::a_press_of_every_pointer_at_an_edge_of_the_display_is_the_systems`,
+    `every_fallback_that_leaves_the_app_is_refused`, `a_device_is_driven_only_by_its_serial`,
+    `arming_forgets_every_line_that_came_while_the_guard_was_disarmed`,
+    `a_capture_is_read_and_cut_in_the_buffer_it_came_in`, `each_session_dumps_to_a_file_of_its_own`,
+    `a_release_that_fails_after_the_run_did_keeps_the_runs_effect_and_verdict`;
+    `android_edges::a_sequence_that_ends_with_a_key_down_is_refused_naming_it`,
+    `a_key_an_aborted_sequence_left_held_is_forgotten_with_it`,
+    `a_lane_that_started_no_app_stops_nothing_when_it_ends` (a forward `adb` refused is removed by
+    its port); each fails with its fix taken out by hand;
     `policy::a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send` (a device in
     someone's hands without a guard is refused); `policy::input_left_held_outranks_why_the_run_ended`
     (a run that failed or was interrupted and then left input held answers `ReleaseFailed`, on
@@ -927,7 +936,10 @@ graph LR
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
     commands; `uiautomator dump` answering while the app animates; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
-    endpoint forward and the app's exit when the session ends. The old probe's gesture-exclusion,
+    endpoint forward and the app's exit when the session ends; which window is under the point
+    before a press (a heads-up notification, the input method, an overlay), which the lane does
+    not check yet; whether the pen's first report after its device registers reaches the app
+    before `InputReader` opens the device. The old probe's gesture-exclusion,
     preference, haptics, drag-and-drop and soft-keyboard checks need fixtures in the scenario app
     and a way for a scenario to reach the lane's shell; neither exists, so they are not carried yet.
 - **As built:**
@@ -940,8 +952,15 @@ graph LR
     `keycombination` with the modifiers held; a contact is held between commands through
     `motionevent`. What the device holds (the contact, the pen) is recorded once the command
     returned; a timed-out press is held and cancelled at the release (`motionevent CANCEL`), and a
-    key a timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed
-    again.
+    key a timed-out command may have left down is named in `Error::ReleaseFailed` once, never
+    pressed again. A sequence that ends with a key down is refused naming it: that key would never
+    be sent.
+  - The refusals cover every pointer's press at an edge of the display, the mouse included (the
+    three-button bar's Home sits at the bottom), and every key or chord whose fallback in AOSP's
+    `Virtual.kcm` or `Generic.kcm` leaves the app (`safety::FALLBACKS`), with Escape alone, which
+    finishes an Activity that closes on a touch outside.
+  - `send_guarded`'s `ReleaseFailed` keeps the run's own failure as `first`, and `effect` and
+    `is_cannot_verify` answer from it.
   - A pen goes only through the lane's `uinput` device (hover, press with pressure, leave), each
     report confirmed by the command's sync answer; `input stylus` is not used, so a device without
     `uinput` refuses the pen. The design's touchpad `uinput` script is not built: no OS lane sends a
@@ -951,8 +970,12 @@ graph LR
   - A device is someone's: `os_input::admit` admits it only with a guard, as the shared desktop.
   - The capture reads `screencap` raw first and falls back to `-p` for a pixel format it does not
     read raw; `image` decodes the PNG within the capture's bounds, and `roxmltree` reads the dump.
-  - The lane never picks a device: `lane::android::host_device` takes the one
-    `FLUI_ANDROID_SERIAL` names and asks `adb` nothing without it; AVD lifecycle stays with FD26.
+  - The lane never picks a device: `adb::HostAdb` cannot be built without a serial, and
+    `lane::android::host_device` takes the one `FLUI_ANDROID_SERIAL` names and asks `adb` nothing
+    without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
+    and its forward from a loopback port the lane picked is removed by that port.
+  - `uiautomator dump` suspends the accessibility services running while it dumps, so a TalkBack
+    run locates the window before TalkBack is on (`docs/gaps.md`).
   - `lane::android::launch` installs, starts and attaches; `Artifact::Apk` through `Driver::launch`
     answers `not_supported` naming `android_launch`, since a path names no package or activity.
 

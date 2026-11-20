@@ -36,8 +36,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
   without a guard, before the run is announced and again at every `lane::send_guarded`, which
   asks the guard before every event and releases everything on every exit, answering
-  `ReleaseFailed` when the release leaves input held, whatever ended the run (its message names
-  that too); `OsInputLock` holds one session per user's
+  `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
+  failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
+  `Error::is_cannot_verify`); `OsInputLock` holds one session per user's
   desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
   existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
   of mode 0700 in the temporary directory on Unix), `busy` only while another
@@ -75,9 +76,16 @@ app's trees, frames and input, and this crate composes that with what only the O
   the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
   device answered a sync); a timed-out press is held and cancelled at the release, and a key a
   timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
-  It refuses a second contact, the keys and chords that leave the app or change the device, and a
-  contact going down at the display's edge; before each press, key and text the app's window
-  must hold the focus. It never takes a device nobody named (`FLUI_ANDROID_SERIAL`).
+  It refuses a second contact, a sequence that ends with a key down (which would never be sent),
+  the keys and chords that leave the app or change the device (the fallbacks of AOSP's
+  `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
+  the mouse included, going down at the display's edge; before each press, key and text the
+  app's window must hold the focus.
+- **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
+  serial, so every command it runs names one; `lane::android::host_device` builds it from
+  `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
+  its own: a window dump at a path of the session's, and a forward from a loopback port the lane
+  picked, removed by that port at its end whatever `adb` answered.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

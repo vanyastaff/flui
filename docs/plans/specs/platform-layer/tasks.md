@@ -5050,7 +5050,10 @@ GPU-память простаивающего или невидимого окн
   `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
   Android-lane (FD13) вводит через `adb`, но дерево TalkBack не читает: `accesskit_android` не
   ставит `viewIdResourceName`, и идентификатор узла до UI Automator не доходит (`docs/gaps.md`);
-  проекция и нажатие через accessibility на Android ждут этого поля в AccessKit.
+  проекция и нажатие через accessibility на Android ждут этого поля в AccessKit. `uiautomator
+  dump`, которым lane находит окно, на время дампа приостанавливает службы accessibility, и
+  TalkBack тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает
+  `uiautomator` (`docs/gaps.md`).
   Долг: сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
   строка качества parity «Conformance executed with assistive technology on each OS».
 
