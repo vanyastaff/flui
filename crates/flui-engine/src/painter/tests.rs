@@ -799,7 +799,7 @@ fn retained_presentation_preserves_bytes_and_fallbacks() {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 99] = [
+    let cases: [(&str, fn()); 101] = [
         (
             "degenerate rounded path coverage",
             degenerate_rounded_paths_preserve_contour_coverage,
@@ -964,6 +964,14 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
         (
             "ordinary fonts after replacement",
             ordinary_fonts_retain_sources_after_replacement,
+        ),
+        (
+            "plugin fonts after another window's ordinary frame",
+            plugin_fonts_survive_another_windows_ordinary_frame,
+        ),
+        (
+            "ordinary fonts after another window's plugin frame",
+            ordinary_fonts_survive_another_windows_plugin_frame,
         ),
         (
             "dash progress refusal recovery",
@@ -3189,15 +3197,38 @@ fn invalid_texture_target_recovers() {
 }
 
 fn plugin_fonts_survive_format_replacement() {
-    replacement_fonts_keep_source_policy(crate::frame_protocol::FontSource::Plugin, false);
+    window_keeps_its_font_policy(
+        crate::frame_protocol::FontSource::Plugin,
+        FontsDisplaced::FormatChanged,
+    );
 }
 
 fn plugin_fonts_survive_domain_replacement() {
-    replacement_fonts_keep_source_policy(crate::frame_protocol::FontSource::Plugin, true);
+    window_keeps_its_font_policy(
+        crate::frame_protocol::FontSource::Plugin,
+        FontsDisplaced::DomainReplaced,
+    );
 }
 
 fn ordinary_fonts_retain_sources_after_replacement() {
-    replacement_fonts_keep_source_policy(crate::frame_protocol::FontSource::Ordinary, true);
+    window_keeps_its_font_policy(
+        crate::frame_protocol::FontSource::Ordinary,
+        FontsDisplaced::DomainReplaced,
+    );
+}
+
+fn plugin_fonts_survive_another_windows_ordinary_frame() {
+    window_keeps_its_font_policy(
+        crate::frame_protocol::FontSource::Plugin,
+        FontsDisplaced::OtherWindow,
+    );
+}
+
+fn ordinary_fonts_survive_another_windows_plugin_frame() {
+    window_keeps_its_font_policy(
+        crate::frame_protocol::FontSource::Ordinary,
+        FontsDisplaced::OtherWindow,
+    );
 }
 
 fn horizontal_glyph_bearings_do_not_overflow_before_clipping() {
@@ -3283,12 +3314,22 @@ fn extreme_glyph_bearings_do_not_overflow_before_clipping(
     }
 }
 
-/// A painter rebuilt for a new device domain or working format, with the
-/// font source the frame protocol last selected, keeps that source's policy
-/// without a reset: its real atlas, including opaque source retirement.
-fn replacement_fonts_keep_source_policy(
+/// What leaves a window's painter on a font namespace other than the one the
+/// window's last frame drew with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FontsDisplaced {
+    FormatChanged,
+    DomainReplaced,
+    OtherWindow,
+}
+
+/// A window whose painter was rebuilt for a new device domain or working
+/// format, or switched by another window's frame, draws its next frame with
+/// its own namespace's policy, though the frame asks for no reset: its real
+/// atlas, including opaque source retirement.
+fn window_keeps_its_font_policy(
     source: crate::frame_protocol::FontSource,
-    fresh_domain: bool,
+    displaced: FontsDisplaced,
 ) {
     use flui_painting::glyphs::GlyphRasterizer;
     use flui_painting::glyphs::{FaceKey, GlyphKey, SubpixelBin, SwashRasterizer};
@@ -3314,12 +3355,7 @@ fn replacement_fonts_keep_source_policy(
     let (device, queue) = test_device_and_queue();
     let domain = crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
     let mut frame = crate::frame_protocol::FrameProtocol::new();
-    let mut painter = WgpuPainter::with_domain_and_font_source(
-        Arc::clone(&domain),
-        READBACK_FORMAT,
-        (32, 32),
-        crate::frame_protocol::FontSource::Ordinary,
-    );
+    let mut painter = WgpuPainter::with_domain(Arc::clone(&domain), READBACK_FORMAT, (32, 32));
     frame.select_font_source(&mut painter, source, false);
     let face = FaceKey {
         blob_id: 1,
@@ -3332,22 +3368,41 @@ fn replacement_fonts_keep_source_policy(
         .register_face(face, Arc::new(flui_painting::fonts::MATERIAL_ICONS_REGULAR))
         .expect("old namespace face registers");
 
-    let replacement_domain = if fresh_domain {
-        crate::device_domain::DeviceDomain::new(device, queue)
-    } else {
-        domain
-    };
-    let format = if fresh_domain {
-        READBACK_FORMAT
-    } else {
-        wgpu::TextureFormat::Bgra8Unorm
-    };
-    // These are the two replacement inputs: a new domain on recovery, or a
-    // changed format on the existing domain. Both discard the old font namespace.
-    painter =
-        WgpuPainter::with_domain_and_font_source(replacement_domain, format, (32, 32), source);
-    // A warm plugin frame supplies no image reset. Its factory must already
-    // have installed the owning policy; this call must not mask that defect.
+    match displaced {
+        // A new domain on recovery, or a changed format on the existing
+        // domain: `GpuContext` builds the replacement painter, which starts
+        // on the ordinary namespace whatever the window's last frame drew.
+        FontsDisplaced::DomainReplaced | FontsDisplaced::FormatChanged => {
+            let (replacement_domain, format) = if displaced == FontsDisplaced::DomainReplaced {
+                (
+                    crate::device_domain::DeviceDomain::new(device, queue),
+                    READBACK_FORMAT,
+                )
+            } else {
+                (domain, wgpu::TextureFormat::Bgra8Unorm)
+            };
+            painter = WgpuPainter::with_domain(replacement_domain, format, (32, 32));
+        }
+        // Another window of the context draws a scene of the other namespace
+        // through the same painter.
+        FontsDisplaced::OtherWindow => {
+            let other = match source {
+                crate::frame_protocol::FontSource::Ordinary => {
+                    crate::frame_protocol::FontSource::Plugin
+                }
+                crate::frame_protocol::FontSource::Plugin => {
+                    crate::frame_protocol::FontSource::Ordinary
+                }
+            };
+            crate::frame_protocol::FrameProtocol::new().select_font_source(
+                &mut painter,
+                other,
+                false,
+            );
+        }
+    }
+    // The window's next frame names its namespace with no reset, as a warm
+    // plugin frame does: the painter it finds must serve that namespace.
     frame.select_font_source(&mut painter, source, false);
     let reads = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
