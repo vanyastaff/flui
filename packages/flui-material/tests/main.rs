@@ -187,6 +187,10 @@ fn action_component_contracts() {
             ink_well::disabled_ink_well_does_not_fire_a_tap_callback,
         ),
         (
+            "ink_well::a well with its painter attached follows its states without rebuilding",
+            ink_well::a_well_with_its_painter_attached_follows_its_states_without_rebuilding,
+        ),
+        (
             "ink_well::press highlight lasts its delay under reduced motion",
             ink_well::press_highlight_lasts_its_delay_under_reduced_motion,
         ),

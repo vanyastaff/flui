@@ -22,7 +22,7 @@ use flui_sdk::interaction::FocusNode;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    FocusRingStyle, SizedBox, WidgetState, WidgetStates, WidgetStatesController,
+    Center, FocusRingStyle, SizedBox, WidgetState, WidgetStates, WidgetStatesController,
 };
 use flui_testing::replay::MouseScript;
 
@@ -1002,4 +1002,71 @@ pub fn a_control_turned_off_or_on_builds_each_element_once() {
             );
         }
     }
+}
+
+/// A well rebuilds to attach its painter and to let it go, and for nothing
+/// in between: while the painter is attached, hover, press, release and the
+/// press-deactivation timer move the state layer and the wave at paint
+/// (ADR-0322 §3). A well back at rest attaches it again at the next hover.
+///
+/// Red-check: rebuild the well from its states listener on every change, or
+/// from the deactivation timer when it settles.
+pub fn a_well_with_its_painter_attached_follows_its_states_without_rebuilding() {
+    let states = WidgetStatesController::default();
+    let mut laid = lay_out(
+        themed(
+            Center::new().child(
+                InkWell::new()
+                    .on_tap(|_ctx| {})
+                    .states_controller(states.clone())
+                    .child(SizedBox::new(80.0, 40.0)),
+            ),
+        ),
+        tight(200.0, 100.0),
+    );
+    laid.pump();
+    let frame = Duration::from_millis(16);
+
+    laid.dispatch_pointer_hover(100.0, 50.0);
+    let hovered = laid.pump_report(frame).build;
+    assert!(states.value().contains_state(WidgetState::Hovered));
+    assert!(
+        hovered.builds_run >= 1,
+        "the first hover attaches the painter: {hovered:?}"
+    );
+
+    let mut builds = Vec::new();
+    laid.dispatch_pointer_down(100.0, 50.0);
+    builds.push(("press", laid.pump_report(frame).build.builds_run));
+    laid.dispatch_pointer_up(100.0, 50.0);
+    builds.push(("release", laid.pump_report(frame).build.builds_run));
+    laid.dispatch_pointer_hover(5.0, 5.0);
+    builds.push(("leave", laid.pump_report(frame).build.builds_run));
+    assert!(!states.value().contains_state(WidgetState::Hovered));
+    assert_eq!(
+        builds,
+        [("press", 0), ("release", 0), ("leave", 0)],
+        "a state change under an attached painter repaints without a build"
+    );
+
+    // The wave, the press hold and the state layer come to rest, and the
+    // well rebuilds without its painter.
+    let mut rebuilding_frames = 0;
+    for _ in 0..120 {
+        if laid.pump_report(frame).build.builds_run > 0 {
+            rebuilding_frames += 1;
+        }
+    }
+    assert!(!states.value().contains_state(WidgetState::Pressed));
+    assert_eq!(
+        rebuilding_frames, 1,
+        "coming to rest rebuilds the well once, to detach the painter"
+    );
+
+    laid.dispatch_pointer_hover(100.0, 50.0);
+    let again = laid.pump_report(frame).build;
+    assert!(
+        again.builds_run >= 1,
+        "a well at rest attaches its painter again: {again:?}"
+    );
 }

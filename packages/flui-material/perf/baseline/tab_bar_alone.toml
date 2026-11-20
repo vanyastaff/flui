@@ -6,7 +6,7 @@
 
 [tab_bar_alone]
 allocations = 477
-bytes = 62329
+bytes = 62201
 elements = 41
 reallocations = 14
 render_nodes = 24
