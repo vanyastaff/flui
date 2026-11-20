@@ -18,9 +18,9 @@ into.
   child-count mismatches are compile errors).
 - **Pipeline** — `PipelineOwner` drives dirty-tracked layout → paint →
   composite (sync, on-demand phases). The
-  re-entrant layout walk's `unsafe` is confined to one SAFETY-audited arena
-  module (`pipeline/owner/subtree_arena.rs`), machine-checked by a miri CI
-  job.
+  re-entrant layout walk reaches a node only through an entry that holds its
+  in-flight bit; the `unsafe` behind that entry is confined to the node slab
+  (`storage/node_slab.rs`), machine-checked by a miri CI job.
 - **Storage** — slab-backed `RenderTree` keyed by generational `RenderId`s
   (the 0-based slot plus a generation, so a stale id cannot address a reused
   slot).

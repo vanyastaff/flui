@@ -142,7 +142,7 @@ parent can hand a clean boundary new constraints.
                +-------------------------------+-------------------------------------+
                                          Vacant{next_free} | Occupied(RenderNode) | Retired
                   read freely, even       &mut handed out only through
-                  while node is leased    NodeGuard, one per slot
+                  while node is leased    EnteredNode, one per slot
 
  generation: occupant's | next id's while Vacant | MAX once Retired (never minted)
 

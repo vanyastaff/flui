@@ -132,36 +132,6 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
 }
 
 // ============================================================================
-// Review-fix regression — Sliver protocol mismatch surfaces as ProtocolMismatch
-// ============================================================================
-
-// ============================================================================
-// SubtreeArena thread-affinity smoke
-// ============================================================================
-
-// `subtree_borrows_worker_thread_pipeline_succeeds` used to prove that
-// handing a freshly-built, not-yet-shared `PipelineOwner` to a worker
-// thread and running layout there was a legitimate pattern -- as long as
-// `SubtreeArena` was constructed and queried on that same worker thread.
-// It no longer compiles, and that is the point: `PipelineOwner` stores a
-// `RenderTree` holding `Box<dyn RenderObject<P>>`, which is no longer
-// `Send` (a render object may now hold non-`Send` state). Moving a
-// `PipelineOwner` -- by value, not just by shared reference -- to any
-// thread other than the one it was created on is a compile error, full
-// stop; "single-owner, single-thread" is no longer a convention a runtime
-// check (`SubtreeArena::check_thread`, since deleted along with `NodePtr`'s
-// manual `unsafe impl Send/Sync` -- confinement needs no runtime check
-// when the type system already refuses to compile the violation) merely
-// encouraged, it is the only shape the type system allows. There is no
-// successor test: the capability this test exercised (worker-thread
-// layout of an unshared owner) is gone by design, not replaced.
-
-// ============================================================================
-// 4-level deep recursion (verifies pre-acquired subtree borrows
-// scale to deeper trees than the original thread-affinity tests covered)
-// ============================================================================
-
-// ============================================================================
 // Dirty-root order — element-mounted nodes lay out parents first
 // ============================================================================
 

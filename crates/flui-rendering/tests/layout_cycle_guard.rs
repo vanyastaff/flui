@@ -1,10 +1,10 @@
 //! Layout cycle guard tests.
 //!
 //! Verifies [`PipelineOwner::layout_dirty_root`] surfaces
-//! [`RenderError::LayoutCycle`] on cyclic re-entry (via the
-//! `SubtreeArena::by_id` per-slot `AtomicBool` in-flight flag +
-//! RAII `LayoutCycleGuard`), and that the guard's `Drop` runs on
-//! panic so the in-flight flag stays consistent across frames.
+//! [`RenderError::LayoutCycle`] on cyclic re-entry (via the per-slot
+//! in-flight bit the walk's RAII `LayoutFrame` holds), and that the
+//! frame's drop runs on panic so the in-flight flag stays consistent
+//! across frames.
 
 use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};
@@ -26,7 +26,7 @@ use crate::common::fresh_layout_pipeline;
 ///
 /// The contract: when a user widget's `perform_layout` calls
 /// `ctx.layout_child` for an ancestor id that's already in flight up
-/// the recursion stack, the `LayoutCycleGuard::enter` collision
+/// the recursion stack, the `LayoutFrame::enter` collision
 /// returns `Err(RenderError::LayoutCycle(id))`. The layout-child
 /// callback in `layout_subtree_borrowed` collapses that Err to
 /// `Size::ZERO` + sets `descendant_error_flag` for the current call
@@ -90,7 +90,7 @@ pub(crate) fn callback_reentry_poisons_structural_cycle() {
 /// RAII safety: a non-leaf user widget whose
 /// `perform_layout` panics must leave the in-flight flag clean
 /// for the next frame (the panic is caught by `catch_unwind` in the
-/// non-leaf path AND the `LayoutCycleGuard`'s Drop runs on unwind).
+/// non-leaf path AND the `LayoutFrame`'s drop runs on unwind).
 ///
 /// Frame 1: panicking widget → catch_unwind catches the panic →
 /// `layout_dirty_root` returns `Err(RenderError::Poisoned)`. Guard's
