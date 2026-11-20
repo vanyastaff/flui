@@ -470,6 +470,54 @@ fn an_absorbed_first_panic_keeps_the_earlier_failure() {
     assert_eq!(resumed.downcast_ref::<&str>(), Some(&"earlier failure"));
 }
 
+/// ADR-0281 §3: a value a `FirstPanic` retires is destroyed under its
+/// containment. A destructor that panics after a held failure is discarded
+/// and the earlier failure stays held; one that panics when none is held
+/// becomes the held failure.
+fn a_first_panic_retires_a_value_under_containment() {
+    let hostile = Arc::new(AtomicUsize::new(0));
+    let mut first = flui_foundation::panic::FirstPanic::new();
+    first.contain(|| panic!("first failure"));
+    first.retire(HostileDrop(Arc::clone(&hostile)));
+    assert_eq!(
+        hostile.load(Ordering::Relaxed),
+        1,
+        "the retired value was destroyed"
+    );
+    assert_eq!(
+        first
+            .held()
+            .and_then(|payload| payload.downcast_ref::<&str>()),
+        Some(&"first failure"),
+        "the destructor's panic does not replace the earlier failure"
+    );
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| first.resume()))
+        .expect_err("the first failure resumes");
+    assert_eq!(resumed.downcast_ref::<&str>(), Some(&"first failure"));
+
+    let healthy = Arc::new(AtomicUsize::new(0));
+    let mut first = flui_foundation::panic::FirstPanic::new();
+    first.retire(CountedRetirement(Arc::clone(&healthy)));
+    assert_eq!(
+        healthy.load(Ordering::Relaxed),
+        1,
+        "a healthy value is dropped"
+    );
+    assert!(!first.is_held(), "a healthy destructor holds nothing");
+    first.retire(HostileDrop(Arc::clone(&hostile)));
+    assert_eq!(
+        hostile.load(Ordering::Relaxed),
+        2,
+        "the second retired value was destroyed"
+    );
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| first.resume()))
+        .expect_err("the destructor's panic is the held failure");
+    assert_eq!(
+        resumed.downcast_ref::<&str>(),
+        Some(&"opaque ownership retirement")
+    );
+}
+
 /// A `FirstPanic` resumed from a `Drop` that an earlier failure's unwind
 /// runs discards what it holds: the unwinding failure is the first one, and
 /// raising out of that destructor would abort (ADR-0281 §1).
@@ -523,6 +571,10 @@ fn recovery_preserves_provenance_and_owned_failure() {
         (
             "absorbed first panic",
             an_absorbed_first_panic_keeps_the_earlier_failure,
+        ),
+        (
+            "first panic retirement",
+            a_first_panic_retires_a_value_under_containment,
         ),
         (
             "unproved retirement",

@@ -13,7 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_rendering::{RenderUpdateImpact, pipeline::LocalRenderInvalidationHandle};
 
 use crate::subscription::RenderSubscription;
@@ -97,7 +97,7 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
         impact: RenderUpdateImpact,
     ) {
         self.detach();
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let weak: Weak<ProxyAnimation<T>> = Rc::downgrade(&self.proxy);
         let cell = Rc::clone(&self.cell);
         let admit = self.admit;
@@ -109,18 +109,18 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
                     refresh(&proxy, &cell, admit, &listener_handle, impact);
                 }
             }),
-            &mut recovery,
+            &mut failure,
         );
-        recovery.finish();
+        failure.resume();
         refresh(&self.proxy, &self.cell, self.admit, handle, impact);
     }
 
     /// Removes the subscription [`attach`](Self::attach) made.
     pub(crate) fn detach(&mut self) {
         if let Some(subscription) = self.listener.take() {
-            let mut recovery = PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

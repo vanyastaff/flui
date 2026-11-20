@@ -55,7 +55,7 @@ use std::rc::Rc;
 
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_painting::paint::Clip;
 
 use flui_rendering::{
@@ -144,21 +144,21 @@ impl RenderFlow {
     /// (if any) to this node's self-dirty handle, so a notify marks the node
     /// needing paint. Returns the subscription id, or `None` when detached or
     /// the delegate has no repaint listenable.
-    fn subscribe(&self, recovery: &mut PanicRecovery) -> Option<RenderSubscription> {
+    fn subscribe(&self, failure: &mut FirstPanic) -> Option<RenderSubscription> {
         RenderSubscription::subscribe(
             || self.delegate.repaint(),
             self.render_invalidation_handle.as_ref(),
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
-            recovery,
+            failure,
         )
     }
 
     /// Tears down a subscription created by [`Self::subscribe`], removing it
     /// from the *same* delegate's repaint listenable it was added to.
-    fn unsubscribe(subscription: Option<RenderSubscription>, recovery: &mut PanicRecovery) {
+    fn unsubscribe(subscription: Option<RenderSubscription>, failure: &mut FirstPanic) {
         if let Some(subscription) = subscription {
-            subscription.close(recovery);
+            subscription.close(failure);
         }
     }
 
@@ -224,40 +224,37 @@ impl RenderFlow {
         &mut self,
         delegate: Rc<dyn FlowDelegate>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let mut recovery = PanicRecovery::new();
-        let mut impact = None;
-        recovery.run(|| {
+        let mut failure = FirstPanic::new();
+        let impact = failure.contain(|| {
             let type_changed =
                 !crate::dynamic_type::same_concrete_type(&*self.delegate, &*delegate);
-            impact = Some(
-                if type_changed || delegate.should_relayout(&*self.delegate) {
-                    flui_rendering::RenderUpdateImpact::LAYOUT
-                } else if delegate.should_repaint(&*self.delegate) {
-                    flui_rendering::RenderUpdateImpact::PAINT
-                        | flui_rendering::RenderUpdateImpact::SEMANTICS
-                } else {
-                    flui_rendering::RenderUpdateImpact::NONE
-                },
-            );
+            if type_changed || delegate.should_relayout(&*self.delegate) {
+                flui_rendering::RenderUpdateImpact::LAYOUT
+            } else if delegate.should_repaint(&*self.delegate) {
+                flui_rendering::RenderUpdateImpact::PAINT
+                    | flui_rendering::RenderUpdateImpact::SEMANTICS
+            } else {
+                flui_rendering::RenderUpdateImpact::NONE
+            }
         });
         let Some(impact) = impact else {
-            recovery.retire(delegate);
-            recovery.finish();
+            failure.retire(delegate);
+            failure.resume();
             return flui_rendering::RenderUpdateImpact::NONE;
         };
         let outgoing = std::mem::replace(&mut self.delegate, delegate);
         let subscription = self.delegate_listener.take();
-        Self::unsubscribe(subscription, &mut recovery);
-        self.delegate_listener = self.subscribe(&mut recovery);
-        recovery.retire(outgoing);
-        if recovery.has_failure()
+        Self::unsubscribe(subscription, &mut failure);
+        self.delegate_listener = self.subscribe(&mut failure);
+        failure.retire(outgoing);
+        if failure.is_held()
             && let Some(handle) = self.render_invalidation_handle.as_ref()
         {
-            recovery.run(|| {
+            failure.contain(|| {
                 let _ = handle.request_update(impact);
             });
         }
-        recovery.finish();
+        failure.resume();
         impact
     }
 
@@ -479,17 +476,17 @@ impl RenderBox for RenderFlow {
     /// so an animation-driven flow repaints without a widget rebuild.
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.render_invalidation_handle = Some(handle);
-        let mut recovery = PanicRecovery::new();
-        self.delegate_listener = self.subscribe(&mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        self.delegate_listener = self.subscribe(&mut failure);
+        failure.resume();
     }
 
     /// Tears down the repaint subscription and drops the self-dirty handle.
     fn detach(&mut self) {
         self.render_invalidation_handle = None;
         let subscription = self.delegate_listener.take();
-        let mut recovery = PanicRecovery::new();
-        Self::unsubscribe(subscription, &mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        Self::unsubscribe(subscription, &mut failure);
+        failure.resume();
     }
 }
