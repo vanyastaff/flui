@@ -69,7 +69,7 @@ fn host_turn(runtime: &mut UiRuntime, sink: &mut Scripted) {
 fn mounted() -> UiRuntime {
     let runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
     runtime
-        .attach_root_widget_with_size(&ColoredBox::new(Color::rgb(40, 80, 120)), 400.0, 400.0)
+        .attach_root_widget(&ColoredBox::new(Color::rgb(40, 80, 120)))
         .expect("mount a box");
     runtime
 }

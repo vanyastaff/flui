@@ -95,7 +95,6 @@ use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::Point;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::painting::Color;
-use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
@@ -312,7 +311,6 @@ struct Core {
     activation: RefCell<Activation>,
     /// The state layer and ripple, shared with the painter.
     indication: Rc<Indication>,
-    rebuild: RebuildHandle,
     /// This core, for the deactivation timer's listener.
     this: std::rc::Weak<Self>,
 }
@@ -383,18 +381,17 @@ impl Core {
             .build_on(Some(&vsync));
         let controller = owner.controller().clone();
 
-        // Completion changes the pressed state. The next press withdraws and
-        // disposes the pending timer through `cancel_pending_deactivation`.
+        // Completion changes the pressed state, which the states listener
+        // takes to the state layer. The next press withdraws and disposes
+        // the pending timer through `cancel_pending_deactivation`.
         let core = std::rc::Weak::clone(&self.this);
-        let rebuild = self.rebuild.clone();
         // This callback lives until its owned timer is canceled or retired.
         controller
             .listen_status(Rc::new(move |status| {
-                if status == AnimationStatus::ForwardSettled {
-                    if let Some(core) = core.upgrade() {
-                        core.release_press_hold();
-                    }
-                    rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
+                if status == AnimationStatus::ForwardSettled
+                    && let Some(core) = core.upgrade()
+                {
+                    core.release_press_hold();
                 }
             }))
             .forget();
@@ -468,16 +465,17 @@ impl std::fmt::Debug for InkWellState {
 }
 
 impl InkWellState {
-    /// Listen to the current states controller: rebuild, and move the state
-    /// layer, on every change.
+    /// Listen to the current states controller: every change moves the state
+    /// layer, which repaints through the painter's listenable. The well
+    /// rebuilds only to attach the painter, when the change makes an idle
+    /// well visible (ADR-0322 §3).
     fn listen_to_states(&mut self) {
         let indication = Rc::downgrade(&self.core.indication);
-        let rebuild = self.core.rebuild.clone();
         self.states_listener = Some(self.states.listen(Rc::new(move || {
             if let Some(indication) = indication.upgrade() {
                 indication.sync();
+                indication.attach_when_active();
             }
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
 
@@ -510,10 +508,8 @@ impl StatefulView for InkWell {
         // switch and before the listener exists, keeps that write from
         // notifying the well while it builds.
         states.update(WidgetState::Disabled, !self.is_enabled());
-        // Fired later, from the states-controller listener, the
-        // press-deactivation timer and the indication's runs, never from
-        // `build` (ADR-0018).
-        let rebuild = ctx.rebuild_handle();
+        // Fired later, by the indication when its painter attaches or
+        // detaches, never from `build` (ADR-0018).
         let indication = Indication::new(
             states.clone(),
             IndicationStyle {
@@ -524,13 +520,12 @@ impl StatefulView for InkWell {
                 has_clock: false,
                 focus_layer: self.focus_indicator == FocusIndicator::Halo,
             },
-            rebuild.clone(),
+            ctx.rebuild_handle(),
         );
         let core = Rc::new_cyclic(|this| Core {
             on_tap: RefCell::new(self.on_tap.clone()),
             activation: RefCell::default(),
             indication,
-            rebuild,
             this: std::rc::Weak::clone(this),
         });
         InkWellState {
@@ -545,7 +540,7 @@ impl StatefulView for InkWell {
 impl ViewState<InkWell> for InkWellState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // From here on every real change of the states set (hover/focus/
-        // press/disabled) moves the state layer and rebuilds.
+        // press/disabled) moves the state layer.
         self.listen_to_states();
 
         self.read_ambient(ctx);
@@ -632,7 +627,7 @@ impl ViewState<InkWell> for InkWellState {
         drop(replaced);
 
         // An idle well attaches no painter, so it records nothing; a state
-        // change or a press rebuilds it with one.
+        // change or a press that makes it visible rebuilds it with one.
         let indication = &self.core.indication;
         let active = indication.is_active();
         indication.set_painted(active);

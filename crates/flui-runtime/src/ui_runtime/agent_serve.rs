@@ -467,7 +467,7 @@ fn inspect_now(
     target: InspectTarget,
     params: &InspectParams,
 ) -> Answer<InspectReading> {
-    // A render object's `debug_name` or an `inspect` override is app code.
+    // A render object's `kind` or an `inspect` override is app code.
     ctx.if_panics.set(AgentError::InspectPanicked);
     Answer::Now(super::agent_inspect::inspect(ctx.state, target, params))
 }

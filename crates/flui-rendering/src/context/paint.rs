@@ -47,7 +47,7 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{Arity, Optional, Single, Variable};
 use flui_layer::{FollowerLayer, LayerLink};
 use flui_painting::paint::{BlendMode, Clip, ImageFilter, Shader};
@@ -292,13 +292,13 @@ pub struct FragmentRecorder {
     /// safe user code, the counter turns an internal bug into a loud
     /// debug failure instead of a silently malformed layer tree).
     open_scopes: usize,
-    dpr: f64,
+    device_pixel_ratio: DevicePixelRatio,
 }
 
 impl FragmentRecorder {
     /// Creates a recorder for a node positioned at `origin` within the
     /// current layer space.
-    pub fn new(origin: Offset, dpr: f64) -> Self {
+    pub fn new(origin: Offset, device_pixel_ratio: DevicePixelRatio) -> Self {
         Self {
             ops: Vec::new(),
             start: 0,
@@ -308,7 +308,7 @@ impl FragmentRecorder {
             anchor: None,
             anchor_read: Cell::new(false),
             open_scopes: 0,
-            dpr,
+            device_pixel_ratio,
         }
     }
 
@@ -316,14 +316,19 @@ impl FragmentRecorder {
     /// node to node: its operations go after the ones already in the buffer,
     /// and its runs record into the canvas the nodes before it left empty,
     /// so a node's fragment costs no buffer and no canvas of its own.
-    pub(crate) fn begin(&mut self, origin: Offset, dpr: f64, anchor: Option<PaintAnchor>) {
+    pub(crate) fn begin(
+        &mut self,
+        origin: Offset,
+        device_pixel_ratio: DevicePixelRatio,
+        anchor: Option<PaintAnchor>,
+    ) {
         debug_assert!(
             !self.open && self.canvas.is_empty() && self.open_scopes == 0,
             "BUG: a node's recording begins after the last one ended"
         );
         self.start = self.ops.len();
         self.origin = origin;
-        self.dpr = dpr;
+        self.device_pixel_ratio = device_pixel_ratio;
         self.anchor = anchor;
         self.anchor_read.set(false);
     }
@@ -377,8 +382,8 @@ impl FragmentRecorder {
 
     /// Device pixel ratio for this paint pass (text shaping and
     /// hairline snapping need it).
-    pub fn dpr(&self) -> f64 {
-        self.dpr
+    pub fn device_pixel_ratio(&self) -> DevicePixelRatio {
+        self.device_pixel_ratio
     }
 
     /// The open recording canvas, pre-translated to the node origin.
@@ -526,8 +531,8 @@ impl<'a, A: Arity> PaintContext<'a, A> {
     }
 
     /// Device pixel ratio for this paint pass.
-    pub fn dpr(&self) -> f64 {
-        self.rec.dpr()
+    pub fn device_pixel_ratio(&self) -> DevicePixelRatio {
+        self.rec.device_pixel_ratio()
     }
 
     /// This node's position relative to the nearest paint anchor at or above
@@ -839,7 +844,7 @@ mod tests {
     }
 
     fn draws_between_child_markers_split_into_ordered_runs() {
-        let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
+        let mut rec = FragmentRecorder::new(Offset::ZERO, DevicePixelRatio::ONE);
         let mut ctx = PaintContext::<Variable>::new(&mut rec, 2, Size::ZERO);
 
         ctx.canvas().draw_rect(rect(10.0, 10.0), &fill()); // background
@@ -877,7 +882,7 @@ mod tests {
     }
 
     fn origin_is_baked_into_run_transforms() {
-        let mut rec = FragmentRecorder::new(Offset::new(7.0, 3.0), 1.0);
+        let mut rec = FragmentRecorder::new(Offset::new(7.0, 3.0), DevicePixelRatio::ONE);
         let mut ctx = PaintContext::<Leaf>::new(&mut rec, 0, Size::ZERO);
         ctx.canvas().draw_rect(rect(10.0, 10.0), &fill());
 

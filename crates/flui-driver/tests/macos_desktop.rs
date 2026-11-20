@@ -162,7 +162,7 @@ fn every_role_reads_back_as_its_ax_role_through_the_accessibility_api() {
         .to_have_count(1)
         .expect("the roles page shows");
     let mut report = Report::new();
-    report.run_scenario("macos-roles", &mut driver, scenarios::macos_roles);
+    report.run_scenario("macos-roles", &mut driver, scenarios::roles);
     assert_eq!(
         report.verdict(),
         Verdict::Pass,

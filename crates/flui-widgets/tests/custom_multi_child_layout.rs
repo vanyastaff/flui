@@ -16,7 +16,7 @@ struct TwoSlotDelegate {
 }
 
 impl MultiChildLayoutDelegate for TwoSlotDelegate {
-    fn get_size(&self, _constraints: BoxConstraints) -> Size {
+    fn size(&self, _constraints: BoxConstraints) -> Size {
         self.size
     }
 

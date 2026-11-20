@@ -46,12 +46,12 @@ fn shuttles(owner: &PipelineCell) -> usize {
     render_count(owner, "RenderIgnorePointer")
 }
 
-fn render_count(owner: &PipelineCell, suffix: &str) -> usize {
+fn render_count(owner: &PipelineCell, kind: &str) -> usize {
     owner.with(|owner| {
         owner
             .render_tree()
             .iter()
-            .filter(|(_, node)| node.debug_name().ends_with(suffix))
+            .filter(|(_, node)| node.kind() == kind)
             .count()
     })
 }

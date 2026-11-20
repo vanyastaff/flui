@@ -1,15 +1,16 @@
-//! The scenarios that replace the Windows and macOS device checks, written once on `flui-driver`
-//! and run on the headless target here: synthetic input by default, so CI holds them. On Windows
-//! and macOS the same functions run against the same apps in a window, through the OS lane as
-//! their certification variant (`windows_desktop`, `macos_desktop`).
+//! The scenarios that replace the Windows, macOS and X11 device checks, written once on
+//! `flui-driver` and run on the headless target here: synthetic input by default, so CI holds
+//! them. On Windows, macOS and Linux the same functions run against the same apps in a window,
+//! through the OS lane as their certification variant (`windows_desktop`, `macos_desktop`,
+//! `x11_desktop`).
 //!
 //! - [`gallery`]: every control of the gallery reached by its identifier and acted on;
 //! - [`accessibility`]: what the app publishes for its controls, an action through the semantic
 //!   path, and, through an OS lane, the OS tree projected against the app's and an activation
 //!   through the OS accessibility API;
-//! - [`roles`] and [`macos_roles`]: each role of the role table publishes the wire role UI
-//!   Automation folds it to, and through an OS lane reads back as UI Automation's control type or
-//!   the accessibility API's role;
+//! - [`roles`]: each role of the role table publishes the wire role UI Automation folds it to,
+//!   and through an OS lane reads back as the native role of the accessibility API the lane reads
+//!   through (UI Automation's control type, the `AXRole`, the AT-SPI role);
 //! - [`input`] and [`macos_input`]: the pointers, the wheel and keys reach the app, read back from
 //!   its journal, and a press beside a control leaves it alone;
 //! - [`notes`] and [`macos_notes`]: text, a select-all chord and an input-method composition in a
@@ -17,6 +18,8 @@
 //! - [`conformance`]: a button's name, role and identifier, its activation and the effect read
 //!   back: the conformance row a platform's run reports.
 
+use flui_driver::lane::AccessibilityApi;
+use flui_driver::lane::atspi::roles as atspi_roles;
 use flui_driver::lane::macos::roles as ax_roles;
 use flui_driver::lane::windows::roles::{ROLES, expected_wire_role};
 use flui_driver::protocol::geometry::LogicalPoint;
@@ -40,7 +43,7 @@ use crate::apps::{Controls, Notes, Roles, role_label};
 pub const WINDOW: (u32, u32) = (800, 600);
 
 /// Where the element `identifier` takes a pointer, once it is actionable.
-fn point_of(driver: &mut Driver, identifier: &str) -> Result<LogicalPoint> {
+pub fn point_of(driver: &mut Driver, identifier: &str) -> Result<LogicalPoint> {
     let mut window = driver.main_window()?;
     let facts = window
         .locate(Locator::identifier(identifier))
@@ -223,33 +226,47 @@ pub fn accessibility(driver: &mut Driver, report: &mut Report) -> Result<()> {
 /// When the app cannot be reached; each check's failure is recorded in `report`.
 pub fn roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
     published_roles(driver, report)?;
-    if driver.lane_name().is_none() {
+    // The table the OS's roles are read against is the one of the accessibility API the lane
+    // reads through.
+    let Some(api) = driver
+        .lane_capabilities()
+        .and_then(|capabilities| capabilities.accessibility)
+    else {
         return Ok(());
-    }
-    let natives: Vec<(SemanticsRole, String)> = ROLES
-        .iter()
-        .map(|row| (row.role, row.control.name().to_owned()))
-        .collect();
-    os_roles(driver, report, "UI Automation", &natives)
-}
-
-/// `macos_roles`: what the app publishes for each role, as [`roles`] checks it, and, through the
-/// macOS lane, each role read back through the accessibility API as the `AXRole` and `AXSubrole`
-/// of the macOS lane's table.
-///
-/// # Errors
-///
-/// When the app cannot be reached; each check's failure is recorded in `report`.
-pub fn macos_roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
-    published_roles(driver, report)?;
-    if driver.lane_name().is_none() {
-        return Ok(());
-    }
-    let natives: Vec<(SemanticsRole, String)> = ax_roles::ROLES
-        .iter()
-        .map(|row| (row.role, row.native()))
-        .collect();
-    os_roles(driver, report, "the accessibility API", &natives)
+    };
+    let (name, natives): (&str, Vec<(SemanticsRole, String)>) = match api {
+        AccessibilityApi::UiAutomation => (
+            "UI Automation",
+            ROLES
+                .iter()
+                .map(|row| (row.role, row.control.name().to_owned()))
+                .collect::<Vec<(SemanticsRole, String)>>(),
+        ),
+        AccessibilityApi::Ax => (
+            "the accessibility API",
+            ax_roles::ROLES
+                .iter()
+                .map(|row| (row.role, row.native()))
+                .collect::<Vec<(SemanticsRole, String)>>(),
+        ),
+        AccessibilityApi::AtSpi => (
+            "AT-SPI",
+            atspi_roles::ROLES
+                .iter()
+                .map(|row| (row.role, row.atspi.native_name()))
+                .collect::<Vec<(SemanticsRole, String)>>(),
+        ),
+        other => {
+            let _ = report.check("the OS reads each role", || -> Result<()> {
+                Err(Error::Expectation {
+                    expected: "a role table for the lane's accessibility API".to_owned(),
+                    actual: format!("{other:?}"),
+                })
+            });
+            return Ok(());
+        }
+    };
+    os_roles(driver, report, name, &natives)
 }
 
 /// Each role of the role table publishes the wire role the role table folds it to.
@@ -591,7 +608,7 @@ fn the_notes_scenario_passes_on_the_headless_target() {
 #[test]
 fn the_macos_input_scenario_and_the_published_roles_pass_on_the_headless_target() {
     passed(&run("macos-input", headless(|| Controls), macos_input));
-    passed(&run("macos-roles", headless(|| Roles), macos_roles));
+    passed(&run("macos-roles", headless(|| Roles), roles));
 }
 
 /// The macOS variant of the notes scenario, its select-all chord Command and A, on an app that

@@ -1216,7 +1216,7 @@ fails leaves the read parked for the next one, and a reply that panics does not 
 theirs. A window that closes first answers `PresentationGone`.
 Pinned by `src/ui_runtime/tests/agent_inspect.rs` and, for the
 reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`. A render
-object or view that panics while the tree is read (`debug_name`, `inspect`) answers
+object or view that panics while the tree is read (`kind`, `inspect`) answers
 `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does;
 pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
 

@@ -176,7 +176,7 @@ mod registry_reentry {
             owner.with(|owner| owner
                 .render_tree()
                 .iter()
-                .any(|(_, node)| node.debug_name().ends_with("RenderIgnorePointer"))),
+                .any(|(_, node)| node.kind() == "RenderIgnorePointer")),
             "the accepted flight builds its shuttle"
         );
         for _ in 0..16 {
@@ -187,7 +187,7 @@ mod registry_reentry {
             !owner.with(|owner| owner
                 .render_tree()
                 .iter()
-                .any(|(_, node)| node.debug_name().ends_with("RenderIgnorePointer"))),
+                .any(|(_, node)| node.kind() == "RenderIgnorePointer")),
             "landing removes the real shuttle"
         );
         drop(flight);

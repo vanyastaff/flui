@@ -562,8 +562,7 @@ impl RenderNode {
     // `RenderTransform`'s corner-mapped bounds. A future culling consumer
     // must reintroduce it transform-aware (apply `paint_effects().transform`
     // to the committed `RenderState` geometry), not resurrect a half-correct
-    // producer. Root paint bounds for the engine live on
-    // `RenderView::physical_paint_bounds`.
+    // producer.
 
     /// Where the view that made this node was created; unknown for a node no view made.
     #[inline]
@@ -578,10 +577,10 @@ impl RenderNode {
         with_entry!(self, entry => entry.set_creation_site(site));
     }
 
-    /// Stable debug name for the stored render object.
+    /// The stored render object's [`Inspect::kind`](flui_foundation::inspect::Inspect::kind).
     #[inline]
-    pub fn debug_name(&self) -> &'static str {
-        with_entry!(self, entry => entry.render_object().debug_name())
+    pub fn kind(&self) -> &'static str {
+        with_entry!(self, entry => flui_foundation::inspect::Inspect::kind(entry.render_object()))
     }
 
     /// [`std::any::TypeId`] of the parent-data type this node expects

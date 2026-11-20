@@ -115,7 +115,9 @@ mod lane {
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::windows::activity::slices;
-    use crate::lane::{ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// How long the lane waits for the app it brought to the front to be there.
@@ -454,6 +456,7 @@ mod lane {
                 Isolation::Shared,
                 PositionFidelity::Exact,
             )
+            .accessibility(AccessibilityApi::Ax)
         }
 
         fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {

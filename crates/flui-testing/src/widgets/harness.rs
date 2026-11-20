@@ -490,17 +490,17 @@ impl Harness {
             .expect("the ui_runtime installs an owner-local post-frame handle")
     }
 
-    /// The `debug_name()` of every render object currently in the tree.
+    /// The `kind()` of every render object currently in the tree.
     ///
     /// The one structural probe a widget-level test has: it says *which* render
     /// objects a view built, without duplicating the render-layer harness in
     /// `flui-objects`, which is where their behavior is pinned.
-    pub fn render_debug_names(&self) -> Vec<&'static str> {
+    pub fn render_kinds(&self) -> Vec<&'static str> {
         self.pipeline_owner.with(|owner| {
             owner
                 .render_tree()
                 .iter()
-                .map(|(_, node)| node.debug_name())
+                .map(|(_, node)| node.kind())
                 .collect()
         })
     }

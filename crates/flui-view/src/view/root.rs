@@ -5,12 +5,9 @@
 
 use std::any::TypeId;
 
-use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::{
-    pipeline::{PipelineCell, PipelineOwner},
-    storage::RenderNode,
-    view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration},
+    pipeline::PipelineCell, storage::RenderNode, view::RenderView as RenderViewObject,
 };
 
 use crate::{
@@ -32,26 +29,20 @@ use crate::{
 pub struct RootRenderView<V: View + Clone> {
     /// The child widget to render
     child: V,
-    /// Window/view size
-    size: (f64, f64),
 }
 
 impl<V: View + Clone + std::fmt::Debug> std::fmt::Debug for RootRenderView<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RootRenderView")
             .field("child", &self.child)
-            .field("size", &self.size)
             .finish()
     }
 }
 
 impl<V: View + Clone> RootRenderView<V> {
     /// Create a new RootRenderView wrapping the given child.
-    pub fn new(child: V, width: f64, height: f64) -> Self {
-        Self {
-            child,
-            size: (width, height),
-        }
+    pub fn new(child: V) -> Self {
+        Self { child }
     }
 }
 
@@ -184,30 +175,11 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         // build in `BuildOwner::build_scope` is not skipped by its dirty guard.
         self.needs_build = true;
 
-        // Create RenderView and insert into RenderTree. The attach
-        // size is LOGICAL; the DPR comes from the pipeline owner (set
-        // by the runner from the window's scale factor BEFORE attach)
-        // so the configuration and the paint root's scale agree.
-        let (width, height) = self.view.size;
-        let mut render_view = RenderViewObject::new();
-        let logical_size = Size::new(width, height);
-        let dpr = self.pipeline_owner.as_ref().map_or(1.0, |owner| {
-            owner.with(PipelineOwner::device_pixel_ratio).get()
-        });
-        let config = ViewConfiguration::from_size(logical_size, dpr);
-        render_view.set_configuration(config);
-        // Bootstrap the root transform + root layer. Without this,
-        // RenderView::perform_layout asserts on the missing transform
-        // the first time the pipeline lays out the root — the adapter
-        // path never attaches an owner pointer, so the without-owner
-        // variant (idempotent) is the right bootstrap here.
-        render_view.prepare_initial_frame_without_owner();
-
-        // Insert into PipelineOwner's RenderTree via RenderViewAdapter
+        // The root's size is the pipeline owner's root constraints, which the
+        // runtime sets each frame from the window.
         if let Some(pipeline_owner) = &self.pipeline_owner {
             let render_id = pipeline_owner.with_mut(|owner| {
-                let adapter = RenderViewAdapter::new(render_view);
-                let node = RenderNode::new_box(Box::new(adapter));
+                let node = RenderNode::new_box(Box::new(RenderViewObject::new()));
                 let render_id = owner.insert_render_node(node);
                 owner.set_root_id(Some(render_id));
                 render_id
@@ -215,10 +187,8 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
             self.render_id = Some(render_id);
 
             tracing::debug!(
-                "RootRenderElement::mount created RenderView render_id={:?} size={}x{}",
-                render_id,
-                width,
-                height
+                "RootRenderElement::mount created RenderView render_id={:?}",
+                render_id
             );
         }
 
@@ -279,33 +249,6 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
             self.view = v;
             // The child config may have changed — re-reconcile next build.
             self.needs_build = true;
-            // Update configuration if size changed
-            if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
-            {
-                // The render object is updated through the owner
-                // (`update_render_object`) rather than a per-node lock guard.
-                // The owner itself is reached through `PipelineCell::with_mut`'s
-                // closure-scoped checkout (owner-local, not a
-                // shared-infrastructure lock).
-                pipeline_owner.with_mut(|owner| {
-                    // Read the owner's real DPR before re-deriving the config —
-                    // `mount` sources the DPR the same way (`device_pixel_ratio()`).
-                    // A hard-coded `1.0` here would halve the root's scale on
-                    // every update after the first on any HiDPI (2x+) display,
-                    // since the config `mount` built with the real DPR would be
-                    // silently overwritten by this one.
-                    let dpr = owner.device_pixel_ratio().get();
-                    let (width, height) = self.view.size;
-                    let config = ViewConfiguration::from_size(Size::new(width, height), dpr);
-                    // The configuration is installed without an impact: the
-                    // update marks nothing.
-                    let _ =
-                        owner.update_render_object::<RenderViewObject>(render_id, |render_view| {
-                            render_view.set_configuration(config);
-                            flui_rendering::RenderUpdateImpact::NONE
-                        });
-                });
-            }
         }
     }
 
@@ -391,8 +334,7 @@ impl<V: View + Clone + 'static> RenderTreeRootElement for RootRenderElement<V> {
     }
 
     // Attach / detach to the PipelineOwner is handled inline in `mount()`
-    // and `unmount()` above (see lines ~180-220): mount inserts the
-    // `RenderView` via `RenderViewAdapter` into
+    // and `unmount()` above: mount inserts the `RenderView` into
     // the render tree (`PipelineOwner::insert_render_node`), calls `set_root_id`, and
     // requests a visual update; unmount inverts that sequence. The
     // pre-Mythos `attach_to_pipeline_owner` / `detach_from_pipeline_owner`

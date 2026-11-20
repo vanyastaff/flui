@@ -201,7 +201,7 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     /// # Arguments
     ///
     /// * `paint_extent` - The extent along the main axis
-    fn get_absolute_size(&self, constraints: &SliverConstraints, paint_extent: f64) -> Size {
+    fn absolute_size(&self, constraints: &SliverConstraints, paint_extent: f64) -> Size {
         let cross_axis_extent = constraints.cross_axis_extent;
 
         match constraints.axis_direction {
@@ -216,14 +216,14 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
 
     /// Returns the absolute size relative to the origin.
     ///
-    /// Like `get_absolute_size`, but takes into account the growth direction
+    /// Like `absolute_size`, but takes into account the growth direction
     /// and axis direction to position relative to origin. Dimensions along
     /// the effective up/left direction may be negative.
     ///
     /// # Arguments
     ///
     /// * `paint_extent` - The extent along the main axis
-    fn get_absolute_size_relative_to_origin(
+    fn absolute_size_relative_to_origin(
         &self,
         constraints: &SliverConstraints,
         paint_extent: f64,
@@ -366,7 +366,7 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     // The blanket `impl<T: RenderSliver …> RenderObject<SliverProtocol> for T`
     // forwards each of these so overrides here are visible through the
     // `&dyn RenderObject<SliverProtocol>` vtable — which is what the pipeline
-    // compositing-bits walk (`owner/mod.rs:2355`) and `RenderNode::debug_name`
+    // compositing-bits walk (`owner/mod.rs:2355`) and `RenderNode::kind`
     // (`storage/node.rs:592`) both call.
 
     /// Whether this node is a repaint boundary.
@@ -390,15 +390,6 @@ pub trait RenderSliver: flui_foundation::inspect::Inspect + 'static {
     /// [`RenderObject::always_needs_compositing`].
     fn always_needs_compositing(&self) -> bool {
         false
-    }
-
-    /// Short human-readable name for diagnostics and error messages.
-    ///
-    /// Default: [`core::any::type_name::<Self>()`]. Override to return a
-    /// stable short name independent of crate layout. See
-    /// [`RenderObject::debug_name`].
-    fn debug_name(&self) -> &'static str {
-        core::any::type_name::<Self>()
     }
 
     // ========================================================================
@@ -561,7 +552,7 @@ where
         // Same paint bridge shape as the BoxProtocol blanket: wrap the
         // recorder in the typed PaintContext<T::Arity> and call the user's
         // RenderSliver::paint. `size` is the sliver's absolute paint size
-        // (`get_absolute_size(paint_extent)`), resolved by the driver
+        // (`absolute_size(paint_extent)`), resolved by the driver
         // from `RenderState` so paint reads `ctx.size()` (2B field dedup).
         let mut ctx = crate::context::PaintContext::<T::Arity>::new(recorder, child_count, size);
         T::paint(self, &mut ctx);
@@ -688,10 +679,6 @@ where
 
     fn always_needs_compositing(&self) -> bool {
         <T as RenderSliver>::always_needs_compositing(self)
-    }
-
-    fn debug_name(&self) -> &'static str {
-        <T as RenderSliver>::debug_name(self)
     }
 
     fn child_parent_data_type_id(&self) -> std::any::TypeId {

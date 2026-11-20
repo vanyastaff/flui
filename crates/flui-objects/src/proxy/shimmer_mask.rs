@@ -128,8 +128,4 @@ impl RenderBox for RenderShimmerMask {
     fn detach(&mut self) {
         self.sweep.detach();
     }
-
-    fn debug_name(&self) -> &'static str {
-        "RenderShimmerMask"
-    }
 }

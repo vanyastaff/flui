@@ -223,11 +223,11 @@ impl MenuPlacement {
 }
 
 impl SingleChildLayoutDelegate for MenuPlacement {
-    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+    fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
         constraints.loosen()
     }
 
-    fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset {
+    fn position_for_child(&self, size: Size, child_size: Size) -> Offset {
         self.position(size, child_size)
     }
 
