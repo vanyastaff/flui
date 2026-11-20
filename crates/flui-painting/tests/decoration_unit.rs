@@ -462,15 +462,27 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
         "an invisible target leaves the strongest layer published"
     );
 
-    // An infinite opacity is no layer either.
+    // An opacity past one counts as one, as paint draws it, so the shares
+    // still add up to full coverage.
+    let overdriven = BoxDecoration::with_image(DecorationImage {
+        opacity: 2.0,
+        ..DecorationImage::new(red.clone())
+    });
+    let images = painted(&BoxDecoration::lerp(&overdriven, &with(&blue), 0.5));
+    assert!(
+        images.len() == 2 && near(images[0].1, 0.5) && near(images[1].1, 0.5),
+        "an overdriven image takes its share of one: {images:?}"
+    );
+
+    // An infinite opacity counts as one, as paint draws it.
     let boundless = BoxDecoration::with_image(DecorationImage {
         opacity: f64::INFINITY,
         ..DecorationImage::new(red.clone())
     });
     let images = painted(&BoxDecoration::lerp(&boundless, &BoxDecoration::new(), 0.5));
     assert!(
-        images.is_empty(),
-        "an infinite opacity paints no image: {images:?}"
+        images.len() == 1 && near(images[0].1, 0.5),
+        "an infinite opacity fades as an opaque image: {images:?}"
     );
 
     // When b is itself a blend, the published image is b's own, not its last

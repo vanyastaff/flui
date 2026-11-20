@@ -1,4 +1,4 @@
-//! What a [`BoxDecoration::lerp`](super::BoxDecoration::lerp)(super::BoxDecoration::lerp) keeps beside the
+//! What a [`BoxDecoration::lerp`](super::BoxDecoration::lerp) keeps beside the
 //! fields it publishes: the bounded gradient and the blend of image layers.
 
 use super::{DecorationImage, Gradient};
@@ -41,10 +41,11 @@ impl ImageBlend {
             .map(|layer| (layer, 1.0 - t))
             .chain(b.iter().map(|layer| (layer, t)));
         for (layer, share) in shares {
-            let opacity = layer.opacity * share;
-            // A layer with no opacity, or a non-finite one from a non-finite `t`, is
-            // no layer.
-            if !(opacity > 0.0 && opacity.is_finite()) {
+            // Paint clamps an image's opacity to one, so a share is of at most that.
+            let opacity = layer.opacity.clamp(0.0, 1.0) * share;
+            // A layer with no opacity is no layer, nor is a NaN one from a NaN `t`
+            // or opacity: the clamp above leaves no other non-finite value.
+            if opacity.is_nan() || opacity <= 0.0 {
                 continue;
             }
             // The same image on both sides is one layer: its shares add up.
@@ -131,7 +132,9 @@ pub(crate) struct LerpRetained {
     /// The raw gradient the lerp published and the bounded endpoint painted
     /// when the raw one cannot be represented at the box's size.
     pub(crate) gradient: Option<(Gradient, Gradient)>,
-    /// The image layers the lerp blends.
+    /// The image layers the lerp blends. Not serialized: a decoration image's
+    /// pixels are not, so a deserialized decoration paints its `image` alone.
+    #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) image: Option<ImageBlend>,
 }
 

@@ -153,7 +153,8 @@ pub struct BoxDecoration<T: Unit = f64> {
 
     /// An image to paint above the background color or gradient. After a
     /// [`lerp`](Self::lerp) it is the image the lerp published, and the images
-    /// it blends are painted with it until this field is replaced.
+    /// it blends are painted with it while this field holds that value: like
+    /// the retained gradient, the blend is matched to the field by value.
     pub image: Option<DecorationImage>,
 
     /// A border to draw above the background.
@@ -324,8 +325,9 @@ where
     /// opaque crossfade covers the box at every `t`. The same image on both
     /// sides is one layer, a lerped endpoint brings the layers it blends, and
     /// past four layers the weakest go and the kept ones take up their shares.
-    /// `image` holds `b`'s own image as the blend paints it, or, with no image
-    /// on `b`'s side, the strongest layer. The shape is not interpolated and
+    /// `image` holds `b`'s own image as the blend paints it, or, when `b`'s image
+    /// is in no layer (none, invisible or of non-finite opacity), the strongest
+    /// layer. A layer's opacity is clamped to one before its share is taken. The shape is not interpolated and
     /// switches at `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
@@ -461,8 +463,8 @@ where
         self.lerp_retained.as_deref()?.gradient.as_ref()
     }
 
-    /// The image layers a lerp blends, while [`image`](Self::image) is still the
-    /// one the lerp published: once it is replaced the blend is stale.
+    /// The image layers a lerp blends, while [`image`](Self::image) equals the
+    /// value the lerp published; any other value leaves the blend unused.
     fn image_blend(&self) -> Option<&ImageBlend> {
         self.lerp_retained
             .as_deref()?
