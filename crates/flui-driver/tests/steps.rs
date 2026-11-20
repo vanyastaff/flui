@@ -134,6 +134,78 @@ fn every_move_is_a_single_step_followed_by_a_pause() {
             ],
         ),
         (
+            "a jump beside a stroke stays a jump, and the stroke keeps its pace",
+            ActionSequence::new(vec![
+                touch(
+                    "a",
+                    vec![move_to(100.0, 100.0, 0), move_to(150.0, 100.0, 0)],
+                ),
+                touch(
+                    "b",
+                    vec![move_to(200.0, 100.0, 0), move_to(232.0, 100.0, 32)],
+                ),
+            ]),
+            vec![
+                a(200),
+                b(400),
+                OsEvent::Pause(STEP),
+                a(300),
+                b(432),
+                OsEvent::Pause(step),
+                b(464),
+                OsEvent::Pause(step),
+            ],
+        ),
+        (
+            "a short stroke beside a long one is not slowed to the long one's pace",
+            ActionSequence::new(vec![
+                touch(
+                    "a",
+                    vec![move_to(100.0, 100.0, 0), move_to(116.0, 100.0, 16)],
+                ),
+                touch(
+                    "b",
+                    vec![move_to(200.0, 100.0, 0), move_to(248.0, 100.0, 48)],
+                ),
+            ]),
+            vec![
+                a(200),
+                b(400),
+                OsEvent::Pause(STEP),
+                a(232),
+                b(432),
+                OsEvent::Pause(step),
+                b(464),
+                OsEvent::Pause(step),
+                b(496),
+                OsEvent::Pause(step),
+            ],
+        ),
+        (
+            "steps of two strokes due within one millisecond go out together, with no shorter pause",
+            ActionSequence::new(vec![
+                touch(
+                    "a",
+                    vec![move_to(100.0, 100.0, 0), move_to(120.0, 100.0, 20)],
+                ),
+                touch(
+                    "b",
+                    vec![move_to(200.0, 100.0, 0), move_to(221.0, 100.0, 21)],
+                ),
+            ]),
+            vec![
+                a(200),
+                b(400),
+                OsEvent::Pause(STEP),
+                a(220),
+                b(421),
+                OsEvent::Pause(Duration::from_millis(10)),
+                a(240),
+                b(442),
+                OsEvent::Pause(Duration::from_millis(11)),
+            ],
+        ),
+        (
             "a lasting move is split into steps of its duration, each paused",
             pointer(vec![move_to(0.0, 0.0, 0), move_to(30.0, 0.0, 48)]),
             vec![
@@ -181,6 +253,54 @@ fn every_move_is_a_single_step_followed_by_a_pause() {
         let events = os_events(&sequence, &geometry()).expect(row);
         assert_eq!(events, expected, "{row}");
     }
+}
+
+#[test]
+fn no_pause_is_shorter_than_a_millisecond_and_a_tick_keeps_its_length() {
+    let strokes = ActionSequence::new(vec![
+        touch(
+            "a",
+            vec![move_to(0.0, 100.0, 0), move_to(300.0, 100.0, 1000)],
+        ),
+        touch(
+            "b",
+            vec![move_to(0.0, 200.0, 0), move_to(300.0, 200.0, 1001)],
+        ),
+    ]);
+    let events = os_events(&strokes, &geometry()).expect("two strokes");
+    let pauses: Vec<Duration> = events
+        .iter()
+        .filter_map(|event| match event {
+            OsEvent::Pause(pause) => Some(*pause),
+            _ => None,
+        })
+        .collect();
+    let short: Vec<&Duration> = pauses
+        .iter()
+        .filter(|pause| pause.subsec_nanos() % 1_000_000 != 0 || pause.is_zero())
+        .collect();
+    assert!(
+        short.is_empty(),
+        "every pause is whole milliseconds, at least one: {short:?}"
+    );
+    assert_eq!(
+        pauses.iter().sum::<Duration>(),
+        STEP + Duration::from_millis(1001),
+        "the first tick's step, then the longer stroke's length exactly"
+    );
+    let moves = |pointer: &str| {
+        events
+            .iter()
+            .filter(
+                |event| matches!(event, OsEvent::PointerMove { pointer: p, .. } if p == pointer),
+            )
+            .count()
+    };
+    assert_eq!(
+        (moves("a"), moves("b")),
+        (1 + 63, 1 + 63),
+        "no step is lost"
+    );
 }
 
 #[test]

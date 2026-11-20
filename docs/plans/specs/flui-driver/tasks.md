@@ -591,13 +591,23 @@ graph LR
       `an_error_reads_into_its_code_with_the_retry_and_effect_it_carries` (the app's `retry` kept
       for every code).
     - `steps::every_move_is_a_single_step_followed_by_a_pause` (two contacts of one tick step
-      together), `a_very_long_move_takes_longer_steps_not_more_of_them`,
+      together, each at its own pace, steps within one millisecond merged),
+      `no_pause_is_shorter_than_a_millisecond_and_a_tick_keeps_its_length`,
+      `a_very_long_move_takes_longer_steps_not_more_of_them`,
       `input_no_lane_sends_is_refused_before_any_event`.
     - `socket::a_driver_that_goes_closes_its_connection_on_every_exit` (dropped, closed, and a
       panic unwinding past it: the app sees the connection close),
       `a_connection_the_app_closed_between_calls_answers_gone_at_once`,
       `actionability_is_waited_for_by_the_clock_on_a_window_that_draws_nothing`,
-      `os_input_whose_effect_cannot_be_read_back_may_have_run`, `a_lock_file_another_user_owns_is_busy`,
+      `os_input_whose_effect_cannot_be_read_back_may_have_run`,
+      `the_desktop_lock_is_busy_only_while_another_session_holds_it`,
+      `a_lock_file_this_user_may_only_read_still_takes_the_lock`,
+      `this_users_lock_is_in_a_directory_only_this_user_can_write`,
+      `a_caller_that_stops_reading_stops_the_connection_reading_and_loses_nothing`,
+      `lines_the_app_sent_before_it_closed_still_reach_the_caller_after_a_failed_send`,
+      `lines_waiting_for_the_caller_still_reach_it_when_a_write_to_the_app_fails`,
+      `an_unfinished_last_line_is_named_when_the_app_closes`,
+      `an_element_that_turns_actionable_on_the_last_frame_is_acted_on`,
       `an_app_that_closes_mid_call_answers_its_process_gone_then_and_after`,
       `an_app_that_exits_before_its_agent_answers_reports_its_exit_code` (exit code 3, without
       waiting out the connect timeout), `an_artifact_without_its_lane_is_named_as_the_capability_missing`,
@@ -605,11 +615,14 @@ graph LR
       `a_driver_moves_to_the_thread_that_runs_it`.
   - Taking out, one at a time, the agent's `window.placement`, the headless frame containment, the
     guard's per-event check, the isolation rule (and its check at every send), the desktop lock
-    (and its answer to another user's file), the never-the-OS fallback, the clamp refusal, the
-    empty-report and empty-scenario rules, the release frame after the driver goes, the liveness
-    check of a launched app, the kept `retry`, the interleaved steps, the effect after unread OS
-    input and the clock-bound actionability wait each fails a test above; the previous socket
-    transport fails the two connection tests.
+    (its `busy` only for a lock another handle holds, and its directory only the user can write),
+    the never-the-OS fallback, the clamp refusal, the empty-report and empty-scenario rules, the
+    release frame after the driver goes, the liveness check of a launched app, the kept `retry`,
+    the interleaved steps (each move's own pace, and steps within one millisecond merged), the
+    effect after unread OS input, the clock-bound actionability wait (and the facts read after its
+    last frame), the connection's bound on lines waiting for the caller, the lines kept when a send
+    finds the thread ended or a write fails, and the unfinished line named at the end each fails a
+    test above; the previous socket transport fails the two connection tests.
   - As built:
     - The isolation mode is `flui_protocol::session::Isolation`, which main already carries.
     - The agent answers `window.placement` now (size and scale from the root media query,
@@ -627,8 +640,13 @@ graph LR
     - The kill-mid-call test of FD7 (a FLUI app launched on a Linux CI host and killed) still
       waits for a CI job that opens a window; the driver's `gone` of the process with its exit
       code is held by the socket tests above.
-    - `OsInputLock` holds one OS-input session per user's desktop (a file lock in the user's
-      temporary directory); a lock file another user owns is `busy`.
+    - `OsInputLock` holds one OS-input session per user's desktop: a file lock in a directory only
+      that user can write (`$XDG_RUNTIME_DIR` where it names an existing directory, or else a
+      `flui-driver-<uid>` of mode 0700 in the temporary directory that
+      `OsInputLock::acquire_in_private_dir` makes, on Unix; the user's own
+      temporary directory on Windows), `busy` only while another handle holds it; a lock file this
+      user may only read is opened for reading, and one it cannot open is `Error::Io`, never
+      retried.
     - Left for later tasks, which take them: `Driver::call_value` (by wire name) is the entry
       `flui drive call` and the MCP adapter use (FD17); `Report::set_trace` is filled by the trace
       writer (FD10); monitor-aware mapping for mixed-DPI desktops comes with the first lane that

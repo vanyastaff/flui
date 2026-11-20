@@ -55,7 +55,8 @@ pub struct Driver {
     target_isolation: Isolation,
     policy: InputPolicy,
     lane: Option<LaneWorker>,
-    os_lock_path: PathBuf,
+    /// The OS-input lock's file, when not this user's default.
+    os_lock_path: Option<PathBuf>,
     /// Held from the session's first OS event to its end.
     os_lock: Option<OsInputLock>,
     scenario: Option<Scenario>,
@@ -171,7 +172,7 @@ impl Driver {
             target_isolation,
             policy: InputPolicy::default(),
             lane: None,
-            os_lock_path: OsInputLock::default_path(),
+            os_lock_path: None,
             os_lock: None,
             scenario: None,
             announced: false,
@@ -218,7 +219,7 @@ impl Driver {
     /// Take the desktop's OS-input lock at `path` instead of this user's default.
     #[must_use]
     pub fn with_os_input_lock(mut self, path: impl Into<PathBuf>) -> Self {
-        self.os_lock_path = path.into();
+        self.os_lock_path = Some(path.into());
         self
     }
 
@@ -524,7 +525,10 @@ impl Driver {
     /// Take the desktop's OS-input lock, once per session.
     pub(crate) fn lock_os_input(&mut self) -> Result<()> {
         if self.os_lock.is_none() {
-            self.os_lock = Some(OsInputLock::acquire(&self.os_lock_path)?);
+            self.os_lock = Some(match &self.os_lock_path {
+                Some(path) => OsInputLock::acquire(path)?,
+                None => OsInputLock::acquire_default()?,
+            });
         }
         Ok(())
     }
