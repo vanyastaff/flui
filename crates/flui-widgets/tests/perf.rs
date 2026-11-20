@@ -3,19 +3,18 @@
 //! Each scenario mounts the same small app — a fixed-height label over a lazy
 //! 10 000-row list — applies one change, pumps, and asserts bounds on the
 //! frame's [`FrameReport`]. The bounds are the budget and hold on every host;
-//! the exact values are what `cargo xtask perf` compares against the checked-in
-//! baseline (one file per scenario in `crates/flui-widgets/perf/baseline/`),
-//! and it collects them
-//! through `FLUI_PERF_OUT`: when that variable names a directory, each scenario
-//! writes `<dir>/<scenario>.toml` **before** asserting, so a broken budget still
-//! reports its numbers.
+//! the exact values are held to the checked-in baseline (one file per scenario
+//! in `crates/flui-widgets/perf/baseline/`) when `FLUI_PERF_BASELINE` is
+//! `check`, and rewritten from the run when it is `bless` ([`baseline`]). Each
+//! scenario holds its counts **before** asserting its budget, so a broken
+//! budget under `check` still reports every counter.
 //!
 //! Every record also carries what the scenario's measured frames asked of the
 //! heap on the test thread, counted by this target's `#[global_allocator]`:
 //! `allocations` (a `realloc` included), `reallocations` (the buffers among
 //! them that outgrew their capacity) and `allocated_bytes`. Like the frame
 //! counters they are a function of the tree and the change, not of the host;
-//! they only have to stay at or under the baseline, which `--bless` ratchets.
+//! they only have to stay at or under the baseline, which a bless ratchets.
 //! Nothing else may move them, neither a seed drawn per run nor what an
 //! earlier test left in the process. `measured_frames_ask_the_heap_the_same_on_every_run`
 //! checks that over the list scrolls, the frames that build and drop the most;
@@ -23,9 +22,9 @@
 //!
 //! A `perf_scaling_` scenario runs the same change on a small and a large tree
 //! and asserts that the two cost the same: equal allocations here, and equal
-//! instruction counts within a tolerance under `cargo xtask perf --instructions`,
-//! which runs each size alone under callgrind (`FLUI_PERF_SIZE`) and counts
-//! only what runs inside [`perf_measured`]. A frame whose cost grows with nodes
+//! instruction counts within a tolerance in CI's `perf-gates` job, which runs
+//! each size alone under callgrind (`FLUI_PERF_SIZE`) and counts only what
+//! runs inside [`perf_measured`]. A frame whose cost grows with nodes
 //! it does not touch fails there, though no counter of its work moves.
 //!
 //! The plateau tests at the end hold the heap level instead of a frame's cost: an
@@ -40,7 +39,6 @@
 //! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
 //! widening every change's CI scope.
 
-use std::fmt::Write as _;
 use std::time::Duration;
 
 use flui_layer::TextureRegistration;
@@ -59,6 +57,9 @@ use flui_widgets::{
     SliverList, Text, Texture, Viewport,
 };
 
+#[path = "perf/baseline.rs"]
+mod baseline;
+
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
@@ -74,9 +75,10 @@ fn heap_counts(heap: HeapCounts) -> [(&'static str, u64); 3] {
 /// Runs a scenario's measured frames and returns their result with what
 /// they asked of the heap.
 ///
-/// The one window `cargo xtask perf --instructions` counts: it collects
+/// The one window `perf-gates` counts under callgrind: it collects
 /// instructions only while this function runs (callgrind's `--toggle-collect`
-/// on its name), so it must stay out of line and keep its name.
+/// on its name, in `.github/workflows/ci.yml`), so it must stay out of line
+/// and keep its name.
 #[inline(never)]
 fn perf_measured<R>(frames: impl FnOnce() -> R) -> (R, HeapCounts) {
     let before = HeapCounts::now();
@@ -208,27 +210,13 @@ fn mount() -> Mounted {
     Mounted { laid, writer }
 }
 
-/// Writes `report` and what the measured frames asked of the heap for `xtask perf`
-/// when `FLUI_PERF_OUT` is set. Called before a scenario asserts, so a failing
-/// budget still reports its numbers.
+/// Holds `report` and what the measured frames asked of the heap to the
+/// scenario's baseline file ([`baseline::hold`]). Called before a scenario
+/// asserts, so a failing budget still reports its numbers.
 fn record(scenario: &str, report: &FrameReport, heap: HeapCounts) {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
     counts.extend(heap_counts(heap));
-    record_counts(scenario, &counts);
-}
-
-/// Writes `counts` as `<FLUI_PERF_OUT>/<scenario>.toml` when that variable is set.
-fn record_counts(scenario: &str, counts: &[(&str, u64)]) {
-    let Some(dir) = std::env::var_os("FLUI_PERF_OUT") else {
-        return;
-    };
-    let dir = std::path::PathBuf::from(dir);
-    std::fs::create_dir_all(&dir).expect("create FLUI_PERF_OUT");
-    let mut body = format!("[{scenario}]\n");
-    for (name, value) in counts {
-        writeln!(body, "{name} = {value}").expect("writing to a String cannot fail");
-    }
-    std::fs::write(dir.join(format!("{scenario}.toml")), body).expect("write perf record");
+    baseline::hold(scenario, &counts);
 }
 
 fn counter(report: &FrameReport, name: &str) -> u64 {
@@ -363,7 +351,7 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     }
     let (first, first_built) = scroll_to(WARM_SCROLLS + 1);
     let (next, next_built) = scroll_to(WARM_SCROLLS + 2);
-    record_counts("list_10k_scroll_warm", &heap_counts(first));
+    baseline::hold("list_10k_scroll_warm", &heap_counts(first));
 
     assert!(
         first_built >= visible_rows && next_built >= visible_rows,
@@ -553,7 +541,7 @@ fn label_change_heap(buttons: usize) -> HeapCounts {
 
 /// A label change costs the same over 500 rows as over 5 000: equal heap
 /// counts here, and equal instructions within a tolerance under
-/// `cargo xtask perf --instructions`. A frame that clears a table the mount
+/// `perf-gates`' callgrind step. A frame that clears a table the mount
 /// grew, or walks the tree to collect something only a few nodes report,
 /// fails the second while every counter of its work stays put.
 #[test]
@@ -565,7 +553,7 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
             continue;
         }
         let heap = label_change_heap(buttons);
-        record_counts(&format!("label_change_{name}"), &heap_counts(heap));
+        baseline::hold(&format!("label_change_{name}"), &heap_counts(heap));
         measured.push((buttons, heap));
     }
     assert!(
@@ -597,7 +585,7 @@ fn perf_raw_button_over_text() {
         ("text_reallocations", cost.bare.reallocations),
         ("text_bytes", cost.bare.live_bytes),
     ]);
-    record_counts("raw_button_over_text", &counts);
+    baseline::hold("raw_button_over_text", &counts);
 
     // One element for the button and one for its behaviours; one render
     // object. The allocations and bytes are held by the baseline, which
@@ -772,7 +760,7 @@ fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
             let _ = host.pump(FRAME);
         }
     });
-    record_counts("idle_frame_retained_scene", &heap_counts(allocations));
+    baseline::hold("idle_frame_retained_scene", &heap_counts(allocations));
     assert_eq!(
         allocations,
         HeapCounts::default(),
@@ -1111,7 +1099,7 @@ fn perf_semantics_action_over_text() {
             .child(Text::new(format!("Row {row}")))
             .boxed()
     });
-    record_counts("semantics_action_over_text", &cost.counts());
+    baseline::hold("semantics_action_over_text", &cost.counts());
 }
 
 /// A press counter, driven the way an application's test drives it.

@@ -96,7 +96,7 @@ stock lint can state to that lint, and puts each exception where the compiler se
   `feature-matrix`, `miri`, the `wasm-*` steps), and the `checks` bundle.
 - **Generators and importers whose output is committed** (`key-vocabulary`, `icon-import`,
   `font-assets`, `changelog`, …).
-- **Tools for working in the repository** (`worktree`, `doctor`, `perf`).
+- **Tools for working in the repository** (`worktree`, `doctor`).
 - **Gates admitted under §3.**
 
 A new step that is one tool call with fixed arguments is written in the workflow and in

@@ -1,13 +1,16 @@
-# Written by `cargo xtask perf --size --bless`; Linux x86_64.
-# Package counts of the facade's default graph and the release sizes of a
-# `flui create` counter (host and wasm32) and of a `flui create --hot-reload` host.
+# Held by CI on Linux x86_64. `crates_<target>`: the distinct packages of the
+# facade's default graph on that target, which the `deps` job fails on when
+# they rise. `*_bytes`: the release sizes of a `flui create` counter (host and
+# wasm32) and of a `flui create --hot-reload` host, which the `size` job fails
+# on past 2% over. Each line is edited by hand from that job's log, with the
+# reason in the pull request.
 
 [size]
 counter_release_bytes = 22547760
 counter_wasm_bytes = 14517927
 crates_android = 220
-crates_linux = 272
-crates_macos = 204
-crates_wasm32 = 177
-crates_windows = 206
+crates_linux = 271
+crates_macos = 203
+crates_wasm32 = 176
+crates_windows = 205
 hot_reload_host_release_bytes = 22703792

@@ -650,7 +650,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
   - **Paint and layers** (about a third): fragment op vectors, display-list commands, and the `LayerTree` and `FragmentComposer` rebuilt every frame. This lane is the retained scene, `docs/plans/specs/render-scaling/` (RS4, RS8).
   - **View rebuild** (about a sixth): each rebuilt level hands its child to the reconciler in `ChildViews`, a child it holds as a `BoxedView` shared and unboxed, and the element clones the offered view without boxing it. What is left is the clone itself: an element copies the view it is offered, and a view that owns heap data (a `Text`'s string) allocates in that copy. This lane is `flui-view`'s element update path.
   - **The root's environment:** each rebuild of `MediaQueryRoot` copies the whole `MediaQueryData` (224 bytes) into a fresh `MediaQuery` view, one `Rc` (`crates/flui-runtime/src/media_query_root.rs`), so every field the data gains costs each full reassemble its size (`full_reassemble.toml`); the root could hand on a shared snapshot that a preference change replaces.
-- The entry closes when a label change allocates at most 40 times a frame, held by those rows. It is measured after the retained scene lands; until then `cargo xtask perf --bless` on `main` ratchets each row a change lowered.
+- The entry closes when a label change allocates at most 40 times a frame, held by those rows. It is measured after the retained scene lands; until then a bless on `main` (`FLUI_PERF_BASELINE=bless`) ratchets each row a change lowered.
 
 ### Accepted ADR sections not built yet
 

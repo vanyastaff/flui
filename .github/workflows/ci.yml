@@ -948,13 +948,14 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # perf-gates — what a frame costs, by counts that do not depend on the
-  # runner: `cargo xtask perf --check` compares every perf scenario's frame
-  # counters and allocations with crates/flui-widgets/perf/baseline/, and
-  # `--instructions --check` runs each `perf_scaling_` scenario on its small
-  # and large tree under callgrind and fails when the large one costs more
-  # than 5% over the small. The scenarios' own assertions (equal allocations
-  # on both sizes) run on every PR with flui-widgets' suite; the baseline
-  # comparison and callgrind run in `full`.
+  # runner: with FLUI_PERF_BASELINE=check every perf scenario holds its frame
+  # counters and allocations to crates/flui-widgets/perf/baseline/ (the
+  # comparison is the perf target's `baseline` module), and each
+  # `perf_scaling_` scenario runs on its small and large tree under callgrind,
+  # failing when the large one costs more than 5% over the small. The
+  # scenarios' own assertions (equal allocations on both sizes) run on every
+  # PR with flui-widgets' suite; the baseline comparison and callgrind run in
+  # `full`.
   # ─────────────────────────────────────────────────────────────────────────
   perf-gates:
     name: perf-gates
@@ -988,20 +989,72 @@ jobs:
         with:
           packages: valgrind
 
-      - name: cargo xtask perf --check
-        run: cargo xtask perf --check
+      # flui-widgets alone, with its default features: the heap counters move
+      # with the features a workspace run unifies into it.
+      - name: cargo nextest run the perf scenarios against their baseline
+        run: cargo nextest run --locked -p flui-widgets --test perf --no-fail-fast -E 'test(/^perf_/)'
+        env:
+          FLUI_PERF_BASELINE: check
 
-      - name: cargo xtask perf --instructions --check
-        run: cargo xtask perf --instructions --check
+      # Instructions are collected only while `perf_measured` runs. The
+      # products below stay far inside 64 bits: a count is tens of millions.
+      - name: callgrind each perf_scaling_ scenario on its small and large tree
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          binary=$(cargo test --locked -p flui-widgets --test perf --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "perf") | .executable // empty' \
+            | tail -n 1)
+          if [ ! -x "$binary" ]; then
+            echo "::error::cargo reported no executable for the perf target"
+            exit 1
+          fi
+          scenarios=$("$binary" --list --format terse | sed -n 's/^\(perf_scaling_[A-Za-z0-9_]*\): test$/\1/p')
+          if [ -z "$scenarios" ]; then
+            echo "::error::the perf target has no perf_scaling_ scenario"
+            exit 1
+          fi
+          logs=$RUNNER_TEMP/callgrind
+          mkdir -p "$logs"
+          collect() {  # collect <scenario> <size>: the instructions of its measured window
+            local log="$logs/$1.$2.log" count
+            if ! FLUI_PERF_SIZE=$2 valgrind --tool=callgrind \
+                --callgrind-out-file="$logs/$1.$2.callgrind" \
+                --toggle-collect='*perf_measured*' \
+                "$binary" --exact "$1" --test-threads=1 2> "$log"; then
+              cat "$log" >&2
+              echo "::error::$1 ($2) failed under callgrind" >&2
+              return 1
+            fi
+            count=$(sed -n 's/.*Collected : *\([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)
+            if [ -z "$count" ]; then
+              echo "::error::callgrind printed no Collected line for $1 ($2)" >&2
+              return 1
+            fi
+            echo "$count"
+          }
+          failed=0
+          printf '%-64s %12s %12s\n' scenario small large
+          for scenario in $scenarios; do
+            small=$(collect "$scenario" small)
+            large=$(collect "$scenario" large)
+            verdict=
+            if (( large * 100 > small * 105 )); then
+              verdict="  GROWS"
+              echo "::error::$scenario costs $large instructions on the large tree, more than 5% over the small tree's $small"
+              failed=1
+            fi
+            printf '%-64s %12s %12s%s\n' "$scenario" "$small" "$large" "$verdict"
+          done
+          exit "$failed"
 
   # ─────────────────────────────────────────────────────────────────────────
   # size — what an application costs before it does anything: the release
   # builds of projects `flui create --local` generates, with the profile the
   # templates write (a counter on Linux and its wasm32 module, and the host of
-  # a `--hot-reload` project), each within 2% of perf/size.toml, and the
-  # default graph's package counts (`cargo xtask perf --size --check`). Three
-  # cold release builds, so main runs them, on every push, where one push may
-  # grow a binary by 0.5% over the commit before it.
+  # a `--hot-reload` project), each within 2% of perf/size.toml. Three cold
+  # release builds, so main runs them; the default graph's package counts in
+  # the same file are the `deps` job's.
   # ─────────────────────────────────────────────────────────────────────────
   size:
     name: size
@@ -1027,60 +1080,82 @@ jobs:
           shared-key: workspace-size-v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # A push to main compares its sizes with the commit before it
-      # (`github.event.before`) as well as with the baseline: the baseline's 2%
-      # is cumulative, so merges that each add a little pass until a later one
-      # crosses it. Each push's measurement is a cache entry keyed by its
-      # commit and saved from main only, failing pushes included; a re-run
-      # reads the same parent, so it fails again until the growth is answered.
-      # A parent whose run was cancelled or skipped has no entry, and the push
-      # is compared with the baseline alone. One file serves both options:
-      # xtask reads the parent's measurement before it records this one.
-      - name: Restore the previous commit's sizes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/size-step/measurement.toml
-          key: size-step-${{ github.event.before }}
-
-      - name: cargo xtask perf --size --check
-        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-        run: cargo xtask perf --size --check
-
-      - name: cargo xtask perf --size --check against the previous commit
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: >-
-          cargo xtask perf --size --check
-          --previous target/size-step/measurement.toml
-          --parent "$PARENT"
-          --record target/size-step/measurement.toml
-        env:
-          PARENT: ${{ github.event.before }}
-
-      # Only a file this commit wrote is saved under its key: a run that failed
-      # before it measured still holds the parent's file.
-      - name: Check this commit recorded its sizes
-        id: recorded
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Each project is generated outside the checkout, so its own release
+      # profile applies and the checkout's `.cargo/` does not; its lock starts
+      # from the checkout's, so it resolves the versions the workspace does.
+      # Every project builds into one target directory: they share the profile
+      # and the dependency graph. A binary fails past 2% over its line, a
+      # tolerance for the growth every change to linked code brings; a line is
+      # raised by hand from this step's log, with the reason in the pull
+      # request (ADR-0331).
+      - name: Build the generated projects in release and compare their sizes
         run: |
-          if grep -qx "commit = \"$GITHUB_SHA\"" target/size-step/measurement.toml 2>/dev/null; then
-            echo "measured=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Save this commit's sizes
-        if: always() && steps.recorded.outputs.measured == 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/size-step/measurement.toml
-          key: size-step-${{ github.sha }}
+          set -euo pipefail
+          shopt -s inherit_errexit
+          projects=$RUNNER_TEMP/size-projects
+          target_dir=$PWD/target/perf-size-projects
+          mkdir -p "$projects"
+          create() {  # create <name> [flui create flags...]
+            cargo run --locked --quiet --package flui-cli --bin flui -- create "$1" \
+              --template counter --org com.perf --local --no-check --path "$projects" "${@:2}"
+            cp Cargo.lock "$projects/$1/Cargo.lock"
+            # Records the project's own members in the copied lock and moves
+            # no registry version, so the builds below can be --locked.
+            (cd "$projects/$1" && cargo update --workspace --offline --quiet)
+          }
+          # size_of <project> <binary> [<target>]: the bytes of the binary
+          # Cargo reports for this build (a wasm32 module is the `.wasm` among
+          # its files), never a path guessed under the target directory.
+          size_of() {
+            local artifact
+            artifact=$(cd "$projects/$1" \
+              && cargo build --locked --release --package "$2" --bin "$2" \
+                --target-dir "$target_dir" ${3:+--target "$3"} \
+                --message-format json-render-diagnostics \
+              | jq -r --arg name "$2" 'select(.reason == "compiler-artifact"
+                  and .target.name == $name and (.target.kind | index("bin")))
+                  | .executable // (.filenames[] | select(endswith(".wasm")))' \
+              | tail -n 1)
+            if [ ! -f "$artifact" ]; then
+              echo "::error::the build reported no executable for $2" >&2
+              return 1
+            fi
+            stat -c %s "$artifact"
+          }
+          create perf-counter
+          create perf-reload --hot-reload
+          counter_release_bytes=$(size_of perf-counter perf-counter)
+          counter_wasm_bytes=$(size_of perf-counter perf-counter wasm32-unknown-unknown)
+          hot_reload_host_release_bytes=$(size_of perf-reload perf-reload-host)
+          failed=0
+          {
+            echo "### Release sizes"
+            echo
+            echo "| counter | perf/size.toml | this commit |"
+            echo "|---|---:|---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for counter in counter_release_bytes counter_wasm_bytes hot_reload_host_release_bytes; do
+            current=${!counter}
+            base=$(sed -n "s/^$counter = \([0-9][0-9]*\)$/\1/p" perf/size.toml)
+            echo "$counter = $current  (perf/size.toml: ${base:-none})"
+            echo "| \`$counter\` | ${base:--} | $current |" >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "$base" ]; then
+              echo "::error::perf/size.toml has no $counter line"
+              failed=1
+            elif (( current * 100 > base * 102 )); then
+              echo "::error::$counter is $current bytes, more than 2% over perf/size.toml's $base"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — cargo-deny over every workspace member (bans, licenses and sources
   # against deny.toml, advisories against RustSec; `--workspace` because the
   # root manifest is the `flui` package, whose graph alone misses flui-cli, the
   # examples and the tools). Its advisories read the same RustSec database
-  # cargo-audit does, so cargo-audit is not run beside it. Nothing compiles
-  # but xtask, for the graph step. A dependency no code uses, a test-only one
+  # cargo-audit does, so cargo-audit is not run beside it. Nothing compiles:
+  # the last step counts packages with `cargo tree`. A dependency no code uses, a test-only one
   # declared as a normal one and a [workspace.dependencies] entry nothing
   # inherits are cargo's `unused_dependencies` lint, which CARGO_BUILD_WARNINGS
   # above makes fatal in every job that builds. Two steps, split by what
@@ -1124,20 +1199,37 @@ jobs:
         continue-on-error: ${{ github.event_name == 'pull_request' }}
         run: cargo deny --workspace --locked check advisories
 
-      - name: Rust cache (xtask)
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: false
-
-      # The packages of the facade's default graph on each target, against
-      # perf/size.toml (`cargo tree` only, nothing builds). A pull request that
-      # adds a package to an application's default graph fails here until
-      # `cargo xtask perf --size --bless` records it; the binary sizes of the
-      # same baseline are the `size` job's.
-      - name: cargo xtask perf --size --graph --check
-        run: cargo xtask perf --size --graph --check
+      # The distinct packages (`name version`) of the facade's default graph on
+      # each target, normal edges only, against perf/size.toml's
+      # `crates_<target>` lines (`cargo tree` only, nothing builds). A pull
+      # request that adds a package to an application's default graph fails
+      # here until it raises that line and says why (ADR-0331); a count that
+      # fell passes, and lowering its line keeps the next rise from passing.
+      # The binary sizes of the same file are the `size` job's.
+      - name: Count the facade's default graph on each target
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          failed=0
+          for pair in linux:x86_64-unknown-linux-gnu windows:x86_64-pc-windows-msvc \
+              macos:aarch64-apple-darwin android:aarch64-linux-android \
+              wasm32:wasm32-unknown-unknown; do
+            name=${pair%%:*}
+            triple=${pair#*:}
+            count=$(cargo tree --locked --quiet --edges normal --prefix none --package flui \
+                --target "$triple" \
+              | awk 'NF >= 2 { print $1, $2 }' | sort -u | wc -l)
+            base=$(sed -n "s/^crates_$name = \([0-9][0-9]*\)$/\1/p" perf/size.toml)
+            echo "crates_$name = $count  (perf/size.toml: ${base:-none})"
+            if [ -z "$base" ]; then
+              echo "::error::perf/size.toml has no crates_$name line"
+              failed=1
+            elif (( count > base )); then
+              echo "::error::the facade's default graph on $triple has $count packages, over perf/size.toml's $base"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute

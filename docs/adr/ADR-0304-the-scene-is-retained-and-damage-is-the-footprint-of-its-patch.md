@@ -815,9 +815,9 @@ consecutive versions. The patch damage must cover the diff damage.
   after a frame that failed once begun, that frame records no chunk and replays every one from
   the cache, and after a frame that panicked once it recorded, it records every chunk again and
   reports the recordings the panic and a reclaim before it dropped; the pixels are a fresh
-  renderer's each time); and the `cargo xtask perf` scenario `not_shown_retry`
+  renderer's each time); and the perf scenario `not_shown_retry`
   (`nodes_painted = 0`, `scene_ops = 0`).
-- The `cargo xtask perf` scenario `caret_blink_in_10k_list` (`crates/flui-widgets/tests/perf.rs`,
+- The perf scenario `caret_blink_in_10k_list` (`crates/flui-widgets/tests/perf.rs`,
   counts in `crates/flui-widgets/perf/baseline/`), whose `nodes_painted` and `scene_ops` per blink
   are equal at 1,000 and 10,000 items; the engine's half is `flui-engine`'s
   `a_caret_blink_records_as_many_chunks_at_any_list_size` (lavapipe), a version of a caret

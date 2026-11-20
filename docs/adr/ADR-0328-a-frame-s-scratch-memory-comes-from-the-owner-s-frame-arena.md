@@ -14,7 +14,7 @@
 
 ## Context and problem statement
 
-`cargo xtask perf` counts what a frame asks of the heap. A run with a probe that tracks each
+The perf scenarios of `crates/flui-widgets/tests/perf.rs` count what a frame asks of the heap. A run with a probe that tracks each
 allocation's lifetime (Linux x86_64, dev profile, `main` of 2026-11-12) shows that most of a busy
 frame's allocations do not outlive the frame:
 
@@ -181,7 +181,7 @@ pure Rust performance gain and changes nothing an author writes.
   the chunk busy frames need, a spike's chunk is released after the window, the last block
   frees, grows and shrinks in place, and zero-size and over-aligned layouts are honoured.
 - A `compile_fail` doctest on `FrameArena`: a `FrameVec` alive across `reset` is error E0502.
-- `cargo xtask perf`: each moving pull request lowers `allocations` in the scenarios it touches,
+- The perf baseline (`FLUI_PERF_BASELINE=check` in `perf-gates`): each moving pull request lowers `allocations` in the scenarios it touches,
   no scenario's count rises, and `idle_frame_retained_scene` stays at zero.
 
 ## Pros and cons of the options
@@ -216,6 +216,6 @@ pure Rust performance gain and changes nothing an author writes.
 
 ## More information
 
-- The allocation profile behind the table: `cargo xtask perf` with a lifetime probe on the
+- The allocation profile behind the table: the perf scenarios with a lifetime probe on the
   counting allocator of `crates/flui-widgets/tests/perf.rs`.
 - Rust 1.100.0 release notes: the allocator API section.

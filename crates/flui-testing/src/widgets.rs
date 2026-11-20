@@ -1133,7 +1133,7 @@ impl LaidOut {
     /// Advance `dt` and drive a frame, as [`Self::pump_for`] does, and report
     /// what it did: the build owner's report of the frame, the pipeline's
     /// counters across it and what its scene patch cost (see
-    /// [`crate::FrameReport`]). Counts, not timings, so `cargo xtask perf`
+    /// [`crate::FrameReport`]). Counts, not timings, so a perf scenario
     /// compares them exactly against a checked-in baseline.
     pub fn pump_report(&mut self, dt: Duration) -> crate::FrameReport {
         let pipeline_before = self
