@@ -8,16 +8,21 @@
 
 mod subtree_arena;
 
-mod accessors;
 mod actions;
 mod buffer_pool;
 mod cell;
 mod compositing;
 mod construction;
 mod counters;
+mod dirty_marks;
+mod geometry;
 mod hit_slop;
+mod hit_test;
 mod input_regions;
+mod insertion;
+mod invalidation;
 mod layout;
+mod layout_inputs;
 mod leader_watch;
 mod paint;
 mod placement;
@@ -30,6 +35,7 @@ mod queues_for_testing;
 mod reassemble;
 mod relocation;
 mod semantics;
+mod semantics_enablement;
 mod tree_edit;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
@@ -259,7 +265,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// draws by. Present ⟹ the follower is visible this frame under the
     /// resolved transform; absent ⟹ either not a follower, or a hidden one
     /// (see `last_hidden_follower_ids`). Consulted generically by the
-    /// hit-test walk (`accessors.rs`) so a visually-displaced
+    /// hit-test walk (`hit_test.rs`) so a visually-displaced
     /// `RenderFollowerLayer` hit-tests at its RESOLVED on-screen position,
     /// not its plain tree-relative position — cached from the last
     /// composite, one frame stale by design.

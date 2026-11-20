@@ -71,11 +71,11 @@ The attach seam has one lifecycle, whichever lane delivers a mark.
   frame, so a render object that does not override them pays nothing.
 - **Attach follows insertion.** The owner calls `attach` once the node's id is minted and its
   links are wired, with a handle bound to the node's next `AttachmentEpoch`
-  (`attach_inserted_node`, `crates/flui-rendering/src/pipeline/owner/accessors.rs:1751`;
+  (`attach_inserted_node`, `crates/flui-rendering/src/pipeline/owner/insertion.rs:252`;
   `RenderNode::attach`, `crates/flui-rendering/src/storage/node.rs:169`).
 - **Detach covers removal and relocation.** `detach` runs for every node of a removed subtree
   (`PipelineOwner::remove_render_object`,
-  `crates/flui-rendering/src/pipeline/owner/accessors.rs:714`) and of a relocated one.
+  `crates/flui-rendering/src/pipeline/owner/tree_edit.rs:172`) and of a relocated one.
   Relocation keeps the node ids and closes each attachment interval
   (`detach_render_subtrees`, `crates/flui-rendering/src/pipeline/owner/relocation.rs:302`).
 - **The relocation token is consumed once.** `DetachedRenderSubtrees` is `#[must_use]` and
@@ -88,7 +88,7 @@ The attach seam has one lifecycle, whichever lane delivers a mark.
   override; it propagates to the insertion, removal or relocation call. An interval opens before
   `attach` runs and closes before `detach` runs (`crates/flui-rendering/src/storage/node.rs:169`,
   `:206`), and removal and relocation withdraw admission for the whole batch before the first
-  `detach` (`accessors.rs:732`, `relocation.rs:316`), so no handle of the batch admits work while
+  `detach` (`tree_edit.rs:190`, `relocation.rs:316`), so no handle of the batch admits work while
   a hook unwinds. A panic part-way through a relocation's mutation is fatal for that batch and is
   not rolled back (`relocation.rs:300`, `:420`).
 - **The render object never sees a ticker.** `attach` carries the invalidation handle and
@@ -107,7 +107,7 @@ The attach seam has one lifecycle, whichever lane delivers a mark.
   `RenderInvalidationHandle` carries its attachment epoch, and the frame-entry drain applies it
   only when the node is live and `is_attached_for(epoch)`; a request from before a detach, while
   detached or from a previous attachment is dropped
-  (`crates/flui-rendering/src/pipeline/owner/accessors.rs:243`). A full channel returns
+  (`crates/flui-rendering/src/pipeline/owner/invalidation.rs:152`). A full channel returns
   `SendError::ChannelFull` (`crates/flui-rendering/src/pipeline/handle.rs:97`).
 
 ## Alternatives
