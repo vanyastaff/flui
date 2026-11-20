@@ -57,6 +57,10 @@ struct Shared {
     observed_node: Cell<Weak<FocusNode>>,
     /// Last `has_focus` value for the currently observed node.
     was_focused: Cell<bool>,
+    /// Whether the observed node showed the primary focus at the last
+    /// notification: what the reveal and the visible-focus edge compare
+    /// against.
+    was_shown: Cell<bool>,
     /// Inherited-provider revision advanced by node notifications.
     node_revision: Cell<u64>,
     /// The current `on_focus_change` handler: the installed listener reads
@@ -376,13 +380,11 @@ fn cloned<T: Clone + Default>(cell: &Cell<T>) -> T {
 
 /// What a shown focus on a hosted node is revealed through: the nearest
 /// reveal scope above the element and the node's live geometry, both acquired
-/// in lifecycle hooks, and whether the node showed the primary focus at the
-/// last notification.
+/// in lifecycle hooks.
 #[derive(Default)]
 struct RevealSlot {
     target: Cell<Option<SharedRevealTarget>>,
     rect: Cell<Option<RectProvider>>,
-    shown: Cell<bool>,
 }
 
 impl RevealSlot {
@@ -452,6 +454,7 @@ impl FocusHost {
             rebuild: ctx.rebuild_handle(),
             observed_node: Cell::new(Rc::downgrade(&node)),
             was_focused: Cell::new(false),
+            was_shown: Cell::new(false),
             node_revision: Cell::new(0),
             on_focus_change: Cell::new(edges.focused),
             on_visible_focus_change: Cell::new(edges.shown),
@@ -521,7 +524,7 @@ impl FocusHost {
             }
             // Recorded before user code runs, so a notification it causes
             // compares against this one's value.
-            let was_shown = shared.reveal.shown.replace(now_shown);
+            let was_shown = shared.was_shown.replace(now_shown);
             if was_shown != now_shown {
                 let handler = cloned(&shared.on_visible_focus_change);
                 if let Some(handler) = handler {
@@ -569,7 +572,7 @@ impl FocusHost {
             return;
         }
         self.shared.was_focused.set(self.node.has_focus());
-        self.shared.reveal.shown.set(self.node.has_visible_focus());
+        self.shared.was_shown.set(self.node.has_visible_focus());
         self.focus_subscription = Some(self.add_focus_listener(&self.node));
     }
 
