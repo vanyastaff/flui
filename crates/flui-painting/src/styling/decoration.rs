@@ -176,7 +176,7 @@ pub struct BoxDecoration<T: Unit = f64> {
     // other decoration its size.
     #[cfg_attr(
         feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
+        serde(default, skip_serializing_if = "LerpRetained::serializes_nothing")
     )]
     pub(crate) lerp_retained: Option<Box<LerpRetained>>,
 
@@ -326,7 +326,7 @@ where
     /// sides is one layer, a lerped endpoint brings the layers it blends, and
     /// past four layers the weakest go and the kept ones take up their shares.
     /// `image` holds `b`'s own image as the blend paints it, or, when `b`'s image
-    /// is in no layer (none, invisible or of non-finite opacity), the strongest
+    /// is in no layer (none, invisible or of NaN opacity), the strongest
     /// layer. A layer's opacity is clamped to one before its share is taken. The shape is not interpolated and
     /// switches at `t = 0.5`.
     #[inline]

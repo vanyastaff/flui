@@ -139,6 +139,19 @@ pub(crate) struct LerpRetained {
 }
 
 impl LerpRetained {
+    /// Whether `retained` writes nothing: the image blend is never serialized,
+    /// so a state without a gradient fallback is left out whole.
+    #[cfg(feature = "serde")]
+    #[expect(
+        clippy::ref_option,
+        reason = "the signature serde's skip_serializing_if calls"
+    )]
+    pub(crate) fn serializes_nothing(retained: &Option<Box<Self>>) -> bool {
+        retained
+            .as_ref()
+            .is_none_or(|retained| retained.gradient.is_none())
+    }
+
     /// The retained state, boxed, or nothing when no part is kept.
     pub(crate) fn boxed(
         gradient: Option<(Gradient, Gradient)>,

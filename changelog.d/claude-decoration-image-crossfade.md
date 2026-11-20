@@ -7,4 +7,5 @@
   not dim, a lerp from a lerped decoration keeps the images it was blending, and past four
   layers the weakest go while the kept ones take up their shares. With the `serde` feature the
   retained gradient fallback is serialized under `lerp_retained` instead of
-  `gradient_fallback`, and the image blend is not serialized.
+  `gradient_fallback`; the image blend is not serialized, and a decoration that retains only a
+  blend writes no retained state.

@@ -575,6 +575,29 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
             .collect::<Vec<_>>()
     );
 
+    // The image blend is not serialized, decoration images being skipped: a
+    // round trip writes no retained state and paints no blend.
+    #[cfg(feature = "serde")]
+    {
+        let written = serde_json::to_value(&crossfaded).expect("a decoration serializes");
+        assert!(
+            written.get("lerp_retained").is_none(),
+            "a blend without a gradient fallback writes no retained state: {written}"
+        );
+        let restored: BoxDecoration =
+            serde_json::from_value(written).expect("a decoration deserializes");
+        let image = restored
+            .image
+            .clone()
+            .expect("the published image round-trips");
+        assert_eq!(
+            restored,
+            BoxDecoration::with_image(image),
+            "a restored blend is the plain decoration it paints like"
+        );
+        assert_eq!(layers(&restored), 0, "and paints no blend");
+    }
+
     let mut replaced = crossfaded;
     replaced.image = Some(DecorationImage::new(blue.clone()));
     let images = painted(&replaced);
