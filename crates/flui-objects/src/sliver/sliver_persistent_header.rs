@@ -584,17 +584,12 @@ impl RenderSliverScrollingPersistentHeader {
         let raw_paint_extent = max_extent - constraints.scroll_offset;
         let cache_extent = self.calculate_cache_offset(constraints, 0.0, max_extent);
         let paint_extent = raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent);
-        // Only scroll extent, paint origin, paint extent, max paint extent and
-        // cache extent are set, so every other field takes
-        // `SliverGeometry`'s constructor default. Going through `new` + `with_*` rather than
-        // a `..ZERO` struct literal is what makes those defaults apply: the
-        // struct-update form substitutes zero/false for whatever it omits,
-        // which is how `layout_extent`, `visible` and `hit_test_extent` were
-        // each silently dropped here in turn.
+        // `layout_extent`, `hit_test_extent` and `visible` follow the paint
+        // extent, as `new` derives them.
         let geometry = SliverGeometry::new(max_extent, paint_extent, constraints.overlap.min(0.0))
             .with_max_paint_extent(max_extent + stretch_offset)
             .with_cache_extent(cache_extent)
-            .with_visual_overflow();
+            .with_visual_overflow(true);
         let child_position = if stretch_offset > 0.0 {
             0.0
         } else {
@@ -740,7 +735,7 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
             } else {
                 layout_extent
             })
-            .with_visual_overflow();
+            .with_visual_overflow(true);
 
         position_persistent_header_child(ctx, &constraints, &geometry, 0.0, child_extent);
         Ok(geometry)
@@ -861,7 +856,7 @@ impl FloatingHeaderMode for FloatingMode {
             .with_layout_extent(layout_extent)
             .with_max_paint_extent(max_extent + stretch_offset)
             .with_cache_extent(layout_extent)
-            .with_visual_overflow();
+            .with_visual_overflow(true);
         // Uses the RAW (pre-clamp) `paint_extent` local, not the clamped
         // `geometry.paint_extent`.
         let child_position = if stretch_offset > 0.0 {
@@ -907,7 +902,7 @@ impl FloatingHeaderMode for FloatingPinnedMode {
         .with_max_paint_extent(max_extent + stretch_offset)
         .with_max_scroll_obstruction(min_extent)
         .with_cache_extent(layout_extent)
-        .with_visual_overflow();
+        .with_visual_overflow(true);
         (geometry, 0.0)
     }
 }

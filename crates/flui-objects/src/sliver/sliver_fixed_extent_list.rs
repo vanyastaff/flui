@@ -447,11 +447,9 @@ impl RenderSliver for RenderSliverFixedExtentList {
                 .map_or(0, |start| self.min_child_index_for_scroll_offset(start));
             self.pinned.clear_slots();
             ctx.emit_retain_band(first, first);
-            return Ok(SliverGeometry {
-                scroll_extent,
-                max_paint_extent: scroll_extent,
-                ..SliverGeometry::ZERO
-            });
+            return Ok(
+                SliverGeometry::new(scroll_extent, 0.0, 0.0).with_max_paint_extent(scroll_extent)
+            );
         };
 
         self.logical_to_slot.clear();
@@ -499,11 +497,9 @@ impl RenderSliver for RenderSliverFixedExtentList {
             self.pinned.clear_slots();
             ctx.emit_retain_band(first, first);
             let scroll_extent = self.compute_max_scroll_offset(effective_count);
-            return Ok(SliverGeometry {
-                scroll_extent,
-                max_paint_extent: scroll_extent,
-                ..SliverGeometry::ZERO
-            });
+            return Ok(
+                SliverGeometry::new(scroll_extent, 0.0, 0.0).with_max_paint_extent(scroll_extent)
+            );
         }
         ctx.emit_retain_band(first, last + 1);
 
@@ -523,17 +519,10 @@ impl RenderSliver for RenderSliverFixedExtentList {
         let target_end_for_paint = constraints.scroll_offset + constraints.remaining_paint_extent;
         let overflows_paint_window = target_end_for_paint.is_finite()
             && last >= self.max_child_index_for_scroll_offset(target_end_for_paint);
-        let geometry = SliverGeometry {
-            scroll_extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: scroll_extent,
-            cache_extent,
-            hit_test_extent: paint_extent,
-            visible: paint_extent > 0.0,
-            has_visual_overflow: overflows_paint_window || constraints.scroll_offset > 0.0,
-            ..SliverGeometry::ZERO
-        };
+        let geometry = SliverGeometry::new(scroll_extent, paint_extent, 0.0)
+            .with_max_paint_extent(scroll_extent)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow(overflows_paint_window || constraints.scroll_offset > 0.0);
 
         // Committed only for a pass the pipeline will accept (see the grid).
         if geometry.validation_error().is_none() {

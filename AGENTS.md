@@ -209,6 +209,7 @@ are checked by `cargo heli nextest run` of the crates that own them.
 | Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
 | **ID offset** — plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize` (`slab_index + 1`); generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) are minted with `new_gen(slab_index, generation)` and read with `.index()` | ID newtypes |
 | Logical and device geometry don't mix (ADR-0098) | trybuild `crates/flui-painting/tests/compile_fail/` |
+| A sliver's geometry is built by `SliverGeometry::new` or `with_extents` and the `with_*` builders, which derive `layout_extent`, `hit_test_extent` and `visible` from the paint extent; outside `flui-rendering` a struct literal does not compile | `#[non_exhaustive]` on `SliverGeometry` |
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
@@ -422,8 +423,8 @@ embarrassed by, with the better shape. What this repository keeps getting wrong:
   about the change instead of the code ("Code for the next reader");
 - the "Recurring defects" above, checked at each failure point alone, two in competition, and
   the next operation after containment ([matrix](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/signal-unwind-contract.ru.md));
-- `SliverGeometry { ..SliverGeometry::ZERO }` (drops `layout_extent`, `visible`), geometry from a
-  stand-in value (ADR-0054), intrinsics, baselines or hit-testing left at defaults;
+- geometry from a stand-in value (ADR-0054), intrinsics, baselines or hit-testing left at
+  defaults;
 - a pixel claim whose readback samples don't distinguish fixed from broken; a `wgpu::Instance`
   created apart from its surface;
 - state owned by the process instead of a UI runtime; event translation tested only
