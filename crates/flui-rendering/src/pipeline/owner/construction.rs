@@ -1,9 +1,6 @@
 //! Constructor, ctor helpers, and run_frame orchestration for `PipelineOwner<Idle>`.
 
-use std::{
-    marker::PhantomData,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::marker::PhantomData;
 
 use flui_layer::SceneWriter;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -21,7 +18,7 @@ use crate::pipeline::{
     scheduler::DirtyTracker,
 };
 
-use super::{DEFAULT_DIRTY_CHANNEL_CAPACITY, PIPELINE_ID_COUNTER, PipelineOwner, rebind_phase};
+use super::{DEFAULT_DIRTY_CHANNEL_CAPACITY, PipelineOwner, rebind_phase};
 
 /// The shared handles an owner is built over: its wake, its dirty channel,
 /// its same-thread inbox, its relocation seal and its leader watches.
@@ -71,7 +68,6 @@ impl PipelineOwner<Idle> {
             DirtySender::new_pair(dirty_channel_capacity, notifier.clone());
         let local_dirty = super::super::local_invalidation::LocalDirtyInbox::new(notifier.clone());
         Self::over(
-            PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             text,
             OwnerHandles {
                 notifier,
@@ -87,13 +83,12 @@ impl PipelineOwner<Idle> {
     /// An owner with no tree and no queued work, over the handles of `self`:
     /// what [`Self::in_place`] leaves in the slot while the owner is out.
     ///
-    /// It shares `self`'s id, notifier, channel ends, inboxes and seal
-    /// instead of building its own, so it allocates nothing and mints no
-    /// pipeline id. Nothing reaches it: the slot is borrowed for as long as
+    /// It shares `self`'s notifier, channel ends, inboxes and seal
+    /// instead of building its own, so it allocates nothing. Nothing
+    /// reaches it: the slot is borrowed for as long as
     /// it sits there, and dropping it only releases the shared handles.
     fn vacant(&self) -> Self {
         Self::over(
-            self.id,
             self.text.clone(),
             OwnerHandles {
                 notifier: self.notifier.clone(),
@@ -107,7 +102,7 @@ impl PipelineOwner<Idle> {
     }
 
     /// An empty owner over `handles`, numbered `id`, measuring through `text`.
-    fn over(id: u64, text: TextContextHandle, handles: OwnerHandles) -> Self {
+    fn over(text: TextContextHandle, handles: OwnerHandles) -> Self {
         let OwnerHandles {
             notifier,
             dirty_sender,
@@ -125,7 +120,6 @@ impl PipelineOwner<Idle> {
             text_measurers: crate::pipeline::TextMeasurers::default(),
             text_sizing: flui_painting::TextSizing::default(),
             text,
-            id,
             relocation_owner_seal,
             render_tree: RenderTree::new(),
             transform_paths: super::buffer_pool::BufferPool::default(),
@@ -135,7 +129,7 @@ impl PipelineOwner<Idle> {
             layout_poison: super::poison::LayoutPoison::default(),
             layout_buffers: super::subtree_arena::LayoutBuffers::default(),
             root_constraints: None,
-            semantics_enabled: AtomicBool::new(false),
+            semantics_enabled: false,
             semantics_owner: None,
             semantics_regions: super::semantics::RegionIdentities::default(),
             frame_arena: flui_foundation::arena::FrameArena::new(),

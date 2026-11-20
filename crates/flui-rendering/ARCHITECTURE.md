@@ -1288,7 +1288,7 @@ No other phase-misuse variant exists. The typestate machine leaves no site that 
 The structural shape of individual components in this crate is designed for Rust and has been informed by multiple Rust-side audited references as recorded in prior plans:
 
 - `slab::Slab` storage pattern with `+1/-1` ID offset — internal precedent in [`src/storage/tree.rs`](src/storage/tree.rs); the offset rationale lives in [`docs/architecture.md`](../../docs/architecture.md).
-- Lock-free atomic dirty tracking (`AtomicRenderFlags`); the offset lives in an `OffsetCell` (`Cell<Offset>`, two `f64` components; the tree is `!Send + !Sync`); geometry and constraints in the protocol's `LayoutRecord`, mutated via `&mut RenderState`: inline for a box, behind one allocation made on first write for a sliver, so a render-slab slot is sized by the box entry, pinned by `render_node_slot_stays_within_its_budget`) — documented in [`src/storage/state/mod.rs`](src/storage/state/mod.rs) module docstring.
+- Dirty and boundary flags in a `RenderFlagsCell` (`Cell<RenderFlags>`) and the offset in an `OffsetCell` (`Cell<Offset>`, two `f64` components; the tree is `!Send + !Sync`); geometry and constraints in the protocol's `LayoutRecord`, mutated via `&mut RenderState`: inline for a box, behind one allocation made on first write for a sliver, so a render-slab slot is sized by the box entry, pinned by `render_node_slot_stays_within_its_budget`) — documented in [`src/storage/state/mod.rs`](src/storage/state/mod.rs) module docstring.
 - Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases when the structural pattern fits Rust idioms better.
 
 ---
@@ -1694,17 +1694,18 @@ control, checking published extents and the cached items' committed geometry.
 
 ## Thread safety
 
-`flui-rendering` runs in the render pipeline; per strategy clause "sync hot path", the hot frame loop is single-threaded. Sync primitives in this crate are limited to shared-infrastructure objects and lock-free atomics on per-node state. No primitive sits inside `perform_layout` / `paint` on a per-node basis.
+`flui-rendering` runs in the render pipeline, on one thread per presentation. Per-node state changed through `&self` is a `Cell` (ADR-0323 §1); the only value that leaves the owner thread is `RenderInvalidationHandle`. No lock sits inside `perform_layout` or `paint`.
 
 | Site | Primitive | Category | Notes |
 |---|---|---|---|
-| `RenderEntry<P>::render_object` (`src/storage/entry.rs`) | plain `Box<dyn RenderObject<P>>` | Owned by value | Mutable access via `&mut self` from `&mut RenderTree`. The previous `RwLock<Box<dyn>>` was the canonical refusal-trigger violation; removed by the U2 exemplar refactor. |
-| `RenderState<P>::flags` (`src/storage/state/mod.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
+| `RenderEntry<P>::render_object` (`src/storage/entry.rs`) | plain `Box<dyn RenderObject<P>>` | Owned by value | Mutable access via `&mut self` from `&mut RenderTree`. |
+| `RenderState<P>::flags` (`src/storage/state/mod.rs`) | `RenderFlagsCell` (`Cell<RenderFlags>`) | `Cell` (single-threaded tree) | Dirty flags and boundary bits, `WAS_REPAINT_BOUNDARY` among them. |
+| `RenderState<P>` layout generations and `placed_by` (`src/storage/state/offset.rs`) | `Cell<u64>`, `Cell<Option<RenderId>>` | `Cell` (single-threaded tree) | Whether the parent placed the node in its current pass. |
 | `RenderState<P>::layout` (`src/storage/state/layout_record.rs`) | `P::LayoutRecord`: `BoxLayoutRecord` (inline `Size` and `BoxConstraints` with two presence bits) or `SliverLayoutRecord` (`Option<Box<_>>`, allocated on first write) | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
 | `RenderState<P>::offset` (`src/storage/state/offset.rs`) | `OffsetCell` | `Cell` (single-threaded tree) | Paint position. |
 | `PipelineCell` / `WeakPipelineCell` (`src/pipeline/owner/cell.rs`) | `Rc` slot holding the presentation's `PipelineOwner`; `WeakPipelineCell` is its `rc::Weak`, which stops upgrading once the presentation closes | Owner-thread shared infrastructure | One presentation's pipeline, owned by that presentation on its one thread (ADR-0043); clones share the owner. `PipelineCell` and `PipelineOwner` are `!Send + !Sync`, pinned by `assert_not_impl_any!` in `cell.rs`. A render object never stores a cell (it would close an `Rc` cycle) and the tree holds no back-reference to its owner. No lock guards the pipeline. |
 | `RenderInvalidationHandle` (`src/pipeline/handle.rs`) | `DirtySender` plus `RenderId` and `AttachmentEpoch` | Cross-thread dirty marks | The one part of the pipeline that leaves the owner thread: it marks one render object dirty for the attachment interval it was minted in. `Send + Sync`, pinned by `assert_impl_all!` in `handle.rs`. |
-| `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
+| `RenderTree::nodes` (`src/storage/tree.rs`) | `NodeSlab` | `!Sync`: its nodes hold `Cell`s | No `unsafe impl`. |
 | Viewport listener list (`OffsetListeners`, `src/view/viewport_offset.rs`, held by `ScrollPosition`) | `Notifier` on the owner thread | Listener registry | Off layout/paint hot path. A fixed offset never notifies, so `FixedViewportOffset` has no list. |
 | `PipelineOwner::frame_arena` (`src/pipeline/owner/mod.rs`) | `flui_foundation::arena::FrameArena` (`Cell` bump cursor) | Owner-thread scratch | ADR-0328. The semantics pass resets it as it begins and takes its fragment lists, conflict marks and reading-order scratch from it, and the nodes it builds (their child lists, the rebuilt root, the graft list) from `PipelineOwner::built_arena`, a second `FrameArena` reset with it, so a built list never sits above scratch the walk frees after it; each list borrows the arena, so none outlives the reset. `!Send`, like the owner. |
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The UI runtime's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the UI runtime's text context". |
@@ -1793,7 +1794,7 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 
 **Note:** `proptest` is already a dev-dependency and is used in `src/virtualization/tests.rs`. The miri half is LANDED: CI's advisory `miri` job runs `cargo +nightly miri test -p flui-rendering --lib pipeline::owner`, interpreting every unit test under `pipeline::owner` — the raw-pointer `SubtreeArena` substrate and the disjoint-borrow layout walks over it. Loom coverage remains open. The remaining deferred test class:
 
-- **Loom tests** for `AtomicRenderFlags` set/clear/read interleaving + private dirty-channel send/recv sequencing across attachment epochs. Needs the `loom` crate gated on `#[cfg(loom)]`.
+- **Loom tests** for the private dirty-channel send/recv sequencing across attachment epochs. Needs the `loom` crate gated on `#[cfg(loom)]`.
 
 **Shape:** a new file under `crates/flui-rendering/tests/` plus a dev-dependency.
 

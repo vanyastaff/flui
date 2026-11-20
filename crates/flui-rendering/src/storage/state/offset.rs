@@ -18,8 +18,7 @@ use crate::protocol::Protocol;
 ///
 /// A plain `Cell`: the render tree is `!Send + !Sync` and a pipeline pass
 /// touches it from one thread (see `RenderTree`), so the offset needs
-/// interior mutability, not atomicity. Two `f64` components do not fit the
-/// single `AtomicU64` the earlier `f32` pair was packed into.
+/// interior mutability, not atomicity.
 #[derive(Debug)]
 pub(super) struct OffsetCell {
     value: Cell<Offset>,
@@ -99,8 +98,7 @@ impl<P: Protocol> RenderState<P> {
     /// this node, and stamped onto the children it lays out.
     #[inline]
     pub fn layout_generation(&self) -> u64 {
-        self.layout_generation
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.layout_generation.get()
     }
 
     /// Advance to a fresh generation and return it.
@@ -118,12 +116,8 @@ impl<P: Protocol> RenderState<P> {
     /// child untouched for exactly 2^64 of its parent's layouts.
     #[inline]
     pub fn advance_layout_generation(&self) -> u64 {
-        let next = self
-            .layout_generation
-            .load(std::sync::atomic::Ordering::Relaxed)
-            .wrapping_add(1);
-        self.layout_generation
-            .store(next, std::sync::atomic::Ordering::Relaxed);
+        let next = self.layout_generation.get().wrapping_add(1);
+        self.layout_generation.set(next);
         next
     }
 
@@ -136,10 +130,8 @@ impl<P: Protocol> RenderState<P> {
     /// number alone.
     #[inline]
     pub fn set_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) {
-        self.placed_generation
-            .store(parent_generation, std::sync::atomic::Ordering::Relaxed);
-        self.placed_by
-            .store(parent.as_u64(), std::sync::atomic::Ordering::Relaxed);
+        self.placed_generation.set(parent_generation);
+        self.placed_by.set(Some(parent));
     }
 
     /// Whether this node was laid out as a child during the parent's current
@@ -159,14 +151,8 @@ impl<P: Protocol> RenderState<P> {
     /// must not remove anything — see `RenderState::placed_generation`.
     #[inline]
     pub fn was_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) -> bool {
-        let stamped_by = self.placed_by.load(std::sync::atomic::Ordering::Relaxed);
-        if stamped_by == 0 {
-            return true;
-        }
-        stamped_by == parent.as_u64()
-            && self
-                .placed_generation
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == parent_generation
+        self.placed_by.get().is_none_or(|stamped_by| {
+            stamped_by == parent && self.placed_generation.get() == parent_generation
+        })
     }
 }
