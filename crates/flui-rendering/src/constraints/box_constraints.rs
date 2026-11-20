@@ -276,13 +276,6 @@ impl BoxConstraints {
         self.min_height <= 0.0
     }
 
-    /// Returns whether constraints are loose in both dimensions.
-    #[inline]
-    #[must_use]
-    pub fn is_loose(&self) -> bool {
-        self.has_loose_width() && self.has_loose_height()
-    }
-
     // ============================================================================
     // SIZE OPERATIONS
     // ============================================================================
@@ -640,20 +633,6 @@ impl BoxConstraints {
     // UTILITY METHODS
     // ============================================================================
 
-    /// Returns maximum possible area as raw f64.
-    #[inline]
-    #[must_use]
-    pub fn max_area(&self) -> f64 {
-        self.max_width * self.max_height
-    }
-
-    /// Returns minimum required area as raw f64.
-    #[inline]
-    #[must_use]
-    pub fn min_area(&self) -> f64 {
-        self.min_width * self.min_height
-    }
-
     /// Returns maximum diagonal length as raw f64.
     ///
     /// Uses `f64::hypot` to avoid intermediate squared lengths overflowing or
@@ -664,18 +643,6 @@ impl BoxConstraints {
         let w = self.max_width;
         let h = self.max_height;
         w.hypot(h)
-    }
-
-    /// Clamps constraints to fit within bounds.
-    #[inline]
-    #[must_use]
-    pub fn clamp_to(&self, bounds: &Self) -> Self {
-        Self {
-            min_width: self.min_width.clamp(bounds.min_width, bounds.max_width),
-            max_width: self.max_width.clamp(bounds.min_width, bounds.max_width),
-            min_height: self.min_height.clamp(bounds.min_height, bounds.max_height),
-            max_height: self.max_height.clamp(bounds.min_height, bounds.max_height),
-        }
     }
 
     /// Returns width range as tuple.

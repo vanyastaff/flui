@@ -71,17 +71,6 @@ impl<P: ParentData + Default> ChildState<P> {
             parent_data: P::default(),
         }
     }
-
-    /// Creates a new child state with specific parent data.
-    pub fn with_parent_data(id: RenderId, parent_data: P) -> Self {
-        Self {
-            id,
-            size: Size::ZERO,
-            offset: Offset::ZERO,
-            laid_out_this_pass: false,
-            parent_data,
-        }
-    }
 }
 
 // ============================================================================
@@ -1213,24 +1202,24 @@ impl ErasedChildState {
 /// publishing scroll dimensions) asks before it commits.
 #[derive(Debug, Clone, Copy)]
 pub struct DegradationProbe<'ctx> {
-    events: &'ctx std::sync::atomic::AtomicU64,
+    events: &'ctx std::cell::Cell<u64>,
     baseline: u64,
 }
 
 impl<'ctx> DegradationProbe<'ctx> {
     /// A probe over the walk's counter, remembering its current value.
     #[must_use]
-    pub fn new(events: &'ctx std::sync::atomic::AtomicU64) -> Self {
+    pub fn new(events: &'ctx std::cell::Cell<u64>) -> Self {
         Self {
             events,
-            baseline: events.load(std::sync::atomic::Ordering::Relaxed),
+            baseline: events.get(),
         }
     }
 
     /// Whether the counter moved since the probe was taken.
     #[must_use]
     pub fn degraded(&self) -> bool {
-        self.events.load(std::sync::atomic::Ordering::Relaxed) > self.baseline
+        self.events.get() > self.baseline
     }
 }
 

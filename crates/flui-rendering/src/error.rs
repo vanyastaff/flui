@@ -1,7 +1,4 @@
-//! Error types for the rendering system.
-//!
-//! This module provides a unified error type for render operations,
-//! replacing panics with recoverable errors where appropriate.
+//! The error a render operation returns instead of panicking.
 
 use flui_foundation::RenderId;
 use thiserror::Error;
@@ -9,10 +6,6 @@ use thiserror::Error;
 /// The pipeline phase whose `catch_unwind` wrapper caught a render object's
 /// (or its own effect-layer build's) panic, carried by
 /// [`RenderError::Poisoned`].
-///
-/// `#[non_exhaustive]`: mirrors [`RenderError`]'s own future-compat stance
-/// (see its doc) so a future poison point can add a variant without a
-/// breaking change for downstream `match`es.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PoisonPhase {
@@ -41,72 +34,72 @@ impl core::fmt::Display for PoisonPhase {
     }
 }
 
+/// What the semantics pass found wrong in the tree it assembled. The frame's
+/// semantics are not published; layout and paint have already committed.
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SemanticsError {
+    /// A render object authored a sort order that is not finite.
+    #[error("render object {host:?} authored a non-finite semantics sort order")]
+    InvalidSortKey {
+        /// The render object whose configuration holds the sort key.
+        host: RenderId,
+    },
+    /// A render object listed one region key twice in one contribution list.
+    #[error(
+        "render object {host:?} authored duplicate semantics region key {key} in one contribution list"
+    )]
+    DuplicateRegion {
+        /// The render object that authored the list.
+        host: RenderId,
+        /// The repeated key.
+        key: u64,
+    },
+    /// No identity is left for a synthetic region node.
+    #[error("synthetic semantics identity space exhausted")]
+    RegionIdentityExhausted,
+    /// The semantics root names a render object the tree does not hold.
+    #[error("semantics root render object {root:?} is missing from the render tree")]
+    MissingRootRenderObject {
+        /// The missing root.
+        root: RenderId,
+    },
+    /// The root's assembly produced other than one formed node.
+    #[error(
+        "semantics root assembly produced {actual} fragments; exactly one formed root is required"
+    )]
+    InvalidRootFragmentCount {
+        /// How many fragments it produced.
+        actual: usize,
+    },
+    /// The root stayed a pending fragment instead of forming a node.
+    #[error("semantics root {root:?} remained pending instead of forming a node")]
+    PendingRoot {
+        /// The root.
+        root: RenderId,
+    },
+}
+
 /// Errors that can occur during rendering operations.
 ///
-/// Marked `#[non_exhaustive]` as a future-compat measure, matching the
-/// convention followed by public error enums across foundation / tree /
-/// painting / engine so new variants can be added without a breaking
-/// change for downstream matches.
-///
-/// The 5 message-carrying variants (`InvalidConstraints`,
-/// `RelayoutBoundaryViolation`, `LayerError`, `CompositingError`,
-/// `SemanticsError`) store `Box<str>` rather than `String`. `Box<str>` is
-/// a 16-byte fat pointer (vs `String`'s 24-byte `Vec<u8>` header) and
-/// never wastes capacity on the heap — error messages are written-once /
-/// read-rarely, so the `Vec` growth amortisation `String` provides has no
-/// value here (the same reasoning applies to `TreeError::Internal`).
-/// Constructors accept `impl Into<Box<str>>` which covers `&str`,
-/// `String`, and `Box<str>` callers unchanged.
-// This type intentionally does not derive `Clone`. A workspace grep
-// (`rg 'RenderError.*clone\(\)'`) found zero consumers of `.clone()` on
-// RenderError; errors are terminal values that propagate through `?` or
-// `Result::map_err`, neither of which requires Clone. Omitting the derive
-// matches the canonical Rust error idiom (*Programming Rust* 2nd ed §7
-// "Error Handling": errors are throwaways, not duplicates). If a future
-// caller needs to fan out a RenderError to multiple consumers, wrap in
-// `Arc` at that callsite -- cheap, explicit, and avoids the
-// implicit-deep-copy footgun.
+/// Errors are terminal values that travel through `?`, so the type is not
+/// `Clone`; a caller that fans one out wraps it in an `Arc`.
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum RenderError {
-    // ========================================================================
-    // Attachment Errors
-    // ========================================================================
-    /// Render object is not attached to a pipeline owner.
-    #[error("render object is not attached to a pipeline owner")]
-    NotAttached,
-
-    /// Render object is already attached to a pipeline owner.
-    #[error("render object is already attached to a pipeline owner")]
-    AlreadyAttached,
-
-    /// View configuration not set before use.
-    #[error("view configuration not set")]
-    ConfigurationNotSet,
-
-    // ========================================================================
-    // Tree Errors
-    // ========================================================================
     /// Render node not found in tree.
     #[error("render node not found: {0:?}")]
     NodeNotFound(RenderId),
 
-    /// Invalid parent-child relationship.
-    #[error("invalid parent-child relationship")]
-    InvalidParentChild,
-
-    /// Cycle detected in render tree.
-    #[error("cycle detected in render tree")]
-    CycleDetected,
-
-    // ========================================================================
-    // Layout Errors
-    // ========================================================================
-    /// Invalid constraints provided to layout.
-    #[error("invalid constraints: {message}")]
+    /// A render object cannot lay out under the constraints it was given,
+    /// though it could under others: the pipeline retries it up to the
+    /// poison budget instead of poisoning it on the first failure.
+    #[error("invalid constraints for {render_object}: {reason}")]
     InvalidConstraints {
-        /// Description of the constraint violation.
-        message: Box<str>,
+        /// Static debug name of the render object that refused them.
+        render_object: &'static str,
+        /// What the render object needs that the constraints do not give.
+        reason: &'static str,
     },
 
     /// Another independently held loan is using the runtime's text resource.
@@ -128,147 +121,24 @@ pub enum RenderError {
     #[error("viewport offset changed during layout")]
     ViewportOffsetChanged,
 
-    /// Layout performed during paint phase.
-    ///
-    /// Reserved variant: no production construction site exists yet. The
-    /// typestate phase machine makes the misuse structurally impossible —
-    /// `run_layout` is defined only on `PipelineOwner<Layout>`, a value in
-    /// the layout phase cannot reach paint-phase code, and the by-value
-    /// phase transitions (`rebind_phase`) move the whole owner across
-    /// phases rather than exposing two phases at once (the ordering
-    /// contract `PipelineOwner::run_frame_impl` states). Pre-adding the
-    /// variant keeps the error surface stable for a future re-entrant
-    /// seam (e.g. a paint-triggered relayout) that could reintroduce the
-    /// condition at runtime.
-    ///
-    /// A layout *mark* made during paint is a different misuse and is
-    /// diagnosed where it happens: the owner logs it, applies the mark next
-    /// frame, and `run_paint` asserts against it in debug builds.
-    #[error("layout cannot be performed during paint phase")]
-    LayoutDuringPaint,
-
-    /// Layout performed on detached node.
-    ///
-    /// Reserved variant: no production construction site exists yet. The
-    /// owner's layout entry points take `RenderId`s and walk the render
-    /// tree by id; detached subtrees are evicted from the dirty queues at
-    /// relocation, and a stale id (node already gone) is a silent no-op
-    /// in the boundary-walk mark and surfaces downstream as
-    /// [`NodeNotFound`](Self::NodeNotFound) in the tree walks. There is
-    /// no seam today where a layout step reaches a node that is present
-    /// but detached; pre-adding the variant keeps the error surface
-    /// stable for one that might.
-    #[error("cannot layout detached render object")]
-    LayoutDetached,
-
-    /// Relayout boundary violation.
-    #[error("relayout boundary violated: {message}")]
-    RelayoutBoundaryViolation {
-        /// Description of the violation.
-        message: Box<str>,
-    },
-
-    // ========================================================================
-    // Paint Errors
-    // ========================================================================
-    /// The paint phase began with layout work still pending — the
+    /// The paint phase began with layout work still pending: the
     /// scheduler's layout queue was non-empty when
     /// [`PipelineOwner::run_paint`](crate::pipeline::PipelineOwner::run_paint)
     /// was entered.
     ///
-    /// The one phase-misuse variant with a production construction site.
-    /// Phase ORDERING is enforced by the type system (each `run_*` method
-    /// lives only on its phase's impl block; transitions are by-value
-    /// `rebind_phase`), but a caller may still legally drive the phases
-    /// directly (`into_layout().into_compositing().into_paint()`, the
-    /// manual-phase pattern the benches use) and skip `run_layout` with
-    /// the queue unserviced — completeness stays a runtime gate. The
-    /// empty-queue variant of that chain is designed behavior and returns
-    /// `Ok`.
-    ///
-    /// Frame-level by design: a paint `Err` aborts the whole frame
-    /// (`PipelineOwner::run_frame`'s error path), and this unit variant
-    /// carries no `RenderId` — per-node needs-layout gating is the paint
-    /// walk's own skip rule, not a frame contract breach.
+    /// Phase order is a type (each `run_*` lives on its phase's
+    /// `PipelineOwner`), but a caller may drive the phases by hand
+    /// (`into_layout().into_compositing().into_paint()`) and skip `run_layout`
+    /// with work queued, so completeness stays a run-time check. With the
+    /// queue empty that chain is allowed and returns `Ok`. The error aborts
+    /// the frame and names no node.
     #[error("paint phase began with layout work still pending")]
     PaintBeforeLayout,
 
-    /// Paint performed on detached node.
-    ///
-    /// Reserved variant: no production construction site exists yet.
-    /// Paint reaches nodes only through the dirty paint queue, and
-    /// detached subtrees are evicted from the dirty queues at relocation
-    /// (`pipeline::owner::relocation`'s phase preflights); a queued id
-    /// that has left the tree is dropped by the walk and reported by the
-    /// end-of-pass residue scan instead of typed here. Pre-adding the
-    /// variant keeps the error surface stable for a future mid-pass
-    /// detach seam (a node whose presentation closes while the paint walk
-    /// is in flight).
-    #[error("cannot paint detached render object")]
-    PaintDetached,
+    /// The semantics pass refused the tree it assembled.
+    #[error(transparent)]
+    Semantics(#[from] SemanticsError),
 
-    /// Layer operation failed.
-    #[error("layer operation failed: {message}")]
-    LayerError {
-        /// Description of the layer error.
-        message: Box<str>,
-    },
-
-    // ========================================================================
-    // Pipeline Errors
-    // ========================================================================
-    /// Pipeline phase executed in wrong order.
-    ///
-    /// Reserved variant: no production construction site exists yet. Phase
-    /// ORDERING is lifted into the type system — each `run_*` method lives
-    /// only on its phase's impl block and the transitions are by-value
-    /// `rebind_phase`, so an out-of-order call is a compile error
-    /// (E0599 "method not found"), not a runtime condition; `PipelineOwner::run_frame`
-    /// is the only sequencing authority. What remains runtime-checkable is
-    /// frame COMPLETENESS, which is
-    /// [`PaintBeforeLayout`](Self::PaintBeforeLayout)'s single semantics.
-    /// Pre-adding the variant keeps the error surface stable for a future
-    /// runtime seam that could still violate ordering.
-    #[error("pipeline phase {phase} executed out of order")]
-    PhaseOrderViolation {
-        /// The phase that was executed incorrectly.
-        phase: &'static str,
-    },
-
-    /// Root render object not set.
-    #[error("root render object not set")]
-    RootNotSet,
-
-    // ========================================================================
-    // Compositing Errors
-    // ========================================================================
-    /// Compositing bits update failed.
-    #[error("compositing bits update failed: {message}")]
-    CompositingError {
-        /// Description of the compositing error.
-        message: Box<str>,
-    },
-
-    // ========================================================================
-    // Semantics Errors
-    // ========================================================================
-    /// Semantics operation failed.
-    #[error("semantics operation failed: {message}")]
-    SemanticsError {
-        /// Description of the semantics error.
-        message: Box<str>,
-    },
-
-    /// Semantics not enabled.
-    #[error("semantics system not enabled")]
-    SemanticsNotEnabled,
-
-    // ChildHandleError variant removed along with the
-    // child_handle.rs / children_access.rs modules it served.
-
-    // ========================================================================
-    // Structured terminal failures
-    // ========================================================================
     /// Geometry returned from a render object's `perform_layout` is
     /// structurally invalid (NaN, negative dimensions, larger than
     /// `f64::MAX / 2`, etc.). The frame is dropped; the previous
@@ -290,30 +160,19 @@ pub enum RenderError {
         render_object: &'static str,
     },
 
-    /// Layout traversal exceeded the depth limit. Almost always
-    /// indicates infinite parent-child recursion in user code.
-    #[error("layout depth limit exceeded ({limit}); infinite recursion suspected")]
-    LayoutDepthExceeded {
-        /// The depth limit that was exceeded.
-        limit: usize,
-    },
-
     /// A render object's `perform_layout_raw` panicked
     /// ([`PoisonPhase::Layout`]); or a panic occurred while painting it —
     /// in `paint_raw`, in its own `paint_effects`, or in the walk's
     /// resolution of a `PaintClip::PathTarget` it reports
     /// ([`PoisonPhase::Paint`]); or while rebuilding a retained boundary's
     /// own effect layers for a composited-layer-update patch
-    /// ([`PoisonPhase::LayerUpdate`]). The pipeline catches via
-    /// `std::panic::catch_unwind`, drops the in-flight frame, and surfaces
-    /// this variant so the caller can decide (drop the node, retry next
-    /// frame, abort).
+    /// ([`PoisonPhase::LayerUpdate`]). The pipeline catches the panic,
+    /// drops the in-flight frame, and surfaces this variant so the caller
+    /// can decide (drop the node, retry next frame, abort).
     ///
-    /// The `std::panic::catch_unwind` plumbing is live as of 2026-05-20.
-    /// See [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
-    /// for the layout wrapper and `PipelineOwner::<PaintPhase>` for the
-    /// paint and layer-update wrappers. The `Mapping decisions` section of
-    /// `crates/flui-rendering/ARCHITECTURE.md` documents the design.
+    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
+    /// holds the layout wrapper and `PipelineOwner::<PaintPhase>` the paint
+    /// and layer-update wrappers.
     #[error("render object {render_object} panicked during {phase}")]
     Poisoned {
         /// Static debug name of the offending render object.
@@ -322,9 +181,6 @@ pub enum RenderError {
         phase: PoisonPhase,
     },
 
-    // ========================================================================
-    // Protocol-erased dispatch
-    // ========================================================================
     /// A pipeline walk reached a node whose protocol does not match the
     /// protocol the walk expects. Returned by the layout walk (a `Box(_)`
     /// constraint handed to a `Sliver` node or vice versa) and by the paint
@@ -340,93 +196,24 @@ pub enum RenderError {
         constraints_protocol: &'static str,
     },
 
-    /// Detected a layout cycle: a `RenderEntry::layout_leaf_only` call recursed
-    /// (via `LayoutContext::layout_child`) back into a node whose layout
-    /// was still in flight on the same frame.
-    ///
-    /// The cycle-detection guard is a per-slot
-    /// `AtomicBool` in-flight flag in the `SubtreeArena` `by_id` index,
-    /// set/cleared by a RAII `LayoutCycleGuard` (unwind-safe via `Drop`);
-    /// re-entry into an in-flight slot returns this variant.
+    /// A layout recursed (through `LayoutContext::layout_child`) back into a
+    /// node whose layout was still in flight on the same frame. The layout
+    /// walk's `LayoutCycleGuard` marks each slot in flight while its frame
+    /// runs and refuses a second entry with this variant.
     #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
     LayoutCycle(RenderId),
 
-    /// A pipeline-side disjoint-borrow walk requested a child slot
-    /// outside the parent's child-id range.
+    /// A render object violated a named layout contract, which the bridge
+    /// or the pipeline detected and reports by name.
     ///
-    /// Reserved variant
-    /// for future defensive bounds checks at the pipeline-side
-    /// disjoint-borrow seam (e.g., when an off-by-one or stale-id
-    /// condition would make a `child_ids[index]` access panic).
-    /// Indicates a pipeline-side bug (tree-link corruption, off-by-one
-    /// in the dirty-queue walk, etc.) rather than a user-widget
-    /// defect; surfaces as a typed error so the caller can drop the
-    /// frame and log the offending parent / index without aborting
-    /// the process.
-    ///
-    /// **No production construction site exists yet.** The current
-    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
-    /// walk iterates over a snapshotted `child_ids` (always in-bounds
-    /// by construction), so stale child-ids surface as
-    /// [`RenderError::NodeNotFound`](Self::NodeNotFound) (id missing
-    /// from tree) or
-    /// [`RenderError::ProtocolMismatch`](Self::ProtocolMismatch) (id
-    /// present but wrong protocol) downstream. Only the
-    /// [`Self::child_index_out_of_bounds`] constructor + round-trip
-    /// unit test cover this variant in the current diff. Future
-    /// defensive checks that grow on the disjoint-borrow primitive
-    /// will produce this variant; pre-adding it keeps the error
-    /// surface stable.
-    #[error(
-        "child index {index} out of bounds for parent {parent:?} (child_count = {child_count})"
-    )]
-    ChildIndexOutOfBounds {
-        /// The parent `RenderId` whose child slice was indexed.
-        parent: RenderId,
-        /// The out-of-range index that was requested.
-        index: usize,
-        /// The actual number of children the parent has.
-        child_count: usize,
-    },
-
-    /// A render object's `perform_layout` violated its layout contract.
-    ///
-    /// Distinct from [`Poisoned`](Self::Poisoned): `Poisoned` covers
-    /// unstructured panics surfaced through `catch_unwind` (genuine
-    /// runtime bugs, double-frees, third-party `panic!` / `unwrap` in
-    /// user widget code); `ContractViolation` covers **specific, named**
-    /// invariants the bridge / pipeline can detect and report by name.
-    ///
-    /// # History
-    ///
-    /// **Original implementation:** introduced so the
-    /// `RenderObject<BoxProtocol>` blanket impl on
-    /// [`crate::traits::RenderBox`] can signal that a render object
-    /// violated its layout contract as a typed error rather than an
-    /// opaque panic. It used
-    /// `std::panic::panic_any(RenderError::ContractViolation { ... })`
-    /// caught by `catch_unwind` in
-    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
-    /// and downcast back to the typed value — `panic_any` was the
-    /// minimum-disruption shape that preserved the existing
-    /// `perform_layout_raw` infallible signature.
-    ///
-    /// **Follow-up change:** the `perform_layout_raw` signature now
-    /// returns `RenderResult<ProtocolGeometry<P>>` so contract violations
-    /// propagate as typed `Err(...)` through `?` directly — no panic
-    /// primitive in the normal error path. The variant + constructor
-    /// stay; the only change is how the value reaches
-    /// `RenderEntry::layout_leaf_only` (via `Result` chain, not via
-    /// `panic_any` + downcast). `catch_unwind` in the entry is retained
-    /// only for genuine third-party panics from user widget code, which
-    /// continue to surface as `Poisoned`.
+    /// A panic in user code is [`Poisoned`](Self::Poisoned) instead; this
+    /// variant reaches the caller through `Result` (`perform_layout_raw`
+    /// returns `RenderResult`), not through an unwind.
     #[error("contract violation in {render_object}: {what}")]
     ContractViolation {
         /// Static debug name of the render object that violated the contract.
         render_object: &'static str,
-        /// Description of the specific contract that was violated
-        /// (`'static` because all contract names are compile-time literals
-        /// owned by the bridge that raises the variant).
+        /// The contract that was violated.
         what: &'static str,
     },
 }
@@ -446,16 +233,16 @@ impl From<flui_painting::TextMeasurementError> for RenderError {
 }
 
 impl RenderError {
-    /// The node this error names, when it carries one: the node a lookup missed, a layout cycle
-    /// re-entered, or the parent whose child list was indexed past its end.
+    /// The node this error names, when it carries one: the node a lookup
+    /// missed or a layout cycle re-entered.
     ///
-    /// Errors that name no node (a panic caught in a render object, an invalid constraint) answer
-    /// `None`; the pipeline owner attaches the node when it knows it.
+    /// Errors that name no node (a panic caught in a render object, an
+    /// invalid constraint) answer `None`; the pipeline owner attaches the
+    /// node when it knows it.
     #[must_use]
     pub fn node(&self) -> Option<RenderId> {
         match self {
             Self::NodeNotFound(id) | Self::LayoutCycle(id) => Some(*id),
-            Self::ChildIndexOutOfBounds { parent, .. } => Some(*parent),
             _ => None,
         }
     }
@@ -471,53 +258,15 @@ impl RenderError {
         )
     }
 
-    /// Creates an invalid constraints error with a message.
-    ///
-    /// The message is stored as `Box<str>` (heap allocation shrinks from
-    /// 24 bytes of `String` header to 16 bytes of fat pointer).
-    ///
-    /// The constructor bound is `impl AsRef<str>` rather than
-    /// `impl Into<Box<str>>`. `AsRef<str>` is strictly more permissive --
-    /// it accepts `&str`, `String`, `Box<str>`, `&String`, `Cow<str>`,
-    /// etc. The allocation happens once via `message.as_ref().into()`
-    /// (`str` -> `Box<str>`); `Into<Box<str>>` would reject `&String`
-    /// callers (there is no impl from `&String` to `Box<str>` without
-    /// deref coercion).
-    pub fn invalid_constraints(message: impl AsRef<str>) -> Self {
+    /// Creates an [`InvalidConstraints`](Self::InvalidConstraints) error.
+    pub fn invalid_constraints(render_object: &'static str, reason: &'static str) -> Self {
         Self::InvalidConstraints {
-            message: message.as_ref().into(),
+            render_object,
+            reason,
         }
     }
 
-    /// Creates a relayout boundary violation error.
-    pub fn relayout_boundary(message: impl AsRef<str>) -> Self {
-        Self::RelayoutBoundaryViolation {
-            message: message.as_ref().into(),
-        }
-    }
-
-    /// Creates a layer error.
-    pub fn layer(message: impl AsRef<str>) -> Self {
-        Self::LayerError {
-            message: message.as_ref().into(),
-        }
-    }
-
-    /// Creates a compositing error.
-    pub fn compositing(message: impl AsRef<str>) -> Self {
-        Self::CompositingError {
-            message: message.as_ref().into(),
-        }
-    }
-
-    /// Creates a semantics error.
-    pub fn semantics(message: impl AsRef<str>) -> Self {
-        Self::SemanticsError {
-            message: message.as_ref().into(),
-        }
-    }
-
-    /// Creates an InvalidGeometry error.
+    /// Creates an [`InvalidGeometry`](Self::InvalidGeometry) error.
     pub fn invalid_geometry(render_object: &'static str, reason: &'static str) -> Self {
         Self::InvalidGeometry {
             render_object,
@@ -525,24 +274,12 @@ impl RenderError {
         }
     }
 
-    /// Creates an UnboundedConstraint error.
+    /// Creates an [`UnboundedConstraint`](Self::UnboundedConstraint) error.
     pub fn unbounded_constraint(render_object: &'static str) -> Self {
         Self::UnboundedConstraint { render_object }
     }
 
-    /// Creates a LayoutDepthExceeded error.
-    pub fn layout_depth_exceeded(limit: usize) -> Self {
-        Self::LayoutDepthExceeded { limit }
-    }
-
-    /// Creates a ContractViolation error.
-    ///
-    /// **Option A follow-up:**
-    /// returned as `Err(...)` by the
-    /// [`RenderObject<BoxProtocol>`](crate::traits::RenderObject)
-    /// blanket impl when a render object violates its layout contract.
-    /// Propagates through the `RenderResult<ProtocolGeometry<P>>` channel of
-    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
+    /// Creates a [`ContractViolation`](Self::ContractViolation) error.
     pub fn contract_violation(render_object: &'static str, what: &'static str) -> Self {
         Self::ContractViolation {
             render_object,
@@ -550,7 +287,7 @@ impl RenderError {
         }
     }
 
-    /// Creates a Poisoned error.
+    /// Creates a [`Poisoned`](Self::Poisoned) error.
     pub fn poisoned(render_object: &'static str, phase: PoisonPhase) -> Self {
         Self::Poisoned {
             render_object,
@@ -558,29 +295,7 @@ impl RenderError {
         }
     }
 
-    /// Creates a [`ChildIndexOutOfBounds`](Self::ChildIndexOutOfBounds) error.
-    ///
-    /// Used by the
-    /// pipeline-side disjoint-borrow walk to surface stale-id /
-    /// off-by-one conditions on the child-id slice as a typed error
-    /// instead of a panic or silent `Size::ZERO`.
-    pub fn child_index_out_of_bounds(parent: RenderId, index: usize, child_count: usize) -> Self {
-        Self::ChildIndexOutOfBounds {
-            parent,
-            index,
-            child_count,
-        }
-    }
-
     /// Creates a [`LayoutCycle`](Self::LayoutCycle) error.
-    ///
-    /// Returned by
-    /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
-    /// when a render object's `perform_layout` re-enters an ancestor's
-    /// layout via `ctx.layout_child` — the `SubtreeArena` per-slot
-    /// `AtomicBool` in-flight flag (set by `LayoutCycleGuard`) detects the
-    /// second-borrow attempt and surfaces this variant instead of
-    /// triggering an aliasing reborrow or stack overflow.
     pub fn layout_cycle(id: RenderId) -> Self {
         Self::LayoutCycle(id)
     }

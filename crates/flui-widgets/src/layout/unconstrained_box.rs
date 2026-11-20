@@ -3,10 +3,12 @@
 
 use flui_foundation::geometry::Axis;
 use flui_objects::RenderConstraintsTransformBox;
-use flui_painting::Alignment;
 use flui_painting::paint::Clip;
+use flui_painting::{Alignment, AlignmentGeometry};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+
+use crate::Directionality;
 
 /// Removes the constraints imposed on `child` — on both axes, or, when
 /// `constrained_axis` is set, on every axis *except* that one (the named
@@ -26,15 +28,9 @@ use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
 /// constraints-transform-function widget.
 /// `create_render_object`/`update_render_object` push every field on every
 /// call.
-///
-/// `textDirection`/`AlignmentDirectional` are not exposed: no widget in
-/// FLUI's shifted-box family (`Align`, `OverflowBox`, `SizedOverflowBox`,
-/// `FractionallySizedBox`, and now this widget) resolves an ambient
-/// `Directionality` yet — a pre-existing, systemic gap, not something new
-/// here.
 #[derive(Clone, Debug)]
 pub struct UnconstrainedBox {
-    alignment: Alignment,
+    alignment: AlignmentGeometry,
     constrained_axis: Option<Axis>,
     clip_behavior: Clip,
     child: Child,
@@ -48,7 +44,7 @@ impl UnconstrainedBox {
     #[track_caller]
     pub fn new() -> Self {
         Self {
-            alignment: Alignment::CENTER,
+            alignment: Alignment::CENTER.into(),
             constrained_axis: None,
             clip_behavior: Clip::None,
             child: Child::empty(),
@@ -58,9 +54,13 @@ impl UnconstrainedBox {
 
     /// Sets the alignment used to position the child when its size differs
     /// from this box's own.
+    ///
+    /// An [`Alignment`] is absolute, an
+    /// [`AlignmentDirectional`](flui_painting::AlignmentDirectional) resolves
+    /// against the ambient [`Directionality`].
     #[must_use]
-    pub fn alignment(mut self, alignment: Alignment) -> Self {
-        self.alignment = alignment;
+    pub fn alignment(mut self, alignment: impl Into<AlignmentGeometry>) -> Self {
+        self.alignment = alignment.into();
         self
     }
 
@@ -87,9 +87,12 @@ impl UnconstrainedBox {
         self
     }
 
-    fn build_render_object(&self) -> RenderConstraintsTransformBox {
+    fn build_render_object(
+        &self,
+        ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> RenderConstraintsTransformBox {
         RenderConstraintsTransformBox::new(
-            self.alignment,
+            Directionality::resolve_alignment(ctx, self.alignment),
             self.constrained_axis,
             self.clip_behavior,
         )
@@ -107,20 +110,18 @@ impl RenderView for UnconstrainedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderConstraintsTransformBox;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.build_render_object()
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+        self.build_render_object(ctx)
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_alignment(self.alignment);
+        impact |=
+            render_object.set_alignment(Directionality::resolve_alignment(ctx, self.alignment));
         impact |= render_object.set_constrained_axis(self.constrained_axis);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         impact

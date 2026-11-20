@@ -572,6 +572,7 @@ impl RenderBox for FailsAfterItsChild {
         ctx.layout_child(0, BoxConstraints::tight(size).loosen())?;
         if self.0.load(Ordering::SeqCst) {
             return Err(RenderError::invalid_constraints(
+                "FailsAfterItsChild",
                 "layout fails after the child laid out",
             ));
         }

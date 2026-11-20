@@ -25,8 +25,7 @@ use flui_foundation::RenderId;
 
 use crate::{
     parent_data::{
-        FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
-        StackParentData, TableCellParentData,
+        FlexParentData, MultiChildLayoutParentData, StackParentData, TableCellParentData,
     },
     pipeline::{Idle, PipelineOwner},
     protocol::{BoxProtocol, SliverProtocol},
@@ -165,19 +164,6 @@ impl TreeNode {
     #[must_use]
     pub fn with_multi_child_layout_parent_data(self, data: MultiChildLayoutParentData) -> Self {
         self.with_parent_data_seed(ParentDataSeed::MultiChildLayout(data))
-    }
-
-    /// Convenience wrapper for [`SliverMultiBoxAdaptorParentData`] on
-    /// [`RenderSliverList`] / `RenderSliverGrid` children.
-    ///
-    /// Stamps the logical `index` onto the child before layout so the
-    /// virtualizer band walk can discover it in `logical_to_slot` and treat
-    /// it as a pre-existing resident.
-    ///
-    /// [`RenderSliverList`]: crate::traits::RenderSliver
-    #[must_use]
-    pub fn with_sliver_multi_box_parent_data(self, data: SliverMultiBoxAdaptorParentData) -> Self {
-        self.with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(data))
     }
 
     /// Convenience wrapper for [`TableCellParentData`] on [`RenderTable`] children.

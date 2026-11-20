@@ -1,105 +1,27 @@
-//! Lock-free render state flags.
+//! A render object's dirty and boundary flags.
 //!
-//! This module implements the render object dirty-flag system using atomic
-//! operations for thread-safe, lock-free access. All operations are single
-//! atomic instructions with no locks or contention.
+//! Each render object tracks, in one `u32` bitset:
+//! - what it needs: layout, paint, compositing bits, semantics;
+//! - what it is: a relayout boundary, a repaint boundary;
+//! - what the pipeline propagates and remembers between passes.
 //!
-//! # Render object flags
-//!
-//! Each render object tracks multiple boolean flags:
-//! - needs layout - Layout computation required
-//! - needs paint - Paint pass required
-//! - needs compositing bits update - Compositing layer update required
-//! - needs semantics update - Accessibility update required
-//!
-//! Additionally, there are boundary flags:
-//! - repaint boundary - Creates compositing layer
-//! - relayout boundary - Isolates layout changes
-//!
-//! # Implementation
-//!
-//! We use a single `AtomicU32` bitset for all flags, providing:
-//! - **O(1) flag mutations** (fetch_or / fetch_and / fetch_xor)
-//! - **Minimal memory traffic** (single 4-byte atomic)
-//! - **Lock-free operations** (10-50x faster than RwLock)
-//! - **Clear semantic separation** (layout / paint / compositing / semantics)
-//!
-//! # Memory Ordering
-//!
-//! - **Loads** use `Acquire` to observe prior mutations
-//! - **Stores** use `Release` to publish complete flag set
-//! - **Mutations** use `AcqRel` for read-modify-write correctness
-//!
-//! This is sufficient because flags are simple presence indicators with no
-//! dependent data co-located in the atomic.
-//!
-//! No cross-thread reader of these flags exists today — the pipeline is
-//! single-threaded by contract (see `storage/state`), and dirty-marking
-//! flows through `PipelineOwner` on the UI thread. The Acquire/Release
-//! scheme is deliberately conservative so that a future off-thread reader
-//! (e.g. a raster or semantics worker) inherits correct publication
-//! ordering without a re-audit of every call site.
-//!
-//! # Performance
-//!
-//! Atomic flag operations are extremely fast:
-//! - Flag check: ~1ns (vs ~50ns for RwLock)
-//! - Flag set: ~5ns (vs ~100ns for RwLock)
-//! - Zero lock contention
-//! - Cache-friendly (4 bytes)
-//!
-//! # Examples
-//!
-//! ## Basic Usage
+//! [`RenderFlagsCell`] holds the set behind `&self`. It is a `Cell`, not an
+//! atomic: the render tree is `!Send + !Sync` and one thread runs every
+//! pipeline pass (ADR-0323 §1), so a flag needs interior mutability and no
+//! ordering. A mark from another thread reaches the tree through
+//! `RenderInvalidationHandle`'s queue, never through these bits.
 //!
 //! ```rust
-//! use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+//! use flui_rendering::storage::{RenderFlags, RenderFlagsCell};
 //!
-//! let flags = AtomicRenderFlags::empty();
-//!
-//! // Mark needs layout
-//! flags.set(RenderFlags::NEEDS_LAYOUT);
-//! assert!(flags.contains(RenderFlags::NEEDS_LAYOUT));
-//!
-//! // Layout complete
-//! flags.remove(RenderFlags::NEEDS_LAYOUT);
-//! ```
-//!
-//! ## Convenience API
-//!
-//! ```rust
-//! use flui_rendering::storage::AtomicRenderFlags;
-//!
-//! let flags = AtomicRenderFlags::empty();
-//!
-//! // Named marking methods
+//! let flags = RenderFlagsCell::empty();
 //! flags.mark_needs_layout();
 //! assert!(flags.needs_layout());
-//!
-//! flags.mark_needs_paint();
-//! assert!(flags.needs_paint());
-//! ```
-//!
-//! ## Boundary Optimization
-//!
-//! ```rust,ignore
-//! // Set up repaint boundary (enables layer caching)
-//! flags.set_repaint_boundary(true);
-//! if flags.is_repaint_boundary() {
-//!     create_compositing_layer();
-//! }
-//!
-//! // Set up relayout boundary (stops layout propagation)
-//! flags.set_relayout_boundary(true);
-//! if flags.is_relayout_boundary() {
-//!     // Don't propagate layout changes to parent
-//! }
+//! flags.remove(RenderFlags::NEEDS_LAYOUT);
+//! assert!(!flags.contains(RenderFlags::NEEDS_LAYOUT));
 //! ```
 
-use std::{
-    fmt,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::{cell::Cell, fmt};
 
 use bitflags::bitflags;
 
@@ -107,7 +29,7 @@ bitflags! {
     /// Per-render-node state flags stored in a compact bitset.
     ///
     /// These flags track the dirty state of a render object and its properties.
-    /// Use via `AtomicRenderFlags` for thread-safe, lock-free access.
+    /// A node holds its set in a [`RenderFlagsCell`].
     ///
     /// # Flag Categories
     ///
@@ -121,9 +43,6 @@ bitflags! {
     /// - `IS_RELAYOUT_BOUNDARY` - Layout change isolation boundary
     /// - `IS_REPAINT_BOUNDARY` - Paint change isolation boundary
     ///
-    /// ## State Flags (computed properties)
-    /// - `HAS_OVERFLOW` - Overflow detected (debug only)
-    ///
     /// # Memory Layout
     ///
     /// Stored as a single `u32` (4 bytes) with bit positions:
@@ -134,8 +53,7 @@ bitflags! {
     /// Bit 3: IS_RELAYOUT_BOUNDARY
     /// Bit 4: IS_REPAINT_BOUNDARY
     /// Bit 5: NEEDS_SEMANTICS
-    /// Bit 6: (reserved — hole left intentionally)
-    /// Bit 7: HAS_OVERFLOW (debug only)
+    /// Bits 6-7: unused
     /// Bit 8: NEEDS_LAYOUT_PROPAGATION
     /// Bit 9: NEEDS_PAINT_PROPAGATION
     /// Bit 10: WAS_REPAINT_BOUNDARY
@@ -198,17 +116,6 @@ bitflags! {
         /// don't require repainting ancestors.
         const IS_REPAINT_BOUNDARY = 1 << 4;
 
-        // ===== State Flags (Computed Properties) =====
-
-        // Bit 6: reserved hole — do not reuse this bit position.
-
-        /// Overflow detected during layout or paint (debug only).
-        ///
-        /// Set when content exceeds available space. Used for
-        /// debugging overflow issues.
-        #[cfg(debug_assertions)]
-        const HAS_OVERFLOW = 1 << 7;
-
         // ===== Propagation Flags (Internal) =====
 
         /// Layout needs to propagate to parent.
@@ -230,8 +137,8 @@ bitflags! {
         /// detect a transition into or out of repaint-boundary status.
         ///
         /// It lives here rather than on the `RenderObject<P>` trait surface so
-        /// the paint phase can flip the bit through a single atomic store
-        /// rather than acquiring a write lock on the trait object.
+        /// the paint phase can flip it through `&self` without borrowing the
+        /// render object mutably.
         const WAS_REPAINT_BOUNDARY = 1 << 10;
 
         /// Marks a node whose compositing-bits subtree walk must be
@@ -389,112 +296,49 @@ impl fmt::Display for RenderFlags {
         if self.contains(Self::WAS_REPAINT_BOUNDARY) {
             flags.push("WAS_REPAINT_BOUNDARY");
         }
-        #[cfg(debug_assertions)]
-        if self.contains(Self::HAS_OVERFLOW) {
-            flags.push("HAS_OVERFLOW");
-        }
 
         write!(f, "RenderFlags({})", flags.join(" | "))
     }
 }
 
 // ============================================================================
-// ATOMIC RENDER FLAGS
+// RENDER FLAGS CELL
 // ============================================================================
 
-/// Atomic wrapper for RenderFlags providing lock-free operations.
+/// A [`RenderFlags`] set that a render node changes through `&self`.
 ///
-/// This wrapper provides thread-safe flag operations using atomic
-/// compare-and-swap operations. It's 10-50x faster than RwLock for hot-path
-/// checks.
-///
-/// # Performance
-///
-/// | Operation | AtomicRenderFlags | `RwLock<RenderFlags>` | Speedup |
-/// |-----------|-------------------|---------------------|---------|
-/// | Check flag | ~1ns | ~50ns | 50x |
-/// | Set flag | ~5ns | ~100ns | 20x |
-/// | Multiple flags | ~10ns | ~150ns | 15x |
-///
-/// # Thread Safety
-///
-/// All operations are atomic and can be safely called from multiple threads
-/// simultaneously without additional synchronization.
-///
-/// # Examples
-///
-/// ## Basic Operations
-///
-/// ```rust
-/// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
-///
-/// let flags = AtomicRenderFlags::empty();
-///
-/// // Set flag
-/// flags.set(RenderFlags::NEEDS_LAYOUT);
-/// assert!(flags.contains(RenderFlags::NEEDS_LAYOUT));
-///
-/// // Remove flag
-/// flags.remove(RenderFlags::NEEDS_LAYOUT);
-/// assert!(!flags.contains(RenderFlags::NEEDS_LAYOUT));
-///
-/// // Set multiple
-/// flags.insert(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
-/// assert!(flags.needs_layout());
-/// assert!(flags.needs_paint());
-/// ```
-///
-/// ## Convenience API
-///
-/// ```rust
-/// use flui_rendering::storage::AtomicRenderFlags;
-///
-/// let flags = AtomicRenderFlags::empty();
-///
-/// // Mark dirty
-/// flags.mark_needs_layout();
-/// flags.mark_needs_paint();
-///
-/// // Check dirty state
-/// assert!(flags.needs_layout());
-/// assert!(flags.needs_paint());
-/// assert!(flags.is_dirty());
-///
-/// // Clear dirty state
-/// flags.clear_needs_layout();
-/// flags.clear_needs_paint();
-/// assert!(flags.is_clean());
-/// ```
+/// A `Cell`: the tree is owned by one thread, so no operation needs to be
+/// atomic (see the module docs).
 #[derive(Debug)]
-pub struct AtomicRenderFlags {
-    bits: AtomicU32,
+pub struct RenderFlagsCell {
+    bits: Cell<RenderFlags>,
 }
 
-impl AtomicRenderFlags {
-    /// Creates a new atomic flag set with initial flags.
+impl RenderFlagsCell {
+    /// Creates a flag set holding `flags`.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
+    /// let flags = RenderFlagsCell::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// assert!(flags.needs_layout());
     /// ```
     pub const fn new(flags: RenderFlags) -> Self {
         Self {
-            bits: AtomicU32::new(flags.bits()),
+            bits: Cell::new(flags),
         }
     }
 
-    /// Creates an empty atomic flag set (no flags set).
+    /// Creates an empty flag set.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// assert!(flags.is_clean());
     /// ```
     pub const fn empty() -> Self {
@@ -505,41 +349,49 @@ impl AtomicRenderFlags {
     // LOW-LEVEL OPERATIONS
     // ========================================================================
 
-    /// Loads the current flags atomically.
+    /// The current flags.
     ///
     /// Uses `Acquire` ordering to observe prior mutations.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT);
+    /// let flags = RenderFlagsCell::new(RenderFlags::NEEDS_LAYOUT);
     /// let current = flags.load();
     /// assert!(current.contains(RenderFlags::NEEDS_LAYOUT));
     /// ```
     #[inline]
     pub fn load(&self) -> RenderFlags {
-        RenderFlags::from_bits_truncate(self.bits.load(Ordering::Acquire))
+        self.bits.get()
     }
 
-    /// Stores a complete flag set atomically.
+    /// Replaces the whole set.
     ///
     /// Uses `Release` ordering to publish the new state.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.store(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// assert!(flags.needs_layout());
     /// assert!(flags.needs_paint());
     /// ```
     #[inline]
     pub fn store(&self, flags: RenderFlags) {
-        self.bits.store(flags.bits(), Ordering::Release);
+        self.bits.set(flags);
+    }
+
+    /// Clears `flag` and answers whether it was set.
+    #[inline]
+    fn take(&self, flag: RenderFlags) -> bool {
+        let bits = self.bits.get();
+        self.bits.set(bits.difference(flag));
+        bits.contains(flag)
     }
 
     /// Checks if the specified flag is set.
@@ -551,9 +403,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT);
+    /// let flags = RenderFlagsCell::new(RenderFlags::NEEDS_LAYOUT);
     /// assert!(flags.contains(RenderFlags::NEEDS_LAYOUT));
     /// assert!(!flags.contains(RenderFlags::NEEDS_PAINT));
     /// ```
@@ -562,52 +414,52 @@ impl AtomicRenderFlags {
         self.load().contains(flag)
     }
 
-    /// Sets a single flag atomically.
+    /// Sets a single flag.
     ///
     /// Uses `AcqRel` ordering for read-modify-write correctness.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.set(RenderFlags::NEEDS_LAYOUT);
     /// assert!(flags.contains(RenderFlags::NEEDS_LAYOUT));
     /// ```
     #[inline]
     pub fn set(&self, flag: RenderFlags) {
-        self.bits.fetch_or(flag.bits(), Ordering::AcqRel);
+        self.bits.set(self.bits.get() | flag);
     }
 
-    /// Removes a single flag atomically.
+    /// Removes a single flag.
     ///
     /// Uses `AcqRel` ordering for read-modify-write correctness.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT);
+    /// let flags = RenderFlagsCell::new(RenderFlags::NEEDS_LAYOUT);
     /// flags.remove(RenderFlags::NEEDS_LAYOUT);
     /// assert!(!flags.contains(RenderFlags::NEEDS_LAYOUT));
     /// ```
     #[inline]
     pub fn remove(&self, flag: RenderFlags) {
-        self.bits.fetch_and(!flag.bits(), Ordering::AcqRel);
+        self.bits.set(self.bits.get().difference(flag));
     }
 
-    /// Toggles a flag atomically.
+    /// Toggles a flag.
     ///
     /// Uses `AcqRel` ordering for read-modify-write correctness.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.toggle(RenderFlags::NEEDS_LAYOUT);
     /// assert!(flags.contains(RenderFlags::NEEDS_LAYOUT));
     /// flags.toggle(RenderFlags::NEEDS_LAYOUT);
@@ -615,44 +467,44 @@ impl AtomicRenderFlags {
     /// ```
     #[inline]
     pub fn toggle(&self, flag: RenderFlags) {
-        self.bits.fetch_xor(flag.bits(), Ordering::AcqRel);
+        self.bits.set(self.bits.get() ^ flag);
     }
 
-    /// Inserts multiple flags atomically.
+    /// Inserts several flags.
     ///
     /// Uses `AcqRel` ordering for read-modify-write correctness.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.insert(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// assert!(flags.needs_layout());
     /// assert!(flags.needs_paint());
     /// ```
     #[inline]
     pub fn insert(&self, flags: RenderFlags) {
-        self.bits.fetch_or(flags.bits(), Ordering::AcqRel);
+        self.bits.set(self.bits.get() | flags);
     }
 
-    /// Clears all flags atomically.
+    /// Clears all flags.
     ///
     /// Uses `Release` ordering to publish the cleared state.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::{AtomicRenderFlags, RenderFlags};
+    /// use flui_rendering::storage::{RenderFlagsCell, RenderFlags};
     ///
-    /// let flags = AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
+    /// let flags = RenderFlagsCell::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT);
     /// flags.clear();
     /// assert!(flags.is_clean());
     /// ```
     #[inline]
     pub fn clear(&self) {
-        self.bits.store(0, Ordering::Release);
+        self.bits.set(RenderFlags::empty());
     }
 
     // ========================================================================
@@ -664,9 +516,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.mark_needs_layout();
     /// assert!(flags.needs_layout());
     /// ```
@@ -682,9 +534,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.mark_needs_layout();
     /// // ... perform layout ...
     /// flags.clear_needs_layout();
@@ -700,9 +552,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// assert!(!flags.needs_layout());
     /// flags.mark_needs_layout();
     /// assert!(flags.needs_layout());
@@ -717,9 +569,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.mark_needs_paint();
     /// assert!(flags.needs_paint());
     /// ```
@@ -775,8 +627,7 @@ impl AtomicRenderFlags {
     /// Clears the laid-out-since-paint flag and answers whether it was set.
     #[inline]
     pub fn take_laid_out_since_paint(&self) -> bool {
-        let bit = RenderFlags::LAID_OUT_SINCE_PAINT.bits();
-        self.bits.fetch_and(!bit, Ordering::AcqRel) & bit != 0
+        self.take(RenderFlags::LAID_OUT_SINCE_PAINT)
     }
 
     /// Records that the render object itself was marked for paint.
@@ -788,8 +639,7 @@ impl AtomicRenderFlags {
     /// Clears the paint-changed flag and answers whether it was set.
     #[inline]
     pub fn take_paint_changed(&self) -> bool {
-        let bit = RenderFlags::PAINT_CHANGED.bits();
-        self.bits.fetch_and(!bit, Ordering::AcqRel) & bit != 0
+        self.take(RenderFlags::PAINT_CHANGED)
     }
 
     /// Marks the render object as needing compositing update.
@@ -863,9 +713,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.set_relayout_boundary(true);
     /// assert!(flags.is_relayout_boundary());
     /// ```
@@ -891,9 +741,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// flags.set_repaint_boundary(true);
     /// assert!(flags.is_repaint_boundary());
     /// ```
@@ -932,27 +782,6 @@ impl AtomicRenderFlags {
         self.contains(RenderFlags::WAS_REPAINT_BOUNDARY)
     }
 
-    /// Marks overflow detected (debug only).
-    #[cfg(debug_assertions)]
-    #[inline]
-    pub fn mark_has_overflow(&self) {
-        self.set(RenderFlags::HAS_OVERFLOW);
-    }
-
-    /// Clears overflow flag (debug only).
-    #[cfg(debug_assertions)]
-    #[inline]
-    pub fn clear_has_overflow(&self) {
-        self.remove(RenderFlags::HAS_OVERFLOW);
-    }
-
-    /// Checks if overflow was detected (debug only).
-    #[cfg(debug_assertions)]
-    #[inline]
-    pub fn has_overflow(&self) -> bool {
-        self.contains(RenderFlags::HAS_OVERFLOW)
-    }
-
     /// Whether the last committed geometry came from a degraded pass
     /// ([`RenderFlags::GEOMETRY_DEGRADED`]).
     #[inline]
@@ -978,9 +807,9 @@ impl AtomicRenderFlags {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_rendering::storage::AtomicRenderFlags;
+    /// use flui_rendering::storage::RenderFlagsCell;
     ///
-    /// let flags = AtomicRenderFlags::empty();
+    /// let flags = RenderFlagsCell::empty();
     /// assert!(flags.is_clean());
     ///
     /// flags.mark_needs_layout();
@@ -998,13 +827,13 @@ impl AtomicRenderFlags {
     }
 }
 
-impl Default for AtomicRenderFlags {
+impl Default for RenderFlagsCell {
     fn default() -> Self {
         Self::empty()
     }
 }
 
-impl Clone for AtomicRenderFlags {
+impl Clone for RenderFlagsCell {
     fn clone(&self) -> Self {
         Self::new(self.load())
     }

@@ -47,7 +47,7 @@ use super::actions::{
     shared_action,
 };
 use super::focus::{FocusChangeHandler, render_box_rect_provider};
-use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
+use super::focus_host::{FocusConfig, FocusEdges, FocusHost, FocusNodeOwnership};
 use super::focus_ring::DefaultFocusRingStyle;
 use super::gesture_detector::{PressCallbacks, PressShape, PressSource, TapSlot};
 use super::listener::{ContactCallbacks, pointer_callback, release_targets};
@@ -444,27 +444,27 @@ impl InteractiveNode {
     /// The focus part's configuration: the control's own, conjoined with
     /// whether the control can be operated.
     fn focus_config(&self) -> Option<FocusConfig> {
-        self.focus.as_ref().map(|config| {
-            let mut config = FocusConfig {
-                can_request_focus: Some(
-                    config.can_request_focus.unwrap_or(true) && self.operable(),
-                ),
-                ..config.clone()
-            };
-            if let Some(states) = &self.states {
-                config.on_focus_change = Some(writing_focus(
-                    states,
-                    WidgetState::Focused,
-                    config.on_focus_change.take(),
-                ));
-                config.on_visible_focus_change = Some(writing_focus(
-                    states,
-                    WidgetState::FocusVisible,
-                    config.on_visible_focus_change.take(),
-                ));
-            }
-            config
+        self.focus.as_ref().map(|config| FocusConfig {
+            can_request_focus: Some(config.can_request_focus.unwrap_or(true) && self.operable()),
+            ..config.clone()
         })
+    }
+
+    /// The focus edges the focus part reports to: the control's own, after
+    /// the states the node writes. They stay out of the configuration, so
+    /// a node that writes states copies no handlers into it.
+    fn focus_edges(&self) -> FocusEdges {
+        let own = self
+            .focus
+            .as_ref()
+            .map_or_else(FocusEdges::default, FocusConfig::edges);
+        match &self.states {
+            Some(states) => FocusEdges {
+                focused: Some(writing_focus(states, WidgetState::Focused, own.focused)),
+                shown: Some(writing_focus(states, WidgetState::FocusVisible, own.shown)),
+            },
+            None => own,
+        }
     }
 
     /// The bindings the node declares: its own while the control can be
@@ -790,7 +790,7 @@ impl StatefulRenderView for InteractiveNode {
             focus: self
                 .focus_config()
                 .as_ref()
-                .map(|config| FocusHost::new(config, ctx)),
+                .map(|config| FocusHost::new(config, self.focus_edges(), ctx)),
             own_actions: self.declared_actions(),
             ambient_actions: None,
             chain: None,
@@ -870,7 +870,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         let record = self.focus_record();
         if let (Some(focus), Some(config)) = (&mut self.focus, &new.focus_config()) {
             failure.contain(|| {
-                focus.update(config);
+                focus.update(config, new.focus_edges());
                 focus.record(record);
             });
         }

@@ -1,34 +1,29 @@
 //! Basic dirty-flag accessors and boundary configuration for `RenderState<P>`.
 //!
-//! This file contains the lock-free flag accessors (`needs_layout`,
+//! The flag accessors (`needs_layout`,
 //! `needs_paint`, `clear_*`, `flags()`) and boundary configuration methods
 //! (`is_relayout_boundary`, `is_repaint_boundary`, `set_*_boundary`,
 //! `was_repaint_boundary`, `set_was_repaint_boundary`).
 
 use super::RenderState;
 use crate::protocol::Protocol;
-use crate::storage::flags::{AtomicRenderFlags, RenderFlags};
+use crate::storage::flags::{RenderFlags, RenderFlagsCell};
 
 // ============================================================================
-// BASIC DIRTY FLAGS (LOCK-FREE)
+// BASIC DIRTY FLAGS
 // ============================================================================
 
 impl<P: Protocol> RenderState<P> {
-    /// Returns a reference to the atomic render flags.
+    /// The node's flag set.
     ///
     /// This provides direct access to the flags for callers that need
     /// fine-grained control over flag operations.
     #[inline]
-    pub fn flags(&self) -> &AtomicRenderFlags {
+    pub fn flags(&self) -> &RenderFlagsCell {
         &self.flags
     }
 
-    /// Checks if layout is needed (lock-free, O(1)).
-    ///
-    /// This is called frequently in hot paths, so it's optimized for speed:
-    /// - Single atomic load operation
-    /// - No locks or blocking
-    /// - Inlined for zero-cost abstraction
+    /// Checks if layout is needed.
     ///
     /// # Example
     ///
@@ -43,7 +38,7 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::NEEDS_LAYOUT)
     }
 
-    /// Checks if paint is needed (lock-free, O(1)).
+    /// Checks if paint is needed.
     ///
     /// Similar performance characteristics to `needs_layout()`.
     #[inline]
@@ -52,14 +47,14 @@ impl<P: Protocol> RenderState<P> {
     }
 
     /// Checks if this node's own composited-layer properties changed while
-    /// nothing it painted did (lock-free, O(1)).
+    /// nothing it painted did.
     #[inline]
     pub fn needs_composited_layer_update(&self) -> bool {
         self.flags
             .contains(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE)
     }
 
-    /// Checks if compositing is needed (lock-free, O(1)).
+    /// Checks if compositing is needed.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         self.flags.contains(RenderFlags::NEEDS_COMPOSITING)
@@ -67,10 +62,10 @@ impl<P: Protocol> RenderState<P> {
 
     /// Marks the layout dirty flag.
     ///
-    /// Sets `NEEDS_LAYOUT` on the underlying atomic flags. Idempotent —
-    /// re-marking an already-dirty node is a no-op at the atomic level.
+    /// Sets `NEEDS_LAYOUT`. Idempotent: re-marking an already-dirty node
+    /// changes nothing.
     ///
-    /// Lock-free, `O(1)`. Used by [`PipelineOwner::mark_needs_layout`]
+    /// Used by [`PipelineOwner::mark_needs_layout`]
     /// to walk the ancestor chain marking each node up to the nearest
     /// relayout boundary.
     ///
@@ -130,15 +125,6 @@ impl<P: Protocol> RenderState<P> {
     #[inline]
     pub fn clear_needs_compositing(&self) {
         self.flags.remove(RenderFlags::NEEDS_COMPOSITING);
-    }
-
-    /// Clears all dirty flags (after all phases complete).
-    ///
-    /// Use this sparingly - usually you want to clear flags individually
-    /// as each phase completes.
-    #[inline]
-    pub fn clear_all_flags(&self) {
-        self.flags.clear();
     }
 }
 
@@ -231,8 +217,8 @@ impl<P: Protocol> RenderState<P> {
     /// compositing-bits propagation to detect repaint-boundary transitions.
     ///
     /// Hoisted off the `RenderObject<P>` trait surface: it lives on
-    /// `RenderState` so the paint phase flips a single atomic bit rather
-    /// than acquiring a write lock on the trait object.
+    /// `RenderState` so the paint phase flips it through `&self` without
+    /// borrowing the render object mutably.
     #[inline]
     pub fn was_repaint_boundary(&self) -> bool {
         self.flags.was_repaint_boundary()

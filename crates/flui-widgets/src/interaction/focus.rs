@@ -180,7 +180,7 @@ impl Focus {
     /// Install weak explicit links; unavailable targets fall back to traversal policy.
     #[must_use]
     pub fn traversal_overrides(mut self, overrides: FocusTraversalOverrides) -> Self {
-        self.config.traversal_overrides = Some(overrides);
+        self.config.rare_mut().traversal_overrides = Some(overrides);
         self
     }
 
@@ -267,7 +267,7 @@ impl Focus {
         F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
-        self.config.on_focus_change = Some(value_callback(handler));
+        self.config.rare_mut().on_focus_change = Some(value_callback(handler));
         self
     }
 
@@ -284,7 +284,7 @@ impl Focus {
         F: Fn(&mut EventContext<'_>, bool) -> R + 'static,
         R: EventOutcome,
     {
-        self.config.on_visible_focus_change = Some(value_callback(handler));
+        self.config.rare_mut().on_visible_focus_change = Some(value_callback(handler));
         self
     }
 
@@ -306,7 +306,7 @@ impl Focus {
     where
         F: Fn(&mut EventContext<'_>, &KeyEvent) -> KeyEventResult + 'static,
     {
-        self.config.on_key_event = Some(Rc::new(handler));
+        self.config.rare_mut().on_key_event = Some(Rc::new(handler));
         self
     }
 
@@ -370,7 +370,7 @@ impl StatefulView for Focus {
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         FocusState {
-            host: FocusHost::new(&self.config, ctx),
+            host: FocusHost::new(&self.config, self.config.edges(), ctx),
             anchor: SubtreeAnchor::new(),
             rect_provider: self.rect_provider.clone(),
             sliver: self.sliver,
@@ -484,7 +484,7 @@ impl ViewState<Focus> for FocusState {
     }
 
     fn did_update_view(&mut self, _old_view: &Focus, new_view: &Focus) {
-        self.host.update(&new_view.config);
+        self.host.update(&new_view.config, new_view.config.edges());
     }
 
     fn dispose(&mut self) {

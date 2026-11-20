@@ -237,7 +237,9 @@ pub(crate) fn wait_until(
 
 /// The facts of `element` once it is actionable, read again after each frame the window presents,
 /// until `timeout` has passed on the connection's clock (the virtual one on the headless target).
-/// A window that presents no frame before the deadline ends the wait there.
+/// A window that presents no frame before the deadline ends the wait there. The answer is always
+/// read after the last wait: an element that became actionable on the frame that ended it is
+/// actionable.
 fn actionable(
     driver: &mut Driver,
     element: ElementRef,
@@ -245,6 +247,7 @@ fn actionable(
     timeout: Duration,
 ) -> Result<Actionability> {
     let deadline = driver.clock().saturating_add(timeout);
+    let mut expired = false;
     loop {
         let facts = driver.agent::<method::ElementActionability>(
             ActionabilityParams::new(element),
@@ -264,10 +267,7 @@ fn actionable(
         if force {
             return Ok(facts);
         }
-        let left = deadline.saturating_sub(driver.clock());
-        let presented = !left.is_zero()
-            && wait_until(driver, element.window, Condition::Frames(1), left)?.satisfied;
-        if !presented || driver.clock() >= deadline {
+        if expired {
             let covered_by = facts.covered_by;
             return Err(Error::NotActionable {
                 failed: Some(failed),
@@ -283,6 +283,11 @@ fn actionable(
                 retry: ErrorCode::NotActionable.default_retry(),
             });
         }
+        let left = deadline.saturating_sub(driver.clock());
+        let presented = !left.is_zero()
+            && wait_until(driver, element.window, Condition::Frames(1), left)?.satisfied;
+        // Past the deadline, or no frame to wait for: the next reading is the last.
+        expired = !presented || driver.clock() >= deadline;
     }
 }
 

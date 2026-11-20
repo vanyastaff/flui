@@ -13,7 +13,7 @@ use flui_rendering::{
         BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
         BoxLayoutContext, PaintContext,
     },
-    parent_data::ListBodyParentData,
+    parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
 
@@ -199,7 +199,7 @@ impl flui_foundation::inspect::Inspect for RenderListBody {
 
 impl RenderBox for RenderListBody {
     type Arity = Variable;
-    type ParentData = ListBodyParentData;
+    type ParentData = BoxParentData;
 
     fn perform_layout(
         &mut self,

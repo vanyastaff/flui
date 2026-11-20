@@ -47,6 +47,8 @@ interprocess = { workspace = true }
 # The private directory a launched app's Unix socket lives in.
 [target.'cfg(unix)'.dependencies]
 tempfile = { workspace = true }
+# The user id that names the private directory of the OS-input lock.
+rustix = { workspace = true, features = ["process"] }
 
 # The Windows lane: `SendInput` and synthetic pointer injection, the low-level hooks and raw input
 # its guard watches, UI Automation, Windows Graphics Capture over Direct3D 11, and the job object a

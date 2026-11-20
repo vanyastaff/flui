@@ -243,27 +243,6 @@ impl SliverConstraints {
         self.scroll_offset <= 0.0
     }
 
-    /// Returns whether there is remaining paint extent available.
-    #[inline]
-    #[must_use]
-    pub fn has_remaining_paint_extent(&self) -> bool {
-        self.remaining_paint_extent > 0.0 && self.remaining_paint_extent.is_finite()
-    }
-
-    /// Returns whether there is remaining cache extent available.
-    #[inline]
-    #[must_use]
-    pub fn has_remaining_cache_extent(&self) -> bool {
-        self.remaining_cache_extent > 0.0 && self.remaining_cache_extent.is_finite()
-    }
-
-    /// Returns whether this sliver is completely scrolled out of view.
-    #[inline]
-    #[must_use]
-    pub fn is_scrolled_out_of_view(&self) -> bool {
-        self.scroll_offset >= self.remaining_paint_extent
-    }
-
     /// Returns whether viewport is shrink-wrapping (infinite paint extent).
     #[inline]
     #[must_use]

@@ -53,56 +53,6 @@ pub struct RenderTree {
     root: Option<RenderId>,
 }
 
-/// Materialises disjoint `&mut RenderNode` borrows for `ids`, in input
-/// order, from a **single** `iter_mut` pass.
-///
-/// Safe split-borrow: the slab's `iter_mut` yields each occupied slot's
-/// `&mut RenderNode` exactly once out of one traversal, so the returned
-/// references are disjoint by construction and no `unsafe` is needed.
-/// (Deriving each element through a fresh slab `get_mut` would re-tag the
-/// whole allocation per element and invalidate the earlier references:
-/// Stacked Borrows UB, reported by miri.)
-///
-/// Returns `None` if `ids` contains duplicates or any id is stale.
-///
-/// # Complexity
-///
-/// O(slab len + N) average and worst case — one traversal with an
-/// early break once all N slots are found, plus an O(N) `HashMap`
-/// build for the id→position lookup.
-fn collect_disjoint_mut<'a>(
-    nodes: &'a mut NodeSlab,
-    ids: &[RenderId],
-) -> Option<Vec<&'a mut RenderNode>> {
-    // id → output position. Duplicate ids collapse the map; report them as
-    // `None` (the caller's id-uniqueness contract).
-    if !ids.iter().all(|&id| nodes.contains(id)) {
-        return None;
-    }
-    let want: std::collections::HashMap<RenderId, usize> = ids.iter().copied().zip(0..).collect();
-    if want.len() != ids.len() {
-        return None;
-    }
-
-    let mut slots: Vec<Option<&'a mut RenderNode>> = Vec::with_capacity(ids.len());
-    slots.resize_with(ids.len(), || None);
-
-    let mut remaining = ids.len();
-    for (id, node) in nodes.iter_mut() {
-        if remaining == 0 {
-            break;
-        }
-        if let Some(&pos) = want.get(&id) {
-            slots[pos] = Some(node);
-            remaining -= 1;
-        }
-    }
-
-    // A stale id leaves its slot `None`, which collapses the whole collect
-    // to `None`.
-    slots.into_iter().collect()
-}
-
 /// The depth of a child under a parent at `parent_depth`.
 fn child_depth(parent_depth: u16) -> u16 {
     parent_depth
@@ -211,62 +161,6 @@ impl RenderTree {
     #[inline]
     pub fn get_mut(&mut self, id: RenderId) -> Option<&mut RenderNode> {
         self.nodes.get_mut(id)
-    }
-
-    /// Returns mutable references to two distinct nodes simultaneously.
-    ///
-    /// Used by the layout phase for parent-child re-entrant access: a
-    /// parent holds `&mut RenderNode` for itself while it calls `layout`
-    /// on each child's `&mut RenderNode`. Returns `None` if either id is
-    /// missing.
-    ///
-    /// Implemented over `collect_disjoint_mut` — a single safe
-    /// `iter_mut` split-borrow pass, no raw pointers. (The previous
-    /// per-index `(*raw_slab).get_mut(..)` derivation re-tagged the
-    /// whole slab allocation per element and invalidated the earlier
-    /// reference — Stacked Borrows UB, caught by miri.)
-    ///
-    /// # Panics
-    ///
-    /// Panics in debug builds if `a == b`. In release builds, returns
-    /// `None`.
-    pub fn get_two_mut(
-        &mut self,
-        a: RenderId,
-        b: RenderId,
-    ) -> Option<(&mut RenderNode, &mut RenderNode)> {
-        debug_assert_ne!(a, b, "RenderTree::get_two_mut requires distinct ids");
-        if a == b {
-            return None;
-        }
-
-        let mut nodes = collect_disjoint_mut(&mut self.nodes, &[a, b])?;
-        let b_ref = nodes.pop()?;
-        let a_ref = nodes.pop()?;
-        Some((a_ref, b_ref))
-    }
-
-    /// Returns mutable references to a parent + every child in the given
-    /// child id list.
-    ///
-    /// Used by variable-arity layout where a parent's `perform_layout`
-    /// must read its own fields while writing into each child's slot.
-    /// Returns `None` if any id is missing or any pair of ids collide
-    /// (`collect_disjoint_mut` rejects duplicates; two distinct current
-    /// ids never share a slot, because a slot holds one generation).
-    pub fn get_parent_and_children_mut<'a>(
-        &'a mut self,
-        parent_id: RenderId,
-        child_ids: &[RenderId],
-    ) -> Option<(&'a mut RenderNode, Vec<&'a mut RenderNode>)> {
-        let mut ids = Vec::with_capacity(child_ids.len() + 1);
-        ids.push(parent_id);
-        ids.extend_from_slice(child_ids);
-
-        let mut nodes = collect_disjoint_mut(&mut self.nodes, &ids)?;
-        let children = nodes.split_off(1);
-        let parent_ref = nodes.pop()?;
-        Some((parent_ref, children))
     }
 
     /// Inserts `node` without a parent and returns its id; the caller links it and
@@ -805,7 +699,7 @@ impl RenderTree {
     }
 
     /// Checks if `ancestor` is an ancestor of `descendant`.
-    pub fn is_ancestor(&self, ancestor: RenderId, descendant: RenderId) -> bool {
+    fn is_ancestor(&self, ancestor: RenderId, descendant: RenderId) -> bool {
         let mut current = self.parent(descendant);
         while let Some(id) = current {
             if id == ancestor {
@@ -814,68 +708,6 @@ impl RenderTree {
             current = self.parent(id);
         }
         false
-    }
-
-    /// Checks if `descendant` is a descendant of `ancestor`.
-    #[inline]
-    pub fn is_descendant(&self, descendant: RenderId, ancestor: RenderId) -> bool {
-        self.is_ancestor(ancestor, descendant)
-    }
-
-    /// Returns the path from root to the given node.
-    ///
-    /// The path includes the node itself.
-    pub fn path_to_root(&self, id: RenderId) -> Vec<RenderId> {
-        let mut path = Vec::new();
-        let mut current = Some(id);
-
-        while let Some(node_id) = current {
-            path.push(node_id);
-            current = self.parent(node_id);
-        }
-
-        path.reverse();
-        path
-    }
-
-    // ========================================================================
-    // Dirty Node Collection
-    // ========================================================================
-
-    /// Collects all nodes that need layout, sorted by depth.
-    ///
-    /// Returns IDs of nodes with `needs_layout() == true`, sorted by depth
-    /// (shallow first) for correct layout order.
-    pub fn collect_nodes_needing_layout(&self) -> Vec<RenderId> {
-        let mut nodes: Vec<(RenderId, usize)> = self
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.needs_layout())
-            .map(|(id, node)| (id, node.depth() as usize))
-            .collect();
-
-        // Sort by depth (shallow first)
-        nodes.sort_by_key(|(_, depth)| *depth);
-
-        nodes.into_iter().map(|(id, _)| id).collect()
-    }
-
-    /// Collects all nodes that need paint, sorted by depth.
-    ///
-    /// Returns IDs of nodes with `needs_paint() == true`, sorted by depth
-    /// (shallow first) for correct paint order.
-    pub fn collect_nodes_needing_paint(&self) -> Vec<RenderId> {
-        let mut nodes: Vec<(RenderId, usize)> = self
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.needs_paint())
-            .map(|(id, node)| (id, node.depth() as usize))
-            .collect();
-
-        // Sort by depth (shallow first)
-        nodes.sort_by_key(|(_, depth)| *depth);
-
-        nodes.into_iter().map(|(id, _)| id).collect()
     }
 
     // ========================================================================
@@ -890,11 +722,6 @@ impl RenderTree {
     /// Returns an iterator over all nodes.
     pub fn nodes(&self) -> impl Iterator<Item = &RenderNode> + '_ {
         self.nodes.iter().map(|(_, node)| node)
-    }
-
-    /// Returns a mutable iterator over all nodes.
-    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut RenderNode> + '_ {
-        self.nodes.iter_mut().map(|(_, node)| node)
     }
 
     /// Returns an iterator over (RenderId, &RenderNode) pairs.
@@ -961,37 +788,6 @@ impl RenderTree {
                 for &child_id in node.children().iter().rev() {
                     stack.push(child_id);
                 }
-            }
-        }
-    }
-
-    /// Visits all nodes mutably in depth-first pre-order starting from root.
-    ///
-    /// **Note:** The callback receives only RenderId since we can't provide
-    /// mutable references during traversal. Use `get_mut()` inside the
-    /// callback.
-    pub fn visit_depth_first_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Self, RenderId),
-    {
-        // Iterative (explicit work-stack) like the immutable twin
-        // above — plain recursion overflows the fixed OS stack on
-        // deep chains. The child snapshot is taken BEFORE `f` runs
-        // (the recursive version did the same), so a callback that
-        // mutates the visited node's children does not change this
-        // node's traversal.
-        let Some(root_id) = self.root else {
-            return;
-        };
-        let mut stack: smallvec::SmallVec<[RenderId; 32]> = smallvec::SmallVec::new();
-        stack.push(root_id);
-        while let Some(id) = stack.pop() {
-            let children: Vec<RenderId> = self.get(id).map_or_default(|n| n.children().to_vec());
-            f(self, id);
-            // Reverse push so pop() yields original child-order
-            // (pre-order traversal).
-            for &child_id in children.iter().rev() {
-                stack.push(child_id);
             }
         }
     }
@@ -1189,7 +985,6 @@ mod tests {
         assert!(tree.get(old).is_none());
         assert!(tree.get_mut(old).is_none());
         assert!(tree.remove_shallow(old).is_none());
-        assert!(tree.get_two_mut(old, new).is_none());
 
         // New id is live.
         assert!(tree.contains(new));

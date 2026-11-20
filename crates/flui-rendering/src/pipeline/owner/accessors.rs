@@ -69,12 +69,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             && self.scheduler.layout_stamp().compatible(saved.stamp)
     }
 
-    /// Returns the unique identifier for this pipeline owner.
-    #[inline]
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
     /// Returns this presentation's current numeric text-sizing authority.
     #[inline]
     pub fn text_sizing(&self) -> &flui_painting::TextSizing {
@@ -785,13 +779,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if let Some(former_parent_id) = former_parent.filter(|id| *id != parent_id) {
             self.note_render_child_membership_changed(former_parent_id);
         }
-        self.note_render_child_membership_changed(parent_id);
-    }
-
-    /// Detach an existing render child without deleting it and invalidate the
-    /// surviving parent's membership-dependent phases.
-    pub fn drop_render_child(&mut self, parent_id: RenderId, child_id: RenderId) {
-        self.render_tree.drop_child(parent_id, child_id);
         self.note_render_child_membership_changed(parent_id);
     }
 
@@ -1986,7 +1973,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     #[inline]
     pub fn semantics_enabled(&self) -> bool {
         self.semantics_enabled
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Sets whether semantics are enabled.
@@ -2020,9 +2006,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// assembles a tree, inspectable via [`Self::semantics_owner`] or the render
     /// harness, but publishes nowhere.
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
-        let was_enabled = self
-            .semantics_enabled
-            .swap(enabled, std::sync::atomic::Ordering::Relaxed);
+        let was_enabled = std::mem::replace(&mut self.semantics_enabled, enabled);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
         let (event, wake) = if enabled && !was_enabled {
             if self.semantics_owner.is_none() {
@@ -2315,12 +2299,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     #[must_use]
     pub fn drain_mid_layout_marks(&mut self) -> usize {
         self.scheduler.drain_mid_marks()
-    }
-
-    /// Returns whether any mid-phase marks are pending drain.
-    #[inline]
-    pub fn has_mid_layout_marks(&self) -> bool {
-        self.scheduler.has_mid_marks()
     }
 
     /// Directly seed a pending child-build request for wiring tests.

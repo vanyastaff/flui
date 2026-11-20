@@ -698,21 +698,3 @@ where
         std::any::TypeId::of::<T::ParentData>()
     }
 }
-
-// ============================================================================
-// Proxy Sliver
-// ============================================================================
-
-/// Trait for slivers with a single sliver child.
-///
-/// Generic over the child type `C` which must implement `RenderSliver`.
-pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
-    /// Returns the child sliver, if any.
-    fn child(&self) -> Option<&C>;
-
-    /// Returns the child sliver mutably, if any.
-    fn child_mut(&mut self) -> Option<&mut C>;
-
-    /// Sets the child sliver.
-    fn set_child(&mut self, child: Option<C>);
-}

@@ -110,18 +110,6 @@ where
         self.inner.position_child(index, offset);
     }
 
-    /// Layouts and positions a child in one call.
-    pub fn layout_and_position_child(
-        &mut self,
-        index: usize,
-        constraints: <P::Layout as LayoutCapability>::Constraints,
-        offset: Offset,
-    ) -> crate::error::RenderResult<<P::Layout as LayoutCapability>::Geometry> {
-        let geometry = self.inner.layout_child(index, constraints)?;
-        self.inner.position_child(index, offset);
-        Ok(geometry)
-    }
-
     /// Gets a child's current geometry (after layout).
     pub fn child_geometry(
         &self,
@@ -147,24 +135,6 @@ where
     /// Iterates over all children indices.
     pub fn children(&self) -> impl Iterator<Item = usize> {
         0..self.child_count()
-    }
-
-    /// Layouts all children with the same constraints.
-    ///
-    /// Returns a vector of geometries.
-    pub fn layout_all_children(
-        &mut self,
-        constraints: <P::Layout as LayoutCapability>::Constraints,
-    ) -> crate::error::RenderResult<Vec<<P::Layout as LayoutCapability>::Geometry>>
-    where
-        <P::Layout as LayoutCapability>::Constraints: Clone,
-    {
-        let count = self.child_count();
-        let mut geometries = Vec::with_capacity(count);
-        for i in 0..count {
-            geometries.push(self.inner.layout_child(i, constraints.clone())?);
-        }
-        Ok(geometries)
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -258,16 +228,6 @@ where
         c.tighten(Some(c.max_width), Some(c.max_height))
     }
 
-    /// Returns constraints with only width tightened.
-    pub fn tighten_width(&self, width: f64) -> BoxConstraints {
-        self.inner.constraints().tighten(Some(width), None)
-    }
-
-    /// Returns constraints with only height tightened.
-    pub fn tighten_height(&self, height: f64) -> BoxConstraints {
-        self.inner.constraints().tighten(None, Some(height))
-    }
-
     /// Returns the smallest valid size.
     pub fn smallest(&self) -> Size {
         self.inner.constraints().smallest()
@@ -281,16 +241,6 @@ where
     /// Checks if constraints are tight (exact size required).
     pub fn is_tight(&self) -> bool {
         self.inner.constraints().is_tight()
-    }
-
-    /// Checks if width is unbounded.
-    pub fn has_unbounded_width(&self) -> bool {
-        self.inner.constraints().max_width.is_infinite()
-    }
-
-    /// Checks if height is unbounded.
-    pub fn has_unbounded_height(&self) -> bool {
-        self.inner.constraints().max_height.is_infinite()
     }
 
     /// Constrains a size to these constraints.

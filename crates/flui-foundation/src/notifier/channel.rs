@@ -155,7 +155,10 @@ impl<Arg> Listeners<Arg> {
 /// The physical shared owner, including retirement of the final listener set.
 struct ListenerStorage<Arg> {
     entries: RefCell<Listeners<Arg>>,
-    delivery_depth: Cell<usize>,
+    /// Nested deliveries in progress. A nesting is a frame of the stack, so
+    /// it never nears `u32::MAX`; the narrower count keeps the storage, which
+    /// every channel allocates, one word smaller.
+    delivery_depth: Cell<u32>,
     failed: Cell<bool>,
     /// What the delivery in progress retires when its outermost round ends.
     /// Made by the first removal or hand-over during a delivery and kept
@@ -665,9 +668,13 @@ impl<Arg> Notifier<Arg> {
         before: impl FnOnce(),
     ) {
         recovery.with_failure_latch(&self.listeners.failed, |recovery| {
-            self.listeners
-                .delivery_depth
-                .set(self.listeners.delivery_depth.get() + 1);
+            self.listeners.delivery_depth.set(
+                self.listeners
+                    .delivery_depth
+                    .get()
+                    .checked_add(1)
+                    .expect("BUG: notification deliveries nest past u32::MAX"),
+            );
             // Stack-allocate the snapshot for the common case (1-4 listeners);
             // ≥5 spills to the heap. `SmallVec` over `tinyvec::ArrayVec`
             // deliberately: the callbacks are `Rc<dyn Fn(..)>`, which does not

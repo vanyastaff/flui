@@ -12,9 +12,9 @@ help: the trait `phase::sealed::Sealed` is not implemented for `CustomPhase`
   = help: the following other types implement trait `phase::sealed::Sealed`:
             Compositing
             PaintPhase
-            Semantics
             flui_rendering::pipeline::Idle
             flui_rendering::pipeline::Layout
+            flui_rendering::pipeline::Semantics
 note: required by a bound in `PipelinePhase`
  --> src/pipeline/phase.rs
   |

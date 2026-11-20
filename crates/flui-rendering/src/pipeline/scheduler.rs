@@ -803,6 +803,7 @@ impl DirtyTracker {
     }
 
     /// Returns `true` when any mid-phase marks are pending drain.
+    #[cfg(test)]
     #[inline]
     pub(super) fn has_mid_marks(&self) -> bool {
         self.mid_layout_marks.any()

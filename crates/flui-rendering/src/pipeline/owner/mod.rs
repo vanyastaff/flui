@@ -42,11 +42,7 @@ pub use relocation::{
     ReleaseDetachedRenderSubtreesFailure,
 };
 
-use std::{
-    marker::PhantomData,
-    rc::Rc,
-    sync::atomic::{AtomicBool, AtomicU64},
-};
+use std::{marker::PhantomData, rc::Rc};
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Matrix4;
@@ -83,13 +79,6 @@ pub struct LayoutPremise {
 /// rather than silently growing the queue. Tunable at owner construction
 /// via [`PipelineOwner::new_with_capacity`].
 const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
-
-// ============================================================================
-// Pipeline ID Counter
-// ============================================================================
-
-/// Global counter for unique pipeline owner IDs.
-static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // ============================================================================
 // PipelineOwner
@@ -138,9 +127,6 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// First to retire: every attachment loses admission before user-owned
     /// resources in the remaining fields run their destructors.
     local_dirty: std::rc::Rc<super::local_invalidation::LocalDirtyInbox>,
-
-    /// Unique identifier for this pipeline owner.
-    id: u64,
 
     /// The UI runtime's text context, lent to every measurement in this
     /// pipeline's layout, intrinsic and dry queries (ADR-0092 §10 step 3).
@@ -209,7 +195,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     root_constraints: Option<BoxConstraints>,
 
     /// Whether semantics are enabled.
-    semantics_enabled: AtomicBool,
+    semantics_enabled: bool,
 
     /// The semantics tree owner (flui-semantics ARCHITECTURE.md, semantics assembly). `None` until semantics is enabled via
     /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
@@ -408,7 +394,6 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PipelineOwner")
             .field("phase", &Phase::NAME)
-            .field("id", &self.id)
             .field("root_id", &self.root_id)
             .field("render_tree_len", &self.render_tree.len())
             .field("nodes_needing_layout", &self.scheduler.layout_queue_len())
@@ -443,7 +428,6 @@ where
     To: PipelinePhase,
 {
     PipelineOwner {
-        id: from.id,
         text: from.text,
         text_measurers: from.text_measurers,
         text_sizing: from.text_sizing,
@@ -1472,7 +1456,7 @@ mod tests {
             "the message names the ancestors: {named}"
         );
 
-        let anonymous = owner.in_tree(crate::error::RenderError::InvalidParentChild);
+        let anonymous = owner.in_tree(crate::error::RenderError::ViewportOffsetChanged);
         assert!(
             anonymous.context().path().is_empty(),
             "an error that names no node has no path"

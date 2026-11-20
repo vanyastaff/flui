@@ -355,14 +355,6 @@ impl PipelineCell {
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
-
-    /// Test-only weak probe: lets a leak test confirm the owner is freed
-    /// (no outstanding strong clone) once every `PipelineCell` referencing
-    /// it has dropped.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn downgrade_for_test(&self) -> WeakPipelineCell {
-        self.downgrade()
-    }
 }
 
 impl fmt::Debug for PipelineCell {

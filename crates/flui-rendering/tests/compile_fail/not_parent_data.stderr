@@ -14,14 +14,14 @@ help: the trait `ParentData` is not implemented for `Offset`
    = note: `impl ParentData for Offset {}` is enough (every method has a default) provided `Offset` is `Debug + Clone + 'static`
    = help: the following other types implement trait `ParentData`:
              BoxParentData
-             ContainerBoxParentData
              FlexParentData
-             FlowParentData
-             ListWheelParentData
              MultiChildLayoutParentData
              SliverCrossAxisParentData
-             SliverLogicalContainerParentData
-           and $N others
+             SliverMultiBoxAdaptorParentData
+             SliverParentData
+             SliverPhysicalParentData
+             StackParentData
+             TableCellParentData
 note: required by a bound in `attach`
   --> tests/compile_fail/not_parent_data.rs:8:14
    |

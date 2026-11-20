@@ -210,7 +210,8 @@ impl RenderFittedBox {
         self
     }
 
-    /// Updates the fit and reports whether layout or paint is required.
+    /// Updates the fit and reports layout, or, when only the fitted transform
+    /// moves, paint and the re-placing of the child's semantics.
     pub fn set_fit(&mut self, fit: BoxFit) -> flui_rendering::RenderUpdateImpact {
         if self.fit == fit {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -224,10 +225,12 @@ impl RenderFittedBox {
                 self.update_paint_data(size, child_size);
             }
             flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
         }
     }
 
-    /// Updates the alignment and reports paint when the value changed.
+    /// Updates the alignment and, when it changed, reports paint and the
+    /// re-placing of the child's semantics, which the fitted transform moves.
     pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         if self.alignment == alignment {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -237,6 +240,7 @@ impl RenderFittedBox {
             self.update_paint_data(size, child_size);
         }
         flui_rendering::RenderUpdateImpact::PAINT
+            | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
     }
 
     /// Updates the overflow clip and reports paint plus semantics when changed.
