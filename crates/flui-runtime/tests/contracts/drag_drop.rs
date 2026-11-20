@@ -408,7 +408,7 @@ fn mount<V: flui_view::View + Clone + 'static>(
     root: &V,
 ) {
     runtime
-        .attach_root_widget_with_size_to(presentation, root, 400.0, 300.0)
+        .attach_root_widget_to(presentation, root)
         .expect("root");
     runtime.synchronize_window_snapshot(presentation, WindowExecutionState::Running, true, true);
 }

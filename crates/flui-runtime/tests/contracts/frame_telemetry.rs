@@ -38,7 +38,7 @@ fn runtime(clock: &ManualClock, fonts: &flui_painting::FontCollection) -> UiRunt
     )
     .expect("telemetry runtime");
     runtime
-        .attach_root_widget_with_size(&flui_widgets::SizedBox::shrink(), 800.0, 600.0)
+        .attach_root_widget(&flui_widgets::SizedBox::shrink())
         .expect("telemetry root");
     runtime
 }
@@ -262,7 +262,7 @@ impl FrameSink for PanickingTimesSink {
 fn a_sink_that_panics_handing_out_gpu_times_still_gets_its_retry() {
     let mut runtime = crate::owner_publication::runtime_with_wake(std::sync::Arc::new(|| {}));
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("timed"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("timed"))
         .expect("mount text");
     let mut sink = PanickingTimesSink::default();
     let mut now = web_time::Instant::now();

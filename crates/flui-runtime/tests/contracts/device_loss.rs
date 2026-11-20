@@ -58,7 +58,7 @@ impl Lost {
             flui_scheduler::ClockSource::Manual(clock.clone()),
         );
         runtime
-            .attach_root_widget_with_size(&flui_widgets::Text::new("lost"), 400.0, 400.0)
+            .attach_root_widget(&flui_widgets::Text::new("lost"))
             .expect("mount text");
         let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let seen = Arc::clone(&reports);
@@ -300,7 +300,7 @@ fn a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work() {
 
     let runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("tree"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("tree"))
         .expect("mount text");
     runtime.mark_primary_needs_full_repaint();
     assert!(

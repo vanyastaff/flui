@@ -329,7 +329,7 @@ mod grid {
         )
         .expect("a UI runtime");
         ui_runtime
-            .attach_root_widget_with_size(grid, f64::from(SIDE), f64::from(SIDE))
+            .attach_root_widget(grid)
             .expect("the grid mounts");
         ui_runtime
     }

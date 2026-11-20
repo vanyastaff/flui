@@ -6,17 +6,12 @@ use flui_foundation::PresentationId;
 use flui_view::environment::{FocusTreeRoot, GestureArenaScope, PlatformConvention, VsyncScope};
 
 impl UiRuntime {
-    // ========================================================================
-    // Root attach (moved from the retired `AppBinding`)
-    // ========================================================================
-
     /// Attach a root widget.
     ///
     /// This creates the root element and schedules the first build. Forwards
     /// to [`flui_view::WidgetsBinding::attach_root_widget`] — the single
-    /// root-bootstrap path; every runner entry point calls
-    /// [`Self::attach_root_widget_with_size`] (this method's sized sibling)
-    /// instead, not a separate hand-rolled wiring.
+    /// root-bootstrap path; every runner entry point calls it, not a separate
+    /// hand-rolled wiring.
     ///
     /// # Implicit-animation and gesture-arena auto-wrap
     ///
@@ -35,8 +30,6 @@ impl UiRuntime {
     ///
     /// Forwards every [`flui_view::AttachError`] the underlying
     /// [`flui_view::WidgetsBinding::attach_root_widget`] returns.
-    // Test-only: the desktop and mobile runners use the sized variant.
-    #[cfg(any(test, feature = "testing"))]
     pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
@@ -44,7 +37,6 @@ impl UiRuntime {
         self.enter(|ui_runtime| ui_runtime.attach_root_widget_entered(view))
     }
 
-    #[cfg(any(test, feature = "testing"))]
     fn attach_root_widget_entered<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
@@ -119,36 +111,34 @@ impl UiRuntime {
         })
     }
 
-    /// [`Self::attach_root_widget_with_size`], but for the resident
+    /// [`Self::attach_root_widget`], but for the resident
     /// presentation `id`: the root is wrapped in THAT presentation's own
     /// `MediaQuery` (its window's size and ratio, rewritten by its addressed
-    /// resize), vsync and gesture arena, and its root view is born at
-    /// `width` × `height`. What a headless host gives a secondary window, so
-    /// the secondary's subtree sees the same environment as the primary's.
+    /// resize), vsync and gesture arena. What a headless host gives a
+    /// secondary window, so its subtree sees the same environment as the
+    /// primary's.
     ///
     /// # Errors
     ///
     /// Forwards every [`flui_view::AttachError`] from
-    /// [`flui_view::WidgetsBinding::attach_root_widget_with_size`].
+    /// [`flui_view::WidgetsBinding::attach_root_widget`].
     ///
     /// # Panics
     ///
     /// Panics if `id` does not name a presentation this UI runtime currently
     /// hosts.
     #[cfg(any(test, feature = "testing"))]
-    pub fn attach_root_widget_with_size_to<V>(
+    pub fn attach_root_widget_to<V>(
         &self,
         id: PresentationId,
         view: &V,
-        width: f64,
-        height: f64,
     ) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {
         self.enter(|ui_runtime| {
             let presentation = ui_runtime.presentations.get(id).expect(
-                "BUG: attach_root_widget_with_size_to given a presentation id this ui_runtime does \
+                "BUG: attach_root_widget_to given a presentation id this ui_runtime does \
                  not host",
             );
             let with_media_query = crate::media_query_root::MediaQueryRoot::new(
@@ -163,77 +153,10 @@ impl UiRuntime {
             let wrapped = GestureArenaScope::new(presentation.gestures().arena().clone(), animated)
                 .settings(presentation.gesture_settings.provider())
                 .wheel_preferences(presentation.wheel_preferences.provider());
-            presentation
-                .widgets()
-                .attach_root_widget_with_size(&wrapped, width, height)?;
+            presentation.widgets().attach_root_widget(&wrapped)?;
             ui_runtime.request_redraw_for(presentation);
-            tracing::debug!(
-                ?id,
-                width,
-                height,
-                "Root widget attached (sized, addressed)"
-            );
+            tracing::debug!(?id, "Root widget attached (addressed)");
             Ok(())
         })
-    }
-
-    /// Attach a root widget sizing the root view to an explicit logical
-    /// `width` × `height` — the platform window's surface size.
-    ///
-    /// Identical to `attach_root_widget` (a `testing` entry point)
-    /// except the root `RenderView` is born at the real window size instead
-    /// of the framework's fallback default. This is the runner's bootstrap
-    /// entry point, and wraps the root in the same `GestureArenaScope`,
-    /// `VsyncScope`, `FocusTreeRoot` and `MediaQuery` as that method (see its
-    /// doc for the auto-wrap invariants).
-    ///
-    /// # Errors
-    ///
-    /// Forwards every [`flui_view::AttachError`] from
-    /// [`flui_view::WidgetsBinding::attach_root_widget_with_size`].
-    pub fn attach_root_widget_with_size<V>(
-        &self,
-        view: &V,
-        width: f64,
-        height: f64,
-    ) -> Result<(), flui_view::AttachError>
-    where
-        V: flui_view::View + Clone + 'static,
-    {
-        self.enter(|ui_runtime| {
-            ui_runtime.attach_root_widget_with_size_entered(view, width, height)
-        })
-    }
-
-    fn attach_root_widget_with_size_entered<V>(
-        &self,
-        view: &V,
-        width: f64,
-        height: f64,
-    ) -> Result<(), flui_view::AttachError>
-    where
-        V: flui_view::View + Clone + 'static,
-    {
-        // Same root MediaQuery as the production attach path — the sized
-        // variant must not present a different ambient environment.
-        let with_media_query = crate::media_query_root::MediaQueryRoot::new(
-            std::rc::Rc::clone(self.media_query()),
-            flui_view::view::ViewExt::boxed(view.clone()),
-        );
-        let focused = FocusTreeRoot::new(PlatformConvention::new(
-            self.presentations.primary().platform,
-            with_media_query,
-        ));
-        let animated = VsyncScope::new(self.vsync(), focused);
-        let wrapped = GestureArenaScope::new(self.gestures().arena().clone(), animated)
-            .settings(self.presentations.primary().gesture_settings.provider())
-            .wheel_preferences(self.presentations.primary().wheel_preferences.provider());
-        self.presentations
-            .primary()
-            .widgets()
-            .attach_root_widget_with_size(&wrapped, width, height)?;
-        self.request_redraw();
-        tracing::debug!(width, height, "Root widget attached (sized)");
-        Ok(())
     }
 }

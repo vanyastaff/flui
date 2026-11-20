@@ -2579,7 +2579,10 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
                     .unwrap()
                     .is_none()
             );
-            let mut recorder = flui_rendering::context::FragmentRecorder::new(Offset::ZERO, 1.0);
+            let mut recorder = flui_rendering::context::FragmentRecorder::new(
+                Offset::ZERO,
+                flui_foundation::geometry::DevicePixelRatio::ONE,
+            );
             icon.paint(&mut flui_rendering::context::PaintContext::new(
                 &mut recorder,
                 0,

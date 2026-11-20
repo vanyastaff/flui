@@ -90,7 +90,7 @@ impl Covering {
         )
         .expect("manual-clock runtime");
         runtime
-            .attach_root_widget_with_size(&flui_widgets::SizedBox::square(10.0), 400.0, 400.0)
+            .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
             .expect("mounted root");
         let _ = runtime.pump(&mut clock.clone(), sink);
         assert_eq!(sink.epochs.len(), 1, "the first frame is submitted");

@@ -145,7 +145,7 @@ impl HitTestOutcome {
 /// All default to no-op / `None`. Override on `RenderBox` or `RenderSliver`
 /// (the blanket impls forward every call from `RenderObject<P>` to the
 /// protocol-specific trait). Direct `RenderObject<P>` impls (e.g.
-/// `RenderViewAdapter`) get the defaults for free.
+/// `RenderView`) get the defaults for free.
 ///
 /// # Hot-reload note
 ///

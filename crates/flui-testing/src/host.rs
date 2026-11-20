@@ -2319,14 +2319,11 @@ impl HeadlessHost {
         V: flui_view::View + Clone + 'static,
     {
         // Every window's root is the same: the catalog's keyboard bindings,
-        // then this window's own `MediaQuery` and its size.
-        let size = self.open_window_of(window).window.size;
-        self.ui_runtime().attach_root_widget_with_size_to(
-            window.0,
-            &flui_widgets::app_root(view.clone()),
-            size.width(),
-            size.height(),
-        )
+        // then this window's own `MediaQuery`. A closed window panics here, with the host's own
+        // message, before the runtime is asked for a presentation it may already have retired.
+        let _open = self.open_window_of(window);
+        self.ui_runtime()
+            .attach_root_widget_to(window.0, &flui_widgets::app_root(view.clone()))
     }
 
     /// Hand `intent` to `window`'s URL owner, the outermost `Router` of its

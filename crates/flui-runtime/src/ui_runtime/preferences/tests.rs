@@ -129,13 +129,11 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         let holds = Rc::new(Cell::new(0));
         let held = Rc::clone(&holds);
         runtime
-            .attach_root_widget_with_size(
+            .attach_root_widget(
                 &flui_widgets::GestureDetector::new()
                     .on_tap(move |_| output.set(output.get() + 1))
                     .on_long_press(move |_| held.set(held.get() + 1))
                     .child(Reader(Rc::clone(&observed))),
-                800.0,
-                600.0,
             )
             .expect("root");
         let replacement = Rc::clone(&runtime);
@@ -379,7 +377,7 @@ pub(crate) fn frame_aligned_haptics_play_only_with_a_presented_frame() {
         )
         .expect("runtime");
         runtime
-            .attach_root_widget_with_size(&flui_widgets::SizedBox::square(20.0), 800.0, 600.0)
+            .attach_root_widget(&flui_widgets::SizedBox::square(20.0))
             .expect("root");
         let handle = runtime.haptics();
         let delivered = Rc::new(RefCell::new(Vec::new()));
@@ -448,7 +446,7 @@ pub(crate) fn an_older_or_repeated_preference_revision_is_ignored() {
     let mut runtime = UiRuntime::for_test();
     let observed = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size(&Reader(Rc::clone(&observed)), 800.0, 600.0)
+        .attach_root_widget(&Reader(Rc::clone(&observed)))
         .expect("root");
     let mut sink = crate::testing::ScriptedSink::always_presents();
     for (revision, offered, label, shown, accepted) in [

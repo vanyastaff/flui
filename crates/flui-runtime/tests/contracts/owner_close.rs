@@ -150,15 +150,13 @@ fn stopping_the_realm_mid_animation_cancels_every_run() {
             (sibling, Rc::clone(&next), next_failure),
         ] {
             runtime
-                .attach_root_widget_with_size_to(
+                .attach_root_widget_to(
                     id,
                     &MotionProbe {
                         observation,
                         cancellation_failure,
                         closing_peers: Rc::clone(&closing_peers),
                     },
-                    100.0,
-                    100.0,
                 )
                 .expect("mount motion owner");
         }
@@ -557,13 +555,11 @@ fn a_runtime_dropped_during_an_unwind_skips_dispose() {
         let runtime = runtime();
         let disposed = Rc::new(Cell::new(0));
         runtime
-            .attach_root_widget_with_size_to(
+            .attach_root_widget_to(
                 runtime.presentation_id(),
                 &DisposeProbe {
                     disposed: Rc::clone(&disposed),
                 },
-                100.0,
-                100.0,
             )
             .expect("mount dispose probe");
         let id = runtime.presentation_id();
