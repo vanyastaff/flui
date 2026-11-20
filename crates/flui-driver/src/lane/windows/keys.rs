@@ -165,6 +165,19 @@ pub fn named(name: &str) -> Option<VirtualKey> {
         .map(|&(_, key)| key)
 }
 
+/// The virtual key `code` as people read it: its W3C name when the lane sends it by name, a
+/// letter or digit as itself, and otherwise its code.
+#[must_use]
+pub fn name_of(code: u16) -> String {
+    if let Some((name, _)) = NAMED.iter().find(|(_, key)| key.code == code) {
+        return (*name).to_owned();
+    }
+    match u8::try_from(code).ok().map(char::from) {
+        Some(c @ ('0'..='9' | 'A'..='Z')) => c.to_string(),
+        _ => format!("virtual key {code:#04x}"),
+    }
+}
+
 /// Whether the virtual key `code` sits in the extended block, as a [`VirtualKey`]'s `extended` says of
 /// the named keys; a letter, a digit or a layout's key is not.
 #[must_use]

@@ -441,8 +441,6 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
         &["Alt", "Escape"],
         &["Control", "Shift", "Escape"],
         &["Control", "Alt", "Delete"],
-        &["Alt", "Shift"],
-        &["Control", "Shift"],
         &["CapsLock"],
         &["NumLock"],
         &["PrintScreen"],
@@ -465,8 +463,10 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
         &["Alt", "d"],
         &["Control", "a"],
         &["Enter"],
-        // One Shift tap is a key the app reads; Sticky Keys takes five in a row.
         &["Shift"],
+        // A chord of modifiers alone is the app's too: its release is masked.
+        &["Alt", "Shift"],
+        &["Control", "Shift"],
     ];
     for keys in app {
         assert_eq!(
@@ -477,25 +477,78 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
     }
 }
 
-/// Sticky Keys turns on at the fifth Shift tapped alone in a row, counted across the lane's sends
-/// as the OS counts it, and another key between starts the count again. (Pointer input between
-/// does not: `windows_desktop::the_lanes_check_counts_a_shift_click_as_a_shift_tap`.)
+/// The strokes `inputs` take from `keys`, sent as the lane sends them, every one taken.
+fn planned(keys: &mut HeldKeys, inputs: &[KeyInput]) -> Vec<Keystroke> {
+    let mut strokes = Vec::new();
+    for input in inputs {
+        for stroke in keys.plan(input) {
+            let _ = keys.apply(stroke);
+            strokes.push(stroke);
+        }
+    }
+    strokes
+}
+
+/// A release that would complete a shortcut of the shell's (the fifth Shift tapped alone in a
+/// row, as the OS counts it across the lane's sends; letting go of Control+Shift or Alt+Shift, a
+/// click under it included, which sends no key) is preceded by the mask key, so the app gets its
+/// keys and no stroke completes the shortcut; the check refuses none of them.
 #[test]
-fn only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut() {
+fn a_release_that_would_complete_a_shell_shortcut_is_masked() {
     let taps =
         |count: usize| -> Vec<KeyInput> { (0..count).flat_map(|_| chord(&["Shift"])).collect() };
-    let quiet = HeldKeys::new();
-    assert_eq!(quiet.shell_hotkey(&taps(4)), None);
-    assert_eq!(quiet.shell_hotkey(&taps(5)), Some(safety::STICKY_KEYS));
-    // Four taps sent before, then one more: the OS counts on.
+    let masks = |strokes: &[Keystroke]| {
+        strokes
+            .iter()
+            .filter(|stroke| **stroke == Keystroke::Press(MASK))
+            .count()
+    };
+    let cases: [(&str, Vec<KeyInput>, usize); 5] = [
+        ("four Shift taps", taps(4), 0),
+        ("five Shift taps", taps(5), 1),
+        ("ten Shift taps", taps(10), 2),
+        ("Control+Shift", chord(&["Control", "Shift"]), 1),
+        ("Alt+Shift", chord(&["Alt", "Shift"]), 1),
+    ];
+    for (case, inputs, expected) in cases {
+        assert_eq!(HeldKeys::new().shell_hotkey(&inputs), None, "{case}");
+        let strokes = planned(&mut HeldKeys::new(), &inputs);
+        assert_eq!(masks(&strokes), expected, "{case}: {strokes:?}");
+        assert!(
+            completed_by(&[], &strokes).iter().all(Option::is_none),
+            "{case}: no stroke completes a shortcut"
+        );
+    }
+    // The mask goes right before the release that would complete the chord.
+    let control_shift = planned(&mut HeldKeys::new(), &chord(&["Control", "Shift"]));
+    assert_eq!(
+        control_shift[2..5],
+        [
+            Keystroke::Press(MASK),
+            Keystroke::Release(MASK),
+            Keystroke::Release(key("Shift")),
+        ]
+    );
+    // Four taps sent before, then a fifth press: the OS counts on, and Windows may take the
+    // shortcut at the press, so the mask goes before the press; the press is then the run's
+    // first, and its release needs no mask.
     let mut keys = HeldKeys::new();
     send(&mut keys, &taps(4));
-    assert_eq!(keys.shell_hotkey(&taps(1)), Some(safety::STICKY_KEYS));
-    // Another key between restarts the count.
-    let mut broken = taps(4);
-    broken.extend(chord(&["a"]));
-    broken.extend(taps(4));
-    assert_eq!(quiet.shell_hotkey(&broken), None);
+    let press = keys.plan(&down("Shift"));
+    assert_eq!(
+        press,
+        [
+            Keystroke::Press(MASK),
+            Keystroke::Release(MASK),
+            Keystroke::Press(key("Shift")),
+        ]
+    );
+    assert!(
+        completed_by(&taps(4), &press).iter().all(Option::is_none),
+        "the fifth press completes nothing once masked"
+    );
+    send(&mut keys, &[down("Shift")]);
+    assert_eq!(masks(&keys.plan(&up("Shift"))), 0);
 }
 
 /// Release everything `keys` holds, recording each stroke sent, every one taken.
@@ -519,8 +572,8 @@ fn completed_by(before: &[KeyInput], sent: &[Keystroke]) -> Vec<Option<&'static 
 
 /// The shortcut check reads what the OS saw of the lane's keys from their one owner, a release
 /// of everything included, and nothing the lane sends completes a shortcut of the shell's: a
-/// sequence that leaves a chord of modifiers down is refused, and the release of everything after
-/// an interrupted run breaks the chord with the mask key before it lets go of a modifier.
+/// sequence may leave a chord of modifiers down, since the release of everything breaks the chord
+/// with the mask key before it lets go of a modifier.
 #[test]
 fn the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_included() {
     let chords: [[&str; 2]; 3] = [["Control", "Shift"], ["Alt", "Shift"], ["Shift", "Alt"]];
@@ -528,11 +581,11 @@ fn the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_inclu
         let left_down = [down(first), down(second)];
         assert_eq!(
             HeldKeys::new().shell_hotkey(&left_down),
-            Some(safety::LANGUAGE_SWITCH),
-            "{first}+{second} left down: whatever releases it switches the input language"
+            None,
+            "{first}+{second} left down is the app's"
         );
 
-        // An interrupted run left the chord down anyway.
+        // A run that ends, or is interrupted, with the chord down.
         let mut keys = HeldKeys::new();
         send(&mut keys, &left_down);
         let sent = release_recorded(&mut keys);
@@ -572,7 +625,11 @@ fn the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_inclu
         sent.push(stroke);
         Ok(())
     });
-    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        matches!(&refused, Err(flui_driver::Error::ReleaseFailed { held, .. })
+            if held == &["Control", "Shift"]),
+        "the keys left held are named: {refused:?}"
+    );
     assert_eq!(
         sent,
         [] as [Keystroke; 0],
@@ -1425,6 +1482,16 @@ fn a_pattern_request_and_an_invoke_tell_their_failures_apart() {
     );
     let gone = walk::invoked(Err(ProviderError::Gone), "like", timeout).expect_err("gone");
     assert_eq!(gone.code(), Some(ErrorCode::Gone));
+    assert!(
+        gone.may_have_run(),
+        "an element or provider that went during the invoke may have run it first: {gone:?}"
+    );
+    let before =
+        walk::pattern::<()>(Err(ProviderError::Gone), "like", "invoke", timeout).expect_err("gone");
+    assert!(
+        !before.may_have_run(),
+        "gone before the invoke was sent: nothing ran"
+    );
 }
 
 /// The search for an automation id walks the app's window only, within its budgets, and tells a

@@ -149,7 +149,11 @@ pub fn pattern<T>(
             retry: ErrorCode::ActionUnsupported.default_retry(),
         }),
         Err(ProviderError::Timeout) => Err(timed_out(timeout)),
-        Err(ProviderError::Gone) => Err(element_gone(automation_id, "asked for its pattern")),
+        Err(ProviderError::Gone) => Err(element_gone(
+            automation_id,
+            "before it was asked for its pattern",
+            None,
+        )),
         Err(ProviderError::Failed(why)) => Err(Error::Platform {
             effect: None,
             message: format!(
@@ -161,12 +165,14 @@ pub fn pattern<T>(
 }
 
 /// What invoking the element `automation_id` answered. The invoke may have reached the app
-/// whenever its provider did not say it failed, so a timeout carries `may_have_run`.
+/// whenever its provider did not say it failed, so a timeout and an element or provider that went
+/// during the call (`RPC_E_DISCONNECTED` among others) carry `may_have_run`.
 ///
 /// # Errors
 ///
 /// [`Error::Timeout`] with `may_have_run` when the provider did not answer within `timeout`,
-/// [`Error::Gone`] when the element went away, and [`Error::Platform`] when the invoke failed.
+/// [`Error::Gone`] with `may_have_run` when the element went away, and [`Error::Platform`] when
+/// the invoke failed.
 pub fn invoked(
     answer: Result<(), ProviderError>,
     automation_id: &str,
@@ -183,7 +189,11 @@ pub fn invoked(
             ),
             retry: ErrorCode::Timeout.default_retry(),
         }),
-        Err(ProviderError::Gone) => Err(element_gone(automation_id, "invoked")),
+        Err(ProviderError::Gone) => Err(element_gone(
+            automation_id,
+            "while it was invoked, which may have run first",
+            Some(Effect::new(EffectKind::MayHaveRun)),
+        )),
         Err(ProviderError::Failed(why)) => Err(Error::Platform {
             effect: None,
             message: format!("invoking the element {automation_id:?} failed: {why}"),
@@ -192,12 +202,13 @@ pub fn invoked(
     }
 }
 
-fn element_gone(automation_id: &str, before: &str) -> Error {
+fn element_gone(automation_id: &str, when: &str, effect: Option<Effect>) -> Error {
     Error::Gone {
         kind: Some(HandleKind::Element),
         handle: None,
         exit: None,
-        message: format!("the element {automation_id:?} went away before it was {before}"),
+        effect,
+        message: format!("the element {automation_id:?} went away {when}"),
         retry: ErrorCode::Gone.default_retry(),
     }
 }
