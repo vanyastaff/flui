@@ -323,3 +323,123 @@ fn a_sequence_the_lane_cannot_send_is_refused_before_any_event() {
     assert_eq!(log.arms(), 0, "the guard never armed");
     assert_eq!(log.releases(), 0, "nothing was pressed to release");
 }
+
+fn two_pauses() -> [OsEvent; 2] {
+    [
+        OsEvent::Pause(Duration::from_millis(1)),
+        OsEvent::Pause(Duration::from_millis(1)),
+    ]
+}
+
+/// A guarded sequence releases first (nothing held: it goes through), then sends, then releases
+/// what it sent. A release that fails is tried once more; after a send that went through, the
+/// second failure is the answer.
+#[test]
+fn a_failed_release_after_a_send_is_tried_once_more() {
+    let rows = [
+        ("one refusal, then released", 1, Ok(())),
+        ("refused twice", 2, Err("Control")),
+    ];
+    for (row, failing, expected) in rows {
+        let (lane, log) = ScriptedLane::new(Isolation::Shared);
+        let mut lane = lane.guarded().failing_releases_once_sent(failing);
+        let sent = lane::send_guarded(&mut lane, &two_pauses());
+        match expected {
+            Ok(()) => assert!(sent.is_ok(), "{row}: {sent:?}"),
+            Err(name) => assert!(
+                matches!(&sent, Err(Error::ReleaseFailed { held, .. }) if held == &[name]),
+                "{row}: {sent:?}"
+            ),
+        }
+        assert_eq!(
+            log.releases(),
+            3,
+            "{row}: the first release, and two after the send"
+        );
+    }
+}
+
+/// A send that failed keeps its error; what the release after it leaves held is logged at error
+/// level, and the next sequence starts by releasing it, refused with nothing sent while it stays
+/// held.
+#[test]
+fn input_left_held_after_a_failed_send_is_logged_and_held_against_the_next_sequence() {
+    let (lane, log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane
+        .foreign_input_after(1, "a click")
+        .failing_releases_once_sent(1);
+    let (sent, captured) =
+        flui_log::testing::capture(|| lane::send_guarded(&mut lane, &two_pauses()));
+    assert!(
+        matches!(&sent, Err(Error::InterruptedByUser { event, .. }) if event == "a click"),
+        "{sent:?}"
+    );
+    assert_eq!(log.releases(), 3, "released once more after the refusal");
+    assert_eq!(
+        captured.at_level(tracing::Level::ERROR).count(),
+        0,
+        "released the second time, nothing to log: {captured}"
+    );
+
+    let (lane, log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane
+        .foreign_input_after(1, "a click")
+        .failing_releases_once_sent(4);
+    let (sent, captured) =
+        flui_log::testing::capture(|| lane::send_guarded(&mut lane, &two_pauses()));
+    assert!(
+        matches!(&sent, Err(Error::InterruptedByUser { event, .. }) if event == "a click"),
+        "the send's error is the caller's: {sent:?}"
+    );
+    assert_eq!(log.releases(), 3);
+    let held = captured
+        .at_level(tracing::Level::ERROR)
+        .filter(|record| record.contains("input stays held") && record.contains("Control"))
+        .count();
+    assert_eq!(
+        held, 1,
+        "what stays held is logged at error level: {captured}"
+    );
+
+    let refused = lane::send_guarded(&mut lane, &two_pauses());
+    assert!(
+        matches!(&refused, Err(Error::ReleaseFailed { held, .. }) if held == &["Control"]),
+        "{refused:?}"
+    );
+    assert_eq!(
+        log.sent().len(),
+        1,
+        "nothing more was sent while Control stayed held"
+    );
+    assert_eq!(log.arms(), 1, "the guard was not armed again");
+    assert_eq!(log.releases(), 5);
+
+    lane::send_guarded(&mut lane, &two_pauses()).expect("released at last, the sequence runs");
+    assert_eq!(log.sent().len(), 3);
+}
+
+/// A send that panics still disarms the guard and releases what it sent before its panic is
+/// resumed.
+#[test]
+fn a_panicking_send_disarms_and_releases_before_its_panic_goes_on() {
+    let (lane, log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().panicking_sends();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test catches the resumed panic to assert on what ran before it"
+    )]
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lane::send_guarded(&mut lane, &two_pauses())
+    }));
+    let payload = resumed.expect_err("the send's panic is resumed");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("the scripted lane's send panics")
+    );
+    assert_eq!(log.disarms(), 1, "the guard was disarmed");
+    assert_eq!(
+        log.releases(),
+        2,
+        "the first release, and the one after the send"
+    );
+}

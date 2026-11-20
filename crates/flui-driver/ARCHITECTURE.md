@@ -97,13 +97,18 @@ app's trees, frames and input, and this crate composes that with what only the O
   its keys, the mask among them. The release of everything masks whenever a modifier is held, and a release that
   would still complete a shortcut (the mask not sent) is not sent. Only a press the shell takes
   (the Windows key, Alt+Tab, Ctrl+Shift+Esc, a lock key) is refused before a sequence.
-- **Nothing stays pressed without a word.** Where no caller is left to retry (the lane's worker
-  ending, a job that panicked), the worker releases once more after a failed release and logs
-  what is still held at error level; the error (`Error::ReleaseFailed`, the lane's own failure,
-  apart from `input_held`) names every key, mouse button and touch contact still down and a pen
-  down or in range, gathered from the lane's parts by `lane::release_outcome` with each part's
-  first failure, so one part's failure never hides another's. It never waits, and a panic in that release (the
-  lane's, a log subscriber's) is held behind the job's panic (`FirstPanic`), never in its place.
+- **Nothing stays pressed without a word.** A failed release is tried once more on every exit.
+  A guarded sequence starts with nothing held: what an earlier one left is released first, and
+  the sequence is refused, nothing sent, while it stays held. After a send that went through,
+  the release's failure is the answer; where no caller is left to retry (the lane's worker
+  ending, a job that panicked, a send that failed with an error of its own, which stays the
+  caller's), what is still held is logged at error level. The error (`Error::ReleaseFailed`, the
+  lane's own failure, apart from `input_held`) names every key, mouse button and touch contact
+  still down and a pen down or in range, gathered from the lane's parts by
+  `lane::release_outcome` with each part's first failure, so one part's failure never hides
+  another's. It never waits, and a panic in that release (the lane's, a log subscriber's) is
+  held behind the job's panic (`FirstPanic`), never in its place; a panicking send still disarms
+  the guard and releases before its panic is resumed.
 - **An accessibility provider's answers stay apart.** A UI Automation read or invoke tells a
   provider that timed out (`timeout`), an element that went away (`gone`) and a pattern the
   element does not offer (`action_unsupported`) from each other; a timeout or a gone element

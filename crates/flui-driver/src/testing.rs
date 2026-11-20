@@ -33,6 +33,7 @@ pub struct LaneLog {
     sent: Arc<Mutex<Vec<OsEvent>>>,
     releases: Arc<AtomicUsize>,
     armed: Arc<AtomicUsize>,
+    disarmed: Arc<AtomicUsize>,
 }
 
 impl LaneLog {
@@ -56,6 +57,12 @@ impl LaneLog {
     pub fn arms(&self) -> usize {
         self.armed.load(Ordering::SeqCst)
     }
+
+    /// How many times its guard was disarmed.
+    #[must_use]
+    pub fn disarms(&self) -> usize {
+        self.disarmed.load(Ordering::SeqCst)
+    }
 }
 
 /// A user-activity guard that reports foreign input once its lane has sent a set number of
@@ -65,6 +72,7 @@ pub struct ScriptedGuard {
     after: Option<(usize, String)>,
     sent: Arc<Mutex<Vec<OsEvent>>>,
     armed: Arc<AtomicUsize>,
+    disarmed: Arc<AtomicUsize>,
     watching: bool,
     reported: bool,
 }
@@ -91,6 +99,7 @@ impl ActivityGuard for ScriptedGuard {
     }
 
     fn disarm(&mut self) {
+        self.disarmed.fetch_add(1, Ordering::SeqCst);
         self.watching = false;
     }
 }
@@ -105,8 +114,14 @@ pub struct ScriptedLane {
     refuses: Option<String>,
     /// How many of its next releases fail, as an OS that refuses them does.
     failing_releases: usize,
+    /// How many of its next releases fail while it holds what it sent.
+    failing_releases_once_sent: usize,
+    /// Whether it holds what it sent: from a send to the release that succeeds after it.
+    holding: bool,
     /// Whether its releases panic, as a lane's code or a log subscriber can.
     panicking_releases: bool,
+    /// Whether its sends panic, each after it is recorded.
+    panicking_sends: bool,
 }
 
 impl ScriptedLane {
@@ -121,7 +136,10 @@ impl ScriptedLane {
                 log: log.clone(),
                 refuses: None,
                 failing_releases: 0,
+                failing_releases_once_sent: 0,
+                holding: false,
                 panicking_releases: false,
+                panicking_sends: false,
             },
             log,
         )
@@ -138,6 +156,21 @@ impl ScriptedLane {
     #[must_use]
     pub fn failing_releases(mut self, count: usize) -> Self {
         self.failing_releases = count;
+        self
+    }
+
+    /// Whose next `count` releases made while it holds what it sent fail, each still counted in
+    /// the log; a release with nothing sent since the last one that succeeded goes through.
+    #[must_use]
+    pub fn failing_releases_once_sent(mut self, count: usize) -> Self {
+        self.failing_releases_once_sent = count;
+        self
+    }
+
+    /// Whose sends panic, each still recorded in the log.
+    #[must_use]
+    pub fn panicking_sends(mut self) -> Self {
+        self.panicking_sends = true;
         self
     }
 
@@ -168,6 +201,7 @@ impl ScriptedLane {
             after,
             sent: Arc::clone(&self.log.sent),
             armed: Arc::clone(&self.log.armed),
+            disarmed: Arc::clone(&self.log.disarmed),
             watching: false,
             reported: false,
         }
@@ -219,6 +253,8 @@ impl Lane for ScriptedLane {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(event.clone());
+        self.holding = true;
+        assert!(!self.panicking_sends, "the scripted lane's send panics");
         Ok(())
     }
 
@@ -228,14 +264,23 @@ impl Lane for ScriptedLane {
             !self.panicking_releases,
             "the scripted lane's release panics"
         );
-        if self.failing_releases > 0 {
+        let refused = if self.failing_releases > 0 {
             self.failing_releases -= 1;
+            true
+        } else if self.holding && self.failing_releases_once_sent > 0 {
+            self.failing_releases_once_sent -= 1;
+            true
+        } else {
+            false
+        };
+        if refused {
             return Err(Error::ReleaseFailed {
                 lane: self.name().to_owned(),
                 held: vec!["Control".to_owned()],
                 message: "the scripted OS refused the release".into(),
             });
         }
+        self.holding = false;
         Ok(())
     }
 }

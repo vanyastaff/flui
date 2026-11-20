@@ -1938,6 +1938,7 @@ dependencies = [
  "flui-app",
  "flui-driver",
  "flui-foundation",
+ "flui-log",
  "flui-platform",
  "flui-protocol",
  "flui-testing",
