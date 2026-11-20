@@ -320,7 +320,8 @@ where
 {
     /// Linearly interpolate between two box decorations.
     ///
-    /// The exact endpoints return `a` and `b`. A paired gradient's geometry
+    /// The exact endpoints return `a` and `b`, less an image blend their `image`
+    /// no longer publishes; every endpoint drops such a blend. A paired gradient's geometry
     /// extrapolates with `t`; other fields clamp `t` to `0..=1`.
     /// Extrapolation retains a bounded endpoint for painting when the resolved
     /// geometry cannot be represented at the actual box size.
@@ -334,15 +335,16 @@ where
     /// past four layers the weakest go and the kept ones take up their shares.
     /// `image` holds `b`'s own image as the blend paints it, or, when `b`'s image
     /// is in no layer (none, invisible or of NaN opacity), the strongest
-    /// layer; with no layer at all (a NaN `t`) it holds no image. A layer's opacity is clamped to one before its share is taken. The shape is not interpolated and
-    /// switches at `t = 0.5`.
+    /// layer; with no layer at all (a NaN `t` between different images) it holds
+    /// no image. The same image and live blend on both sides are kept as they
+    /// are, whatever `t`. A layer's opacity is clamped to one before its share
+    /// is taken. The shape is not interpolated and switches at `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
-        if t == 0.0 {
-            return a.clone();
-        }
-        if t == 1.0 {
-            return b.clone();
+        if t == 0.0 || t == 1.0 {
+            let mut endpoint = if t == 0.0 { a.clone() } else { b.clone() };
+            endpoint.drop_stale_image_blend();
+            return endpoint;
         }
         let gradient_t = t;
         let t = t.clamp(0.0, 1.0);

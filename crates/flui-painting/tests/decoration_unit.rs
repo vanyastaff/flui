@@ -457,6 +457,32 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
         with(&green),
         "an extrapolated endpoint drops a stale blend"
     );
+    for (endpoint, t) in [
+        (BoxDecoration::lerp(&stale, &with(&blue), 0.0), 0.0),
+        (BoxDecoration::lerp(&with(&blue), &stale, 1.0), 1.0),
+        (BoxDecoration::lerp(&with(&blue), &stale, 2.0), 2.0),
+    ] {
+        assert_eq!(
+            endpoint,
+            with(&green),
+            "the endpoint at t = {t} drops a stale blend"
+        );
+    }
+    // A live blend survives every endpoint.
+    for t in [0.0, -1.0] {
+        assert_eq!(
+            BoxDecoration::lerp(&crossfaded, &with(&green), t),
+            crossfaded,
+            "the endpoint at t = {t} keeps a live blend"
+        );
+    }
+    for t in [1.0, 2.0] {
+        assert_eq!(
+            BoxDecoration::lerp(&with(&green), &crossfaded, t),
+            crossfaded,
+            "the endpoint at t = {t} keeps a live blend"
+        );
+    }
 
     // b's image invisible and in no layer of a's: the strongest layer is
     // published instead.
