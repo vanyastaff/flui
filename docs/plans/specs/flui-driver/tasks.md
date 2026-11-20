@@ -960,8 +960,9 @@ graph LR
     child read alone by index (`AXUIElementCopyAttributeValues`) so the walk's budget bounds what
     is copied, the frame's close, minimize, zoom and full-screen buttons left out and the
     adapter's untitled root group lifted into the window. `native_role` reads `AXRole` or
-    `AXRole/AXSubrole`. Moving `walk`, `slices` and the shared release fold down into `lane` is a
-    follow-up after this and the Linux lanes merge.
+    `AXRole/AXSubrole`. The macOS and X11 lanes fold their releases with
+    `lane::release_outcome`; the Windows lane folds its three with `.and`, which a follow-up moves
+    onto it.
   - ScreenCaptureKit is loaded by path and its classes found by name, since FLUI runs on releases
     without it; `SCScreenshotManager` (macOS 14) captures the window's frame without its shadow,
     and the lane cuts it to the content. `objc2-screen-capture-kit` is not a dependency.

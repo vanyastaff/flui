@@ -23,12 +23,12 @@
 //!   own input ends the run, since it would no longer see the person's.
 //! - **Reading.** [`roles`] is the role table UI Automation is read against; the lane projects the
 //!   window's UI Automation tree onto the wire's nodes (`Lane::read_tree`) through the bounded
-//!   [`walk`].
+//!   [`walk`](crate::lane::walk).
 //! - **Process.** A launched app runs in a kill-on-close job (`job`, on Windows), which it joins
 //!   before its first instruction.
 //!
 //! The pure parts (the key, role, coordinate and activity tables, the safety rules, the held keys
-//! and buttons, the contact frames and the walk) build on every host, so their tables run on Linux
+//! and buttons and the contact frames) build on every host, so their tables run on Linux
 //! CI; the parts that call Windows are `cfg(windows)`.
 
 pub mod activity;
@@ -63,6 +63,15 @@ pub use lane::WindowsLane;
 #[must_use]
 pub fn desktop_takes_input() -> bool {
     win32::on_input_desktop()
+}
+
+/// The name of the calling thread's desktop: `Default` for the one a person works at (and for it
+/// while the workstation is locked), `flui-test-<run id>` for a test's own. `None` when Windows
+/// refuses to say.
+#[cfg(windows)]
+#[must_use]
+pub fn thread_desktop_name() -> Option<String> {
+    win32::thread_desktop_name()
 }
 
 #[cfg(windows)]

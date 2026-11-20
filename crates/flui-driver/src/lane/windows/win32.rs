@@ -10,7 +10,7 @@ use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, POINT, RECT, RPC_E_CHANGE
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::StationsAndDesktops::{
-    GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
+    GetThreadDesktop, GetUserObjectInformationW, UOI_IO, UOI_NAME,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Controls::{
@@ -137,6 +137,27 @@ pub(super) fn on_input_desktop() -> bool {
         )
     };
     read.is_ok() && receives.as_bool()
+}
+
+/// The name of the calling thread's desktop (`UOI_NAME`: `Default` for the one a person works at);
+/// `None` when Windows refuses either call.
+pub(super) fn thread_desktop_name() -> Option<String> {
+    // SAFETY: the thread's own desktop handle, which belongs to the thread and is not closed.
+    let desktop = unsafe { GetThreadDesktop(GetCurrentThreadId()) }.ok()?;
+    let mut name = [0_u16; 256];
+    // SAFETY: `name` is a writable buffer of the size passed.
+    unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_NAME,
+            Some(name.as_mut_ptr().cast()),
+            u32::try_from(size_of_val(&name)).expect("BUG: 512 bytes fit a u32"),
+            None,
+        )
+    }
+    .ok()?;
+    let len = name.iter().position(|&unit| unit == 0)?;
+    Some(String::from_utf16_lossy(&name[..len]))
 }
 
 /// The process that owns `window`; `None` for a window that no longer exists.
