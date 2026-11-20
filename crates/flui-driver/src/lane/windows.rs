@@ -65,15 +65,6 @@ pub fn desktop_takes_input() -> bool {
     win32::on_input_desktop()
 }
 
-/// The name of the calling thread's desktop: `Default` for the one a person works at (and for it
-/// while the workstation is locked), `flui-test-<run id>` for a test's own. `None` when Windows
-/// refuses to say.
-#[cfg(windows)]
-#[must_use]
-pub fn thread_desktop_name() -> Option<String> {
-    win32::thread_desktop_name()
-}
-
 #[cfg(windows)]
 mod lane {
     use std::time::Instant;

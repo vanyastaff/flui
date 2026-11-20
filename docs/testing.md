@@ -278,8 +278,8 @@ open windows and may send input, do not take plain `cargo test`'s start on the c
 their setup (`private_desktop::require`) fails a test whose desktop is not the run's own
 `flui-test-<run id>` (the name the wrapper gives it; `Default`, a locked workstation's included, is
 refused) unless `FLUI_TEST_VISIBLE_DESKTOP=1` is set, so `cargo test` and cargo-gamma stop before
-the first window. cargo-gamma runs libtest, where those tests panic: it skips them with
-`-- --skip windows_desktop::`.
+the first window. cargo-gamma runs libtest, where those tests would panic and redden its
+baseline, so `gamma.toml`'s `cargo-test-args` skips them (`--skip windows_desktop::`).
 
 `FLUI_TEST_VISIBLE_DESKTOP=1` starts the tests on the caller's desktop instead, to watch them.
 

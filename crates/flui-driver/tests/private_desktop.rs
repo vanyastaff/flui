@@ -5,9 +5,10 @@
 //! send real input. nextest starts each test on a desktop of its own, `flui-test-<run id>`
 //! (`docs/testing.md`, "The Windows test desktop"; the wrapper is `tools/xtask`'s `test-desktop`,
 //! and `flui-native`'s `windows_test_desktop` checks the same name); libtest, which `cargo test`
-//! and cargo-gamma use, starts them on `Default`, the desktop the person is working at. Each live
-//! test's setup (`session`, `live_guard`, `live_job` of `windows_desktop`) asks [`require`] first,
-//! so a run off nextest stops before it opens a window.
+//! and cargo-gamma use, starts them on `Default`, the desktop the person is working at. A live
+//! test asks [`require`] first and passes the [`LiveDesktop`] it returns to the setup that opens
+//! a window, installs the hooks, starts a job or sends input, so a run off nextest stops before
+//! any of that, and a setup without the check does not compile.
 //!
 //! The question is the desktop's name, not whether it takes input at the moment: a locked
 //! workstation reports `Default` as taking none, and a test in flight there would send into the
@@ -22,16 +23,53 @@ const VISIBLE: &str = "FLUI_TEST_VISIBLE_DESKTOP";
 /// The run id the wrapper names its desktop with when nextest gave none.
 const MANUAL_RUN: &str = "manual";
 
+/// The proof that [`require`] ran on this thread's desktop: a live setup takes `&LiveDesktop`, so
+/// one that skips the check does not compile. Only [`require`] makes one.
+#[cfg(windows)]
+pub(crate) struct LiveDesktop(());
+
 /// Stops a live test that is not on a desktop of its own and whose person has not asked for it:
 /// a test off nextest, or one whose desktop Windows would not name.
 #[cfg(windows)]
-pub(crate) fn require() {
+pub(crate) fn require() -> LiveDesktop {
     let run = std::env::var("NEXTEST_RUN_ID").ok();
-    let desktop = flui_driver::lane::windows::thread_desktop_name();
+    let desktop = this_threads_desktop_name();
     let visible = std::env::var_os(VISIBLE);
     if let Err(refusal) = decide(desktop.as_deref(), run.as_deref(), visible.as_deref()) {
         panic!("{refusal}");
     }
+    LiveDesktop(())
+}
+
+/// The name of the calling thread's desktop (`Default` for the one a person works at, a locked
+/// workstation's included); `None` when Windows refuses either call.
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "reads the calling thread's own desktop and its name"
+)]
+fn this_threads_desktop_name() -> Option<String> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::StationsAndDesktops::{
+        GetThreadDesktop, GetUserObjectInformationW, UOI_NAME,
+    };
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    // SAFETY: the thread's own desktop handle, which belongs to the thread and is not closed.
+    let desktop = unsafe { GetThreadDesktop(GetCurrentThreadId()) }.ok()?;
+    let mut name = [0_u16; 256];
+    // SAFETY: `name` is a writable buffer of the size passed.
+    unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_NAME,
+            Some(name.as_mut_ptr().cast()),
+            u32::try_from(size_of_val(&name)).expect("BUG: 512 bytes fit a u32"),
+            None,
+        )
+    }
+    .ok()?;
+    let len = name.iter().position(|&unit| unit == 0)?;
+    Some(String::from_utf16_lossy(&name[..len]))
 }
 
 /// Whether a test on the desktop named `desktop` (`None` when Windows would not say), in the
@@ -171,42 +209,33 @@ fn a_live_test_runs_on_the_runs_own_desktop_or_where_the_person_chose() {
     );
 }
 
-/// The body of the function `name` in `source`: from its signature to the first line that is a
-/// lone closing brace.
-fn body<'a>(source: &'a str, name: &str) -> &'a str {
-    let signature = format!("\nfn {name}(");
-    let start = source
-        .find(&signature)
-        .unwrap_or_else(|| panic!("windows_desktop.rs has no `fn {name}`"));
-    let rest = &source[start..];
-    let end = rest.find("\n}\n").expect("the function ends");
-    &rest[..end]
-}
-
-/// What opens a window, installs the hooks or starts a job in `windows_desktop` is built in one
-/// setup function each, and each of those asks `private_desktop::require` first: a test that
-/// built its own would run on the person's desktop under libtest without being asked. A runtime
-/// test cannot show this under nextest, where `require` passes, so the source is read.
+/// What a `&LiveDesktop` parameter cannot hold: a constructor of something live, written in a
+/// function that does not take the token. Every spelling of one in `windows_desktop.rs` must sit
+/// in a function whose signature takes `&LiveDesktop`; the token itself is what the compiler
+/// holds for the setups.
 #[test]
-fn the_live_setups_ask_before_they_open_anything() {
+fn what_opens_a_window_or_sends_input_is_written_only_where_the_token_is_taken() {
     let source = include_str!("windows_desktop.rs");
-    for (setup, built) in [
-        ("session", "Driver::launch("),
-        ("live_guard", "WindowsGuard::new("),
-        ("live_job", "KillOnCloseJob::try_new("),
+    assert!(
+        source.contains("Driver::launch("),
+        "the check no longer finds the live setups: update its spellings"
+    );
+    for spelling in [
+        "Driver::launch(",
+        "Driver::attach(",
+        "WindowsGuard::new(",
+        "WindowsGuard::default(",
+        "KillOnCloseJob::try_new(",
+        "SendInput(",
     ] {
-        let function = body(source, setup);
-        let asked = function
-            .find("private_desktop::require()")
-            .unwrap_or_else(|| panic!("`{setup}` does not ask `private_desktop::require`"));
-        let opened = function
-            .find(built)
-            .unwrap_or_else(|| panic!("`{setup}` does not build with `{built}`"));
-        assert!(asked < opened, "`{setup}` asks after it has built");
-        assert_eq!(
-            source.matches(built).count(),
-            1,
-            "`{built}` is built outside `{setup}`: a live test must go through the setup"
-        );
+        for (at, _) in source.match_indices(spelling) {
+            let start = source[..at].rfind("\nfn ").expect("inside a function");
+            let end = start + source[start..].find("{\n").expect("a body");
+            assert!(
+                source[start..end].contains("&LiveDesktop"),
+                "`{spelling}` is written in a function that does not take `&LiveDesktop`: {}",
+                source[start..end].trim()
+            );
+        }
     }
 }
