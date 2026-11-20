@@ -3635,3 +3635,69 @@ pub(crate) fn a_field_lays_its_line_out_in_the_ambient_direction() {
         "a left-to-right field's empty line starts at its left edge, the caret at {caret_x}"
     );
 }
+
+/// Left and Right step the caret toward the side of the line they name: in a
+/// left-to-right field Left steps toward the text's start, in a right-to-left
+/// field, whose start is on the right, toward its end; Shift extends the
+/// selection the same way.
+///
+/// Red-check: map Left to the step toward the start whatever the direction,
+/// and the right-to-left Left steps back.
+pub(crate) fn arrow_keys_step_toward_the_side_of_the_line_they_name() {
+    use flui_foundation::TextDirection;
+    use flui_platform::input::keyboard::NamedKey;
+    use flui_widgets::Directionality;
+
+    let press =
+        |harness: &crate::common::harness::Harness, key: NamedKey, code: Code, shift: bool| {
+            let mut event = KeyEvent::new(
+                KeyState::Down(KeyPress::First),
+                Key::Named(key),
+                code,
+                EventTime::from_nanos(0),
+            );
+            if shift {
+                event = event.with_modifiers(Modifiers::SHIFT);
+            }
+            assert!(
+                harness
+                    .focus_manager()
+                    .dispatch_key_event(&event)
+                    .is_handled()
+            );
+        };
+    for (direction, after_left, after_right) in
+        [(TextDirection::Ltr, 1, 3), (TextDirection::Rtl, 3, 1)]
+    {
+        let controller = TextEditingController::with_text("abcd");
+        let node = FocusNode::with_debug_label("arrowed field");
+        let mut harness = crate::common::harness::mount(Directionality::new(
+            direction,
+            EditableText::new(controller.clone(), Rc::clone(&node)),
+        ));
+        let _ = node.request_focus();
+        harness.tick();
+
+        controller.set_caret_byte_offset(2);
+        press(&harness, NamedKey::ArrowLeft, Code::ArrowLeft, false);
+        assert_eq!(
+            controller.caret_byte_offset(),
+            after_left,
+            "{direction:?}: Left"
+        );
+        controller.set_caret_byte_offset(2);
+        press(&harness, NamedKey::ArrowRight, Code::ArrowRight, false);
+        assert_eq!(
+            controller.caret_byte_offset(),
+            after_right,
+            "{direction:?}: Right"
+        );
+        controller.set_caret_byte_offset(2);
+        press(&harness, NamedKey::ArrowLeft, Code::ArrowLeft, true);
+        assert_eq!(
+            controller.selection(),
+            2.min(after_left)..2.max(after_left),
+            "{direction:?}: Shift+Left"
+        );
+    }
+}

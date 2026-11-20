@@ -1226,10 +1226,12 @@ pub(crate) fn a_long_press_moves_the_caret_or_extends_the_word_under_the_magnifi
 /// A field's handles and its magnifier are built for the direction the field
 /// lays its line out in, read at the field: a right-to-left field in a
 /// left-to-right app, whose overlay they are built in, gives its handle and
-/// magnifier builders right-to-left.
+/// magnifier builders right-to-left, and a shown handle is built again when
+/// the field's direction flips, with no toolbar up and the same look.
 ///
 /// Red-check: build the handles or the magnifier for left-to-right (the
-/// overlay's direction), and the right-to-left field's says left-to-right.
+/// overlay's direction), or leave a shown handle alone on a flip, and the
+/// field's direction is not the one they are built for.
 pub(crate) fn a_fields_handles_take_the_fields_direction_not_the_overlays() {
     use flui_foundation::TextDirection;
     use flui_widgets::{Directionality, LongPressSelection, MagnifierInfo, SelectionMagnifier};
@@ -1245,27 +1247,38 @@ pub(crate) fn a_fields_handles_take_the_fields_direction_not_the_overlays() {
     }
 
     let (marked, noted) = (Marked::default(), Noted::default());
-    let field = EditableText::new(
-        TextEditingController::with_text(WORDS),
-        FocusNode::with_debug_label("field"),
-    )
-    .text_style(style())
-    .handles(marked.clone())
-    .caret_handle(CaretHandle::on_tap())
-    .long_press(LongPressSelection::Caret)
-    .no_menu();
-    let page = Column::new((
-        SizedBox::new(400.0, 40.0).child(Directionality::new(TextDirection::Rtl, field)),
-    ))
-    .boxed();
-    let mut laid = lay_out(
+    let controller = TextEditingController::with_text(WORDS);
+    let focus = FocusNode::with_debug_label("field");
+    let app = |direction: TextDirection| {
+        let field = EditableText::new(controller.clone(), Rc::clone(&focus))
+            .text_style(style())
+            .handles(marked.clone())
+            .caret_handle(CaretHandle::on_tap())
+            .long_press(LongPressSelection::Caret)
+            .no_menu();
+        // Preserved below the `Directionality`, so a flip reaches the field
+        // through its dependency alone, with the look it had.
+        let field = crate::media_query_fields::StaticChild {
+            inner: field.boxed(),
+        };
+        let page =
+            Column::new((SizedBox::new(400.0, 40.0).child(Directionality::new(direction, field)),))
+                .boxed();
         WidgetsApp::new(
             DefaultSelectionControls::new(page)
                 .magnifier(noted.clone())
                 .boxed(),
-        ),
-        tight(400.0, 300.0),
-    );
+        )
+    };
+    let last_handle_direction = || {
+        marked
+            .0
+            .borrow()
+            .last()
+            .expect("a tap on the field shows its caret handle")
+            .text_direction
+    };
+    let mut laid = lay_out(app(TextDirection::Rtl), tight(400.0, 300.0));
     laid.pump();
     let editable = laid.find_all_by_render_type("RenderEditable")[0];
     let at =
@@ -1275,13 +1288,22 @@ pub(crate) fn a_fields_handles_take_the_fields_direction_not_the_overlays() {
     for _ in 0..4 {
         laid.pump_for(Duration::from_millis(16));
     }
-    let handle = *marked
-        .0
-        .borrow()
-        .last()
-        .expect("a tap on the field shows its caret handle");
-    assert_eq!(handle.side, HandleSide::Collapsed);
-    assert_eq!(handle.text_direction, TextDirection::Rtl, "the handle");
+    assert_eq!(
+        marked.sides().last(),
+        Some(&HandleSide::Collapsed),
+        "a tap shows the caret handle"
+    );
+    assert_eq!(last_handle_direction(), TextDirection::Rtl, "the handle");
+
+    for direction in [TextDirection::Ltr, TextDirection::Rtl] {
+        laid.pump_widget(app(direction));
+        laid.pump();
+        assert_eq!(
+            last_handle_direction(),
+            direction,
+            "the shown handle is built again for a flip to {direction:?}"
+        );
+    }
 
     let press = TouchScript::new("long press and move")
         .down(1, middle)

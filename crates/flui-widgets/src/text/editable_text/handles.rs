@@ -359,16 +359,23 @@ impl FieldHandles {
     ) {
         let editing = editing_commands(ctx);
         let owner = "an EditableText";
+        let direction = self.menu.direction();
         (self.menu).configure(ctx, settings, &editing, chain, origin, owner);
+        let mut failure = FirstPanic::new();
+        // The handles and the magnifier are built for the field's direction:
+        // a shown one is built again for the new one.
+        if self.menu.direction() != direction {
+            self.refresh(&mut failure);
+        }
         let post_frame = self
             .parts
             .borrow()
             .as_ref()
             .and_then(|parts| parts.post_frame.clone());
         if !self.menu.configured(post_frame.as_ref()) {
+            failure.resume();
             return;
         }
-        let mut failure = FirstPanic::new();
         // Taken away first, so a menu turned off leaves no toolbar.
         self.hide_toolbar(&mut failure);
         self.show_toolbar(&mut failure);

@@ -317,6 +317,7 @@ fn text_editing() {
             ("editable_text::a_push_platform_is_told_the_focused_fields_status", crate::editable_text::a_push_platform_is_told_the_focused_fields_status),
             ("editable_text::a_tap_places_the_caret_where_it_landed", crate::editable_text::a_tap_places_the_caret_where_it_landed),
             ("editable_text::a_field_lays_its_line_out_in_the_ambient_direction", crate::editable_text::a_field_lays_its_line_out_in_the_ambient_direction),
+            ("editable_text::arrow_keys_step_toward_the_side_of_the_line_they_name", crate::editable_text::arrow_keys_step_toward_the_side_of_the_line_they_name),
             ("editable_text_platform_selection::a_field_leaves_its_selection_ui_to_a_platform_that_draws_it", crate::editable_text_platform_selection::a_field_leaves_its_selection_ui_to_a_platform_that_draws_it),
             ("editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui", crate::editable_text_platform_selection::the_fields_own_handles_go_when_the_platform_takes_the_selection_ui),
             ("editable_text_platform_selection::a_control_over_the_field_keeps_its_press", crate::editable_text_platform_selection::a_control_over_the_field_keeps_its_press),
