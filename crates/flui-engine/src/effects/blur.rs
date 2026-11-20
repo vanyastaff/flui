@@ -32,8 +32,7 @@ const KERNEL_RADIUS_PER_SIGMA: f32 = 1.732_050_8;
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    // non-negative result: sigma > 0.0 guard ensures (sigma * √3).ceil() ≥ 0;
-    // truncation: u32::MAX ≈ 4.3 × 10^9, overflowable only at sigma > ~2.5 × 10^9 px
+    reason = "the `sigma <= 0.0` guard keeps `(sigma * KERNEL_RADIUS_PER_SIGMA).ceil()` non-negative, and it overflows `u32` only above a sigma of about 2.5e9 px"
 )]
 #[must_use]
 pub(crate) fn kernel_radius(sigma: f32) -> u32 {

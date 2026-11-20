@@ -362,7 +362,10 @@ impl GpuReplay {
     /// loop and all `flush_opacity_layer` recursion.  Every `flush_texture_batch*`
     /// call drains and clears it before returning, so depth-N+1 content cannot
     /// leak into depth-N.  `&mut self` serializes the recursion.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, queue, pipelines, resources, glyph atlas and encoder are independent borrows of the frame's state that the caller holds as separate locals"
+    )]
     pub(super) fn submit(
         &mut self,
         items: Vec<DrawItem>,

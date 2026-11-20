@@ -62,7 +62,10 @@ impl HSLColor {
 
 impl From<Color> for HSLColor {
     #[inline]
-    #[expect(clippy::manual_midpoint)]
+    #[expect(
+        clippy::manual_midpoint,
+        reason = "the sum of two channels is divided by two to mirror the HSL lightness formula"
+    )]
     fn from(color: Color) -> Self {
         let [r, g, b, a] = color.to_rgba_f32_array();
 

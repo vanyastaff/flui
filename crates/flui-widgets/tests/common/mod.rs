@@ -7,16 +7,25 @@
 
 pub use flui_testing::widgets::*;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "each integration-test binary includes this module and uses a different subset of it"
+)]
 pub mod cases;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "each integration-test binary includes this module and uses a different subset of it"
+)]
 pub mod child_process;
 
 /// Alternatives for a `Dismissible` under test whose alternatives are not
 /// what the test is about: a context menu nobody opens, so the card keeps
 /// its whole row. Its long press competes with a finger's drag, not a
 /// mouse's.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "each integration-test binary includes this module and uses a different subset of it"
+)]
 pub fn dismiss_alternatives() -> flui_widgets::GestureAlternatives {
     struct Dismiss;
     impl flui_widgets::Intent for Dismiss {}
@@ -32,7 +41,10 @@ pub fn dismiss_alternatives() -> flui_widgets::GestureAlternatives {
 /// Alternatives for an `InteractiveViewer` under test whose alternatives are
 /// not what the test is about: zoom commands in a context menu nobody
 /// opens, so the viewer keeps its whole row.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "each integration-test binary includes this module and uses a different subset of it"
+)]
 pub fn viewer_alternatives() -> flui_widgets::GestureAlternatives {
     flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
@@ -50,7 +62,10 @@ pub fn viewer_alternatives() -> flui_widgets::GestureAlternatives {
 /// Alternatives for a `PageView` under test whose alternatives are not what
 /// the test is about: page commands in a context menu nobody opens, so the
 /// pager keeps its whole row.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "each integration-test binary includes this module and uses a different subset of it"
+)]
 pub fn pager_alternatives() -> flui_widgets::GestureAlternatives {
     flui_widgets::GestureAlternatives::try_new(flui_widgets::Alternative::ContextMenu(
         flui_widgets::MenuSpec::new(
@@ -67,7 +82,10 @@ pub fn pager_alternatives() -> flui_widgets::GestureAlternatives {
 
 /// The byte range a `RenderParagraph` paints highlighted, read from its typed
 /// `selection_start` / `selection_end` fields; `None` when it paints no selection.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "each integration-test binary includes this module and uses a different subset of it"
+)]
 pub fn painted_selection(
     laid: &LaidOut,
     paragraph: flui_foundation::RenderId,

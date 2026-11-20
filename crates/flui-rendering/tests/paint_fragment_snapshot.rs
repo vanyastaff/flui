@@ -101,7 +101,7 @@ impl RenderBox for FramedRow {
             let constraints = *ctx.constraints();
             for i in 0..ctx.child_count() {
                 let _ = ctx.layout_child(i, constraints)?;
-                #[expect(clippy::cast_precision_loss)] // test fixture, i < 3
+                #[expect(clippy::cast_precision_loss, reason = "test fixture with i < 3")]
                 ctx.position_child(i, Offset::new(i as f64 * 50.0, 0.0));
             }
             constraints.constrain(Size::new(150.0, 50.0))

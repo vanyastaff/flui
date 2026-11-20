@@ -11,7 +11,10 @@
 // own handles (Device, Queue, Texture, Buffer, …) all derive `Debug`, so they
 // are not the reason. It is an `expect`, not an `allow`: if the last such
 // type gains `Debug`, the attribute must go with it.
-#![expect(missing_debug_implementations)]
+#![expect(
+    missing_debug_implementations,
+    reason = "public types such as `WgpuPainter` and the pre-present hook hold lyon or atlas state or boxed closures with no `Debug`"
+)]
 // No hand-written production `unsafe` in this crate but two: surfaces come from wgpu's safe
 // `create_surface` over an owned `WindowTarget` (ADR-0063), and every GPU
 // handle is a wgpu value type. The exceptions are the read of DXGI frame
@@ -33,17 +36,6 @@
 // the feature that makes it reachable. Keep it on: the next one is a warning,
 // not a discovery.
 #![warn(unreachable_pub)]
-// Two lints are suppressed crate-wide for the wgpu backend, each with a
-// named site rather than a blanket rationale:
-//
-// - `struct_field_names`: the instance batches carry one `*_batch` field per
-//   primitive family (`rect_batch`, `circle_batch`, …), which is the field's
-//   domain name, not a redundant suffix.
-// - `large_enum_variant`: `command_ir::ImageFilterSpec` and
-//   `layer_compositor::RestoreOutcome` are dominated by one variant each;
-//   both are short-lived per-frame values, so boxing the large variant would
-//   trade an allocation on the frame path for a stack-size nit.
-#![expect(clippy::struct_field_names, clippy::large_enum_variant)]
 // The next-generation trait solver counts auto-trait proof depth honestly,
 // and proving `wgpu::Renderer: Send` descends through wgpu-core
 // (`Global -> Hub -> Registry -> RwLock<Storage<..>>`) past the default

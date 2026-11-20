@@ -2070,7 +2070,10 @@ pub(crate) fn zoom_keys(platform: TargetPlatform) -> Vec<(SingleActivator, ZoomI
 impl InteractiveViewerState {
     /// The transformed, clipped and recognized child, rebuilt whenever the
     /// transform changes.
-    #[expect(clippy::too_many_lines)] // one gesture-wiring closure; splitting fragments the capture set
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one gesture-wiring closure set; splitting it fragments the capture set"
+    )]
     fn content(&self, view: &InteractiveViewer) -> BoxedView {
         let core = Rc::clone(&self.core);
         let post_frame = self.post_frame.clone();
@@ -2638,7 +2641,10 @@ fn toward(moved: f64, wanted: f64) -> f64 {
 
 /// Compose in viewport space, then keep the same scene point under the moving
 /// focal point. Publish only an invertible finite matrix inside the boundary.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the gesture state is a set of independent scalars and offsets that no existing struct groups"
+)]
 fn gesture_transform(
     matrix: Matrix4,
     focal: Offset<f64>,

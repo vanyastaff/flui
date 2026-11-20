@@ -29,7 +29,10 @@ mod notices {
 
     // The dispatch source type and the notification names are libdispatch's and
     // AppKit's statics.
-    #![expect(unsafe_code)]
+    #![expect(
+        unsafe_code,
+        reason = "the dispatch source type and the notification names are libdispatch's and AppKit's statics, which are read through `unsafe`"
+    )]
 
     use std::sync::{Arc, Weak};
 

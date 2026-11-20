@@ -31,7 +31,7 @@ fn record(bytes: usize) {
 
 // SAFETY: all operations forward the caller's exact pointer and layout to System;
 // realloc likewise preserves System's allocation ownership and failure semantics.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "`GlobalAlloc` is an unsafe trait")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());

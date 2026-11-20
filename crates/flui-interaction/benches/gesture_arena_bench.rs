@@ -36,14 +36,9 @@ use flui_interaction::ids::PointerId;
 /// Implements the public `GestureArenaMember` extension point so the bench can drive arena
 /// dispatch without instantiating a real recogniser. The bench
 /// measures arena cost, not the recogniser's per-event work, so
-/// `accept_gesture` / `reject_gesture` are no-ops. The `id` field
-/// is intentionally kept for debugging output (the bench fixture
-/// could grow to per-id timings in a follow-up).
+/// `accept_gesture` / `reject_gesture` are no-ops.
 #[derive(Debug)]
-struct BenchMember {
-    #[expect(dead_code)] // retained for future per-id bench breakdown
-    id: usize,
-}
+struct BenchMember;
 
 impl GestureArenaMember for BenchMember {
     fn accept_gesture(&self, _: GestureContest) {}
@@ -54,7 +49,7 @@ impl GestureArenaMember for BenchMember {
 /// just a borrowed member handle. Strong owners stay alive throughout every
 /// measured interval because the arena retains only weak membership.
 fn make_members(count: usize) -> Vec<Rc<BenchMember>> {
-    (0..count).map(|i| Rc::new(BenchMember { id: i })).collect()
+    (0..count).map(|_| Rc::new(BenchMember)).collect()
 }
 
 /// Benchmark `arena.add` against an empty arena. Each iteration

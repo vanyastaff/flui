@@ -375,7 +375,13 @@ impl<Arg> Notifier<Arg> {
             // Unreachable in debug (the panic above diverges); reached only in
             // release, where use-after-dispose degrades to a warn + no-op. The
             // lint therefore only exists in debug builds — hence `cfg_attr`.
-            #[cfg_attr(debug_assertions, expect(unreachable_code))]
+            #[cfg_attr(
+                debug_assertions,
+                expect(
+                    unreachable_code,
+                    reason = "the `panic!` above diverges in debug builds; the release-only block is reachable"
+                )
+            )]
             {
                 tracing::warn!(target: "flui.notifier", "Notifier used after dispose");
                 return true;

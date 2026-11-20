@@ -8,7 +8,10 @@
 
 // WinRT activation and initialization, and the Win32 metric queries. Each
 // `unsafe` block states its invariant.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "WinRT activation and initialization and the Win32 metric queries have no safe wrapper"
+)]
 
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;

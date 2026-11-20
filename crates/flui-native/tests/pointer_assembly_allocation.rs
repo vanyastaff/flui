@@ -33,7 +33,7 @@ struct CountingAllocator;
 // SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
 // is freed by the allocator that produced it. The default `realloc` and
 // `alloc_zeroed` decompose into these and are counted through `alloc`.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "`GlobalAlloc` is an unsafe trait")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let _ = ALLOCATIONS.try_with(|count| count.set(count.get().wrapping_add(1)));

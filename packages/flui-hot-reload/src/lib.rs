@@ -126,7 +126,10 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-#![expect(clippy::module_name_repetitions)]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "`worker::WorkerPlugin`, `driver::HotReloadDriver` and `dynlib::DynLib` repeat their module name, and those are the names callers import"
+)]
 // The crate-level `warn(clippy::pedantic)` above re-enables the pedantic
 // lints the workspace allows; these five are re-suppressed. `allow`, not
 // `expect`: which of them fire depends on the enabled features and target

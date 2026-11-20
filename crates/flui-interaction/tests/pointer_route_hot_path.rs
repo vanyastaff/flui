@@ -1,6 +1,9 @@
 //! Hot-path regression tests for owner-routed pointer delivery.
 
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the counting `GlobalAlloc` below is an `unsafe impl` whose methods forward to `System`"
+)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

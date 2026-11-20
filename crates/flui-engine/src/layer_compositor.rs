@@ -32,6 +32,10 @@ use crate::command_ir::{DrawItem, DrawSegment, ImageFilterSpec, LayerFilterChain
 /// GPU-emission path to follow.  All payloads are owned values so the painter
 /// can mutate its own fields after the compositor call returns — no aliasing.
 // `DrawSegment` / `Vec<DrawItem>` contain `wgpu::TextureView` which is not `Debug`.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a short-lived per-frame value dominated by one variant; boxing it would add an allocation on the frame path"
+)]
 pub(super) enum RestoreOutcome {
     /// The layer needs a premultiplied offscreen composite (opacity ≠ 1.0,
     /// non-white tint, a blend mode other than `SrcOver`, a filter or a

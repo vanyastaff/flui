@@ -389,7 +389,7 @@ impl ScenePlugin {
             // Arc<[u8]>. Recorded GPU commands retain no plugin trait objects.
             // This callback retains no image-dependent payload, including
             // when rendering unwinds.
-            #[expect(unsafe_code)]
+            #[expect(unsafe_code, reason = "`scene_frame` is an `unsafe fn`")]
             unsafe {
                 hook.scene_frame(width, height, &mut render)
             }

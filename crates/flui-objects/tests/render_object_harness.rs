@@ -121,7 +121,10 @@
 )]
 // Row functions are plain `fn`s run by the family tables below, so clippy no
 // longer treats them as `#[test]` bodies where `unwrap` is allowed.
-#![allow(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "row functions are plain `fn`s, which clippy does not treat as `#[test]` bodies where `unwrap` is allowed"
+)]
 
 // Single-binary consolidation (`autotests = false` in `Cargo.toml`): the
 // snapshot dogfood suite compiles as a module of this target instead of

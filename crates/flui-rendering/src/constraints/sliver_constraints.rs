@@ -115,7 +115,10 @@ impl Eq for SliverConstraints {}
 
 impl SliverConstraints {
     /// Creates new sliver constraints with all parameters.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per `SliverConstraints` field"
+    )]
     #[inline]
     #[must_use]
     pub const fn new(

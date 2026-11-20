@@ -72,7 +72,10 @@ impl RSuperellipse {
 
     /// Creates a rounded superellipse from edge coordinates with independent
     /// corner radii.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "four edges and four corner radii are the constructor's whole input"
+    )]
     #[inline]
     pub fn from_ltrb_and_corners(
         left: f64,

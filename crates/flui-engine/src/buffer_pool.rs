@@ -138,7 +138,10 @@ impl BufferPool {
     /// `current_frame` is the recency-clock value stamped onto the acquired
     /// entry (taken by value, so the split-borrow accessor can hand it to both
     /// calls without an extra borrow).
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the pool and both counters are disjoint fields of the caller, borrowed separately so that `self` is not borrowed whole"
+    )]
     fn get_buffer_internal<'a>(
         device: &Device,
         queue: &wgpu::Queue,

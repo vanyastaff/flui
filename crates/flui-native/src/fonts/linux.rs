@@ -10,7 +10,10 @@
 // This module calls the operating system directly, which has no safe wrapper:
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "calls fontconfig through `dlopen`ed symbols, which have no safe wrapper"
+)]
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::path::PathBuf;

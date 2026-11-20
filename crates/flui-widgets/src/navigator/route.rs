@@ -252,7 +252,10 @@ pub enum PushCompletion {
 /// trait is the floor: no overlay entries, no animation, no barrier.
 ///
 /// Every hook has a default, so a test route is a struct with one line.
-#[expect(unused_variables)]
+#[expect(
+    unused_variables,
+    reason = "every hook has a default body that ignores its arguments; their names document the signature an override receives"
+)]
 pub trait Route: 'static {
     /// The value a `pop` of this route delivers.
     type Output: 'static;

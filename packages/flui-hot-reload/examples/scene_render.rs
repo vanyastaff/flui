@@ -31,10 +31,10 @@
 //! Native effects gallery: cargo run -p flui-hot-reload --example scene_render -- --effects
 //! Deterministic PNG: cargo run -p flui-hot-reload --example scene_render -- --capture-effects gallery.png
 
-// Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic from `unwrap` is the example's failure report (docs/PANIC-POLICY.md)"
+)]
 // `Renderer: Send` is re-proved here for the frame callback; see the
 // `recursion_limit` rationale at the top of flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
@@ -265,7 +265,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // SAFETY: the scene is rendered and dropped while this driver is
             // locked, before any later reload. The dedicated renderer copies
             // retained font bytes and retains no image-dependent payloads.
-            #[expect(unsafe_code)]
+            #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
             let built = unsafe { driver.build_scene(w, h) };
             if let Some(scene) = built {
                 let result = renderer_frame

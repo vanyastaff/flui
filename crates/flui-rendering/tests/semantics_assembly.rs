@@ -618,7 +618,10 @@ fn assert_snapshot_preorder(snapshot: &Published, expected: &[AccessibilityNodeI
 }
 
 // The test oracle names each independently observable node field explicitly.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the oracle names each independently observable node field"
+)]
 fn assert_snapshot_node(
     snapshot: &Published,
     id: AccessibilityNodeId,

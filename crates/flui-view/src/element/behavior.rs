@@ -331,18 +331,27 @@ where
     /// lookup is NOT wired here — it is built structurally by
     /// [`ElementTree::insert`](crate::tree::ElementTree) into each node's
     /// `inherited` map, so `InheritedBehavior` needs no mount-time hook.)
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called before unmount to perform behavior-specific cleanup.
     ///
     /// `owner` is threaded through so behaviors can unregister themselves
     /// from `BuildOwner` registries (mirror of `on_mount`).
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called after view update to perform behavior-specific reactions.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called after the element is re-activated (re-inserted into the tree).
@@ -355,7 +364,10 @@ where
     /// bounded retake handoff is armed. The immediate retake catch takes that
     /// token, and the recovery path publishes it only after the substitute
     /// commits.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn on_activate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called before the element is deactivated (temporarily removed from the tree).
@@ -367,7 +379,10 @@ where
     /// lifecycle flip (`ElementCore::deactivate`) must stay unconditional
     /// after a user panic, so the catch has to sit here rather than at the
     /// tree level.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn on_deactivate(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
     }
 
@@ -383,7 +398,10 @@ where
     /// The split-borrow `owner` handle is threaded through so behaviors
     /// can call `ElementOwner::schedule_build_for` for affected
     /// descendants.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn on_view_updated(
         &mut self,
         core: &ElementCore<V, A>,
@@ -489,7 +507,10 @@ where
     /// Default `None`; `ParentDataBehavior` overrides it. Read at the
     /// `ElementTree` insert/update seams (`apply_ancestor_parent_data`), which
     /// find the ancestor parent-data elements and apply their data.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn parent_data_config(
         &self,
         core: &ElementCore<V, A>,
@@ -547,19 +568,28 @@ where
     ///
     /// Default `None`. Used by `ElementTree::apply_ancestor_parent_data` to
     /// validate compatibility with the nearest render parent before writing.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn parent_data_type_id(&self, core: &ElementCore<V, A>) -> Option<std::any::TypeId> {
         None
     }
 
     /// Short diagnostic name of the contributing `ParentDataView`.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn parent_data_debug_type_name(&self, core: &ElementCore<V, A>) -> Option<&'static str> {
         None
     }
 
     /// Description of legal ancestors for the contributing `ParentDataView`.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn parent_data_typical_ancestor_description(
         &self,
         core: &ElementCore<V, A>,
@@ -568,7 +598,10 @@ where
     }
 
     /// Fully-qualified name of the contributed parent-data storage type.
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn parent_data_storage_type_name(&self, core: &ElementCore<V, A>) -> Option<&'static str> {
         None
     }
@@ -608,7 +641,10 @@ where
     /// can resolve the same live build-time context (`BuildHandle`) the
     /// rebuild uses, letting a user `did_change_dependencies` re-read the
     /// changed inherited value against the real tree (PR-K).
-    #[expect(unused_variables)]
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn did_change_dependencies(
         &mut self,
         core: &ElementCore<V, A>,

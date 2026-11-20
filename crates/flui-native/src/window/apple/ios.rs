@@ -15,10 +15,16 @@
 //! layer is created here — the same shape macOS uses with `NSView`.
 
 // Some screen and geometry APIs the window reads remain deprecated in SDK 26.2.
-#![expect(deprecated)]
+#![expect(
+    deprecated,
+    reason = "some screen and geometry APIs the window reads remain deprecated in SDK 26.2"
+)]
 // Direct UIKit Objective-C calls have no safe wrapper: the window is one of the
 // crate's `unsafe` FFI islands, opted out at its module boundary.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "direct UIKit Objective-C calls have no safe wrapper"
+)]
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;

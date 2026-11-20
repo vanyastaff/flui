@@ -77,7 +77,10 @@ pub enum PluginKind {
 ///     ↓
 /// plugin.unload()  —or—  drop(plugin)
 /// ```
-#[expect(missing_debug_implementations)]
+#[expect(
+    missing_debug_implementations,
+    reason = "`ScenePlugin` holds a raw library handle and plugin function pointers with nothing meaningful to print"
+)]
 pub struct ScenePlugin {
     lib: DynLib,
     build_fn: BuildSceneFn,
@@ -90,7 +93,10 @@ pub struct ScenePlugin {
     /// decides not to consume. Currently every host path consumes, so this is
     /// resolved-but-idle; kept because it is the correct disposal for an
     /// unconsumed pointer.
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "never read: every host path consumes the scene and frees it with `free_fn`"
+    )]
     drop_fn: Option<SceneDropFn>,
     kind: PluginKind,
     version: u32,
@@ -113,7 +119,7 @@ impl ScenePlugin {
         // is `try_resolve`'s stated requirement. The symbol-name/type pairs
         // below are the plugin ABI this crate defines, so a library built by
         // the matching macro exports them with these signatures.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "symbol resolution on a freshly opened library")]
         unsafe {
             // Try app_plugin! symbols first (flui_app_build)
             if let Some(resolved) = Self::try_resolve(&lib, "flui_app") {
@@ -170,7 +176,10 @@ impl ScenePlugin {
     /// # Safety
     ///
     /// Caller must ensure `lib` is a valid loaded library.
-    #[expect(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "an `unsafe fn`: `lib` must be a live loaded library, stated under `# Safety`"
+    )]
     unsafe fn try_resolve(lib: &DynLib, family: &str) -> Option<ResolvedSceneFamily> {
         // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
         // calls still need their own block. The caller guarantees `lib` is a
@@ -274,7 +283,10 @@ impl ScenePlugin {
     /// use-after-free of code. Development-only tooling either way. This
     /// obligation applies only to a `Some` return — a `None` (skipped frame)
     /// owns nothing.
-    #[expect(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "an `unsafe fn`: the scene must be dropped before the library is unloaded, stated in its docs"
+    )]
     pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<Scene> {
         // SAFETY: `build_fn`/`free_fn` were resolved from the `DynLib` this
         // struct owns, which outlives the call. The plugin macro returns
@@ -286,7 +298,7 @@ impl ScenePlugin {
         // reads the slot as `MaybeUninit<Scene>`), in the image that
         // allocated it — no cross-image allocator or drop-glue mismatch
         // remains. A null `ptr` never reaches `ptr::read`/`free_fn` at all.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "calls the plugin's build and free entries")]
         unsafe {
             let ptr = (self.build_fn)(width, height);
             if ptr.is_null() {

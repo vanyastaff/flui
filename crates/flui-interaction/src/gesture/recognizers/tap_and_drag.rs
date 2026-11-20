@@ -187,7 +187,10 @@ enum Phase {
 }
 
 // Field names keep the `on_tap_down`/`on_drag_start`-style callback names.
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields are named after the callbacks they hold, so each keeps its `on_*` name"
+)]
 #[derive(Default)]
 struct TapDragCallbacks {
     on_tap_down: Option<TapDragDownCallback>,

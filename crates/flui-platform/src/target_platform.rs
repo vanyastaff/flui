@@ -25,7 +25,10 @@
 #[must_use]
 pub enum TargetPlatform {
     /// Apple iOS (iPhone, iPad).
-    #[expect(non_camel_case_types)]
+    #[expect(
+        non_camel_case_types,
+        reason = "`iOS` is Apple's spelling of the platform name"
+    )]
     iOS,
     /// Google Android.
     Android,

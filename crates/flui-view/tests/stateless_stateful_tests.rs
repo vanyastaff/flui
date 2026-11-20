@@ -3,10 +3,10 @@
 //!
 //! Tests view creation, element management, state handling, and update cycles.
 
-// Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![expect(clippy::struct_field_names)]
+#![expect(
+    clippy::struct_field_names,
+    reason = "`LifecycleCallbackState` names each callback counter with its `_called` suffix"
+)]
 
 use std::sync::{
     Arc, Mutex,

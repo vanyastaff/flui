@@ -102,7 +102,6 @@
     clippy::fallible_impl_from,
     clippy::missing_panics_doc,
     clippy::missing_errors_doc,
-    clippy::allow_attributes_without_reason,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::clone_on_ref_ptr
