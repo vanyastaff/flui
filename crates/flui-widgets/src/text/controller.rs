@@ -226,6 +226,13 @@ pub(super) struct ComposingState {
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
 ///
+/// # Left and right
+///
+/// The methods named `left` and `right` step by offset: `left` toward the
+/// text's start, `right` toward its end. `EditableText` maps the Left and
+/// Right keys onto them by the field's line direction, so in a right-to-left
+/// field the Left key calls the `right` methods.
+///
 /// # Character unit
 ///
 /// Caret movement ([`Self::move_caret_left`]/[`Self::move_caret_right`],
@@ -578,7 +585,8 @@ impl TextEditingController {
         self.set_text(String::new());
     }
 
-    /// Delete the character immediately to the **left** of the caret (Backspace).
+    /// Delete the character immediately **before** the caret in the text
+    /// (Backspace), whichever side of it that is on screen.
     ///
     /// No-op when the caret is at the beginning of the buffer. Clears any
     /// active composing region on an actual deletion — see
@@ -610,7 +618,8 @@ impl TextEditingController {
         });
     }
 
-    /// Delete the character immediately to the **right** of the caret (Delete key).
+    /// Delete the character immediately **after** the caret in the text
+    /// (Delete key), whichever side of it that is on screen.
     ///
     /// No-op when the caret is at the end of the buffer. Clears any active
     /// composing region on an actual deletion — see [`Self::insert_str`]'s
@@ -639,8 +648,8 @@ impl TextEditingController {
         });
     }
 
-    /// Move the selection's EXTENT one character left, leaving the anchor —
-    /// Shift+Left.
+    /// Move the selection's EXTENT one character toward the text's start,
+    /// leaving the anchor: Shift+Left in a left-to-right field.
     ///
     /// Moves the selection's extent past the user-perceived character before it.
     /// The contrast with [`Self::move_caret_left`] is the whole point of the pair:
@@ -658,7 +667,8 @@ impl TextEditingController {
         });
     }
 
-    /// Move the selection's extent one character right — Shift+Right. The
+    /// Move the selection's extent one character toward the text's end:
+    /// Shift+Right in a left-to-right field. The
     /// mirror of [`Self::extend_selection_left`].
     pub fn extend_selection_right(&self) {
         self.extend_to(|guard| {
@@ -699,7 +709,8 @@ impl TextEditingController {
         });
     }
 
-    /// Move the caret one character to the left.
+    /// Move the caret one character toward the text's start: to the left in
+    /// a left-to-right line, to the right in a right-to-left one.
     ///
     /// No-op when the caret is at the beginning. Also clears
     /// [`Self::caret_hidden_by_ime`] when a composition is active — the user
@@ -732,7 +743,8 @@ impl TextEditingController {
         });
     }
 
-    /// Move the caret one character to the right.
+    /// Move the caret one character toward the text's end. The mirror of
+    /// [`Self::move_caret_left`].
     ///
     /// No-op when the caret is at the end. Also clears
     /// [`Self::caret_hidden_by_ime`] when a composition is active — see
@@ -799,7 +811,8 @@ impl TextEditingController {
     // Word movement
     // =========================================================================
 
-    /// Move the caret one WORD to the left — Ctrl/Alt+Left.
+    /// Move the caret one WORD toward the text's start: Ctrl/Alt+Left in a
+    /// left-to-right field.
     ///
     /// With an active selection, collapses to its logical start without a
     /// further jump — the same rule [`Self::move_caret_left`] documents for
@@ -827,7 +840,8 @@ impl TextEditingController {
         });
     }
 
-    /// Move the caret one WORD to the right — Ctrl/Alt+Right. The mirror
+    /// Move the caret one WORD toward the text's end: Ctrl/Alt+Right in a
+    /// left-to-right field. The mirror
     /// of [`Self::move_caret_word_left`] — see its doc.
     pub fn move_caret_word_right(&self) {
         self.app_edit(|guard| {
@@ -849,8 +863,9 @@ impl TextEditingController {
         });
     }
 
-    /// Move the selection's EXTENT one WORD left, leaving the anchor —
-    /// Shift+Ctrl/Alt+Left. The word-granularity counterpart of
+    /// Move the selection's EXTENT one WORD toward the text's start, leaving
+    /// the anchor: Shift+Ctrl/Alt+Left in a left-to-right field. The
+    /// word-granularity counterpart of
     /// [`Self::extend_selection_left`] — see its doc for why this shares
     /// the same private `extend_to` helper rather than duplicating the
     /// anchor-preserving logic.
@@ -861,8 +876,9 @@ impl TextEditingController {
         });
     }
 
-    /// Move the selection's EXTENT one WORD right, leaving the anchor —
-    /// Shift+Ctrl/Alt+Right. Mirror of [`Self::extend_selection_word_left`].
+    /// Move the selection's EXTENT one WORD toward the text's end, leaving
+    /// the anchor: Shift+Ctrl/Alt+Right in a left-to-right field. Mirror of
+    /// [`Self::extend_selection_word_left`].
     pub fn extend_selection_word_right(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
@@ -870,7 +886,8 @@ impl TextEditingController {
         });
     }
 
-    /// Delete the WORD immediately to the left of the caret — Ctrl+Backspace.
+    /// Delete the WORD immediately before the caret in the text —
+    /// Ctrl+Backspace.
     ///
     /// With an active selection, deletes the selection rather than a word —
     /// same rule [`Self::backspace`] documents. No-op at the start of the
@@ -898,7 +915,7 @@ impl TextEditingController {
         });
     }
 
-    /// Delete the WORD immediately to the right of the caret — Ctrl+Delete.
+    /// Delete the WORD immediately after the caret in the text — Ctrl+Delete.
     /// Mirror of [`Self::delete_word_backward`], for the same reason
     /// [`Self::delete_forward`] exists beside [`Self::backspace`].
     pub fn delete_word_forward(&self) {

@@ -14791,6 +14791,10 @@ fn family_text_and_image() {
                 harness_editable_paints_the_selection_behind_the_glyphs,
             ),
             (
+                "editable_direction_relays_out_and_describes_again",
+                harness_editable_direction_relays_out_and_describes_again,
+            ),
+            (
                 "editable_publishes_its_selection_ends_for_handles",
                 harness_editable_publishes_its_selection_ends_for_handles,
             ),
@@ -15755,4 +15759,22 @@ fn a_sized_box_describes_an_infinite_dimension_as_infinite() {
         .expect("one sized box");
     assert_eq!(sized.get::<f64>("width"), Ok(f64::INFINITY));
     assert_eq!(sized.get::<f64>("height"), Ok(30.0));
+}
+
+/// A direction change relays the editable out and describes its text again,
+/// whose runs carry the direction and their rects; the same direction again
+/// changes nothing.
+///
+/// Red-check: report a direction change as layout alone, and assistive
+/// technology keeps the old runs.
+fn harness_editable_direction_relays_out_and_describes_again() {
+    let mut editable = RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr);
+    assert_eq!(
+        editable.set_text_direction(TextDirection::Rtl),
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS,
+    );
+    assert_eq!(
+        editable.set_text_direction(TextDirection::Rtl),
+        flui_rendering::RenderUpdateImpact::NONE,
+    );
 }

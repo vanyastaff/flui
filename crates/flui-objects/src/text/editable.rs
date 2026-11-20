@@ -318,7 +318,8 @@ impl RenderEditable {
 
     /// Lays the text out in `direction`: the line's base direction, which
     /// side its start is aligned to, and so where the caret, the selection
-    /// and an input method's rects fall. A change relays out.
+    /// and an input method's rects fall. A change relays out and describes
+    /// the text again, whose runs carry the direction and their rects.
     pub fn set_text_direction(
         &mut self,
         direction: TextDirection,
@@ -327,7 +328,7 @@ impl RenderEditable {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.painter.set_text_direction(Some(direction));
-        flui_rendering::RenderUpdateImpact::LAYOUT
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Replaces the composing-region range and returns the invalidation

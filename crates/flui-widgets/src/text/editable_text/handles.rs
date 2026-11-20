@@ -349,7 +349,8 @@ impl FieldHandles {
     /// Resolves the field's menu in its build, its items performing
     /// through `chain`, the field's actions: a retired popup closes after
     /// the frame, and a shown toolbar shows the new items, follows their
-    /// enablement, or goes with the look.
+    /// enablement, or goes with the look. A change of the field's direction
+    /// builds the shown handles and magnifier again for the new one.
     pub(super) fn menu_configured(
         self: &Rc<Self>,
         ctx: &dyn BuildContext,
