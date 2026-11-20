@@ -754,7 +754,10 @@ fn the_held_records_follow_what_the_server_took() {
         _ => Ok(()),
     });
     assert!(matches!(released, Err(Error::Lane { .. })), "{released:?}");
-    assert!(masked.keys().is_empty(), "Control was released after the mask");
+    assert!(
+        masked.keys().is_empty(),
+        "Control was released after the mask"
+    );
 
     // Buttons are released by their own numbers, and one refused is named.
     let mut buttons = HeldButtons::default();
