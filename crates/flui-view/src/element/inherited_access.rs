@@ -77,7 +77,7 @@ pub trait InheritedElementAccess {
     /// without an extra tree traversal.
     ///
     /// Idempotent: re-registering the same id overwrites its depth
-    /// (FxHashMap keyed by id) so reconciliation-driven depth changes are
+    /// in its one entry, so reconciliation-driven depth changes are
     /// captured without leaving stale entries, and unions `mask` into the
     /// fields it depends on (issue #1090: a dependent that read two fields in
     /// two builds depends on both).

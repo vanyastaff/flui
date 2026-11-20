@@ -13,7 +13,10 @@ use smallvec::SmallVec;
 
 /// The usual element reads one inherited value; two inline slots avoid a heap
 /// allocation for the common theme-plus-media-query case as well.
-pub(crate) type ProviderIds = SmallVec<[ElementId; 2]>;
+const INLINE_PROVIDERS: usize = 2;
+
+/// The providers one dependent reads.
+pub(crate) type ProviderIds = SmallVec<[ElementId; INLINE_PROVIDERS]>;
 
 /// Sparse reverse index owned by one element tree.
 #[derive(Debug, Default)]
@@ -44,6 +47,37 @@ impl InheritedDependencies {
 
     pub(crate) fn reset_build_misses(&mut self, dependent: ElementId) {
         self.build_misses.remove(&dependent);
+    }
+
+    /// Make room for the providers among `providers` that `dependent` does not
+    /// hold yet, in one allocation, before they are registered one by one.
+    ///
+    /// A list that outgrows its inline slots would otherwise double, and a
+    /// control that reads five values keeps eight slots. `providers` names
+    /// each provider once; the caller registers each of them next, so a list
+    /// created here is not left empty. The cost is that of the registrations
+    /// that follow: one look through the held list per provider, so a
+    /// dependent with `k` providers pays O(k²) a build. `k` counts the
+    /// distinct provider types one element reads, a handful in practice
+    /// (eight stay inline); an element that read hundreds would spend that
+    /// quadratic time here and in [`Self::register`] alike, and the list,
+    /// not this check, is what to replace then.
+    pub(crate) fn reserve(
+        &mut self,
+        dependent: ElementId,
+        providers: impl Iterator<Item = ElementId>,
+    ) {
+        let held = self.active.get(&dependent);
+        let added = providers
+            .filter(|provider| !held.is_some_and(|held| held.contains(provider)))
+            .count();
+        let held = held.map_or(0, ProviderIds::len);
+        if held + added > INLINE_PROVIDERS {
+            self.active
+                .entry(dependent)
+                .or_default()
+                .reserve_exact(added);
+        }
     }
 
     /// Record one active dependency, deduplicating repeated reads.

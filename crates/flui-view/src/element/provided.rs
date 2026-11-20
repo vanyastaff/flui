@@ -13,9 +13,11 @@
 //! the elements that read that value.
 
 use std::any::{Any, TypeId};
+use std::hash::BuildHasher as _;
 
 use flui_foundation::ElementId;
-use rustc_hash::FxHashMap;
+use hashbrown::HashTable;
+use rustc_hash::FxBuildHasher;
 use smallvec::SmallVec;
 
 use crate::view::FieldSet;
@@ -113,6 +115,26 @@ impl DependentEntry {
 /// keeps an index from element to position.
 const SCANNED_DEPENDENTS: usize = 8;
 
+/// The slots of a provider's dependents, in registration order.
+type Slots = Vec<Option<(ElementId, DependentEntry)>>;
+
+/// `position` as the index stores it.
+fn index_position(position: usize) -> u32 {
+    u32::try_from(position).expect("BUG: a provider holds fewer than u32::MAX dependents")
+}
+
+/// The hash a dependent is indexed under.
+fn hash_of(element: ElementId) -> u64 {
+    FxBuildHasher.hash_one(element)
+}
+
+/// The hash of the dependent at `position`, which the index names only while
+/// the slot is live.
+fn hash_at(slots: &Slots, position: u32) -> u64 {
+    let (id, _) = slots[position as usize].expect("BUG: the dependents' index names live slots");
+    hash_of(id)
+}
+
 /// The forward half of the dependency ledger: who reads this provider.
 ///
 /// One per provider element, whatever it publishes. The reverse half is
@@ -124,17 +146,22 @@ const SCANNED_DEPENDENTS: usize = 8;
 /// compaction closes; holes never outnumber the live entries.
 #[derive(Debug, Default)]
 pub(crate) struct Dependents {
-    entries: Vec<Option<(ElementId, DependentEntry)>>,
+    entries: Slots,
     live: usize,
     /// Position of each live dependent in `entries`, once the list outgrows
-    /// [`SCANNED_DEPENDENTS`].
-    index: Option<Box<FxHashMap<ElementId, usize>>>,
+    /// [`SCANNED_DEPENDENTS`]. The table holds positions alone, four bytes a
+    /// bucket: the id each one is found by is the one in `entries`.
+    index: Option<Box<HashTable<u32>>>,
 }
 
 impl Dependents {
     fn position(&self, element: ElementId) -> Option<usize> {
         match &self.index {
-            Some(index) => index.get(&element).copied(),
+            Some(index) => index
+                .find(hash_of(element), |&position| {
+                    self.entries[position as usize].is_some_and(|(id, _)| id == element)
+                })
+                .map(|&position| position as usize),
             None => self
                 .entries
                 .iter()
@@ -167,7 +194,10 @@ impl Dependents {
         self.live += 1;
         match &mut self.index {
             Some(index) => {
-                index.insert(element, position);
+                let entries = &self.entries;
+                index.insert_unique(hash_of(element), index_position(position), |&at| {
+                    hash_at(entries, at)
+                });
             }
             None if self.live > SCANNED_DEPENDENTS => self.rebuild_index(),
             None => {}
@@ -178,12 +208,14 @@ impl Dependents {
     fn rebuild_index(&mut self) {
         let index = self.index.get_or_insert_with(Box::default);
         index.clear();
-        index.extend(
-            self.entries
-                .iter()
-                .enumerate()
-                .filter_map(|(position, slot)| slot.map(|(id, _)| (id, position))),
-        );
+        let entries = &self.entries;
+        for (position, slot) in entries.iter().enumerate() {
+            if let Some((id, _)) = slot {
+                index.insert_unique(hash_of(*id), index_position(position), |&at| {
+                    hash_at(entries, at)
+                });
+            }
+        }
     }
 
     /// Record a read made in `build`. Re-registering overwrites the depth and
@@ -222,11 +254,15 @@ impl Dependents {
         let Some(position) = self.position(element) else {
             return;
         };
+        if let Some(index) = &mut self.index {
+            // `position` came from this index a line above, under the same hash.
+            let found = index
+                .find_entry(hash_of(element), |&at| at as usize == position)
+                .expect("BUG: an indexed dependent's position is in the index");
+            let _: (u32, _) = found.remove();
+        }
         self.entries[position] = None;
         self.live -= 1;
-        if let Some(index) = &mut self.index {
-            index.remove(&element);
-        }
         if self.live == 0 {
             self.entries.clear();
             self.index = None;

@@ -2497,6 +2497,7 @@ dependencies = [
  "flui-testing",
  "flui-view",
  "futures-core",
+ "hashbrown 0.17.1",
  "parking_lot",
  "percent-encoding",
  "proptest",
