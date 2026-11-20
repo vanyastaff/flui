@@ -1,18 +1,25 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 131 закрыта и 3 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `bc2f0ec33`, закрытием LY102 и закрытием LY98 трассой драйвера, FD10 спеки
-  flui-driver); открытые — неотмеченные записи раздела «Ход исполнения». Прогоны на устройствах,
-  которых ждут закрытые задачи, — строки `crates/flui-native/platform-parity.toml`. Открытые
-  задачи и код, которого они ждут:
-  - LY96 и LY99 — Windows-, macOS-, X11- и Android-lane драйвера есть; ждут прогонов на рабочем
-    столе, принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane),
-    сеанса TalkBack и идентификатора узла в `accesskit_android`, и lane остальных ОС спеки
-    flui-driver;
-  - LY97 — запись драйвером есть (трасса держит слои `input` и `native`); ждёт прогонов на
-    Windows, macOS и Linux, lane Android (FD13) и прогона Chrome-lane (FD12, есть, с настоящим
-    браузером не прогонялся) спеки flui-driver.
+  Из 134 задач серии 131 закрыта и 3 открыты: LY96, LY97 и LY99 (сверено с отметками записей
+  «Хода исполнения» на `main` @ `2fa8bc6cc`, где слиты Windows-, macOS-, X11-, Wayland-,
+  Android- и Chrome-lane драйвера и его трасса, FD10–FD14 и FD16 спеки flui-driver).
+  Прогоны на устройствах — строки `crates/flui-native/platform-parity.toml`. Что держит
+  открытые задачи и кто может это снять:
+  - LY99 — прогон сценария conformance через Windows `os`-lane на рабочем столе, принимающем
+    ввод пользователя: на отдельном рабочем столе nextest он `cannot_verify` (прогон
+    2026-11-20 в записи), а на рабочий стол пользователя тесты выходят только с
+    `FLUI_TEST_VISIBLE_DESKTOP=1`, и этот прогон делает владелец;
+  - LY96 — сценариев TalkBack и VoiceOver на iOS нет в коде: Android-lane не читает дерево
+    доступности, пока `accesskit_android` не ставит `viewIdResourceName` (правка AccessKit
+    написана, upstream не отправлена: владелец отправляет её, затем lane читает дерево), а
+    iOS-lane нет (FD15 спеки flui-driver, и агент пока не достигает приложения в Simulator);
+    сеансы Narrator, VoiceOver, Orca и TalkBack — долг строки parity;
+  - LY97 — Web: ADR-0288 §11 решил, что страница пишет только слой `input`, поэтому запись
+    драйвером через Chrome-lane не держит lifecycle, дисплеи и снимки окна web-сборки, а строка
+    задачи требует их и на Web. Нужно решение владельца: ADR, который заменяет это предложение
+    ADR-0288 §11 и вводит журнал отладочной web-сборки, или Web в строке LY97 сужается до слоя
+    `input`. Записи на Windows, macOS и Android — долг строки parity.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -5021,8 +5028,8 @@ GPU-память простаивающего или невидимого окн
   9 из 9 после переноса). Захват на Windows, macOS, iOS и Android не прогонялся — строка качества
   parity «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY97** (ждёт `--record` `os`-lane драйвера на каждой ОС) — на `main` всё, кроме
-  `--record`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
+- [ ] **LY97** (Web противоречит ADR-0288 §11 и ждёт решения владельца; записи на устройствах в
+  долгу) — словарь и replay на headless на `main`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
   headless (`NativeRecording::replay_into`, отказ — типизированный `ReplayError`), строки IME,
   закрытия и блокировок хранилища pull-модели (`store_focus`, `store_lock`; защищённое хранилище —
   одна строка `protected`), чтения предпочтений и дисплеев, снимки состояния окна;
@@ -5040,13 +5047,27 @@ GPU-память простаивающего или невидимого окн
   присоединённого через любой lane, — запись идёт от агента приложения, не от lane, поэтому
   Windows-, macOS-, X11-, Wayland- и Android-lane ничего своего для неё не требуют; Android-lane
   (FD13) запускает приложение и присоединяет драйвер через проброшенный порт
-  (`lane::android::launch`), Chrome-lane (FD12) — через экспорт страницы в headless Chrome.
-  Остаётся: прогон записи `os`-lane на Windows, macOS, Linux и Android с отладочной сборкой
-  приложения (`native-capture`) и в настоящем браузере — строка parity «Recorded native input
-  replays deterministically on the headless host». Захват настоящего метода ввода на
-  устройствах — та же строка parity.
+  (`lane::android::launch`), Chrome-lane (FD12, #2953) — через экспорт страницы в headless
+  Chrome. Словарь схемы (`flui_protocol::native_recording::Row`) держит композицию IME (`ime`,
+  `store_focus`, `store_lock`), lifecycle (`notice`, `session_end`, `reopen`, `close_request`,
+  `closed`, снимки окна `state` потока `window_state`), предпочтения (`preferences`) и дисплеи (`displays`); таблица
+  `native_recording::native_recording_contracts` прошла на Windows 11 2026-11-20
+  (`cargo heli nextest run -p flui-native -E 'test(/native_recording/)'`, 1 из 1).
+  **Что не выполнено.** (1) Web: ADR-0288 §11 — «A page records the input layer only»;
+  `cfg(native_journal)` (`crates/flui-app/build.rs`) ставится только целям с локальным сокетом,
+  web-сборка журнал не начинает, и трасса через Chrome-lane держит из этих видов только события
+  IME и ревизии предпочтений слоя `input`, без lifecycle, дисплеев и снимков окна. Строка задачи
+  требует записи на Web; снимает это владелец: ADR, который заменяет это предложение ADR-0288 §11
+  (захват `flui-native` на wasm32 собирается: `journal` по цели не ограничен), или сужение Web в
+  строке до слоя `input`. (2) `assert_backend_conforms` гоняет таблицу ввода по общим декодерам
+  (`backend_conformance.rs`); записи IME, lifecycle, предпочтений и дисплеев держит replay
+  (равенство доставленному на headless), а не строки этой таблицы — второе предложение приёмки
+  буквально выполнено только для ввода. **Долг устройств:** запись драйвером на Windows, macOS,
+  Linux и Android с отладочной сборкой приложения и захват настоящего метода ввода — строка
+  parity «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY96** (Windows и macOS начаты, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
+- [ ] **LY96** (сценариев TalkBack и VoiceOver на iOS нет в коде; сеансы ассистивных технологий в
+  долгу) — Windows-lane
   драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
   приложение через UI Automation, то дерево, что читает Narrator: нормализованная проекция дерева
   UIA равна дереву приложения, каждая роль таблицы ролей читается своим control type, элемент
@@ -5058,26 +5079,47 @@ GPU-память простаивающего или невидимого окн
   приложение через AT-SPI, то дерево, что читает Orca: проекция равна дереву приложения, каждая
   роль таблицы ролей AT-SPI читается своей ролью, элемент нажимается через действие AT-SPI
   (`x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does`,
-  `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
-  Chrome-lane (FD12) вводит в web-сборку через WebDriver BiDi, но дерева доступности не читает:
-  ARIA-зеркало канваса есть, его чтение через дерево доступности Chrome не построено.
-  Android-lane (FD13) вводит через `adb`, но дерево TalkBack не читает: `accesskit_android` не
-  ставит `viewIdResourceName`, и идентификатор узла до UI Automator не доходит (`docs/gaps.md`);
-  проекция и нажатие через accessibility на Android ждут этого поля в AccessKit. `uiautomator
-  dump`, которым lane находит окно, на время дампа приостанавливает службы accessibility, и
-  TalkBack тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает
-  `uiautomator` (`docs/gaps.md`).
+  `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI);
+  Wayland-lane (FD16) читает AT-SPI тем же клиентом. Headless-половины сценариев:
+  `scenarios::the_accessibility_scenario_passes_on_the_headless_target` (кнопка, переключатель,
+  действие через семантический путь), `scenarios::each_role_publishes_the_wire_role_ui_automation_folds_it_to`
+  (каждая роль таблицы, поле ввода и список среди них),
+  `scenarios::the_conformance_scenario_passes_on_the_headless_target`; на Windows 11 2026-11-20 —
+  3 из 3. **Чего нет в коде.** Android-lane (FD13, #2954) вводит через `adb`, но дерево TalkBack
+  не читает (`read_tree` и `invoke` — `not_supported`): `accesskit_android` не ставит
+  `viewIdResourceName`, и идентификатор узла до UI Automator не доходит; правка AccessKit
+  написана и upstream не отправлена (`docs/gaps.md`, «No accessibility on mobile and the Web» и
+  «The driver's Android lane reads no accessibility tree…»), снимает это владелец отправкой
+  правки и выпуском AccessKit, затем lane читает дерево. iOS-lane нет (FD15 спеки flui-driver), и
+  агент не достигает приложения в Simulator (`docs/gaps.md`, «The driver agent cannot reach an
+  app in the iOS Simulator»): сценария VoiceOver на iOS нет. Chrome-lane (FD12, #2953) дерева
+  доступности страницы не читает (в строке задачи Web нет). `uiautomator dump`, которым
+  Android-lane находит окно, на время дампа приостанавливает службы accessibility, и TalkBack
+  тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает `uiautomator`.
   Долг: сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
   строка качества parity «Conformance executed with assistive technology on each OS».
 
-- [ ] **LY99** (сценарий есть; прогон на Windows через `os`-lane в долгу) — сценарий conformance
-  драйвера `scenarios::conformance` (`crates/flui-driver/tests/scenarios.rs`): имя, роль и
-  идентификатор кнопки, её нажатие и прочитанный эффект, через `os`-lane ещё и дерево UIA. На
-  headless в CI — `scenarios::the_conformance_scenario_passes_on_the_headless_target`; через
-  `os`-lane на Windows — `windows_desktop::the_conformance_scenario_runs_through_the_os_lane`,
-  который на отдельном рабочем столе nextest объявляет OS-ввод и выходит `cannot_verify` (ввод
-  туда не доходит) и проходит только на рабочем столе, принимающем ввод пользователя; этот прогон
-  — долг строки качества parity «Real OS input drives an app through the driver's OS lane». Через
+- [ ] **LY99** (сценарий есть; прогон через Windows `os`-lane на рабочем столе, принимающем
+  ввод, ждёт владельца) — сценарий conformance драйвера `scenarios::conformance`
+  (`crates/flui-driver/tests/scenarios.rs`): имя, роль и идентификатор кнопки, её нажатие и
+  прочитанный эффект, через `os`-lane ещё и дерево UIA. На headless в CI —
+  `scenarios::the_conformance_scenario_passes_on_the_headless_target` (на Windows 11 2026-11-20
+  тоже проходит). Через `os`-lane на Windows —
+  `windows_desktop::the_conformance_scenario_runs_through_the_os_lane`. Прогон
+  `cargo heli nextest run -p flui-driver -E 'test(/windows_desktop::the_conformance_scenario_runs_through_the_os_lane/)'`
+  на отдельном рабочем столе nextest (Windows 11 build 26300, `main` @ `2fa8bc6cc`,
+  2026-11-20) объявил ввод («OS input: will take mouse on this desktop for about 5 s») и вывел
+  `CANNOT_VERIFY the_conformance_scenario_runs_through_the_os_lane: it needs the desktop that
+  takes the user's input`. Тест при этом зелёный: вне рабочего стола ввода он требует вердикт
+  `cannot_verify` с `windows_lane` в списке недостающего, а не `pass`, поэтому приёмку этот
+  прогон не выполняет. Её выполняет тот же тест на рабочем столе, принимающем ввод пользователя
+  (`FLUI_TEST_VISIBLE_DESKTOP=1`, с `FLUI_REQUIRE_INPUT_DESKTOP=1`, чтобы прогон вне него упал);
+  его делает владелец, это долг строки качества parity «Real OS input drives an app through the
+  driver's OS lane». Форма отчёта для строки parity есть: `Report::to_json` пишет `lane`,
+  `verdict`, `cannot_verify` и `isolation`, `Display` — строки `lane: …` и
+  `FLUI_DRIVER_VERDICT=…`; тест требует `report.lane() == Some("windows")`,
+  `policy::a_certification_scenario_takes_the_os_path_announced_once_before_its_first_event` —
+  `to_json()["lane"]`. Через
   `os`-lane на macOS — `macos_desktop::the_conformance_scenario_runs_through_the_os_lane`, тоже в
   долгу до прогона на Mac. Через X11-lane сценарий проходит в CI на Xvfb
   (`x11_desktop::the_conformance_scenario_runs_through_the_os_lane`); долг Linux — прогон на X
