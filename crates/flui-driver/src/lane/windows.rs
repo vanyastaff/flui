@@ -111,9 +111,7 @@ mod lane {
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::pacing::{ECHO_WITHIN, slices};
-    use crate::lane::{
-        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
-    };
+    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
     use crate::steps::OsEvent;
 
     /// The Windows lane for the app whose process is `pid`: see the
@@ -586,7 +584,7 @@ mod lane {
             uia::invoke(window, identifier)
         }
 
-        fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+        fn capture_window(&mut self, placement: &Placement) -> Result<crate::pixels::Image> {
             let _units = DeviceUnits::enter();
             let (window, _) = self.find(placement)?;
             capture::capture(window)

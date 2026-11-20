@@ -23,12 +23,16 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::connection::{Call, Connection};
+use flui_foundation::panic::FirstPanic;
+
+use crate::connection::{Call, Connection, Events};
 use crate::error::{Error, Result};
 use crate::lane::{Lane, LaneWorker};
 use crate::launch::{AppProcess, Launch};
 use crate::os_input::OsInputLock;
+use crate::report::Report;
 use crate::scenario::Scenario;
+use crate::trace::{self, TraceOptions, TraceSummary, TraceWriter};
 use crate::window::Window;
 
 /// How long past the agent's own reply bound a call over a socket waits before it calls the app
@@ -52,6 +56,9 @@ pub struct Driver {
     connection: Box<dyn Connection>,
     /// The process a launch started, ended with the session.
     process: Option<AppProcess>,
+    /// Whether the session launched the page it drives (a web build in a browser of its own),
+    /// which ends with it as a launched process does.
+    launched_page: bool,
     /// Where the target's own input lands: in process, or the desktop of a launched app.
     target_isolation: Isolation,
     policy: InputPolicy,
@@ -66,6 +73,12 @@ pub struct Driver {
     /// How long a call waits past what the app may hold it.
     reply_budget: Duration,
     pub(crate) timeout: Duration,
+    /// The trace being recorded, between `start_trace` and `finish_trace`.
+    trace: Option<TraceWriter>,
+    /// How deep the call being run is in commands: only the outermost is a trace's command.
+    command_depth: u32,
+    /// Events a trace took from the connection that are the caller's to take.
+    kept_events: Events,
 }
 
 impl Driver {
@@ -98,7 +111,9 @@ impl Driver {
                     &token,
                     launch.chromedriver_source(),
                 )?;
-                Self::page(session, lines, &token, launch.connect_timeout())
+                let mut driver = Self::page(session, lines, &token, launch.connect_timeout())?;
+                driver.launched_page = true;
+                Ok(driver)
             }
             _ => Self::launch_process(&launch),
         }
@@ -217,6 +232,7 @@ impl Driver {
         Self {
             connection,
             process,
+            launched_page: false,
             target_isolation,
             policy: InputPolicy::default(),
             lane: None,
@@ -227,6 +243,9 @@ impl Driver {
             announcements: Vec::new(),
             reply_budget,
             timeout: DEFAULT_TIMEOUT,
+            trace: None,
+            command_depth: 0,
+            kept_events: Events::default(),
         }
     }
 
@@ -403,6 +422,13 @@ impl Driver {
     pub fn call_value(&mut self, method: &str, params: Value) -> Result<Value> {
         let row = method::find(method)
             .ok_or_else(|| Error::invalid_argument(format!("no method is named `{method}`")))?;
+        self.command(row.name, params, |driver, params| {
+            driver.dispatch_value(row, params)
+        })
+    }
+
+    /// Send `row`'s method to whoever serves it.
+    fn dispatch_value(&mut self, row: &'static method::MethodRow, params: Value) -> Result<Value> {
         match row.served_by {
             ServedBy::Agent => {
                 if !self.serves(row.name) {
@@ -451,22 +477,272 @@ impl Driver {
         M::Params: Serialize,
         M::Output: DeserializeOwned,
     {
-        if !self.serves(M::NAME) {
-            return Err(Error::not_supported(
-                M::NAME,
-                format!("the app's agent does not serve `{}`", M::NAME),
-            ));
-        }
         let params = serde_json::to_value(params).map_err(|error| {
             Error::invalid_argument(format!(
                 "the parameters of `{}` did not serialize: {error}",
                 M::NAME
             ))
         })?;
-        decode(
-            M::NAME,
-            self.agent_value(M::NAME, M::EFFECT, params, holds)?,
+        let output = self.command(M::NAME, params, |driver, params| {
+            if !driver.serves(M::NAME) {
+                return Err(Error::not_supported(
+                    M::NAME,
+                    format!("the app's agent does not serve `{}`", M::NAME),
+                ));
+            }
+            driver.agent_value(M::NAME, M::EFFECT, params, holds)
+        })?;
+        decode(M::NAME, output)
+    }
+
+    /// Run `run` with `params` as the command `method`: when a trace is being recorded and no
+    /// command is running already, the trace gets the command as written, then its result, the
+    /// events the app sent meanwhile and the evidence it left. A command run inside another (the
+    /// reads and waits an `element.tap` is made of) is the outer command's work, not a row.
+    ///
+    /// A panic out of `run` is resumed after the depth is restored, its result never written, so
+    /// the trace ends incomplete if nothing else is written, and the next command is traced.
+    pub(crate) fn command<P: Serialize, O: Serialize>(
+        &mut self,
+        method: &'static str,
+        params: P,
+        run: impl FnOnce(&mut Self, P) -> Result<O>,
+    ) -> Result<O> {
+        if self.trace.is_none() || self.command_depth > 0 {
+            return run(self, params);
+        }
+        let written = serde_json::to_value(&params)
+            .unwrap_or_else(|error| serde_json::json!({ "unserializable": error.to_string() }));
+        let now = self.clock();
+        let seq = self
+            .trace
+            .as_mut()
+            .map_or(0, |trace| trace.command(method, written, now));
+        self.command_depth += 1;
+        let mut first = FirstPanic::new();
+        let result = first.contain(|| run(&mut *self, params));
+        self.command_depth -= 1;
+        let Some(result) = result else {
+            std::panic::resume_unwind(
+                first
+                    .into_payload()
+                    .expect("BUG: a command that returned nothing held its panic"),
+            );
+        };
+        self.drain_into_trace();
+        let now = self.clock();
+        if let Some(trace) = self.trace.as_mut() {
+            let outcome = match &result {
+                Ok(output) => Ok(serde_json::to_value(output).unwrap_or(Value::Null)),
+                Err(error) => Err(error),
+            };
+            trace.result(seq, outcome, now);
+        }
+        result
+    }
+
+    /// Hand the events the app sent to the trace, keeping for the caller every one that is not
+    /// the trace's own recording's.
+    fn drain_into_trace(&mut self) {
+        let Some(mut trace) = self.trace.take() else {
+            return;
+        };
+        self.drain_events(&mut trace);
+        self.trace = Some(trace);
+    }
+
+    /// Hand the events the app sent to `trace`, keeping for the caller every one that is not
+    /// its recording's.
+    fn drain_events(&mut self, trace: &mut TraceWriter) {
+        let (events, dropped) = self.connection.take_events();
+        let now = self.connection.clock();
+        let taken = trace.events(&events, dropped, now);
+        // The trace marks the loss with its gaps, and the caller's count has it too: the lost
+        // events may have been the caller's.
+        self.kept_events.count_dropped(dropped);
+        for (event, taken) in events.into_iter().zip(taken) {
+            if !taken {
+                self.kept_events.push(event);
+            }
+        }
+    }
+
+    /// Keep `image` as evidence of the command being traced.
+    pub(crate) fn trace_evidence(&mut self, image: &crate::pixels::Image) {
+        if self.command_depth > 0
+            && let Some(trace) = self.trace.as_mut()
+        {
+            trace.evidence_png(image);
+        }
+    }
+
+    /// Begin recording a trace as `options` describe (ADR-0241): every command from here on is
+    /// written with its result, and the app's input and native recordings beside them where it
+    /// serves them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when a trace is being recorded already, or the directory holds
+    /// one; [`Error::Io`] when it cannot be written; the app's refusal of its recording.
+    pub fn start_trace(&mut self, options: TraceOptions) -> Result<()> {
+        use flui_protocol::record::{RecordLayer, RecordParams};
+
+        if self.trace.is_some() {
+            return Err(Error::invalid_argument(
+                "a trace is being recorded already: finish it first",
+            ));
+        }
+        let placement = self
+            .main_window()
+            .and_then(|mut window| window.placement())
+            .ok();
+        let record = (options.record_layers && self.serves(method::RecordStart::NAME)).then(|| {
+            let native = self
+                .hello()
+                .capabilities
+                .as_ref()
+                .is_some_and(|capabilities| capabilities.record.contains(&RecordLayer::Native));
+            let mut params = RecordParams::input(None).keep_text(options.keep_text);
+            if native {
+                params.layers.push(RecordLayer::Native);
+            }
+            (params, native)
+        });
+        let layers = record
+            .as_ref()
+            .map_or_default(|(params, _)| params.layers.clone());
+        let header = self.trace_header(&options, placement, layers);
+        // The trace's files come first: once the app records, every way out of here stops it.
+        let mut writer = TraceWriter::create(&options, &header, self.clock())?;
+        let Some((params, native)) = record else {
+            self.trace = Some(writer);
+            return Ok(());
+        };
+        let started = match self.agent::<method::RecordStart>(params, Duration::ZERO) {
+            Ok(started) => started,
+            Err(error) => {
+                writer.abandon();
+                return Err(error);
+            }
+        };
+        let mut first = FirstPanic::new();
+        let held =
+            first.contain(|| writer.hold_recording(started.recording, &started.header, native));
+        match held {
+            Some(Ok(())) => {
+                self.trace = Some(writer);
+                Ok(())
+            }
+            held => {
+                // The recording the trace cannot hold is stopped, its answer of no use now; a
+                // panic in the stop is held behind the first failure, never in its place.
+                first.contain(|| self.stop_recording(started.recording));
+                writer.abandon();
+                match held {
+                    Some(Err(error)) => {
+                        // The failure to hold the recording is the first; a panic of the stop
+                        // after it is destroyed under containment as the collector drops.
+                        drop(first);
+                        Err(error)
+                    }
+                    _ => std::panic::resume_unwind(
+                        first
+                            .into_payload()
+                            .expect("BUG: a hold that returned nothing held its panic"),
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Stop the app's recording `number`; called with no trace held, so it is no row of one.
+    fn stop_recording(&mut self, number: u64) -> Option<flui_protocol::record::RecordSummary> {
+        debug_assert!(
+            self.trace.is_none(),
+            "a trace's own stop is no command of it"
+        );
+        self.agent::<method::RecordStop>(
+            flui_protocol::record::RecordStopParams::new(number),
+            Duration::ZERO,
         )
+        .ok()
+    }
+
+    fn trace_header(
+        &self,
+        options: &TraceOptions,
+        placement: Option<flui_protocol::session::Placement>,
+        layers: Vec<flui_protocol::record::RecordLayer>,
+    ) -> trace::Header {
+        let kind = if self.target_isolation == Isolation::InProcess {
+            "headless"
+        } else if self.process.is_some() || self.launched_page {
+            "launched"
+        } else {
+            "attached"
+        };
+        let positions = match self.lane_capabilities().map(|lane| lane.fidelity) {
+            Some(crate::lane::PositionFidelity::OrderOnly) => trace::Positions::Order,
+            _ => trace::Positions::Exact,
+        };
+        let started_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| {
+                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+            });
+        trace::Header {
+            flui_trace: trace::FORMAT_VERSION,
+            protocol: self.protocol().to_string(),
+            target: trace::TraceTarget {
+                kind: kind.to_owned(),
+                os: std::env::consts::OS.to_owned(),
+                app: self.app().map(|app| app.name.clone()),
+                lane: self.lane_name().map(str::to_owned),
+            },
+            window: placement.map(|placement| trace::TraceWindow {
+                width: placement.size.width,
+                height: placement.size.height,
+                scale: placement.scale,
+            }),
+            isolation: self.isolation(),
+            fidelity: trace::Fidelity { positions },
+            seed: None,
+            started_unix_ms,
+            privacy: if options.keep_text {
+                trace::Privacy::KeepText
+            } else {
+                trace::Privacy::Redact
+            },
+            layers,
+        }
+    }
+
+    /// End the trace being recorded: the app's recording is stopped and its rows written, the
+    /// trace ends with its `end` row, and `report` names it, unless the trace is kept only on
+    /// failure and `report` passed, which removes it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when no trace is being recorded; the trace's first failed write,
+    /// the trace then left without its `end`. A recording the app could not stop leaves its
+    /// input file without its `end` row, which the summary's missing recording says.
+    pub fn finish_trace(&mut self, report: &mut Report) -> Result<TraceSummary> {
+        let Some(mut writer) = self.trace.take() else {
+            return Err(Error::invalid_argument("no trace is being recorded"));
+        };
+        // The stop is the trace's own, not a command of the session (the trace is out of the
+        // session already, so it is no row): its rows, and the `end` row the app sends before it
+        // answers, are taken from the events after it.
+        let stopped = writer
+            .recording()
+            .and_then(|number| self.stop_recording(number));
+        self.drain_events(&mut writer);
+        let dir = writer.dir().to_owned();
+        let summary = writer.finish(stopped, report.verdict())?;
+        if summary.dir.is_some() {
+            report.set_trace(dir);
+        }
+        Ok(summary)
     }
 
     /// A process that went, with the exit code its OS reported.
@@ -523,9 +799,14 @@ impl Driver {
         Window::new(self, id)
     }
 
-    /// The events the app sent since the last take, and how many were dropped unread.
+    /// The events the app sent since the last take, and how many were dropped unread. While a
+    /// trace is recorded, the rows of its own recording are the trace's.
     pub fn take_events(&mut self) -> (Vec<Event>, u64) {
-        self.connection.take_events()
+        self.drain_into_trace();
+        let (mut events, dropped) = self.kept_events.take();
+        let (more, more_dropped) = self.connection.take_events();
+        events.extend(more);
+        (events, dropped.saturating_add(more_dropped))
     }
 
     /// The OS-input announcements made since the last take.
@@ -550,7 +831,9 @@ impl Driver {
     /// Whether the session launched its app, which therefore ends with it.
     #[must_use]
     pub fn launched_app(&self) -> bool {
-        self.process.is_some() || self.target_isolation == Isolation::InProcess
+        self.process.is_some()
+            || self.launched_page
+            || self.target_isolation == Isolation::InProcess
     }
 
     /// How long the session has run on the clock its waits are counted in.

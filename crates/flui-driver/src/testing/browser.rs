@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use flui_protocol::envelope::{Greeting, Request, ServerLine};
+use flui_protocol::session::Capabilities;
 use serde_json::{Value, json};
 use tungstenite::{Message, WebSocket};
 
@@ -111,7 +112,11 @@ impl ScriptedBrowser {
         let log = BrowserLog::default();
         let mut page = Page {
             token: token.clone(),
-            methods: methods.iter().map(|method| (*method).to_owned()).collect(),
+            capabilities: {
+                let mut capabilities = Capabilities::default();
+                capabilities.methods = methods.iter().map(|method| (*method).to_owned()).collect();
+                capabilities
+            },
             agent,
             browser,
             greeted: false,
@@ -202,7 +207,7 @@ impl std::fmt::Debug for ScriptedBrowser {
 /// The tab and its page, as the stand-in plays them.
 struct Page {
     token: String,
-    methods: Vec<String>,
+    capabilities: Capabilities,
     agent: Script,
     browser: BrowserScript,
     greeted: bool,
@@ -324,7 +329,7 @@ impl Page {
                 return vec![None];
             }
             self.greeted = true;
-            return vec![text(&scripted_hello(&self.methods))];
+            return vec![text(&scripted_hello(self.capabilities.clone()))];
         }
         let Ok(request) = serde_json::from_str::<Request<Value>>(line) else {
             return vec![None];
@@ -343,6 +348,14 @@ impl Page {
             Reply::ResultThenBytes { result, .. } => {
                 vec![text(&ServerLine::answer(request.id, Ok(result)))]
             }
+            Reply::LinesThenResult { lines, result } => lines
+                .iter()
+                .map(|line| serde_json::to_string(line).ok())
+                .chain(std::iter::once(text(&ServerLine::answer(
+                    request.id,
+                    Ok(result),
+                ))))
+                .collect(),
             Reply::Close => vec![None],
         }
     }

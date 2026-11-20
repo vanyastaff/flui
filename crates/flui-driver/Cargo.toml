@@ -34,9 +34,7 @@ wayland = ["dep:reis"]
 chrome = [
     "dep:base64",
     "dep:icu_segmenter",
-    "dep:png",
     "dep:rustls",
-    "dep:sha2",
     "dep:tungstenite",
     "dep:ureq",
     "dep:zip",
@@ -44,7 +42,9 @@ chrome = [
 
 [dependencies]
 # The wire: the method table, its parameters and outputs, the envelope and the launch contract.
-flui-protocol = { workspace = true, features = ["serde"] }
+# With its schemas, which tell a replay where each method's parameters and output hold a handle.
+flui-protocol = { workspace = true, features = ["serde", "schemars"] }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -59,24 +59,27 @@ flui-view = { workspace = true, optional = true }
 flui-foundation = { workspace = true }
 # The instants the in-process agent's conversation is polled at (std's on native targets).
 web-time = { workspace = true, optional = true }
+# Baselines, a trace's captured evidence and the Chrome lane's screenshots are PNG files: the
+# codec `image` already brings into the workspace, without `image`'s other formats.
+png = "0.18"
+# A trace's evidence is named by the SHA-256 of its bytes, so a capture taken twice is kept once;
+# the Chrome lane records a fetched ChromeDriver's and its archive's, and checks a kept one's
+# before it runs.
+sha2 = { workspace = true }
 # The Chrome lane (`chrome`): the BiDi WebSocket to a ChromeDriver on the loopback, so the client
-# handshake alone and no TLS (the version `flui-cli`'s browser relay speaks); a screenshot's base64
-# and PNG; text typed a grapheme cluster at a time, the unit a WebDriver key action takes, as ICU4X
-# segments it (FLUI's one Unicode source, ADR-0092 §6).
+# handshake alone and no TLS (the version `flui-cli`'s browser relay speaks); a screenshot's base64;
+# text typed a grapheme cluster at a time, the unit a WebDriver key action takes, as ICU4X segments
+# it (FLUI's one Unicode source, ADR-0092 §6).
 tungstenite = { version = "0.30", default-features = false, features = [
     "handshake",
 ], optional = true }
 base64 = { version = "0.23", optional = true }
-png = { version = "0.18", optional = true }
 icu_segmenter = { workspace = true, optional = true }
-# The one ChromeDriver archive fetched from Chrome for Testing when neither `CHROMEDRIVER` nor the
-# cache names one (rustls with the platform's verifier, as `flui-cli` fetches), and the WebDriver
-# session ChromeDriver opens over HTTP on the loopback; the archive's deflated entry.
+# The one ChromeDriver archive fetched from Chrome for Testing when the launch allows it (rustls
+# with the platform's verifier, as `flui-cli` fetches), and the WebDriver session ChromeDriver
+# opens over HTTP on the loopback; the archive's deflated entry.
 ureq = { workspace = true, optional = true }
 rustls = { workspace = true, features = ["std", "aws_lc_rs"], optional = true }
-# The SHA-256 of a fetched ChromeDriver and its archive, recorded beside it and checked before a
-# kept one runs.
-sha2 = { workspace = true, optional = true }
 zip = { workspace = true, features = ["deflate-flate2-zlib-rs"], optional = true }
 
 # Local sockets: a named pipe on Windows, a Unix domain socket elsewhere.
@@ -200,7 +203,6 @@ tempfile = { workspace = true }
 # The Chrome lane's tests: the screenshots its stand-in browser answers with, and the ChromeDriver
 # archive its stand-in Chrome for Testing serves.
 base64 = "0.23"
-png = "0.18"
 zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
 
 # The scenario apps in a window (`examples/scenario_app.rs`): the Windows, macOS and X11 lanes'

@@ -3,7 +3,6 @@
 //! mapping across displays, the window frame's projection, and the release gates.
 
 use flui_driver::coordinates::{DevicePoint, WindowGeometry, to_device};
-use flui_driver::lane::OsCapture;
 use flui_driver::lane::macos::activity::{
     self, LANE_TAG, Motion, Observed, PRIVATE_STATE, TapEvent, Watcher,
 };
@@ -21,6 +20,7 @@ use flui_driver::lane::macos::version::MacosVersion;
 use flui_driver::lane::macos::{self, callback, frame};
 use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows;
+use flui_driver::pixels::Image;
 use flui_driver::projection::Projection;
 use flui_driver::protocol::error::{ErrorCode, HandleKind};
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
@@ -1401,20 +1401,20 @@ fn a_window_capture_is_cut_to_its_content() {
     let rgba = (0..height)
         .flat_map(|y| (0..width).flat_map(move |x| [x as u8, y as u8, 0, 255]))
         .collect();
-    let frame = OsCapture::try_new(width, height, rgba).expect("a capture");
+    let frame = Image::try_new(width, height, rgba).expect("a capture");
     let content =
         screen::crop_content(&frame, LogicalSize::new(3.0, 3.0), 1.0).expect("the content fits");
-    assert_eq!((content.width, content.height), (3, 3));
+    assert_eq!((content.width(), content.height()), (3, 3));
     assert_eq!(content.pixel(0, 0), Some([0, 2, 0, 255]));
     assert_eq!(content.pixel(2, 2), Some([2, 4, 0, 255]));
     let half = screen::crop_content(&frame, LogicalSize::new(1.0, 1.0), 2.0).expect("fits");
-    assert_eq!((half.width, half.height), (2, 2));
+    assert_eq!((half.width(), half.height()), (2, 2));
     assert_eq!(half.pixel(1, 0), Some([1, 3, 0, 255]));
     let empty = screen::crop_content(&frame, LogicalSize::new(0.0, 0.0), 1.0).expect("fits");
-    assert_eq!((empty.width, empty.height), (0, 0));
+    assert_eq!((empty.width(), empty.height()), (0, 0));
     // A frame with no title bar is all content.
     let whole = screen::crop_content(&frame, LogicalSize::new(3.0, 5.0), 1.0).expect("fits");
-    assert_eq!((whole.width, whole.height), (3, 5));
+    assert_eq!((whole.width(), whole.height()), (3, 5));
     assert_eq!(whole.pixel(2, 4), Some([2, 4, 0, 255]));
     assert!(screen::crop_content(&frame, LogicalSize::new(3.0, 6.0), 1.0).is_err());
     assert!(screen::crop_content(&frame, LogicalSize::new(4.0, 1.0), 1.0).is_err());

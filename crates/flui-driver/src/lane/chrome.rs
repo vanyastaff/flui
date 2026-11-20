@@ -18,8 +18,8 @@
 //! - **Where.** The lane's screen is the page's viewport in device pixels; the window is the
 //!   canvas `#flui-canvas` the web host draws the first window into, located again before every
 //!   sequence, and refused when its size or the page's device pixel ratio is not the window's.
-//! - **Capture.** `browsingContext.captureScreenshot` clipped to the canvas, decoded within bounds
-//!   ([`screenshot`]).
+//! - **Capture.** `browsingContext.captureScreenshot` clipped to the canvas, its base64 bounded and
+//!   its PNG decoded by the driver's one decoder ([`screenshot`]), a [`crate::pixels::Image`].
 //! - **Isolation.** The browser is always headless (`chromedriver::chrome_args`), so the lane is
 //!   isolated and needs no user-activity guard.
 //! - **Reading.** None: the canvas exposes no DOM accessibility tree for FLUI's nodes to a client
@@ -60,9 +60,7 @@ use self::page::PageServer;
 use crate::coordinates::WindowGeometry;
 
 use crate::error::{Error, Result};
-use crate::lane::{
-    ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity, release_outcome,
-};
+use crate::lane::{ActivityGuard, Lane, LaneCapabilities, PositionFidelity, release_outcome};
 use crate::steps::OsEvent;
 
 /// The lane's name.
@@ -420,7 +418,7 @@ impl Lane for ChromeLane {
         sent
     }
 
-    fn capture_window(&mut self, placement: &Placement) -> Result<OsCapture> {
+    fn capture_window(&mut self, placement: &Placement) -> Result<crate::pixels::Image> {
         self.locate_window(placement)?;
         let canvas = self.canvas()?;
         let shot = self

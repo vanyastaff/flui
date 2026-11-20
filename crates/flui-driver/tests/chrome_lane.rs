@@ -12,6 +12,7 @@ use base64::Engine as _;
 use flui_driver::coordinates::DevicePoint;
 use flui_driver::lane::chrome::{PAGE_ROOM, actions, ime, keys, screenshot};
 use flui_driver::protocol::act::EffectKind;
+use flui_driver::protocol::capture::CaptureSource;
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
     ActionSequence, ImeAction, InputSource, KeyAction, PointerAction, PointerButton, PointerDevice,
@@ -232,7 +233,7 @@ fn base64(bytes: &[u8]) -> String {
 fn a_screenshot_is_decoded_to_rgba_within_its_bounds() {
     let rgba = png(2, 1, png::ColorType::Rgba, &[1, 2, 3, 4, 5, 6, 7, 8]);
     let capture = screenshot::decode(&base64(&rgba)).expect("an RGBA screenshot");
-    assert_eq!((capture.width, capture.height), (2, 1));
+    assert_eq!((capture.width(), capture.height()), (2, 1));
     assert_eq!(capture.pixel(1, 0), Some([5, 6, 7, 8]));
     let rgb = png(1, 1, png::ColorType::Rgb, &[9, 8, 7]);
     assert_eq!(
@@ -249,12 +250,16 @@ fn a_screenshot_is_decoded_to_rgba_within_its_bounds() {
         Some([100, 100, 100, 50])
     );
     // A header naming more pixels than a capture takes is refused before any pixel is decoded:
-    // the image data after it is never there.
+    // the few bytes of image data after it could never fill it.
     let mut header = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut header, 10_000, 10_000);
         encoder.set_color(png::ColorType::Rgba);
-        drop(encoder.write_header().expect("a header"));
+        let mut writer = encoder.write_header().expect("a header");
+        writer
+            .write_chunk(png::chunk::IDAT, &[0; 8])
+            .expect("a scrap of image data");
+        drop(writer);
     }
     let refused = screenshot::decode(&base64(&header));
     assert!(
@@ -764,9 +769,10 @@ fn the_canvas_is_captured_clipped_to_itself() {
     let mut driver = attach(&browser);
     let capture = driver
         .window(window())
-        .capture_os()
+        .capture(CaptureSource::Os)
         .expect("the canvas's capture");
-    assert_eq!((capture.width, capture.height), (2, 2));
+    let capture = capture.image();
+    assert_eq!((capture.width(), capture.height()), (2, 2));
     assert_eq!(capture.pixel(1, 1), Some([255; 4]));
     let shot = &browser.log().of("browsingContext.captureScreenshot")[0];
     assert_eq!(
@@ -1152,5 +1158,50 @@ fn closing_the_pages_connection_is_bounded_when_the_browser_stops_answering() {
         started.elapsed() < Duration::from_secs(5),
         "the driver left in {:?}",
         started.elapsed()
+    );
+}
+
+/// A trace of a page session names the Chrome lane, the headless browser its input lands in and
+/// the exact positions the lane reproduces, and holds the OS input as one of its commands, as a
+/// trace through any other lane does.
+#[test]
+fn a_trace_of_a_page_session_names_the_chrome_lane_and_holds_its_input() {
+    use flui_driver::Report;
+    use flui_driver::trace::{Positions, Trace, TraceOptions};
+
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|_, _| BrowserReply::Played),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("page.flui-trace");
+    driver
+        .start_trace(TraceOptions::new(&dir))
+        .expect("the trace starts");
+    let mut report = Report::new();
+    report
+        .check("a press", || {
+            driver
+                .window(window())
+                .perform(press(LogicalPoint::new(100.0, 50.0)))
+        })
+        .expect("the press goes through the lane");
+    driver
+        .finish_trace(&mut report)
+        .expect("the trace finishes");
+    let trace = Trace::open(&dir).expect("the trace reads back");
+    assert!(trace.is_complete());
+    let header = trace.header();
+    assert_eq!(header.target.lane.as_deref(), Some("chrome"));
+    assert_eq!(header.target.kind, "attached");
+    assert_eq!(header.isolation, Isolation::HeadlessBrowser);
+    assert_eq!(header.fidelity.positions, Positions::Exact);
+    let rows = std::fs::read_to_string(dir.join("trace.jsonl")).expect("the trace's rows");
+    assert!(
+        rows.lines().any(|row| row.contains("input.perform")),
+        "the OS input is a command of the trace: {rows}"
     );
 }
