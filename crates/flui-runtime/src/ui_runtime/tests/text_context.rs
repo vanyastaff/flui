@@ -103,7 +103,7 @@ fn dirty_the_paragraph(ui_runtime: &UiRuntime) {
         let paragraph = owner
             .render_tree()
             .iter()
-            .find(|(_, node)| node.debug_name().contains("RenderParagraph"))
+            .find(|(_, node)| node.kind() == "RenderParagraph")
             .map(|(id, _)| id)
             .expect("the Text mounted a RenderParagraph");
         owner.mark_needs_layout(paragraph);
@@ -188,7 +188,7 @@ fn probe_paragraph_width(ui_runtime: &UiRuntime) -> f64 {
         let paragraph = owner
             .render_tree()
             .iter()
-            .find(|(_, node)| node.debug_name().contains("RenderParagraph"))
+            .find(|(_, node)| node.kind() == "RenderParagraph")
             .map(|(id, _)| id)
             .expect("the Text mounted a RenderParagraph");
         owner

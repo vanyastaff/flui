@@ -654,14 +654,10 @@ fn harness_custom_paint_failed_replacement_commits_new_painter_and_revokes_old_r
 struct ListeningFlowDelegate(Rc<RemovalNotifier>);
 
 impl FlowDelegate for ListeningFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         constraints
     }
     fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
@@ -1043,15 +1039,15 @@ impl HarnessSingleChildLayoutDelegate {
 }
 
 impl SingleChildLayoutDelegate for HarnessSingleChildLayoutDelegate {
-    fn get_size(&self, _constraints: BoxConstraints) -> Size {
+    fn size(&self, _constraints: BoxConstraints) -> Size {
         self.size
     }
 
-    fn get_constraints_for_child(&self, _constraints: BoxConstraints) -> BoxConstraints {
+    fn constraints_for_child(&self, _constraints: BoxConstraints) -> BoxConstraints {
         self.child_constraints
     }
 
-    fn get_position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
+    fn position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
         self.offset
     }
 
@@ -1095,7 +1091,7 @@ impl HarnessMultiChildLayoutDelegate {
 }
 
 impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
-    fn get_size(&self, _constraints: BoxConstraints) -> Size {
+    fn size(&self, _constraints: BoxConstraints) -> Size {
         self.size
     }
 
@@ -2852,12 +2848,12 @@ fn harness_custom_single_child_layout_positions_child_with_delegate() {
     assert_eq!(
         run.box_geometry(run.root()),
         Size::new(120.0, 80.0),
-        "parent size must come from delegate.get_size constrained by incoming constraints",
+        "parent size must come from delegate.size constrained by incoming constraints",
     );
     assert_eq!(
         run.box_geometry(run.id("child")),
         Size::new(30.0, 20.0),
-        "child must be laid out under delegate.get_constraints_for_child",
+        "child must be laid out under delegate.constraints_for_child",
     );
     assert_eq!(run.offset(run.id("child")), Offset::new(70.0, 50.0));
     assert_eq!(run.hit_first(75.0, 55.0), Some(run.id("child")));
@@ -2896,7 +2892,7 @@ fn harness_custom_multi_child_layout_positions_children_by_layout_id() {
     assert_eq!(
         run.box_geometry(run.root()),
         Size::new(120.0, 90.0),
-        "parent size must come from delegate.get_size constrained by incoming constraints",
+        "parent size must come from delegate.size constrained by incoming constraints",
     );
     assert_eq!(
         run.box_geometry(run.id("header")),
@@ -3391,7 +3387,7 @@ fn harness_aspect_ratio_infinite_minima_reject_without_panicking() {
                 flui_rendering::RenderError::InvalidGeometry {
                     render_object,
                     ..
-                } if render_object == std::any::type_name::<RenderAspectRatio>()
+                } if render_object == "RenderAspectRatio"
             ),
             "expected typed geometry rejection, got {error:?}"
         );
@@ -9662,7 +9658,7 @@ fn harness_sliver_carousel_geometry_and_frames() {
 /// `SliverGridLayout::compute_max_scroll_offset` divides by
 /// `cross_axis_count` (`(child_count - 1) / self.cross_axis_count`) with no
 /// zero guard — an unconditional (not debug-only) integer division-by-zero
-/// panic for any delegate whose `get_layout` returns `cross_axis_count: 0`.
+/// panic for any delegate whose `layout` returns `cross_axis_count: 0`.
 /// `SliverGridDelegate` is a public trait implemented by caller code, and
 /// nothing in its contract (or `SliverGridLayout`'s public fields) rules out
 /// a degenerate return value, so this is a real, externally reachable panic
@@ -9676,7 +9672,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     struct ZeroCrossAxisCountDelegate;
 
     impl SliverGridDelegate for ZeroCrossAxisCountDelegate {
-        fn get_layout(&self, _constraints: SliverConstraints) -> SliverGridLayout {
+        fn layout(&self, _constraints: SliverConstraints) -> SliverGridLayout {
             SliverGridLayout {
                 cross_axis_count: 0,
                 main_axis_stride: 100.0,
@@ -11958,15 +11954,11 @@ struct StepFlowDelegate {
 }
 
 impl FlowDelegate for StepFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -12006,15 +11998,11 @@ struct SemanticFlowDelegate {
 }
 
 impl FlowDelegate for SemanticFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -12132,15 +12120,11 @@ struct FailingFlowDelegate {
 }
 
 impl FlowDelegate for FailingFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -12268,15 +12252,11 @@ fn harness_flow_only_announces_presented_children_after_repaint_and_replacement(
 }
 
 impl FlowDelegate for DegenerateFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 

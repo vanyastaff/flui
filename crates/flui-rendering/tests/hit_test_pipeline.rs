@@ -228,13 +228,13 @@ pub(crate) fn perspective_container_hits_its_actual_child_plane() {
 struct TiltedPlaneFlow;
 
 impl flui_rendering::delegates::FlowDelegate for TiltedPlaneFlow {
-    fn get_size(
+    fn size(
         &self,
         constraints: flui_rendering::constraints::BoxConstraints,
     ) -> flui_foundation::geometry::Size {
         constraints.biggest()
     }
-    fn get_constraints_for_child(
+    fn constraints_for_child(
         &self,
         _index: usize,
         constraints: flui_rendering::constraints::BoxConstraints,

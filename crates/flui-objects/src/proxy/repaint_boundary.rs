@@ -125,10 +125,6 @@ impl RenderBox for RenderRepaintBoundary {
     // === Query pass-through =================================================
 
     flui_rendering::forward_single_child_box_queries!();
-
-    fn debug_name(&self) -> &'static str {
-        "RenderRepaintBoundary"
-    }
 }
 
 // ============================================================================

@@ -290,7 +290,7 @@ fn a_window_that_closed_answers_gone() {
     assert_window_gone(&error, second_window);
 }
 
-/// A render object's `debug_name` is app code the read calls: its panic answers the request with
+/// A render object's `kind` is app code the read calls: its panic answers the request with
 /// `platform` before the panic continues on the owner thread, so the agent is not told
 /// the runtime is gone.
 #[test]

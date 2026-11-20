@@ -106,15 +106,11 @@ fn committed_transform_queries_reuse_ancestry_storage() {
 struct RowFlowDelegate;
 
 impl flui_rendering::delegates::FlowDelegate for RowFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 

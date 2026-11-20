@@ -217,8 +217,4 @@ impl RenderBox for RenderSkeleton {
     fn detach(&mut self) {
         self.phase.detach();
     }
-
-    fn debug_name(&self) -> &'static str {
-        "RenderSkeleton"
-    }
 }

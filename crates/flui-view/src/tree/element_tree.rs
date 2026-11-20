@@ -1224,7 +1224,7 @@ impl ElementTree {
                      (incompatible child parent-data TypeId). `{provider_name}` must be \
                      placed under {typical_ancestor}. Element ancestry \
                      (child → … → root): {}",
-                    parent_node.debug_name(),
+                    parent_node.kind(),
                     self.format_element_ancestry(child_id),
                 );
             }

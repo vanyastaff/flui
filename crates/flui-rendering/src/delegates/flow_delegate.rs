@@ -30,12 +30,12 @@ use crate::{constraints::BoxConstraints, context::PaintContext};
 /// }
 ///
 /// impl FlowDelegate for CircularFlowDelegate {
-///     fn get_size(&self, constraints: BoxConstraints) -> Size {
+///     fn size(&self, constraints: BoxConstraints) -> Size {
 ///         let diameter = self.radius * 2.0;
 ///         constraints.constrain(Size::new(diameter, diameter))
 ///     }
 ///
-///     fn get_constraints_for_child(&self, _index: usize, _constraints: BoxConstraints) -> BoxConstraints {
+///     fn constraints_for_child(&self, _index: usize, _constraints: BoxConstraints) -> BoxConstraints {
 ///         BoxConstraints::loose(Size::new(100.0, 100.0))
 ///     }
 ///
@@ -78,7 +78,7 @@ pub trait FlowDelegate: Debug {
     /// # Returns
     ///
     /// The size of this render object.
-    fn get_size(&self, constraints: BoxConstraints) -> Size;
+    fn size(&self, constraints: BoxConstraints) -> Size;
 
     /// Get the constraints for a child at the given index.
     ///
@@ -90,11 +90,7 @@ pub trait FlowDelegate: Debug {
     /// # Returns
     ///
     /// The constraints to pass to the child.
-    fn get_constraints_for_child(
-        &self,
-        index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints;
+    fn constraints_for_child(&self, index: usize, constraints: BoxConstraints) -> BoxConstraints;
 
     /// Paint children with custom transforms.
     ///

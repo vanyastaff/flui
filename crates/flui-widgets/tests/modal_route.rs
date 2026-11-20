@@ -143,15 +143,13 @@ pub(crate) fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gestur
     let _result = navigator.push(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));
     harness.tick();
 
-    let names = harness.render_debug_names();
+    let names = harness.render_kinds();
     assert!(
-        names
-            .iter()
-            .any(|name| name.ends_with("RenderAbsorbPointer")),
+        names.contains(&"RenderAbsorbPointer"),
         "every modal barrier absorbs pointers: {names:?}"
     );
     assert!(
-        !names.iter().any(|name| name.ends_with("RenderListener")),
+        !names.contains(&"RenderListener"),
         "a non-dismissible barrier installs no gesture recogniser: {names:?}"
     );
 
@@ -161,9 +159,9 @@ pub(crate) fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gestur
     let _result = navigator.push(dismissible);
     harness.tick();
 
-    let names = harness.render_debug_names();
+    let names = harness.render_kinds();
     assert!(
-        names.iter().any(|name| name.ends_with("RenderListener")),
+        names.contains(&"RenderListener"),
         "a dismissible barrier listens for the dismiss tap: {names:?}"
     );
 }
