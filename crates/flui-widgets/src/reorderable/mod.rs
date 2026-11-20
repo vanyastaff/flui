@@ -680,16 +680,12 @@ impl SliverGridDelegate for ShapeRecorder {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SliverGridDelegate) -> bool {
-        match old_delegate.as_any().downcast_ref::<Self>() {
+        match (old_delegate as &dyn Any).downcast_ref::<Self>() {
             Some(old) => {
                 !Rc::ptr_eq(&self.shape, &old.shape) || self.inner.should_relayout(&*old.inner)
             }
             None => true,
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

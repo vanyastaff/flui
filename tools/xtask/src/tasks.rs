@@ -1,17 +1,14 @@
-//! The tasks `checks`, `fuzz` and `clean-nested`.
+//! The tasks `checks` and `clean-nested`.
 //!
-//! `checks` and `fuzz` run every step even after one fails and then report all
-//! that failed; `fuzz` prints each command before it runs it. `--dry-run`
-//! prints what a task would run or remove without doing it.
+//! `checks` runs every check even after one fails and then reports all that
+//! failed. `--dry-run` prints what a task would run or remove without doing it.
 
 mod checks;
 mod exec;
-mod fuzz;
 
 use std::process::ExitCode;
 
 use exec::{Runner, target_dir};
-pub(crate) use fuzz::{FuzzArgs, fuzz};
 
 use crate::util::{human_size, tree_size};
 

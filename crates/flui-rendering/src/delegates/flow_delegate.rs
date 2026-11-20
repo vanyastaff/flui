@@ -56,7 +56,7 @@ use crate::{constraints::BoxConstraints, context::PaintContext};
 ///     }
 ///
 ///     fn should_relayout(&self, old_delegate: &dyn FlowDelegate) -> bool {
-///         if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+///         if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
 ///             self.radius != old.radius
 ///         } else {
 ///             true
@@ -68,7 +68,7 @@ use crate::{constraints::BoxConstraints, context::PaintContext};
 ///     }
 /// }
 /// ```
-pub trait FlowDelegate: Debug {
+pub trait FlowDelegate: Any + Debug {
     /// Get the size of the flow layout for the given constraints.
     ///
     /// # Arguments
@@ -143,9 +143,6 @@ pub trait FlowDelegate: Debug {
     fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
         None
     }
-
-    /// Returns self as `Any` for downcasting.
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// Context for flow painting operations.

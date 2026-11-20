@@ -60,8 +60,4 @@ impl PlatformHaptics for MacHaptics {
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
         HapticCapabilities::FEEDBACK_ONLY
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

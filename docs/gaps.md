@@ -824,7 +824,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** Linux, Windows · **Who it hurts:** Applications whose process reads what another process sends: an input method's replies, clipboard and drag payloads, a compositor's arrays · **Parity:** none (robustness)
 
-- `cargo xtask fuzz` runs two targets, `image_decode` and `agent_wire` ([testing.md](testing.md#fuzzing)). The parsers inside `flui-native` (the XIM codec, clipboard text, drag offer kinds, the Windows drag crossing, Wayland configure arrays) have property tests that draw their bytes at random and no coverage-guided run: they are `pub(crate)`, and a fuzz target is an example, which sees only its crate's public API.
+- The nightly fuzz workflow runs two targets, `image_decode` and `agent_wire` ([testing.md](testing.md#fuzzing)). The parsers inside `flui-native` (the XIM codec, clipboard text, drag offer kinds, the Windows drag crossing, Wayland configure arrays) have property tests that draw their bytes at random and no coverage-guided run: they are `pub(crate)`, and a fuzz target is an example, which sees only its crate's public API.
 - The entry closes when each has a target, reached through an item the crate's `testing` feature exports.
 
 ### JNI calls are hand-written signature strings

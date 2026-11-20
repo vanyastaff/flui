@@ -204,7 +204,7 @@ impl CustomPainter for TickPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             old.color != self.color
                 || old.controller.is_some() != self.controller.is_some()
                 || !Rc::ptr_eq(&old.phases, &self.phases)
@@ -215,9 +215,5 @@ impl CustomPainter for TickPainter {
         self.controller
             .as_ref()
             .map(|controller| Rc::new(controller.clone()) as Rc<dyn Listenable>)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

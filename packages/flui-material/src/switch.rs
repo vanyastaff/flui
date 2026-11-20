@@ -82,6 +82,7 @@
 //! - **`focus_node`/`autofocus`** — same whole-substrate `InkWell` gap
 //!   [`crate::Checkbox`] already names.
 
+use std::any::Any;
 use std::rc::Rc;
 
 use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpec};
@@ -608,17 +609,12 @@ impl CustomPainter for SwitchPainter {
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
         // The position repaints through `repaint`; only the endpoints and
         // direction come from a rebuild.
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old.off != self.off || old.on != self.on || old.rtl != self.rtl)
     }
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         Some(Rc::new(self.position.clone()))
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

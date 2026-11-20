@@ -32,10 +32,6 @@ impl CustomPainter for RectanglePainter {
         false
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn repaint(&self) -> Option<Rc<dyn flui::foundation::Listenable>> {
         None
     }
@@ -100,7 +96,6 @@ impl CustomPainter for MotionPainter {
     }
 
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool { false }
-    fn as_any(&self) -> &dyn std::any::Any { self }
     fn repaint(&self) -> Option<Rc<dyn flui::foundation::Listenable>> {
         Some(Rc::new(self.0.clone()))
     }
@@ -209,7 +204,6 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
         Color::rgb(0, 255, 0),
     ));
 }
-
 
 #[derive(Debug, flui::Inspect)]
 struct SolidLeaf {
@@ -516,7 +510,6 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
         assert!(candidate.contact.current().is_none());
     }
 }
-
 
 use flui::view::{
     AsyncDriver, BoxedTask, FrameId, FrameTiming, Instant, PostFrameHandle,

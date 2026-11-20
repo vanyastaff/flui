@@ -752,10 +752,6 @@ impl PlatformHaptics for Absent<position::Haptics> {
     fn capabilities(&self, _: Option<DeviceId>) -> HapticCapabilities {
         HapticCapabilities::NONE
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Every window hands out an actuator that plays nothing, for want of the
@@ -789,10 +785,6 @@ impl<O> Lifecycle<O> for Absent<position::Lifecycle> {
 
 impl PlatformSystemChrome for Absent<position::Chrome> {
     fn set_overlay_style(&self, _: SystemUiOverlayStyle) {}
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Every window styles system bars that are not there.

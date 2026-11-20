@@ -8,7 +8,7 @@
   and for those of the same
   kind it does not list (`deps`, `doc-strict`, `gpu-test`, `platform-test`, `wayland-optional`,
   `native-features`, `build-all-targets`, `facade-combos`, `wasm-imports`, `wasm-test-crates`,
-  `locked-version`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a workflow step calls
+  `locked-version`, `fuzz`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a workflow step calls
   the tool. The same §1 for `perf`, which it lists among the tools for working in the repository:
   the scenarios hold their own baseline, and the other comparisons are steps (§7).
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
@@ -18,7 +18,8 @@
   runs wasm-bindgen over them and reads their import modules with node, and runs the wasm32 tests
   itself; §6 and `cross-typecheck` in Supersedes: each native leg lints the whole workspace; §7 and
   `perf` in Supersedes: the perf scenarios hold their baseline, and `perf-gates`, `size` and `deps`
-  compare the rest in steps.
+  compare the rest in steps. 2026-11-20 — §8 and `fuzz` in Supersedes: the fuzz workflow builds
+  each target with `cargo +nightly --config .cargo/fuzz.toml run`.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -71,7 +72,7 @@ and macOS) is a shell loop that runs every iteration before it fails.
 `lint`, `gate`, `test`, `platform-test`, `cli-test`, `wayland-optional`, `build-all-targets`, `ci`,
 `ci-full`, `deps`, `native-features`, `gpu-test`, `miri`, `doc-strict`, `feature-matrix`,
 `facade-combos`, `wasm-check`, `docs-links`, `wasm-link`, `wasm-test`, `wasm-imports`,
-`wasm-test-crates`, `locked-version`, `cross-typecheck` and `perf` leave `tools/xtask`.
+`wasm-test-crates`, `locked-version`, `cross-typecheck`, `perf` and `fuzz` leave `tools/xtask`.
 There is no local command that mirrors CI: `docs/testing.md` names, for each job, the commands a
 contributor runs, and the job holds them.
 
@@ -218,6 +219,30 @@ brought it. The options for that driver:
   under it, so the line follows a fall and no slack builds up below it. Growth inside the 2%
   still passes until the merge that crosses it.
 
+### §8. The fuzz workflow builds each target with cargo and a config file
+
+`cargo xtask fuzz` held the flags a fuzz build adds, the table of targets and the libFuzzer
+arguments, so the nightly run and a developer replaying its finding built with the same flags.
+The options:
+
+- *Keep the task*: one command for both, but a reader opens Rust to learn what the job runs.
+- *`cargo fuzz`*: the tool every Rust project uses, with `cmin`, `tmin` and coverage beside the
+  run, and a fuzz package can share the workspace's lockfile. It moves each target out of the
+  example of its crate into a package of its own, with its own dependencies, and builds release
+  with more flags than these (the stack-depth counter, no branch folding, one codegen unit): a
+  change of the build and of the targets' layout, which is a change of its own, not this move.
+- *`RUSTFLAGS` in the step*, as the task set them: they replace every config file's rustflags, so
+  a developer's own flags cannot reach a replay, but the replay then copies the flags into the
+  docs, a second source that drifts from the step's.
+- *The flags in a config file, the targets in the matrix* (chosen): `.cargo/fuzz.toml` holds the
+  flags under the x86_64 Linux target table, read only when a command names it (`cargo +nightly
+  --config .cargo/fuzz.toml run`), so the workflow and a replay share one source for them.
+  `fuzz.yml`'s matrix holds each target's package, seeds, longest input and limits, and its step
+  is the run's command line; docs/testing.md shows the run and the replay with a row's fields as
+  placeholders. Cargo joins the file's flags with a developer's own target rustflags, and a
+  `RUSTFLAGS` replaces them, so the docs say to leave both out of a replay, and to replay a
+  finding that depends on codegen with the nightly the run's log names.
+
 ### Consequences
 
 - Good, because what a job runs is in the job, and `tools/xtask` loses the subcommands and their
@@ -263,12 +288,20 @@ brought it. The options for that driver:
   the records step, for the reader to catch.
 - Bad, because there is no local command for a size check: `perf/size.toml` is edited by hand from
   the job's log, and its counts are Linux x86_64's.
+- Bad, because the fuzz task's tests go with it (`a_run_builds_the_example_under_the_fuzzing_flags`,
+  `a_replay_runs_the_target_on_the_one_input`, `every_target_is_a_declared_example_with_seeds`,
+  `only_x86_64_linux_runs_the_fuzzers`, the selection of targets by name, the refusal of a
+  zero-second run), and so does its untested refusal of a directory to replay. The reader of a
+  change to `.cargo/fuzz.toml` or `fuzz.yml`'s matrix holds the flags, the libFuzzer arguments
+  and each row's package and seeds: a target renamed in one place fails the night's build, but a
+  dropped coverage flag or an emptied seed directory leaves a green run. A replay is a command a
+  developer writes from docs/testing.md with the row's fields, on x86_64 Linux (§8).
 
 ### Confirmation
 
 - `actionlint` (in `checks`) parses the workflows and runs shellcheck over their steps.
 - Each job runs its commands on every run of its lane;
-  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck|perf)\b'`
+  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck|perf|fuzz)\b'`
   finds none in `.github/`.
 - flui-widgets' perf target tests the counts' rules on every pull request
   (`the_comparison_passes_only_an_equal_counter_or_a_cost_that_fell`,
@@ -286,7 +319,8 @@ brought it. The options for that driver:
   that job on its branch at the head that merges: `gh workflow run CI --ref <branch>` takes the
   full lane, and the pull request's body links the run. AGENTS.md "Before each push" item 14 asks
   the author for it; the readers of "Before a merge" read git, not the body, so the author holds
-  it.
+  it. A pull request that changes `fuzz.yml`, `.cargo/fuzz.toml`, a target or its seeds runs
+  `gh workflow run Fuzz --ref <branch>` at the head that merges the same way (§8).
 - `cargo test -p xtask` holds doctor's wasm-bindgen row to one locked version
   (`the_wasm_bindgen_row_needs_one_locked_version_installed`, `this_lock_pins_one_wasm_bindgen`).
 
