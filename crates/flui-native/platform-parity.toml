@@ -1176,7 +1176,7 @@ note = 'A `static` or `thread_local!` outside tests is immutable data, a private
 [[quality.row]]
 quality = 'Version floors declared, packaged and gated by types; no version check in application code'
 status = "partial"
-enforced_by = '`platform-support.toml`, `cargo xtask platform-floor`, `Since<F>` gates (ADR-0244)'
+enforced_by = '`platform-support.toml`, `flui-cli`'s `platform_floor` test, `Since<F>` gates (ADR-0244)'
 note = 'Declared, generated and refused at start; GPU fallback compiled and run on llvmpipe GL; packaged by `flui build` except the Windows manifest ([Version floors and the GPU fallback not run on devices](gaps.md#version-floors-and-the-gpu-fallback-not-run-on-devices))'
 
 [[quality.row]]

@@ -40,7 +40,7 @@
 *.wasm binary
 *.dex binary
 
-# Java sources (the digest `cargo xtask android-dex` checks reads LF bytes)
+# Java sources (the digest each declaring crate's `android_dex` test checks reads LF bytes)
 *.java text eol=lf
 
 # Lock files (exact match, no diff)

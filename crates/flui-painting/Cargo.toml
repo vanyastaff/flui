@@ -62,6 +62,16 @@ proptest = { workspace = true }
 trybuild = { workspace = true }
 criterion = { workspace = true }
 serde_json = { workspace = true }
+# `tests/font_assets.rs`: SHA-256 of the bundled fonts and notices.
+sha2 = { workspace = true }
+# `tests/font_assets.rs`: reads `assets/fonts/inventory.toml`.
+toml = { workspace = true }
+# `tests/font_assets.rs`: walks the asset tree and the repository for stray fonts.
+walkdir = { workspace = true }
+# `tests/font_assets.rs`: the inventory records derive `Deserialize`.
+serde = { workspace = true }
+# `tests/font_assets.rs`: scratch copies of the assets that the tests break.
+tempfile = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.

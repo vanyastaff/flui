@@ -28,6 +28,7 @@ mod cli_completions;
 mod cli_create;
 #[path = "cli_devices.rs"]
 mod cli_devices;
+mod platform_floor;
 #[path = "cli_doctor.rs"]
 mod cli_doctor;
 #[path = "cli_errors.rs"]

@@ -1,8 +1,8 @@
 //! `FluiView`, the Java side of the Android backend (ADR-0348, ADR-0255).
 //!
 //! The view's classes are compiled from `crates/flui-native/android/java`
-//! into one dex (`android/classes.dex`, checked against its sources by
-//! `cargo xtask android-dex`), which `flui build` packs into the APK next to
+//! into one dex (`android/classes.dex`, checked against its sources by the
+//! crate's `android_dex` test), which `flui build` packs into the APK next to
 //! `FluiActivity`, the Activity the generated manifest names. At platform
 //! start the view class is loaded on the Java main thread through the
 //! Activity's class loader, which reads the APK, after the platform checked

@@ -1219,8 +1219,8 @@ two finite extremes stay finite through the middle. `AnimatedIcon` takes the cal
 animation, clamps its progress and keeps the last finite one, so an icon never vanishes and
 never publishes geometry that is not finite; mirroring under right-to-left text is the data's
 flag, because only the icon's author knows whether it points somewhere. The pictures come in
-through `cargo xtask icon-import` (SVG frames or an Android animated vector drawable), not a
-runtime parser.
+as constants generated ahead of time from SVG key frames (`flui-material`'s
+`tests/animated_icon_data.rs` writes its pairs), not through a runtime parser.
 
 `animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
 `animated_icon::theme_and_direction_shape_the_icon` pin the three.

@@ -1284,10 +1284,10 @@ keeps the fallback tie with Roboto intact, and explicit `A`, `B`, `o`, and space
 coverage gives the `Ao Bo` probe real glyph IDs and positive advances. Empty
 outlines are sufficient for shaping metrics; no rasterization claim is made.
 No test loads it: the load-order regression it was made for is **Unasserted:** no test
-pins this. The xtask font gate's self-test still uses its bytes and its generator entry.
+pins this. The `font_assets` tests of `tests/font_assets.rs` still use its bytes and its generator entry.
 
 `assets/fonts/inventory.toml` binds each font to reviewed bytes, source provenance,
-and complete local license/attribution texts. The font asset gate discovers
+and complete local license/attribution texts. The `font_assets` tests (`tests/font_assets.rs`) discover
 unlisted fonts, checks hashes/notices, regenerates all fixtures into a temporary
 directory, and checks Cargo package file selection. This is a Rust test-fixture
 and packaging decision; it changes no shaping contract. It also

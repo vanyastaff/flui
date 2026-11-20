@@ -12,6 +12,8 @@
 )]
 mod common;
 
+#[path = "animated_icon_data.rs"]
+mod animated_icon_data;
 #[path = "animated_icons.rs"]
 mod animated_icons;
 

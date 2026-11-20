@@ -876,8 +876,8 @@ mod queue {
 }
 
 /// The Java source of the class named `binary_name`, from the sources the
-/// checked-in dex is compiled from (`cargo xtask android-dex` holds the dex
-/// to them).
+/// checked-in dex is compiled from (the crate's `android_dex` test holds the
+/// dex to them).
 #[cfg(test)]
 pub(crate) fn java_source(binary_name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

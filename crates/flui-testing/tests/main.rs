@@ -297,6 +297,8 @@ mod pointer_script_replay;
 mod recording;
 #[path = "recording_vocabulary.rs"]
 mod recording_vocabulary;
+#[path = "recording_vocabulary_table.rs"]
+mod recording_vocabulary_table;
 #[path = "runtime_driver.rs"]
 mod runtime_driver;
 #[path = "runtime_input_lifecycle.rs"]

@@ -50,8 +50,8 @@ upstream revisions or an exact release archive and retain full upstream licenses
 and copyright attributions. Roboto comes from the v2.138 Android release archive,
 not from a guessed current repository path.
 
-Run `cargo xtask font-assets --package-list` for the offline inventory checks,
-generation into a temporary directory, byte comparisons, and Cargo
-file-selection checks. The four older generated files have historical hash
+Run `cargo heli nextest run -p flui-painting --test painting_it -E 'test(font_assets)'`
+for the offline inventory checks, generation into a temporary directory, byte
+comparisons, and Cargo file-selection checks (`tests/font_assets.rs`). The four older generated files have historical hash
 controls. `cargo package --list` confirms file inclusion only; it does not
 establish that complete archives can be resolved, built, or published.

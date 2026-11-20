@@ -25,6 +25,9 @@ mod host_notice;
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 
+#[path = "key_vocabulary.rs"]
+mod key_vocabulary;
+
 #[path = "parts.rs"]
 mod parts;
 

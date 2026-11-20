@@ -2,7 +2,7 @@
 
 - **`platform-support.toml`**: the lowest version of each environment FLUI supports, declared
   once, with the generated [version map](/docs/version-map.md)
-  ([ADR-0244](/docs/adr/ADR-0244-os-version-floors-and-gates.md)). `cargo xtask platform-floor`
+  ([ADR-0244](/docs/adr/ADR-0244-os-version-floors-and-gates.md)). `flui-cli`'s `platform_floor` test
   fails when a generated floor or a template disagrees with it.
 
 ### Changed

@@ -23,6 +23,10 @@
 )]
 #[path = "absent.rs"]
 mod absent;
+// Reads the checkout's files, which a browser test cannot.
+#[path = "android_dex.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod android_dex;
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
 use flui_native::testing::app;

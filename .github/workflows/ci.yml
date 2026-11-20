@@ -67,11 +67,10 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate: rustfmt, typos, taplo and lychee called
-  # directly, shell steps for the MSRV, unmounted test files and ADR numbers,
-  # then `cargo xtask checks` (changelog fragments, the generated files
-  # against their sources), xtask's own tests (which include each self-test), and
-  # the workflow linters. It builds only xtask, never the workspace, so a
-  # malformed PR fails before any workspace build starts. It has no `if:`: a
+  # directly, shell steps for the MSRV, unmounted test files, ADR numbers and
+  # changelog fragments, and the workflow linters. It builds nothing, so a
+  # malformed PR fails before any workspace build starts. The generated files
+  # are checked by tests of the crates that own them, in the `test` job. It has no `if:`: a
   # docs-only PR, which skips every compile job, still runs it, and the link
   # check is what such a PR most needs. Ubuntu only; clippy lives in its own
   # parallel job.
@@ -240,14 +239,6 @@ jobs:
                 --remap "^https://github\.com/vanyastaff/flui/(?:blob|tree)/main/(.*)\$ file://$PWD/\$1" \
                 --files-from -
 
-      - name: Rust cache (xtask)
-        if: ${{ !cancelled() }}
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       # Every place that states the MSRV states rust-toolchain.toml's minor:
       # the workspace `rust-version`, the `flui create` templates, the README
       # badge and llms.txt.
@@ -311,14 +302,47 @@ jobs:
             exit 1
           fi
 
-      # The generated files against their sources and the changelog fragments.
-      - name: cargo xtask checks
+      # A fragment (changelog.d/README.md) is named <branch-slug>.md and holds
+      # only `###` sections of Keep a Changelog's six, each once, each one `-`
+      # list; CHANGELOG.md has one `## [Unreleased]`, where the fragments are
+      # pasted at release. Links are lychee's, above.
+      - name: Changelog fragments
         if: ${{ !cancelled() }}
-        run: cargo xtask checks
-
-      - name: cargo test -p xtask
-        if: ${{ !cancelled() }}
-        run: cargo test -p xtask --locked
+        run: |
+          set -euo pipefail
+          failed=0
+          for f in changelog.d/*; do
+            name=$(basename "$f")
+            [ "$name" = README.md ] && continue
+            if [[ ! "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*\.md$ ]]; then
+              echo "::error file=$f::a fragment is named <branch-slug>.md: lowercase letters, digits and single dashes"
+              failed=1
+              continue
+            fi
+            awk -v f="$f" '
+              /^### / {
+                cur = substr($0, 5)
+                if (cur !~ /^(Added|Changed|Deprecated|Removed|Fixed|Security)$/) { print "::error file=" f ",line=" NR "::`" $0 "` is not one of Added, Changed, Deprecated, Removed, Fixed, Security"; bad = 1 }
+                if (seen[cur]++) { print "::error file=" f ",line=" NR "::`### " cur "` appears twice"; bad = 1 }
+                next
+              }
+              /^[[:space:]]*$/ { next }
+              cur == "" { print "::error file=" f ",line=" NR "::text above the first `###` section"; bad = 1; next }
+              /^- / { listed[cur] = 1; next }
+              /^[[:space:]]/ && listed[cur] { next }
+              { print "::error file=" f ",line=" NR "::a section holds one `-` list, not `" $0 "`"; bad = 1 }
+              END {
+                if (length(seen) == 0) { print "::error file=" f "::no `###` section"; bad = 1 }
+                for (s in seen) if (!listed[s]) { print "::error file=" f "::`### " s "` has no list under it"; bad = 1 }
+                exit bad
+              }' "$f" || failed=1
+          done
+          unreleased=$(grep -c '^## \[Unreleased\]$' CHANGELOG.md || true)
+          if [ "$unreleased" != 1 ]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md holds $unreleased \`## [Unreleased]\` headings, not one"
+            failed=1
+          fi
+          exit "$failed"
 
       - name: actionlint (workflow semantics)
         if: ${{ !cancelled() }}

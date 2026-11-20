@@ -1105,9 +1105,9 @@ let replayable = ReplayableRecording::read(RecordingReader::try_new(&bytes[..])?
 assert_eq!(fresh_host.replay(&replayable), replayable.decisions());
 ```
 
-A variant added to the recorded vocabulary fails `cargo xtask checks` until
-`cargo xtask recording-vocabulary --write` regenerates the variant table, and
-then `every_vocabulary_variant_round_trips_through_the_recording_dto` until the
+A variant added to the recorded vocabulary fails the `recording_vocabulary_table` test until
+`FLUI_BLESS=1 cargo nextest run -p flui-testing --test flui_testing_it -E 'test(recording_vocabulary_table)'`
+regenerates the variant table, and then `every_vocabulary_variant_round_trips_through_the_recording_dto` until the
 wire form mirrors it.
 
 ### Accessibility

@@ -235,8 +235,8 @@ text-input paths its platform requires.
    `loadClass` through that loader, never `FindClass`, which searches the system loader on a native
    thread, and its natives are still bound with `RegisterNatives`; the installation is still posted
    to the Java main thread. The sources, the checked-in `classes.dex`, `classes.dex.toml` and the
-   `cargo xtask android-dex` digest gate are as ADR-0247 item 1 states them, so building FLUI for
-   Android needs no JDK. Delivery is never mixed (ADR-0247 item 9): the in-memory path is gone, not
+   crate's `android_dex` test are as ADR-0247 item 1 states them, so building FLUI for Android
+   needs no JDK. Delivery is never mixed (ADR-0247 item 9): the in-memory path is gone, not
    kept as a fallback.
 
 5. **A protocol constant is checked before binding.** The Java side declares `FluiHost.PROTOCOL`; Rust
@@ -421,7 +421,7 @@ text-input paths its platform requires.
 
     | Concern | Rule |
     |---|---|
-    | Android host sources | `crates/flui-native/android/` (the `android` directory of the core host): `java/`, `classes.dex`, `classes.dex.toml`, the `cargo xtask android-dex` gate, `FluiHost.PROTOCOL` |
+    | Android host sources | `crates/flui-native/android/` (the `android` directory of the core host): `java/`, `classes.dex`, `classes.dex.toml`, the `android_dex` test, `FluiHost.PROTOCOL` |
     | Why a checked-in dex, not `build.rs` | As in ADR-0247: no JDK or build-tools version in a user's build. The cost, one binary under review, is already accepted |
     | Android build, SDK-tools path | `aapt2 link` the generated manifest, add the native libraries and `classes.dex` from the resolved crate directory, `zipalign`, `apksigner`. No `javac` or `d8` |
     | Android build, Gradle path | The CLI writes the host sources into a generated, git-ignored source directory with a generated-file header on every build, or points a `sourceSets` entry at the crate; R8 keep rules for `dev.flui.**`, whose classes only native code names |
@@ -502,7 +502,7 @@ IPA export for an iOS app staged without Xcode; an AAB without Gradle (bundletoo
 under a View-hosted surface, which waits for the requirement of decision 9.
 
 Linux CI runs the parts that need no device: the generated manifest carries the declared
-attributes, the packager adds the dex and uses the pinned `targetSdk`, `xtask platform-floor`
+attributes, the packager adds the dex and uses the pinned `targetSdk`, the `platform_floor` test of flui-cli
 agrees with `platform-support.toml` for the new key, and the protocol check rejects a mismatch
 before any native is bound. The support claim for a platform is the run.
 The tests that do so: `android_manifest::tests::the_base_names_flui_activity_with_the_code_it_needs`,

@@ -246,8 +246,12 @@ web-sys = { version = "0.3", features = [
 flui-platform = { workspace = true, features = ["testing"] }
 flui-sdk = { workspace = true }
 flui-testing = { workspace = true }
-# Reads the crate's own `[package.metadata.flui.capability]` in a test.
+# Reads the crate's own `[package.metadata.flui.capability]` in a test, and
+# its declared dex and their records (`tests/android_dex.rs`).
 toml = { workspace = true }
+# The SHA-256 digests of the Java sources and the dex that
+# `android/classes.dex.toml` records (`tests/android_dex.rs`).
+sha2 = { workspace = true }
 # The windows a provider's rules are tested in, and the panic boundary and
 # the native-call adapter, whose tests run on every host.
 raw-window-handle = { workspace = true }
@@ -307,7 +311,8 @@ order = 5
 schema = 4
 
 # The crate's Java classes (`FluiCallback`, `FluiDocuments`),
-# compiled from `java` into the checked-in dex (`cargo xtask android-dex`):
+# compiled from `java` into the checked-in dex by the `Android dex` workflow
+# and held to the sources by `tests/android_dex.rs`:
 # `flui build` packs the dex into the APK and hands Gradle the sources.
 [package.metadata.flui.declares.android]
 dex = "android/classes.dex"

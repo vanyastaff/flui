@@ -755,8 +755,12 @@ flui-protocol = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 # The parity table `docs/platform-parity.md` is rendered from
-# (`platform-parity.toml`, `testing::parity`).
+# (`platform-parity.toml`, `testing::parity`), and the manifest and dex record
+# `tests/android_dex.rs` reads.
 toml = { workspace = true }
+# The SHA-256 digests of the Java sources and the dex that
+# `android/classes.dex.toml` records (`tests/android_dex.rs`).
+sha2 = { workspace = true }
 
 # Arbitrary bytes into the parsers of what another process sends (the XIM
 # codec, clipboard and drag payloads, Wayland arrays), drawn at random on every
@@ -991,7 +995,8 @@ schema = 2
 [package.metadata.flui.declares.android]
 permissions = ["android.permission.VIBRATE"]
 # The Java classes of the Android host (`FluiActivity`, `FluiHost`, `FluiView`),
-# compiled from `java` into the checked-in dex (`cargo xtask android-dex`):
+# compiled from `java` into the checked-in dex by the `Android dex` workflow
+# and held to the sources by `tests/android_dex.rs`:
 # `flui build` packs the dex into the APK and hands Gradle the sources
 # (ADR-0255 decisions 1 and 4).
 dex = "android/classes.dex"
