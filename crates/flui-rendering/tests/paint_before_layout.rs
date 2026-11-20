@@ -56,7 +56,7 @@ pub(crate) fn run_paint_refuses_to_start_with_layout_work_pending() {
 
     owner.mark_needs_layout(child_id);
     assert!(
-        !owner.nodes_needing_layout().is_empty(),
+        !owner.queued_for_layout().is_empty(),
         "precondition: mark_needs_layout must leave the layout queue \
          non-empty — the gate fires on queue work, not node flags",
     );

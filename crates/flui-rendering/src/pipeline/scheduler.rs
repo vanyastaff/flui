@@ -1062,6 +1062,7 @@ impl DirtyTracker {
     // =========================================================================
 
     /// Returns the nodes needing layout.
+    #[cfg(any(test, feature = "testing"))]
     #[inline]
     pub(super) fn nodes_needing_layout(&self) -> &[DirtyNode] {
         self.dirty.needs_layout.as_slice()
@@ -1074,6 +1075,7 @@ impl DirtyTracker {
     }
 
     /// Returns the nodes needing compositing bits update.
+    #[cfg(any(test, feature = "testing"))]
     #[inline]
     pub(super) fn nodes_needing_compositing_bits_update(&self) -> &[DirtyNode] {
         self.dirty.needs_compositing.as_slice()
