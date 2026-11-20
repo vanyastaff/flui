@@ -102,7 +102,7 @@ const BLACK54: Color = Color::rgba(0, 0, 0, 0x8A);
 /// Which reading edge of the [`crate::Scaffold`] a drawer slides in from.
 ///
 /// The edge resolves against the ambient
-/// [`Directionality`](flui_sdk::widgets::Directionality): `Start` is the left
+/// [`Directionality`]: `Start` is the left
 /// side left-to-right and the right side right-to-left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
