@@ -664,95 +664,272 @@ pub(crate) fn provided_set_change_rescopes_the_subtree() {
     }
 }
 
-/// How many providers [`provider_chain`] nests: enough that a lookup at the
-/// bottom resolves through several tables folded above it.
-const CHAIN_DEPTH: u32 = 40;
+/// What one element of a [`provider_chain`] publishes beside its `Filler`,
+/// or that it publishes nothing and is no provider at all.
+#[derive(Clone, Copy, Default)]
+struct Step {
+    palette: Option<u32>,
+    density: Option<u32>,
+    silent: bool,
+}
 
-/// The depth whose provider publishes the nearer `Palette`, two below the
-/// first, so both sit in the first stretch of the chain.
-const NEAR_PALETTE: u32 = 3;
+impl Step {
+    const FILLER: Self = Self {
+        palette: None,
+        density: None,
+        silent: false,
+    };
+    const SILENT: Self = Self {
+        palette: None,
+        density: None,
+        silent: true,
+    };
 
-/// The depth whose provider publishes the nearer `Density`.
-const NEAR_DENSITY: u32 = 13;
+    const fn palette(tone: u32) -> Self {
+        Self {
+            palette: Some(tone),
+            ..Self::FILLER
+        }
+    }
 
-/// One provider at each depth from `depth` to [`CHAIN_DEPTH`], each over a
-/// reader of each type beside the next depth: the first publishes `Palette(1)`
-/// and `Density(7)`, the one at [`NEAR_PALETTE`] `Palette(near)` if any, the
-/// one at [`NEAR_DENSITY`] `Density(8)`, and every one below the first a
-/// `Filler`.
+    const fn density(tone: u32) -> Self {
+        Self {
+            density: Some(tone),
+            ..Self::FILLER
+        }
+    }
+}
+
+/// `steps.len()` elements nested in each other, the outermost first, each
+/// over a reader of each type (`probes` by position) beside the next
+/// element; the innermost holds `tail` there instead.
 fn provider_chain(
     publisher: Publisher,
+    steps: &[Step],
     probes: &[(Seen, Seen)],
-    depth: u32,
-    near: Option<u32>,
+    tail: BoxedView,
 ) -> BoxedView {
-    let (palette, density) = &probes[usize::try_from(depth - 1).expect("a small depth")];
-    let mut children = vec![reader::<Palette>(palette), reader::<Density>(density)];
-    if depth < CHAIN_DEPTH {
-        children.push(provider_chain(publisher, probes, depth + 1, near));
-    }
-    let published = match depth {
-        1 => Published {
-            palette: Some(1),
-            density: Some(7),
+    let Some((step, below)) = steps.split_first() else {
+        return tail;
+    };
+    let (palette, density) = &probes[0];
+    let children = vec![
+        reader::<Palette>(palette),
+        reader::<Density>(density),
+        provider_chain(publisher, below, &probes[1..], tail),
+    ];
+    let published = if step.silent {
+        Published::default()
+    } else {
+        Published {
+            palette: step.palette,
+            density: step.density,
+            filler: Some(0),
             ..Published::default()
-        },
-        NEAR_PALETTE => Published {
-            palette: near,
-            filler: Some(depth),
-            ..Published::default()
-        },
-        NEAR_DENSITY => Published {
-            density: Some(8),
-            filler: Some(depth),
-            ..Published::default()
-        },
-        _ => Published {
-            filler: Some(depth),
-            ..Published::default()
-        },
+        }
     };
     publisher(published, Group(children).boxed())
 }
 
+/// Holds each reader of `probes` to the nearest value its chain publishes:
+/// `above` (the ancestors outside the chain) and then `steps`, the
+/// outermost first.
+fn expect_chain(above: &[Step], steps: &[Step], probes: &[(Seen, Seen)], phase: &str) {
+    let mut palette_wanted = None;
+    let mut density_wanted = None;
+    for step in above.iter().filter(|step| !step.silent) {
+        palette_wanted = step.palette.or(palette_wanted);
+        density_wanted = step.density.or(density_wanted);
+    }
+    for (position, (step, (palette, density))) in steps.iter().zip(probes).enumerate() {
+        if !step.silent {
+            palette_wanted = step.palette.or(palette_wanted);
+            density_wanted = step.density.or(density_wanted);
+        }
+        let depth = position + 1;
+        assert_eq!(
+            palette.seen.get(),
+            palette_wanted,
+            "{phase}: the palette at chain position {depth}"
+        );
+        assert_eq!(
+            density.seen.get(),
+            density_wanted,
+            "{phase}: the density at chain position {depth}"
+        );
+    }
+}
+
+/// How many elements a chain of these cases nests: enough that a lookup at
+/// the bottom resolves through several tables folded above it.
+const CHAIN_DEPTH: usize = 40;
+
+fn probes(count: usize) -> Vec<(Seen, Seen)> {
+    (0..count)
+        .map(|_| (Seen::default(), Seen::default()))
+        .collect()
+}
+
+/// A chain of [`CHAIN_DEPTH`] providers: `Palette(1)` and `Density(7)` at the
+/// top, nearer values at `nearer` (position, step), a `Filler` elsewhere.
+fn chain_steps(nearer: &[(usize, Step)]) -> Vec<Step> {
+    let mut steps = vec![Step::FILLER; CHAIN_DEPTH];
+    steps[0] = Step {
+        palette: Some(1),
+        density: Some(7),
+        silent: false,
+    };
+    for (position, step) in nearer {
+        steps[*position] = *step;
+    }
+    steps
+}
+
 pub(crate) fn a_provider_any_number_of_providers_up_is_found_and_the_nearest_shadows_it() {
+    // Each case mounts its first chain, then updates to each next one in
+    // place, element for element, and checks every reader after each.
+    let holders = [
+        (3, Step::density(8)),
+        (4, Step::palette(2)),
+        (7, Step::density(9)),
+        (8, Step::palette(3)),
+        (12, Step::density(10)),
+    ];
+    let without = |position: usize| {
+        let mut steps = chain_steps(&holders);
+        steps.remove(position);
+        steps
+    };
+    let silenced = |position: usize| {
+        let mut steps = chain_steps(&holders);
+        steps[position] = Step::SILENT;
+        steps
+    };
+    let cases: [(&str, Vec<Vec<Step>>); 4] = [
+        (
+            "a nearer palette two below the first comes and goes",
+            vec![
+                chain_steps(&[(2, Step::palette(2)), (12, Step::density(8))]),
+                chain_steps(&[(12, Step::density(8))]),
+                chain_steps(&[(2, Step::palette(5)), (12, Step::density(8))]),
+            ],
+        ),
+        (
+            // The providers at depths 4 and 8 move to 3 and 7, and every
+            // one below them one level up.
+            "a provider above the tables leaves",
+            vec![chain_steps(&holders), without(1), chain_steps(&holders)],
+        ),
+        (
+            "the provider at depth 4 stops publishing",
+            vec![chain_steps(&holders), silenced(3), chain_steps(&holders)],
+        ),
+        (
+            "the provider at depth 8 stops publishing",
+            vec![chain_steps(&holders), silenced(7), chain_steps(&holders)],
+        ),
+    ];
     for (name, publisher) in PUBLISHERS {
-        let probes: Vec<(Seen, Seen)> = (0..CHAIN_DEPTH)
-            .map(|_| (Seen::default(), Seen::default()))
-            .collect();
-        let view = |near: Option<u32>| provider_chain(publisher, &probes, 1, near);
-        let expect = |near: Option<u32>, phase: &str| {
-            for depth in 1..=CHAIN_DEPTH {
-                let (palette, density) =
-                    &probes[usize::try_from(depth - 1).expect("a small depth")];
-                let palette_wanted = match near {
-                    Some(near) if depth >= NEAR_PALETTE => near,
-                    _ => 1,
-                };
-                let density_wanted = if depth >= NEAR_DENSITY { 8 } else { 7 };
-                assert_eq!(
-                    palette.seen.get(),
-                    Some(palette_wanted),
-                    "{name}, {phase}: the palette under {depth} providers"
-                );
-                assert_eq!(
-                    density.seen.get(),
-                    Some(density_wanted),
-                    "{name}, {phase}: the density under {depth} providers"
+        for (case, phases) in &cases {
+            let probes = probes(CHAIN_DEPTH);
+            let view = |steps: &[Step]| provider_chain(publisher, steps, &probes, Leaf.boxed());
+            let frames = Frames::mount(&view(&phases[0]));
+            for (phase, steps) in phases.iter().enumerate() {
+                if phase > 0 {
+                    frames.update(&view(steps));
+                }
+                expect_chain(
+                    &[],
+                    steps,
+                    &probes,
+                    &format!("{name}, {case}, phase {phase}"),
                 );
             }
+        }
+    }
+}
+
+#[serial_test::serial(global_key_registry)]
+pub(crate) fn a_subtree_moved_to_another_depth_reads_its_new_ancestry() {
+    // Two branches of different depths under one root; a keyed chain of its
+    // own providers moves from the end of the shallow one to the end of the
+    // deep one and back.
+    let shallow = [
+        Step {
+            palette: Some(1),
+            density: Some(7),
+            silent: false,
+        },
+        Step::FILLER,
+    ];
+    let deep = {
+        let mut steps = vec![Step::FILLER; 11];
+        steps[0] = Step {
+            palette: Some(2),
+            density: Some(8),
+            silent: false,
+        };
+        steps[6] = Step::density(9);
+        steps
+    };
+    let carried = {
+        let mut steps = vec![Step::FILLER; 14];
+        steps[5] = Step::palette(3);
+        steps
+    };
+    for (name, publisher) in PUBLISHERS {
+        let key = GlobalKey::<KeyedState>::new();
+        let carried_probes = probes(carried.len());
+        let shallow_probes = probes(shallow.len());
+        let deep_probes = probes(deep.len());
+        let keyed = || {
+            Keyed {
+                key: key.clone(),
+                child: provider_chain(publisher, &carried, &carried_probes, Leaf.boxed()),
+            }
+            .boxed()
+        };
+        let view = |under_deep: bool| {
+            let (shallow_tail, deep_tail) = if under_deep {
+                (Leaf.boxed(), keyed())
+            } else {
+                (keyed(), Leaf.boxed())
+            };
+            Group(vec![
+                provider_chain(publisher, &shallow, &shallow_probes, shallow_tail),
+                provider_chain(publisher, &deep, &deep_probes, deep_tail),
+            ])
         };
 
-        let frames = Frames::mount(&view(Some(2)));
-        expect(Some(2), "mounted");
+        let frames = Frames::mount(&view(false));
+        expect_chain(
+            &shallow,
+            &carried,
+            &carried_probes,
+            &format!("{name}: mounted"),
+        );
 
-        // The nearer palette goes, and every reader below it falls through
-        // to the first provider again.
-        frames.update(&view(None));
-        expect(None, "the nearer palette removed");
+        frames.update(&view(true));
+        expect_chain(
+            &deep,
+            &carried,
+            &carried_probes,
+            &format!("{name}: moved deeper"),
+        );
 
-        frames.update(&view(Some(5)));
-        expect(Some(5), "the nearer palette back");
+        frames.update(&view(false));
+        expect_chain(
+            &shallow,
+            &carried,
+            &carried_probes,
+            &format!("{name}: moved back"),
+        );
+        expect_chain(
+            &[],
+            &deep,
+            &deep_probes,
+            &format!("{name}: the deep branch"),
+        );
     }
 }
 

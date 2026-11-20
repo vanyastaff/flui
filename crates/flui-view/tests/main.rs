@@ -326,6 +326,7 @@ fn element_lifecycle_and_dependency_matrix() {
             ("provided_values::provided_value_unmount_releases_dependents", provided_values::provided_value_unmount_releases_dependents),
             ("provided_values::provided_set_change_rescopes_the_subtree", provided_values::provided_set_change_rescopes_the_subtree),
             ("provided_values::a_provider_any_number_of_providers_up_is_found_and_the_nearest_shadows_it", provided_values::a_provider_any_number_of_providers_up_is_found_and_the_nearest_shadows_it),
+            ("provided_values::a_subtree_moved_to_another_depth_reads_its_new_ancestry", provided_values::a_subtree_moved_to_another_depth_reads_its_new_ancestry),
             ("provided_values::a_provide_panic_is_recorded_and_keeps_the_frame", provided_values::a_provide_panic_is_recorded_and_keeps_the_frame),
             ("provided_values::a_replaced_value_that_panics_in_drop_keeps_its_notification", provided_values::a_replaced_value_that_panics_in_drop_keeps_its_notification),
             ("provided_values::a_signal_read_in_provide_republishes_on_write", provided_values::a_signal_read_in_provide_republishes_on_write),
