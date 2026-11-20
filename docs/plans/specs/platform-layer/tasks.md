@@ -7,7 +7,7 @@
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY96 и LY99 — Windows-lane драйвера есть; ждут прогонов на рабочем столе, принимающем ввод
     (Narrator, сценарий conformance через `os`-lane), и lane остальных ОС спеки flui-driver;
-  - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
+  - LY97 — ждёт `--record` `os`-lane драйвера на каждой ОС (записи в драйвере пока нет);
   - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
@@ -5013,7 +5013,7 @@ GPU-память простаивающего или невидимого окн
   `flui-protocol`. Захват на Windows, macOS, iOS и Android не прогонялся — строка качества parity
   «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY97** (заблокирована спекой flui-driver: `--record` `os`-lane) — на `main` всё, кроме
+- [ ] **LY97** (ждёт `--record` `os`-lane драйвера на каждой ОС) — на `main` всё, кроме
   `--record`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
   headless (`NativeRecording::replay_into`, отказ — типизированный `ReplayError`), строки IME,
   закрытия и блокировок хранилища pull-модели (`store_focus`, `store_lock`; защищённое хранилище —
@@ -5027,8 +5027,9 @@ GPU-память простаивающего или невидимого окн
   `window_store_and_close_recordings_replay_on_the_headless_host`,
   `captured_streams_replay_to_what_the_session_delivered`,
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Эти потоки пишет `flui record --native`
-  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Android и Web; крейта
-  `flui-driver` нет, задача ждёт FD6 спеки [flui-driver](../flui-driver/tasks.md). Захват
+  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Android и Web. Крейт
+  `flui-driver` и его Windows-lane есть, но записи в драйвере пока нет (её строят задачи спеки
+  [flui-driver](../flui-driver/tasks.md)), а `os`-lane других ОС ещё не написаны. Захват
   настоящего метода ввода на устройствах — строка качества parity «Recorded native input replays
   deterministically on the headless host».
 
