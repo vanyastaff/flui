@@ -440,7 +440,7 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
     let mut stale = crossfaded.clone();
     stale.image = Some(DecorationImage::new(green.clone()));
     let mut through = BoxDecoration::lerp(&stale, &with(&green), 0.3);
-    through.image = crossfaded.image.clone();
+    through.image.clone_from(&crossfaded.image);
     assert_eq!(
         painted(&through).len(),
         1,
