@@ -70,7 +70,7 @@ pub(super) fn own_effect_layers(
 /// they bracket carries the accumulated `origin` baked into its canvas
 /// transform: the per-node [`RenderObject::paint_effects`](crate::traits::RenderObject::paint_effects)
 /// value's `transform` field (one transform for the whole node, applied
-/// here) and the per-child [`FragmentOp::PushTransform`] op (`RenderFlow`
+/// here) and the per-child [`FragmentOp::PushTransform`](crate::context::FragmentOp::PushTransform) op (`RenderFlow`
 /// and any other Variable-arity node giving each child its own paint-time
 /// transform). The result is `T(offset)·M·T(−offset)`.
 pub(super) fn conjugate(
