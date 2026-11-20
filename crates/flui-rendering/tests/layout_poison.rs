@@ -288,12 +288,7 @@ pub(crate) fn a_failed_dirty_root_keeps_the_rest_of_its_batch() {
 
         run.update::<FlakyLeaf>(bad, |leaf| leaf.fail = true);
         run.update::<FlakyLeaf>(good, |_| {});
-        let queued: Vec<RenderId> = run
-            .owner()
-            .nodes_needing_layout()
-            .iter()
-            .map(|dirty| dirty.id)
-            .collect();
+        let queued: Vec<RenderId> = run.owner().queued_for_layout();
         assert!(
             queued.len() == 2 && queued.contains(&bad) && queued.contains(&good),
             "{mode:?}: precondition: each leaf is its own relayout root, got {queued:?}",

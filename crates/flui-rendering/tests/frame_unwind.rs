@@ -439,10 +439,8 @@ fn layout_report_after_a_boundary_laid_out() {
     );
     f.fails_layout.store(false, Ordering::SeqCst);
     assert!(
-        f.cell.with(|owner| owner
-            .nodes_needing_paint()
-            .iter()
-            .any(|entry| entry.id == f.boundary)),
+        f.cell
+            .with(|owner| owner.queued_for_paint().contains(&f.boundary)),
         "the boundary that laid out owes its paint"
     );
     assert!(
@@ -502,10 +500,8 @@ fn compositing_hook() {
         "the walk took the first leaf's change"
     );
     assert!(
-        f.cell.with(|owner| owner
-            .nodes_needing_paint()
-            .iter()
-            .any(|entry| entry.id == f.root)),
+        f.cell
+            .with(|owner| owner.queued_for_paint().contains(&f.root)),
         "the first leaf's change owes the paint of its repaint boundary"
     );
     assert!(
@@ -622,10 +618,7 @@ fn an_error_in_the_layout_pass() {
     );
     assert!(!woke.load(Ordering::SeqCst), "the wake was sent");
     assert!(
-        cell.with(|owner| owner
-            .nodes_needing_paint()
-            .iter()
-            .any(|entry| entry.id == boundary)),
+        cell.with(|owner| owner.queued_for_paint().contains(&boundary)),
         "the boundary that laid out owes its paint"
     );
 }

@@ -1452,7 +1452,7 @@ fn text_failure_retains_independent_pending_layout() {
     );
     owner.mark_needs_layout(content);
     assert!(
-        owner.nodes_needing_layout().len() >= 2,
+        owner.queued_for_layout().len() >= 2,
         "the failure and pending content must occupy independent queued boundaries"
     );
     let (mut owner, result) = scene.run_frame(owner);

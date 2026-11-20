@@ -261,7 +261,7 @@ and the reveal of the row past the edge.
 
 Dropping a render entry drops its render object, then its parent data; a
 render tree drops its entries in slot order, and a `VisualUpdateNotifier` its
-references to the visual-update, created, then disposed callbacks. If one of
+reference to the visual-update callback. If one of
 those destructors panics the rest are still dropped and the first panic
 propagates; one that panics while the thread is already unwinding aborts, as
 in std (ADR-0281, which supersedes ADR-0127). Framework-owned entry state
@@ -286,9 +286,9 @@ propagates and leaves the new callback installed. Pinned by
 
 `set_semantics_enabled` commits the transition (the flag, the owner, the
 root's semantics seed, and on disable the owner's teardown) before the
-lifecycle callback and the visual-update wake run. Each of them runs even when
-an earlier one panics, and the first panic is resumed at the end. Pinned by
-`a_failing_semantics_lifecycle_hook_keeps_the_transition`.
+visual-update wake runs. The wake runs even when the teardown panics, and the
+first panic is resumed at the end. Pinned by
+`a_failing_semantics_transition_keeps_it`.
 
 ### Caught hit-test panics do not change sibling coordinates
 
