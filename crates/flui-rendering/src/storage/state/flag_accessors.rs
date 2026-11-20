@@ -140,7 +140,7 @@ impl<P: Protocol> RenderState<P> {
     /// ```rust,ignore
     /// if state.is_relayout_boundary() {
     ///     // boundary owns its layout pass
-    ///     pipeline_owner.add_node_needing_layout(element_id);
+    ///     pipeline_owner.mark_needs_layout(element_id);
     /// }
     /// ```
     #[inline]

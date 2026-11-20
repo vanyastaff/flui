@@ -14,7 +14,6 @@ use crate::{
     RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     pipeline::{
-        dirty::DirtyNode,
         handle::DirtyKind,
         phase::{Idle, PipelinePhase},
     },
@@ -120,28 +119,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             wake.notify_with(&mut recovery.scope());
         }
         recovery.scope().retire(outgoing);
-        recovery.finish();
-    }
-
-    /// Sets the callback for when semantics owner is created.
-    pub fn set_on_semantics_owner_created<F>(&mut self, callback: F)
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        let outgoing = self.notifier.replace_semantics_owner_created(callback);
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        recovery.retire(outgoing);
-        recovery.finish();
-    }
-
-    /// Sets the callback for when semantics owner is disposed.
-    pub fn set_on_semantics_owner_disposed<F>(&mut self, callback: F)
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        let outgoing = self.notifier.replace_semantics_owner_disposed(callback);
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        recovery.retire(outgoing);
         recovery.finish();
     }
 
@@ -1760,15 +1737,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     // Dirty Node Access
     // ========================================================================
 
-    /// Returns the nodes needing layout.
-    ///
-    /// These are relayout boundaries that need to be laid out in the next
-    /// layout phase.
-    #[inline]
-    pub fn nodes_needing_layout(&self) -> &[DirtyNode] {
-        self.scheduler.nodes_needing_layout()
-    }
-
     /// Dirty layout entries drained by every `run_layout` so far (monotonic).
     /// A frame's relayout-root count is the difference across the frame
     /// (ADR-0074 §8 telemetry). Entries that turned out already clean or
@@ -1793,33 +1761,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
     }
 
-    /// Returns the nodes needing paint.
-    ///
-    /// These are repaint boundaries that need to be painted in the next
-    /// paint phase.
-    #[inline]
-    pub fn nodes_needing_paint(&self) -> &[crate::pipeline::PaintEntry] {
-        self.scheduler.nodes_needing_paint()
-    }
-
-    /// Returns the nodes needing compositing bits update.
-    #[inline]
-    pub fn nodes_needing_compositing_bits_update(&self) -> &[DirtyNode] {
-        self.scheduler.nodes_needing_compositing_bits_update()
-    }
-
-    /// Returns the nodes needing semantics update.
-    #[inline]
-    pub fn nodes_needing_semantics(&self) -> &[DirtyNode] {
-        self.scheduler.nodes_needing_semantics()
-    }
-
     /// Adds a node to the layout dirty list.
     ///
     /// Routes into the mid-phase side queue when layout is active, otherwise
     /// into `dirty.needs_layout`. See `DirtyTracker::add_node_needing_layout`
     /// for the full routing and dedup contract.
-    pub fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
+    pub(crate) fn add_node_needing_layout(&mut self, node_id: RenderId, depth: usize) {
         self.scheduler.add_node_needing_layout(node_id, depth);
     }
 
@@ -1982,12 +1929,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Lazily creates a [`SemanticsOwner`](flui_semantics::SemanticsOwner) on the
     /// `false` → `true` transition (unless one was already installed via
     /// [`Self::set_semantics_owner`] — e.g. a platform binding that needs
-    /// its own update callback — in which case that owner is kept as-is),
-    /// then delivering the callback installed with
-    /// [`Self::set_on_semantics_owner_created`]. Disposes the owner on the
-    /// `true` → `false` transition, then delivers the callback installed with
-    /// [`Self::set_on_semantics_owner_disposed`]. Enablement is a single
-    /// boolean flag that gates `run_semantics`.
+    /// its own update callback — in which case that owner is kept as-is).
+    /// Disposes the owner on the `true` → `false` transition. Enablement is a
+    /// single boolean flag that gates `run_semantics`.
     ///
     /// A freshly-created owner has an empty tree even though the render
     /// tree may already hold content built while semantics was off, so this
@@ -1997,9 +1941,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// The transition is committed before any user code runs (ADR-0287): the
     /// flag, the owner, the root's seed, and on disable the owner's
-    /// teardown. The lifecycle callback and the visual-update wake run after
-    /// that, contained, and every one of them runs even when an earlier one
-    /// or the teardown panics; the first panic is resumed at the end.
+    /// teardown. The visual-update wake runs after that, contained, even when
+    /// the teardown panics; the first panic is resumed at the end.
     ///
     /// A lazily-created owner publishes through the callback installed via
     /// [`Self::set_semantics_update_callback`] — the composition root's wire
@@ -2010,7 +1953,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
         let was_enabled = std::mem::replace(&mut self.semantics_enabled, enabled);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        let (event, wake) = if enabled && !was_enabled {
+        let wake = if enabled && !was_enabled {
             if self.semantics_owner.is_none() {
                 let callback = self
                     .semantics_update_callback
@@ -2030,10 +1973,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                         .commit_node_needing_semantics(root, usize::from(node.depth()))
                 })
             });
-            (
-                self.notifier.semantics_owner_created(),
-                seeded.then(|| self.notifier.visual_update()),
-            )
+            seeded.then(|| self.notifier.visual_update())
         } else if !enabled && was_enabled {
             if let Some(mut owner) = self.semantics_owner.take() {
                 // Teardown drops the tree's action handlers and stops the
@@ -2042,11 +1982,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 recovery.run(|| owner.dispose());
                 recovery.retire(owner);
             }
-            (self.notifier.semantics_owner_disposed(), None)
+            None
         } else {
             return;
         };
-        event.notify_with(&mut recovery.scope());
         if let Some(wake) = wake {
             wake.notify_with(&mut recovery.scope());
         }
