@@ -103,7 +103,7 @@ fn dirty_the_paragraph(ui_runtime: &UiRuntime) {
         let paragraph = owner
             .render_tree()
             .iter()
-            .find(|(_, node)| node.debug_name().contains("RenderParagraph"))
+            .find(|(_, node)| node.kind() == "RenderParagraph")
             .map(|(id, _)| id)
             .expect("the Text mounted a RenderParagraph");
         owner.mark_needs_layout(paragraph);
@@ -188,7 +188,7 @@ fn probe_paragraph_width(ui_runtime: &UiRuntime) -> f64 {
         let paragraph = owner
             .render_tree()
             .iter()
-            .find(|(_, node)| node.debug_name().contains("RenderParagraph"))
+            .find(|(_, node)| node.kind() == "RenderParagraph")
             .map(|(id, _)| id)
             .expect("the Text mounted a RenderParagraph");
         owner
@@ -254,13 +254,9 @@ fn the_overlay_shapes_through_the_ui_runtime_text_context() {
             400.0, 300.0,
         )))
         .expect("the first frame paints");
-    let overlay = scene
-        .tree()
-        .expect("draw_frame flattens the version into a tree")
-        .iter()
-        .find_map(|(_, node)| node.layer().as_performance_overlay().cloned())
+    let overlay = super::performance_overlay::overlay_readout(scene.version())
         .expect("the overlay is attached");
-    let overlay_ids = paragraph_blob_ids(overlay.readout());
+    let overlay_ids = paragraph_blob_ids(overlay.commands());
     assert!(!overlay_ids.is_empty(), "the readout carries shaped labels");
 
     let ui_runtime_ids = ui_runtime.text_context_for_test().with(|text| {

@@ -14,7 +14,7 @@
 //!
 //! ```rust
 //! use flui_interaction::gesture::VelocityTracker;
-//! use flui_platform::pointer::PointerKind;
+//! use flui_platform::input::pointer::PointerKind;
 //! use flui_foundation::geometry::Offset;
 //! use web_time::Instant;
 //!

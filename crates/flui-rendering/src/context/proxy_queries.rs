@@ -235,7 +235,7 @@ macro_rules! forward_single_child_box_layout {
             &mut self,
             ctx: &mut $crate::context::BoxLayoutContext<
                 '_,
-                $crate::prelude::Single,
+                $crate::__MacroSingle,
                 $crate::parent_data::BoxParentData,
             >,
         ) -> $crate::RenderResult<$crate::__MacroSize> {
@@ -258,7 +258,7 @@ macro_rules! forward_single_child_box_hit_test {
             &self,
             ctx: &mut $crate::context::BoxHitTestContext<
                 '_,
-                $crate::prelude::Single,
+                $crate::__MacroSingle,
                 $crate::parent_data::BoxParentData,
             >,
         ) -> bool {

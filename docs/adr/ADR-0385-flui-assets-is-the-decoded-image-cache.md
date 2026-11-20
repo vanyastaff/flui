@@ -51,7 +51,7 @@ Chosen option: 2. `flui-assets` exports one cache and what a load needs:
 ```rust
 pub struct ImageCache;                 // new(ImageCacheConfig), Default, ReclaimMemory
 pub struct ImageCacheConfig;           // Default; budget(bytes), decode_threads(n)
-pub struct ImageSource;                // a path, or a URL with its client (ADR-0386)
+pub struct ImageSource;                // an asset key with its bundle, or a URL with its client (ADR-0386, ADR-0384 §6)
 pub struct LoadServices;               // the caller's lanes
 pub struct ImageLoad;                  // Future<Output = Result<Image, ImageLoadError>>
 ```
@@ -64,7 +64,7 @@ type listed in the context are deleted with their tests.
 
 The decoded-image rules stay where they are: ADR-0250 for what the cache keeps, ADR-0279 for
 the lanes a load runs on, ADR-0280 for network fetches. Reading an asset from the
-application's bundle is not decided here ([gaps](../gaps.md#an-application-has-no-asset-bundle)).
+application's bundle is ADR-0384's ([ADR-0384](ADR-0384-an-application-reads-its-assets-by-key-from-the-bundle-its-host-provides.md) §6).
 
 ### Confirmation
 

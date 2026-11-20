@@ -21,7 +21,7 @@ use flui_interaction::{
     },
 };
 use flui_platform::EventTime;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     DeviceId, PointerDeviceChange, PointerEvent, PointerId, PointerKind, PointerPosition,
     PointerSource, TouchpadSwipeEvent, TouchpadSwipePhase,
 };
@@ -185,7 +185,7 @@ fn every_way_a_swipe_ends_ends_it_once() {
         swipe(
             1,
             TouchpadSwipePhase::Update(
-                flui_platform::pointer::SwipeOffset::try_new(
+                flui_platform::input::pointer::SwipeOffset::try_new(
                     flui_foundation::geometry::Offset::new(5.0, 0.0),
                 )
                 .expect("finite"),
@@ -258,9 +258,9 @@ fn a_listener_that_fails_mid_swipe_leaves_the_swipe_open() {
     let update = swipe(
         1,
         TouchpadSwipePhase::Update(
-            flui_platform::pointer::SwipeOffset::try_new(flui_foundation::geometry::Offset::new(
-                5.0, 0.0,
-            ))
+            flui_platform::input::pointer::SwipeOffset::try_new(
+                flui_foundation::geometry::Offset::new(5.0, 0.0),
+            )
             .expect("finite"),
         ),
     );

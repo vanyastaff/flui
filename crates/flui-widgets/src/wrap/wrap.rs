@@ -4,7 +4,7 @@ use std::fmt;
 
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
-use flui_objects::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+use flui_objects::{RenderWrap, VerticalDirection, WrapAlignment, WrapCrossAlignment};
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::seq::ViewSeq;
@@ -28,8 +28,10 @@ use crate::support::generic_render_view_element;
 /// The ambient [`Directionality`] decides where a horizontal run starts and
 /// which side a vertical wrap places its first run on: in a right-to-left
 /// subtree both start at the right, and `Start` / `End` alignments name the
-/// reading edge. Horizontal runs stack top to bottom, and a vertical run
-/// fills from the top.
+/// reading edge. [`vertical_direction`](Wrap::vertical_direction) decides the
+/// vertical sense the same way: with the default `Down` horizontal runs stack
+/// top to bottom and a vertical run fills from the top, and with `Up` both
+/// start at the bottom.
 ///
 /// # Example
 ///
@@ -54,6 +56,7 @@ pub struct Wrap<C = Vec<BoxedView>> {
     run_alignment: WrapAlignment,
     run_spacing: f64,
     cross_axis_alignment: WrapCrossAlignment,
+    vertical_direction: VerticalDirection,
     clip_behavior: Clip,
     children: C,
     site: CreationSite,
@@ -71,6 +74,7 @@ impl<C> Wrap<C> {
             run_alignment: WrapAlignment::Start,
             run_spacing: 0.0,
             cross_axis_alignment: WrapCrossAlignment::Start,
+            vertical_direction: VerticalDirection::Down,
             clip_behavior: Clip::None,
             children,
             site: CreationSite::here(),
@@ -131,6 +135,15 @@ impl<C> Wrap<C> {
         self
     }
 
+    /// Sets the vertical sense (`Down` by default): `Up` starts horizontal runs
+    /// at the bottom and fills a vertical run from the bottom, so `Start` and
+    /// `End` on the vertical axis name the bottom and the top.
+    #[must_use]
+    pub fn vertical_direction(mut self, vertical_direction: VerticalDirection) -> Self {
+        self.vertical_direction = vertical_direction;
+        self
+    }
+
     fn build_render_object(&self, text_direction: TextDirection) -> RenderWrap {
         RenderWrap::new()
             .with_direction(self.direction)
@@ -139,6 +152,7 @@ impl<C> Wrap<C> {
             .with_run_alignment(self.run_alignment)
             .with_run_spacing(self.run_spacing)
             .with_cross_axis_alignment(self.cross_axis_alignment)
+            .with_vertical_direction(self.vertical_direction)
             .with_clip_behavior(self.clip_behavior)
             .with_text_direction(text_direction)
     }
@@ -153,6 +167,7 @@ impl<C: ViewSeq> fmt::Debug for Wrap<C> {
             .field("run_alignment", &self.run_alignment)
             .field("run_spacing", &self.run_spacing)
             .field("cross_axis_alignment", &self.cross_axis_alignment)
+            .field("vertical_direction", &self.vertical_direction)
             .field("clip_behavior", &self.clip_behavior)
             .field("children", &self.children.len())
             .finish_non_exhaustive()
@@ -183,6 +198,7 @@ where
             self.run_spacing,
             self.cross_axis_alignment,
         ) | render_object.set_text_direction(Directionality::of_render_object(ctx))
+            | render_object.set_vertical_direction(self.vertical_direction)
             | render_object.set_clip_behavior(self.clip_behavior)
     }
 

@@ -155,6 +155,15 @@ filter = 'binary_id(flui-animation::animation_it) & test(=retarget::repeated_int
 slow-timeout = { period = "180s", terminate-after = 4 }
 priority = 100
 
+# The X11 lane's desktop tests build the scenario app (`Launch::cargo_example`, a cargo build of
+# the example's own feature set) in whichever runs first, the others waiting on cargo's lock, and
+# each starts an Xvfb, a session bus and the AT-SPI bus of its own: a cold build gets the nested
+# budget, and they start with the nested builds.
+[[profile.default.overrides]]
+filter = 'binary_id(flui-driver::driver_it) & test(/^x11_desktop::/)'
+slow-timeout = { period = "300s", terminate-after = 3 }
+priority = 100
+
 # GPU readback tests share one software rasterizer (lavapipe locally, WARP on
 # the CI GPU job), and each builds its own `wgpu::Device`. Submitting from
 # several processes at once can saturate that single driver and make an
@@ -174,9 +183,6 @@ system-clipboard = { max-threads = 1 }
 # flui-native's Win32 and AppKit window tests share one desktop's activation
 # (and AppKit's Spaces; see `desktop-foreground` below).
 desktop-foreground = { max-threads = 1 }
-# xtask's binary test spawns the built `cargo xtask` binary, which runs
-# `cargo metadata`; one at a time keeps it off the other tests' timing.
-xtask-binary = { max-threads = 1 }
 # flui-native's X11 window tests share the one X server `xvfb-run` starts for
 # the run (see `x11-server` below).
 x11-server = { max-threads = 1 }
@@ -254,9 +260,3 @@ test-group = 'x11-server'
 [[profile.default.overrides]]
 filter = 'package(flui-native) & test(/^drag::linux::x11::tests::/)'
 test-group = 'xdnd-selection'
-
-# `cargo xtask` itself, spawned as a binary (see `xtask-binary`).
-[[profile.default.overrides]]
-filter = 'binary_id(xtask::binary)'
-slow-timeout = { period = "60s", terminate-after = 3 }
-test-group = 'xtask-binary'

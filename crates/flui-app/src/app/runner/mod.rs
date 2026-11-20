@@ -82,12 +82,10 @@ mod web;
 use android::run_android;
 #[cfg(windows)]
 pub(in crate::app) use associations::PendingRegistration;
-pub(in crate::app) use display_host::color_on as display_color_on;
 pub use fonts::{FontRegistrationError, register_font};
-pub(crate) use host::{
-    AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, opening_app_handler,
-    route_exit_policy, route_quit, with_owner_platform,
-};
+#[cfg(test)]
+pub(crate) use host::app_handler;
+pub(crate) use host::{AppRoutes, opening_app_handler};
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 use ios::run_ios;
@@ -200,6 +198,17 @@ pub(super) fn discard_window(window: &dyn flui_platform::PlatformWindow, why: &'
 /// Close a window whose close request, held until its presentation could be
 /// asked, the presentation granted: the window system's request was answered
 /// already, so the close is the application's command.
+#[cfg_attr(
+    not(all(
+        not(target_os = "android"),
+        not(target_arch = "wasm32"),
+        any(test, not(target_os = "ios"))
+    )),
+    expect(
+        dead_code,
+        reason = "only the desktop window installation routes a close request"
+    )
+)]
 pub(crate) fn close_granted_request(window: &dyn flui_platform::PlatformWindow) {
     if let Err(error) = flui_platform::WindowCommand::Close.admit_and_apply(window) {
         tracing::warn!(%error, "a granted close request did not close its window");
@@ -266,7 +275,7 @@ fn presented_host_window(
 
 fn text_store_host_of(
     window: &Rc<dyn flui_native::HostWindow>,
-) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+) -> Option<std::rc::Rc<dyn flui_platform::text::store::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
@@ -640,7 +649,9 @@ fn keep_native_journal(served: bool) {
 #[cfg(test)]
 mod tests {
 
-    use super::host::APP_RUNTIME;
+    use super::host::{
+        APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform,
+    };
     use super::window_routes::{OpenRouted as _, OwnerOpenRouted as _};
 
     // `teardown_platform_ui_runtime` is `cfg(all(not(ios), not(wasm32)))` -- neither
@@ -793,25 +804,25 @@ mod tests {
     /// headless platform's factory built it.
     struct FocusLog(std::sync::Arc<parking_lot::Mutex<Vec<bool>>>);
 
-    impl flui_platform::text_store::TextStoreHost for FocusLog {
+    impl flui_platform::text::store::TextStoreHost for FocusLog {
         fn focus_store(
             &self,
-            store: Option<std::rc::Rc<dyn flui_platform::text_store::TextStore>>,
+            store: Option<std::rc::Rc<dyn flui_platform::text::store::TextStore>>,
         ) {
             self.0.lock().push(store.is_some());
         }
 
         fn complete_composition(
             &self,
-            _: &std::rc::Rc<dyn flui_platform::text_store::TextStore>,
+            _: &std::rc::Rc<dyn flui_platform::text::store::TextStore>,
         ) -> Result<
-            flui_platform::text_store::CompositionEnd,
-            flui_platform::text_store::TextStoreHostError,
+            flui_platform::text::store::CompositionEnd,
+            flui_platform::text::store::TextStoreHostError,
         > {
-            Ok(flui_platform::text_store::CompositionEnd::Committed)
+            Ok(flui_platform::text::store::CompositionEnd::Committed)
         }
 
-        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::text_store::TextStore>) {}
+        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::text::store::TextStore>) {}
     }
 
     /// A pull-model window's host reaches the presentation the runner builds

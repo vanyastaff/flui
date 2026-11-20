@@ -1,27 +1,18 @@
-//! View rendering - root of the render tree and viewport abstractions.
+//! The root render object and the viewport abstractions.
 //!
-//! This module provides the root render object for the render tree and
-//! viewport-related types.
-//!
-//! # Architecture
-//!
-//! The view is the root of the render tree and is responsible for:
-//! - Converting logical constraints to the render tree
-//! - Managing the root transformation (device pixel ratio)
-//! - Compositing the final frame to the screen
-//! - Hit testing at the root level
+//! [`RenderView`] is the root of the render tree: it fills the constraints the
+//! pipeline owner holds for the root and lays its children out tight at that
+//! size.
 //!
 //! Viewports are render objects that are "bigger on the inside" - they
 //! display a portion of their content controlled by a scroll offset.
 
-mod configuration;
 mod render_view;
 mod scroll_position;
 mod viewport;
 mod viewport_offset;
 
-pub use configuration::ViewConfiguration;
-pub use render_view::{CompositeResult, RenderView, RenderViewAdapter};
+pub use render_view::RenderView;
 pub use scroll_position::{
     DimensionChangePolicy, OffsetWriteCause, ScrollOffsetWriter, ScrollPosition,
     ScrollPositionLayout, ScrollPositionSnapshot,

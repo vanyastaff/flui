@@ -166,7 +166,7 @@ fn rails_keep_a_one_finger_scale_pan_on_its_axis() {
 fn rails_keep_a_near_axial_trackpad_pan_on_its_axis() {
     use flui_foundation::geometry::Point;
     use flui_interaction::pointer::PanZoomDispatch;
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerPosition, PointerSource,
     };
     for (lock, railed) in [(AxisLock::Rails, true), (AxisLock::Free, false)] {
@@ -202,7 +202,7 @@ fn rails_keep_a_near_axial_trackpad_pan_on_its_axis() {
 fn a_trackpad_rail_waits_for_the_pan_slop() {
     use flui_foundation::geometry::Point;
     use flui_interaction::pointer::PanZoomDispatch;
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerPosition, PointerSource,
     };
     let published = Rc::new(RefCell::new(Offset::ZERO));

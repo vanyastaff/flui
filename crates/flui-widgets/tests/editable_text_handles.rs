@@ -14,7 +14,7 @@ use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifier
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::TextStyle;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
     PointerPress, PointerRelease, PointerSample, PointerSource,
 };
@@ -527,7 +527,7 @@ pub(crate) fn the_focus_leaving_before_a_tap_lifts_shows_no_handles() {
 /// stays past its time).
 pub(crate) fn a_panic_on_the_last_drag_move_still_ends_the_drag() {
     use flui_foundation::Listenable;
-    use flui_platform::pointer::PointerMove;
+    use flui_platform::input::pointer::PointerMove;
 
     let mut scene = Scene::over(CaretHandle::on_tap().hide_after(Duration::from_secs(1)));
     let caret = start_of("alpha ");
@@ -676,7 +676,7 @@ pub(crate) fn a_panic_on_a_long_press_release_still_ends_the_press() {
 /// (the move selects from the old caret).
 pub(crate) fn a_panic_on_the_long_press_selection_still_claims_the_contact() {
     use flui_foundation::Listenable;
-    use flui_platform::pointer::PointerMove;
+    use flui_platform::input::pointer::PointerMove;
 
     let mut scene = Scene::over(CaretHandle::NEVER);
     let armed = Rc::new(std::cell::Cell::new(true));
@@ -850,7 +850,7 @@ pub(crate) fn shown_handles_follow_a_new_line_height() {
 /// moved by the layers up to the follower that places it, and by where
 /// that follower resolves.
 pub(crate) fn magnifiers(laid: &LaidOut) -> Vec<flui_foundation::geometry::Rect<f64>> {
-    use flui_rendering::layer::{Layer, resolve_follower_transform};
+    use flui_layer::{Layer, resolve_follower_transform};
 
     let tree = laid.layer_tree().expect("a painted frame");
     let mut found = Vec::new();
@@ -862,7 +862,7 @@ pub(crate) fn magnifiers(laid: &LaidOut) -> Vec<flui_foundation::geometry::Rect<
         let mut up = tree.parent(id);
         let follower = loop {
             let parent = up.expect("a magnifier sits under a follower");
-            let layer = tree.get_layer(parent).expect("a parent layer");
+            let layer = tree.layer(parent).expect("a parent layer");
             if matches!(layer, Layer::Follower(_)) {
                 break parent;
             }

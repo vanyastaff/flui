@@ -6,9 +6,9 @@ use flui_rendering::{
     constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverPhysicalParentData,
-    semantics::SemanticsConfiguration,
     traits::RenderSliver,
 };
+use flui_semantics::SemanticsConfiguration;
 
 /// Describes a sliver subtree to accessibility while preserving its geometry.
 /// Boundary, merge, reading-order and sibling-barrier policies use the same

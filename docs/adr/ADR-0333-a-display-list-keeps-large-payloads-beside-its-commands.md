@@ -130,7 +130,7 @@ const _: () = assert!(size_of::<RecordedOp>() <= 120);
   names and not its position) and `a_fingerprint_reads_what_the_commands_draw`
   (`DisplayList::fingerprint`, which inspection reports, hashes a payload by content: the same
   drawing with its payloads at other positions reads alike, another path reads apart).
-- The control-cost rows (`packages/*/tests/perf.rs`) and `cargo xtask perf --check` hold the
+- The control-cost rows (`packages/*/tests/perf.rs`) and `perf-gates`' baseline check hold the
   numbers above.
 
 ## Pros and cons of the options

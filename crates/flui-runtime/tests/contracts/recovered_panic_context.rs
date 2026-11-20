@@ -105,13 +105,9 @@ fn a_recovered_panic_report_names_its_ancestors_and_creation_site() {
     let view = PanicsInBuild::new();
     let line = line!() - 1;
     runtime
-        .attach_root_widget_with_size(
-            &Outer {
-                child: Middle { child: view },
-            },
-            800.0,
-            600.0,
-        )
+        .attach_root_widget(&Outer {
+            child: Middle { child: view },
+        })
         .expect("root");
     clock.advance(Duration::from_millis(16));
     let _ = runtime.pump(
@@ -196,7 +192,7 @@ fn a_handler_factory_gives_each_runtime_its_own_handler() {
     clock.advance(Duration::from_millis(16));
     for mut runtime in runtimes {
         runtime
-            .attach_root_widget_with_size(&PanicsInBuild::new(), 800.0, 600.0)
+            .attach_root_widget(&PanicsInBuild::new())
             .expect("root");
         let _ = runtime.pump(
             &mut flui_runtime::pump::SampledClock(clock.now()),

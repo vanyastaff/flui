@@ -103,6 +103,8 @@ mod measured {
     use flui_sdk::foundation::InputSequenceId as _;
     // A behavioural widget's gesture alternatives (ADR-0216).
     use flui_sdk::painting::Alignment as _;
+    // The start and end alignment a table cell resolves against the reading direction.
+    use flui_sdk::painting::AlignmentDirectional as _;
     use flui_sdk::painting::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
         BoxDecoration as _, BoxShadow as _, Color as _,
@@ -457,12 +459,12 @@ mod measured_unstable {
 #[test]
 fn the_unstable_input_re_exports_are_the_owning_crates_types() {
     let _: fn(
-        flui_platform::input_capabilities::InputCapabilities,
+        flui_platform::input::capabilities::InputCapabilities,
     ) -> flui_sdk::platform::input_capabilities::InputCapabilities = |x| x;
     let _: fn(flui_platform::Availability) -> flui_sdk::platform::input_capabilities::Availability =
         |x| x;
     let _: fn(
-        flui_platform::input_capabilities::PointerKindSet,
+        flui_platform::input::capabilities::PointerKindSet,
     ) -> flui_sdk::platform::input_capabilities::PointerKindSet = |x| x;
     let _: fn(flui_platform::haptics::HapticPattern) -> flui_sdk::platform::haptics::HapticPattern =
         |x| x;
@@ -581,6 +583,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::haptics::HapticObserver;",
         "pub use flui_interaction::haptics::HapticsHandle;",
         "pub use flui_interaction::ids::PointerId;",
+        "pub use flui_interaction::pointer::HitTestBehavior;",
         "pub use flui_interaction::pointer::PointerDispatch;",
         "pub use flui_interaction::text_input::ClipboardBackend;",
         "pub use flui_interaction::text_input::ClipboardCapability;",
@@ -600,6 +603,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_layer::Scene;",
         "pub use flui_objects::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction};",
         "pub use flui_painting::Alignment;",
+        "pub use flui_painting::AlignmentDirectional;",
         "pub use flui_painting::BlurSigma;",
         "pub use flui_painting::Canvas;",
         "pub use flui_painting::DrawOp;",
@@ -701,7 +705,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::capability::ResultTicket;",
         "pub use flui_platform::capability::ResultToken;",
         "pub use flui_platform::capability::WindowRef;",
-        "pub use flui_platform::data_transfer::TransferActions;",
         "pub use flui_platform::haptics::ControlPoint;",
         "pub use flui_platform::haptics::HapticCapabilities;",
         "pub use flui_platform::haptics::HapticEvent;",
@@ -717,26 +720,26 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::haptics::PatternPlayback;",
         "pub use flui_platform::haptics::Sharpness;",
         "pub use flui_platform::haptics::UnitRangeError;",
-        "pub use flui_platform::input_capabilities::InputCapabilities;",
-        "pub use flui_platform::input_capabilities::PointerKindSet;",
-        "pub use flui_platform::input_capabilities::PointerKindSet;",
-        "pub use flui_platform::pointer::PointerKind;",
-        "pub use flui_platform::text_store::Autofill;",
-        "pub use flui_platform::text_store::Capitalization;",
-        "pub use flui_platform::text_store::Correction;",
-        "pub use flui_platform::text_store::EnterAction;",
-        "pub use flui_platform::text_store::NumberFormat;",
-        "pub use flui_platform::text_store::TextInputOptions;",
-        "pub use flui_platform::text_store::TextInputPurpose;",
+        "pub use flui_platform::input::capabilities::InputCapabilities;",
+        "pub use flui_platform::input::capabilities::PointerKindSet;",
+        "pub use flui_platform::input::capabilities::PointerKindSet;",
+        "pub use flui_platform::input::pointer::PointerKind;",
+        "pub use flui_platform::text::store::Autofill;",
+        "pub use flui_platform::text::store::Capitalization;",
+        "pub use flui_platform::text::store::Correction;",
+        "pub use flui_platform::text::store::EnterAction;",
+        "pub use flui_platform::text::store::NumberFormat;",
+        "pub use flui_platform::text::store::TextInputOptions;",
+        "pub use flui_platform::text::store::TextInputPurpose;",
+        "pub use flui_platform::transfer::data::TransferActions;",
         "pub use flui_rendering::constraints::BoxConstraints;",
-        "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::pipeline::TextContextHandle;",
         "pub use flui_rendering::protocol::BoxProtocol;",
-        "pub use flui_rendering::semantics::SemanticsRegion;",
-        "pub use flui_rendering::semantics::SemanticsRegionKey;",
         "pub use flui_rendering::view::ScrollDirection;",
         "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
         "pub use flui_scheduler::FrameSnapshot;",
+        "pub use flui_semantics::SemanticsRegion;",
+        "pub use flui_semantics::SemanticsRegionKey;",
         "pub use flui_view::*;",
         "pub use flui_widgets as widgets;",
         "pub use plugin_pipeline::PluginFrameError;",

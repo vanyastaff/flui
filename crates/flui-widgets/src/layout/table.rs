@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use flui_foundation::ViewKey;
 use flui_objects::RenderTable;
 
-use crate::SizedBox;
+use crate::{Directionality, SizedBox};
 use flui_objects::TableColumnWidth;
 use flui_painting::styling::{BoxDecoration, TableBorder};
 use flui_painting::typography::TextBaseline;
@@ -144,15 +144,11 @@ struct CellKey {
 }
 
 impl ViewKey for CellKey {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
         // `key_eq` takes `&dyn ViewKey` and is
         // contractually a comparison against this key's own type — every key
         // in the workspace implements it this way (see `SaltedKey`).
-        let same_kind = other.as_any().downcast_ref::<Self>(); // see above
+        let same_kind = (other as &dyn std::any::Any).downcast_ref::<Self>(); // see above
         same_kind
             .is_some_and(|other| self.row.part_eq(&other.row) && self.cell.part_eq(&other.cell))
     }
@@ -218,6 +214,9 @@ impl StatelessView for KeyedCell {
 /// keeps its cells wherever it moves to, unkeyed rows are matched to each
 /// other in order, and a row with no counterpart is disposed whole. Wrap a
 /// cell in [`TableCell`] to override its vertical alignment.
+///
+/// Column 0 sits against the start edge of the ambient [`Directionality`]:
+/// the left edge in LTR, the right edge in RTL.
 #[derive(Clone, Debug)]
 pub struct Table {
     rows: Vec<TableRow>,
@@ -380,10 +379,7 @@ impl RenderView for Table {
     type Protocol = BoxProtocol;
     type RenderObject = RenderTable;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
+    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         debug_assert!(
             self.rows
                 .iter()
@@ -397,11 +393,12 @@ impl RenderView for Table {
             .with_text_baseline(self.text_baseline)
             .with_border(self.border)
             .with_row_decorations(self.row_decorations())
+            .with_text_direction(Directionality::of_render_object(ctx))
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
         // No shape check here: `Table::new` squared the rows up, so the grid
@@ -414,6 +411,7 @@ impl RenderView for Table {
         impact |= render_object.set_text_baseline(self.text_baseline);
         impact |= render_object.set_border(self.border);
         impact |= render_object.set_row_decorations(self.row_decorations());
+        impact |= render_object.set_text_direction(Directionality::of_render_object(ctx));
         impact
     }
 

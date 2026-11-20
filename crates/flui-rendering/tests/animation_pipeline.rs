@@ -24,7 +24,11 @@ use flui_animation::{Animation, AnimationController};
 use flui_foundation::geometry::Size;
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderColoredBox, RenderOpacity};
-use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, testing::SceneHost};
+use flui_rendering::{
+    constraints::BoxConstraints,
+    pipeline::PipelineOwner,
+    testing::{SceneHost, update_render_object},
+};
 
 use crate::common::BoxedRenderObject;
 
@@ -83,21 +87,8 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     // at alpha 255 (a fully opaque RenderOpacity pushes no
     // layer) — the child paints directly, with no OpacityLayer to pay for.
     ctrl.tick_at(std::time::Duration::from_secs_f64(0.0));
-    let impact = {
-        let entry = owner
-            .render_tree_mut()
-            .get_mut(fade)
-            .expect("fade node")
-            .as_box_mut()
-            .expect("box");
-        entry
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<RenderOpacity>()
-            .expect("RenderOpacity")
-            .set_opacity(1.0 - ctrl.value())
-    };
-    owner.apply_render_update_impact(fade, impact);
+    let opacity = 1.0 - ctrl.value();
+    update_render_object::<RenderOpacity, _>(&mut owner, fade, |fade| fade.set_opacity(opacity));
     let (next, tree) = frame(&mut scene, owner);
     owner = next;
     let tree = tree.expect("fully-opaque frame paints");
@@ -111,21 +102,9 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     for (i, t) in [0.25f64, 0.5].iter().enumerate() {
         ctrl.tick_at(std::time::Duration::from_secs_f64(*t));
         let opacity = 1.0 - ctrl.value();
-        {
-            let entry = owner
-                .render_tree_mut()
-                .get_mut(fade)
-                .expect("fade node")
-                .as_box_mut()
-                .expect("box");
-            let impact = entry
-                .render_object_mut()
-                .as_any_mut()
-                .downcast_mut::<RenderOpacity>()
-                .expect("RenderOpacity")
-                .set_opacity(opacity);
-            owner.apply_render_update_impact(fade, impact);
-        }
+        update_render_object::<RenderOpacity, _>(&mut owner, fade, |fade| {
+            fade.set_opacity(opacity)
+        });
         let (next, tree) = frame(&mut scene, owner);
         owner = next;
         let tree = tree.unwrap_or_else(|| panic!("fade frame {i} must paint"));
@@ -140,21 +119,8 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
 
     // Final frame: opacity 0 — the subtree is skipped entirely.
     ctrl.tick_at(std::time::Duration::from_secs_f64(1.0));
-    let impact = {
-        let entry = owner
-            .render_tree_mut()
-            .get_mut(fade)
-            .expect("fade node")
-            .as_box_mut()
-            .expect("box");
-        entry
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<RenderOpacity>()
-            .expect("RenderOpacity")
-            .set_opacity(1.0 - ctrl.value())
-    };
-    owner.apply_render_update_impact(fade, impact);
+    let opacity = 1.0 - ctrl.value();
+    update_render_object::<RenderOpacity, _>(&mut owner, fade, |fade| fade.set_opacity(opacity));
     let (_owner, tree) = frame(&mut scene, owner);
     let tree = tree.expect("the zero-alpha frame still produces a (empty) tree");
     assert!(

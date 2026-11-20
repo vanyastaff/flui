@@ -95,7 +95,7 @@ fn implicit_opacity_settles_under_reduce() {
         .expect("opacity runtime");
         let target = Rc::new(Cell::new(0.2));
         runtime
-            .attach_root_widget_with_size(&OpacityTarget(Rc::clone(&target)), 800.0, 600.0)
+            .attach_root_widget(&OpacityTarget(Rc::clone(&target)))
             .expect("opacity root");
         let mut sink = OpacitySceneSink::default();
         frame(&mut runtime, &clock, &mut sink, 16);
@@ -168,7 +168,7 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
     .expect("motion runtime");
     let observed = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size(&MotionReader(Rc::clone(&observed)), 800.0, 600.0)
+        .attach_root_widget(&MotionReader(Rc::clone(&observed)))
         .expect("motion reader");
     let normal =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
@@ -278,7 +278,7 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
         .expect("late runtime");
         late.set_motion_override(preference);
         let late_observed = Rc::new(RefCell::new(Vec::new()));
-        late.attach_root_widget_with_size(&MotionReader(Rc::clone(&late_observed)), 800.0, 600.0)
+        late.attach_root_widget(&MotionReader(Rc::clone(&late_observed)))
             .expect("late root");
         let _ = late.pump(
             &mut flui_runtime::pump::SampledClock(clock.now() + Duration::from_millis(16)),
@@ -294,13 +294,8 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
             .assemble(crate::owner_publication::window())
             .expect("assemble sibling");
         let sibling = late.install_presentation(sibling);
-        late.attach_root_widget_with_size_to(
-            sibling,
-            &MotionReader(Rc::clone(&late_observed)),
-            800.0,
-            600.0,
-        )
-        .expect("late sibling root");
+        late.attach_root_widget_to(sibling, &MotionReader(Rc::clone(&late_observed)))
+            .expect("late sibling root");
         let _ = late.pump(
             &mut flui_runtime::pump::SampledClock(clock.now() + Duration::from_millis(32)),
             &mut *effects.sink.borrow_mut(),
@@ -468,7 +463,7 @@ fn preference_recipient(owner: &OwnerHost) -> (Effects, Rc<RefCell<Vec<TextSizin
     let runtime = crate::owner_publication::runtime();
     let observed = Rc::default();
     runtime
-        .attach_root_widget_with_size(&PreferenceReader(Rc::clone(&observed)), 800.0, 600.0)
+        .attach_root_widget(&PreferenceReader(Rc::clone(&observed)))
         .expect("mount preference consumer");
     let address = owner
         .publication(owner.prepare_runtime(runtime))
@@ -649,7 +644,7 @@ fn initial_inherited_scale_matches_the_renderer() {
                 .expect("runtime");
         let observed = Rc::new(Cell::new(0.0));
         runtime
-            .attach_root_widget_with_size(&Reader(Rc::clone(&observed)), 800.0, 600.0)
+            .attach_root_widget(&Reader(Rc::clone(&observed)))
             .expect("root");
         let mut sink = Sink {
             size: Rc::new(Cell::new((1600, 1200))),
@@ -683,18 +678,14 @@ fn resize_and_surface_restore_reach_the_product_frame() {
     let text_scale = Rc::new(RefCell::new(Vec::new()));
     let contrast = Rc::default();
     runtime
-        .attach_root_widget_with_size(
-            &MetricsReader {
-                observed: Rc::clone(&observed),
-                contrast: Rc::clone(&contrast),
-                text_scale: Rc::clone(&text_scale),
-                owner: owner.clone(),
-                brightness: Rc::default(),
-                padding: Rc::default(),
-            },
-            800.0,
-            600.0,
-        )
+        .attach_root_widget(&MetricsReader {
+            observed: Rc::clone(&observed),
+            contrast: Rc::clone(&contrast),
+            text_scale: Rc::clone(&text_scale),
+            owner: owner.clone(),
+            brightness: Rc::default(),
+            padding: Rc::default(),
+        })
         .expect("mount actual widget");
     let address = owner
         .publication(owner.prepare_runtime(runtime))
@@ -859,14 +850,10 @@ fn resize_and_surface_restore_reach_the_product_frame() {
     .expect("late runtime");
     let initial = Rc::new(RefCell::new(Vec::new()));
     let initial_contrast = Rc::default();
-    late.attach_root_widget_with_size(
-        &flui_widgets::Column::new(vec![
-            PreferenceReader(Rc::clone(&initial)).boxed(),
-            ContrastReader(Rc::clone(&initial_contrast)).boxed(),
-        ]),
-        800.0,
-        600.0,
-    )
+    late.attach_root_widget(&flui_widgets::Column::new(vec![
+        PreferenceReader(Rc::clone(&initial)).boxed(),
+        ContrastReader(Rc::clone(&initial_contrast)).boxed(),
+    ]))
     .expect("attach seeded root");
     let mut sink = Sink {
         size: Rc::new(Cell::new((800, 600))),
@@ -906,7 +893,7 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
     let owner = OwnerHost::new();
     let runtime = crate::owner_publication::runtime();
     runtime
-        .attach_root_widget_with_size(&flui_widgets::SizedBox::new(80.0, 60.0), 800.0, 600.0)
+        .attach_root_widget(&flui_widgets::SizedBox::new(80.0, 60.0))
         .expect("mount primary content");
     let primary = owner
         .publication(owner.prepare_runtime(runtime))
@@ -1130,7 +1117,7 @@ fn bold_text_changes_the_painted_glyphs() {
             root
         };
         runtime
-            .attach_root_widget_with_size(&root, 800.0, 600.0)
+            .attach_root_widget(&root)
             .expect("mount real text consumer");
         let owner = OwnerHost::new();
         let address = owner
@@ -1293,7 +1280,7 @@ fn bold_text_changes_the_painted_glyphs() {
             )
             .expect("late text runtime");
             let late_root = text_root("AA");
-            late.attach_root_widget_with_size(&late_root, 800.0, 600.0)
+            late.attach_root_widget(&late_root)
                 .expect("mount late text consumer");
             let mut sink = Sink {
                 size: Rc::new(Cell::new((800, 600))),
@@ -1323,7 +1310,7 @@ fn bold_text_changes_the_painted_glyphs() {
             let secondary = late.install_presentation(
                 late.assemble_presentation(crate::owner_publication::window()),
             );
-            late.attach_root_widget_with_size_to(secondary, &text_root("AAA"), 800.0, 600.0)
+            late.attach_root_widget_to(secondary, &text_root("AAA"))
                 .expect("mount a late presentation's real text consumer");
             assert!(
                 late.pump(
@@ -1420,7 +1407,7 @@ fn regional_formats_reach_media_query() {
     let runtime = crate::owner_publication::runtime();
     let observed = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size(&RegionalReader(Rc::clone(&observed)), 800.0, 600.0)
+        .attach_root_widget(&RegionalReader(Rc::clone(&observed)))
         .expect("mount regional reader");
     let address = owner
         .publication(owner.prepare_runtime(runtime))
@@ -1544,7 +1531,7 @@ fn preferred_locales_select_resources_and_direction() {
             None => app,
         };
         runtime
-            .attach_root_widget_with_size(&app, 800.0, 600.0)
+            .attach_root_widget(&app)
             .expect("mount localized app");
         let address = owner
             .publication(owner.prepare_runtime(runtime))
@@ -1667,7 +1654,7 @@ fn preferred_locales_select_resources_and_direction() {
             )
             .expect("late localized runtime");
             let initial = Rc::new(RefCell::new(Vec::new()));
-            late.attach_root_widget_with_size(
+            late.attach_root_widget(
                 &flui_widgets::WidgetsApp::new(LocalizedContent(Rc::clone(&initial)))
                     .supported_locales(vec![
                         Locale::en_us(),
@@ -1677,8 +1664,6 @@ fn preferred_locales_select_resources_and_direction() {
                         BoxedLocalizationsDelegate::new(Greetings),
                         BoxedLocalizationsDelegate::new(GlobalWidgetsLocalizationsDelegate),
                     ]),
-                800.0,
-                600.0,
             )
             .expect("late root");
             let mut sink = Sink {
@@ -1744,7 +1729,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         ManualClock, MonotonicClock,
         geometry::{DevicePixelRatio, Point},
     };
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
         PointerPress, PointerRelease, PointerSample, PointerSource,
     };
@@ -1804,12 +1789,10 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         .update_dimensions(300.0, 0.0, 4700.0)
         .expect("ordered extents");
     runtime
-        .attach_root_widget_with_size(
+        .attach_root_widget(
             &flui_widgets::SingleChildScrollView::new()
                 .controller(controller.clone())
                 .child(flui_widgets::SizedBox::new(300.0, 5000.0)),
-            300.0,
-            300.0,
         )
         .expect("mount scrolling consumer");
     let address = owner
@@ -1954,14 +1937,12 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         let taps = Rc::new(Cell::new(0));
         let output = Rc::clone(&taps);
         runtime
-            .attach_root_widget_with_size(
+            .attach_root_widget(
                 &flui_widgets::GestureDetector::new()
                     .on_tap(move |_| output.set(output.get() + 1))
                     .child(flui_widgets::ColoredBox::new(
                         flui_painting::styling::Color::RED,
                     )),
-                800.0,
-                600.0,
             )
             .expect("mounted cold recipient");
         let address = owner
@@ -2199,14 +2180,12 @@ fn gesture_values_follow_the_presentation_display() {
     let taps = Rc::new(Cell::new(0));
     let output = taps.clone();
     runtime
-        .attach_root_widget_with_size(
+        .attach_root_widget(
             &flui_widgets::GestureDetector::new()
                 .on_tap(move |_| output.set(output.get() + 1))
                 .child(flui_widgets::ColoredBox::new(
                     flui_painting::styling::Color::RED,
                 )),
-            800.0,
-            600.0,
         )
         .expect("mount");
     let address = owner
@@ -2411,13 +2390,9 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     let id = runtime.presentation_id();
     assert!(runtime.install_window(id, source));
     runtime
-        .attach_root_widget_with_size(
-            &flui_widgets::SystemGestureExclusion::new().child(flui_widgets::ColoredBox::new(
-                flui_painting::styling::Color::RED,
-            )),
-            40.0,
-            40.0,
-        )
+        .attach_root_widget(&flui_widgets::SystemGestureExclusion::new().child(
+            flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED),
+        ))
         .expect("mount");
     struct Sink;
     impl FrameSink for Sink {
@@ -2557,15 +2532,13 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     let holds = Rc::new(Cell::new(0));
     let held = holds.clone();
     runtime
-        .attach_root_widget_with_size(
+        .attach_root_widget(
             &flui_widgets::GestureDetector::new()
                 .on_tap(move |_| output.set(output.get() + 1))
                 .on_long_press(move |_| held.set(held.get() + 1))
                 .child(flui_widgets::ColoredBox::new(
                     flui_painting::styling::Color::RED,
                 )),
-            800.0,
-            600.0,
         )
         .expect("mount");
     let address = owner
@@ -3116,7 +3089,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
 }
 
 fn wheel_preferences_reach_the_next_mounted_input() {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
@@ -3127,16 +3100,12 @@ fn wheel_preferences_reach_the_next_mounted_input() {
         let runtime = crate::owner_publication::runtime();
         let scroll = flui_widgets::ScrollController::new();
         runtime
-            .attach_root_widget_with_size(
-                &NestedWheelScroll {
-                    authored_gestures,
-                    child: flui_widgets::SingleChildScrollView::new()
-                        .controller(scroll.clone())
-                        .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
-                },
-                800.0,
-                600.0,
-            )
+            .attach_root_widget(&NestedWheelScroll {
+                authored_gestures,
+                child: flui_widgets::SingleChildScrollView::new()
+                    .controller(scroll.clone())
+                    .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
+            })
             .expect("mount scroll consumer");
         let address = owner
             .publication(owner.prepare_runtime(runtime))
@@ -3417,9 +3386,7 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
                 .boxed()
             },
         );
-        runtime
-            .attach_root_widget_with_size(&root, 800.0, 600.0)
-            .expect("attach detector");
+        runtime.attach_root_widget(&root).expect("attach detector");
         let address = owner
             .publication(owner.prepare_runtime(runtime))
             .expect("publish")
@@ -3566,9 +3533,7 @@ fn accessibility_floor_holds_under_an_authored_scope() {
                 flui_painting::styling::Color::RED,
             )),
     };
-    runtime
-        .attach_root_widget_with_size(&root, 800.0, 600.0)
-        .expect("attach detector");
+    runtime.attach_root_widget(&root).expect("attach detector");
     let address = owner
         .publication(owner.prepare_runtime(runtime))
         .expect("publish")
@@ -3666,7 +3631,7 @@ fn preference_fanout_survives_a_failing_runtime() {
             }));
             let observed = Rc::default();
             runtime
-                .attach_root_widget_with_size(&PreferenceReader(Rc::clone(&observed)), 800.0, 600.0)
+                .attach_root_widget(&PreferenceReader(Rc::clone(&observed)))
                 .expect("mount preference consumer");
             let address = owner
                 .publication(owner.prepare_runtime(runtime))
@@ -3869,7 +3834,7 @@ fn an_older_preference_revision_cannot_replace_a_newer_seed() {
     // accepted revision, as the composition root seeds every runtime.
     let mut late = seeded_runtime(&owner);
     let observed: Rc<RefCell<Vec<TextSizing>>> = Rc::default();
-    late.attach_root_widget_with_size(&PreferenceReader(Rc::clone(&observed)), 800.0, 600.0)
+    late.attach_root_widget(&PreferenceReader(Rc::clone(&observed)))
         .expect("mount the late consumer");
     pump_once(&mut late);
     assert_eq!(
@@ -3884,7 +3849,7 @@ fn an_older_preference_revision_cannot_replace_a_newer_seed() {
 /// were accepted, and no frame separates them: each wheel input scrolls by the
 /// step of the revision accepted just before it, not of an earlier or later one.
 fn queued_preferences_are_not_coalesced_across_an_input() {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
@@ -3895,16 +3860,12 @@ fn queued_preferences_are_not_coalesced_across_an_input() {
     let runtime = crate::owner_publication::runtime();
     let scroll = flui_widgets::ScrollController::new();
     runtime
-        .attach_root_widget_with_size(
-            &NestedWheelScroll {
-                authored_gestures: false,
-                child: flui_widgets::SingleChildScrollView::new()
-                    .controller(scroll.clone())
-                    .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
-            },
-            800.0,
-            600.0,
-        )
+        .attach_root_widget(&NestedWheelScroll {
+            authored_gestures: false,
+            child: flui_widgets::SingleChildScrollView::new()
+                .controller(scroll.clone())
+                .child(flui_widgets::SizedBox::new(800.0, 5000.0)),
+        })
         .expect("mount scroll consumer");
     let address = owner
         .publication(owner.prepare_runtime(runtime))
@@ -4018,18 +3979,13 @@ fn text_scale_reaches_a_late_runtime_and_its_later_presentation() {
         .expect("scale before the late runtime exists");
     let mut late = seeded_runtime(&owner);
     let observed: Rc<RefCell<Vec<TextSizing>>> = Rc::default();
-    late.attach_root_widget_with_size(&PreferenceReader(Rc::clone(&observed)), 800.0, 600.0)
+    late.attach_root_widget(&PreferenceReader(Rc::clone(&observed)))
         .expect("late root");
     pump_once(&mut late);
     let second =
         late.install_presentation(late.assemble_presentation(crate::owner_publication::window()));
-    late.attach_root_widget_with_size_to(
-        second,
-        &PreferenceReader(Rc::clone(&observed)),
-        800.0,
-        600.0,
-    )
-    .expect("later presentation root");
+    late.attach_root_widget_to(second, &PreferenceReader(Rc::clone(&observed)))
+        .expect("later presentation root");
     pump_once(&mut late);
     let scaled = TextSizing::linear(2.0).expect("valid scale");
     assert_eq!(
@@ -4047,18 +4003,14 @@ fn queued_state_bursts_coalesce_between_observing_frames() {
     let brightness = Rc::default();
     let text_scale = Rc::default();
     runtime
-        .attach_root_widget_with_size(
-            &MetricsReader {
-                observed: Rc::clone(&observed),
-                owner: owner.clone(),
-                contrast: Rc::default(),
-                brightness: Rc::clone(&brightness),
-                text_scale: Rc::clone(&text_scale),
-                padding: Rc::default(),
-            },
-            800.0,
-            600.0,
-        )
+        .attach_root_widget(&MetricsReader {
+            observed: Rc::clone(&observed),
+            owner: owner.clone(),
+            contrast: Rc::default(),
+            brightness: Rc::clone(&brightness),
+            text_scale: Rc::clone(&text_scale),
+            padding: Rc::default(),
+        })
         .expect("mount state consumer");
     let address = owner
         .publication(owner.prepare_runtime(runtime))
@@ -4155,18 +4107,14 @@ fn resize_failure_preserves_other_batched_window_state() {
         let padding = Rc::default();
         let text_scale = Rc::default();
         runtime
-            .attach_root_widget_with_size(
-                &MetricsReader {
-                    observed: Rc::clone(&observed),
-                    owner: owner.clone(),
-                    contrast: Rc::default(),
-                    brightness: Rc::clone(&brightness),
-                    text_scale: Rc::clone(&text_scale),
-                    padding: Rc::clone(&padding),
-                },
-                800.0,
-                600.0,
-            )
+            .attach_root_widget(&MetricsReader {
+                observed: Rc::clone(&observed),
+                owner: owner.clone(),
+                contrast: Rc::default(),
+                brightness: Rc::clone(&brightness),
+                text_scale: Rc::clone(&text_scale),
+                padding: Rc::clone(&padding),
+            })
             .expect("mount actual window-state consumer");
         let address = owner
             .publication(owner.prepare_runtime(runtime))
@@ -4338,7 +4286,7 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                 Rc::clone(&events),
             );
             runtime
-                .attach_root_widget_with_size(
+                .attach_root_widget(
                     &Listener::new()
                         .behavior(HitTestBehavior::Opaque)
                         .on_pointer_down(move |_, _| down.borrow_mut().push("down"))
@@ -4349,8 +4297,6 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
                         .on_pointer_up(move |_, _| up.borrow_mut().push("up"))
                         .on_pointer_cancel(move |_, _| cancel.borrow_mut().push("cancel"))
                         .child(SizedBox::new(800.0, 600.0)),
-                    800.0,
-                    600.0,
                 )
                 .expect("mount input consumer");
             runtime.synchronize_window_snapshot(

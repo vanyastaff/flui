@@ -523,7 +523,7 @@ impl<'a> PanZoomDispatch<'a> {
     pub fn on_retirement(self, retire: impl Fn() + 'static) -> bool {
         if !matches!(
             self.global.phase,
-            flui_platform::pointer::PanZoomPhase::Start
+            flui_platform::input::pointer::PanZoomPhase::Start
         ) {
             return false;
         }
@@ -541,7 +541,7 @@ impl<'a> PanZoomDispatch<'a> {
     ) {
         if matches!(
             self.global.phase,
-            flui_platform::pointer::PanZoomPhase::Start
+            flui_platform::input::pointer::PanZoomPhase::Start
         ) && let Some(admission) = self.admission
         {
             (admission.stage)(PanZoomRetirement(Rc::new(retire), Some(Rc::new(current))));
@@ -558,7 +558,7 @@ impl<'a> PanZoomDispatch<'a> {
     pub fn claim(self) {
         if matches!(
             self.global.phase,
-            flui_platform::pointer::PanZoomPhase::Update(_)
+            flui_platform::input::pointer::PanZoomPhase::Update(_)
         ) && let Some(admission) = self.admission
         {
             (admission.claim)();

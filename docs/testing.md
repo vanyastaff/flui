@@ -33,7 +33,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Inspection | Typed self-description of any node | `flui_foundation::inspect::{Inspect, SnapshotNode}` | always |
 | Waker | A `Waker` that counts its wakes, runs an action, drops its captures when it retires, or panics | `flui_foundation::testing::{CountingWaker, panicking_waker}` | `flui-foundation/testing` |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
-| Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
+| Layer | Structural walkers over a `LayerTree` (built with `push_child`, or a scene's `SceneVersion::flatten`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessHost` | dev-dependency |
 | Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::ScriptedSink` and the window double `flui_testing::MockWindow` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |
@@ -61,10 +61,11 @@ Two structural rules hold across the stack:
 
 ### wasm32: compiled everywhere, executed in one place
 
-Three of the commands above target wasm32 and only the last one runs anything. That distinction is
+Of the wasm32 commands in the CI list below, only `cargo test` runs anything. That distinction is
 the whole content of the tier: `cargo check` and `cargo clippy` prove the code type-checks, and
-`cargo xtask wasm-link` proves rust-lld resolves the cdylibs (with a committed import allowlist,
-because on wasm32 an undefined symbol becomes an *import* rather than a link error). None of them
+`wasm-check`'s `cargo build` of the two web demos proves rust-lld resolves the cdylibs (since Rust
+1.96 an undefined symbol fails that link instead of becoming an import), and its node step reads
+the demos' import modules after `wasm-bindgen` processes them (ADR-0383 §5). None of them
 execute a single instruction.
 
 It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
@@ -73,10 +74,13 @@ It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
 `time not implemented on this platform` the moment it runs. That was the state of the workspace
 until issue #985.
 
-`cargo xtask wasm-test` (CI: the last steps of the `wasm-check` job) discovers the participating
-crates — those declaring a wasm32 `wasm-bindgen-test` dev-dependency, resolved by
-`cargo xtask wasm-test-crates` parsing the manifests rather than grepping them — and hosts their
-tests on node through `wasm-bindgen-test-runner`. It runs **both** target kinds, because which one
+The `wasm-check` job's test step discovers the participating crates — those whose dev-dependencies
+on wasm32 include `wasm-bindgen-test`, as cargo's resolver reports them (`cargo metadata
+--filter-platform wasm32-unknown-unknown`) rather than grepped out of the manifests — and runs
+`cargo test --target wasm32-unknown-unknown` on each, which hosts their tests through the
+`wasm-bindgen-test-runner` that `.cargo/config.toml` names: on node, or in the job's headless
+Chrome for a crate whose tests are `run_in_browser` (flui-system's lib test). It runs **both**
+target kinds, because which one
 is possible depends on visibility: an integration test (`tests/wasm32.rs`) sees only the public
 API, while a `pub(crate)` seam is reachable *only* from a lib test. Two things about it are deliberate:
 
@@ -84,22 +88,24 @@ API, while a `pub(crate)` seam is reachable *only* from a lib test. Two things a
   substitution whose whole purpose is keeping wasm32 working. A test that would pass identically on
   native costs a wasm build and proves nothing extra.
 - **The assertion count is checked, not trusted.** A runner that finds no tests exits 0 and prints
-  `0 passed`, which is indistinguishable from a passing suite, so both the xtask command and the CI
-  step fail when the count is zero.
+  `0 passed`, which is indistinguishable from a passing suite, so the step fails when the count is
+  zero.
 
 Three versions must agree or the runner refuses to start: the locked `wasm-bindgen`,
 `wasm-bindgen-test` (pinned `=0.3.77` in flui-foundation — the unpinned `"0.3"` resolves to 0.3.78
 and would bump the workspace lock as a side effect of adding a dev-dependency), and
-`wasm-bindgen-cli`, whose version xtask and the CI step both read out of `Cargo.lock`
-(`cargo xtask locked-version wasm-bindgen`).
+`wasm-bindgen-cli`, whose version is the one `wasm-bindgen` the lock resolves: the step reads it
+from `cargo metadata`, `cargo xtask doctor full` compares the installed one with it, and both fail
+on a lock with two. Locally, the step's loop is one line per test target:
+`cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32`.
 
 Discovery rather than a crate list is deliberate: a list is how the next crate to add wasm tests
 gets silently never run — the same defect one level up. Its guards exist for that reason and each
-covers a distinct way this goes inert while looking like success: a glob matching nothing never runs
-the loop body; a runner finding no tests still exits 0 printing `0 passed`; and an aggregate-only
-count lets *exactly the crate someone just added* be the silent one, so the non-zero check is **per
-crate**. (Per crate, not per target — a crate legitimately has only one kind, and a zero there is
-expected.)
+covers a distinct way this goes inert while looking like success: a query matching nothing never runs
+the loop body; a runner finding no tests still exits 0 printing `0 passed`; and an aggregate count
+lets *exactly the target someone just added* be the silent one, so the non-zero check is **per
+target**. The one exception is a crate's lib target beside its `wasm32` target: when the wasm
+tests live in `tests/wasm32.rs`, the lib target legitimately holds none.
 
 **A `#[test]` function does not run on wasm32.** It compiles, and `wasm-bindgen-test-runner` reports
 `no tests to run!`, because only `#[wasm_bindgen_test]` registers with the harness. That attribute is
@@ -113,10 +119,10 @@ next to its definition, the `default_pools_started` probe it reads exists only u
 the `testing` feature, and the one execution API an embedder reaches through `flui-app`
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
-`flui-native`'s web backend needs a DOM, which node does not have, so `wasm-test` leaves it
-alone. Its `web_browser` target runs in headless Chrome instead, through
-`wasm-bindgen-test-runner` with a ChromeDriver matching the installed Chrome; CI's `wasm-check`
-job runs it after `wasm-test`. Locally:
+`flui-native`'s web backend needs a DOM, which node does not have: the test step runs its lib and
+`wasm32` targets on node, and its `web_browser` target, which no discovery selects, is a row the
+same step names, run in headless Chrome through `wasm-bindgen-test-runner` with a ChromeDriver
+matching the installed Chrome. Locally:
 `CHROMEDRIVER=<path> cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked`.
 
 ## Quality Gates
@@ -267,7 +273,13 @@ windows the cases before it opened: a dropped platform leaves its windows open
 (`no_case_leaves_a_window_shown` in `drag::windows::tests`). This holds for `cargo heli nextest run`,
 `cargo nextest run` and every `cargo xtask` task that runs nextest; plain `cargo test` starts its tests on the caller's desktop.
 `windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` fails when a test nextest
-starts is not there.
+starts is not there. The live tests of `flui-driver`'s Windows lane (`windows_desktop::`), which
+open windows and may send input, do not take plain `cargo test`'s start on the caller's desktop:
+their setup (`private_desktop::require`) fails a test whose desktop is not the run's own
+`flui-test-<run id>` (the name the wrapper gives it; `Default`, a locked workstation's included, is
+refused) unless `FLUI_TEST_VISIBLE_DESKTOP=1` is set, so `cargo test` and cargo-gamma stop before
+the first window. cargo-gamma runs libtest, where those tests would panic and redden its
+baseline, so `gamma.toml`'s `cargo-test-args` skips them (`--skip windows_desktop::`).
 
 `FLUI_TEST_VISIBLE_DESKTOP=1` starts the tests on the caller's desktop instead, to watch them.
 
@@ -643,40 +655,61 @@ conversation of 2 KiB comes nowhere near.
 
 A target is an example of the crate it tests, `crates/<crate>/fuzz/<name>.rs`,
 so it builds from the workspace's lockfile, with the versions an application
-ships. `cargo xtask fuzz` builds it under `--cfg fuzzing` with coverage
-counters and AddressSanitizer and runs it; the manifest names `libfuzzer-sys`
-under `cfg(fuzzing)`, so no other build compiles it. That flag reaches every
-crate of the build, and `png` and `fdeflate` skip their checksums under it,
-so that a mutated image gets past its CRC to the decoder behind it.
+ships. `.cargo/fuzz.toml` holds what a fuzz build adds: `--cfg fuzzing`,
+coverage counters and AddressSanitizer, for x86_64 Linux. The manifest names
+`libfuzzer-sys` under `cfg(fuzzing)`, so no other build compiles it. That
+flag reaches every crate of the build, and `png` and `fdeflate` skip their
+checksums under it, so that a mutated image gets past its CRC to the decoder
+behind it. Each target's package, seeds, longest input and limits are its row
+in `fuzz.yml`'s matrix; the run and the replay below take them from there:
 
 ```bash
-cargo xtask fuzz                          # every target, 60 seconds each
-cargo xtask fuzz image_decode --seconds 600
-cargo xtask fuzz agent_wire --replay target/fuzz/agent_wire/findings/crash-<hash>
+# a run: <package>, <seeds>, <max_len> and <limits> are the target's row
+mkdir -p target/fuzz/<target>/corpus target/fuzz/<target>/findings
+cargo +nightly --config .cargo/fuzz.toml run --locked --target x86_64-unknown-linux-gnu \
+  -p <package> --example fuzz_<target> -- \
+  target/fuzz/<target>/corpus <seeds> \
+  -artifact_prefix=target/fuzz/<target>/findings/ -max_total_time=60 \
+  -max_len=<max_len> <limits>
+# a replay: the finding's file in place of the corpus and seeds, with the row's limits
+cargo +nightly --config .cargo/fuzz.toml run --locked --target x86_64-unknown-linux-gnu \
+  -p <package> --example fuzz_<target> -- target/fuzz/<target>/findings/crash-<hash> <limits>
 ```
 
-It needs the nightly toolchain on x86_64 Linux. The inputs libFuzzer keeps
-are in `target/fuzz/<name>/corpus/`; the input that ended a run is in
-`target/fuzz/<name>/findings/`, named by what it did (`crash-`, `timeout-`,
-`oom-`, `leak-`). `--replay` runs one input in the build that found it. The
-example built without the flag reads the files named on its command line
-with the shipped decoders and no sanitizer: it shows what an application
-does with an input, and it refuses a PNG whose checksum the fuzzer never
-repaired, so it does not stand in for the replay.
+It needs the nightly toolchain on x86_64 Linux; on another host cargo fails
+to build the sanitizer target. A `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` in
+the environment replaces the file's flags, and any `target.<triple>` or
+`target.<cfg>` rustflags another config file sets (your `~/.cargo/config.toml`,
+a linker flag), or `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS`, is
+joined to them, so a replay leaves them out; `cargo +nightly -Zunstable-options
+--config .cargo/fuzz.toml config get target` shows what it builds with. The night's nightly is in its log: the toolchain step prints `rustc
++nightly --version --verbose` with its commit hash. rustup's
+`nightly-<date>` is the date it was published, usually the day after that
+commit date, so a finding that depends on codegen replays with the
+`nightly-<date>` whose `rustc --version` names the same hash. libFuzzer keeps
+the inputs that reached new code in the corpus
+directory and writes the input that ended a run to `findings/`, named by what
+it did (`crash-`, `timeout-`, `oom-`, `leak-`). It reads a directory as a
+corpus and fuzzes it without end, so a replay names a file. The example built
+without the file reads the files named on its command line with the shipped
+decoders and no sanitizer: it shows what an application does with an input,
+and it refuses a PNG whose checksum the fuzzer never repaired, so it does not
+stand in for the replay.
 
 `fuzz.yml` runs each target as a job of its own for ten minutes every night
 against main, carries the corpus from one night to the next, uploads what a
 failing run found as `fuzz-findings-<target>` and keeps the "Fuzzing failed
-on main" issue open while a run is red. No pull request runs it (ADR-0376): a
-change to a target, its seeds or what it is built from runs `cargo xtask fuzz
-<target>` locally, and the night's run sees every other change.
+on main" issue open while a run is red. No pull request runs it (ADR-0376): a change to a target,
+its seeds or what it is built from runs the workflow on its branch (`gh
+workflow run Fuzz --ref <branch>`) at the head that merges, and the night's
+run sees every other change.
 
 A finding is fixed with a named case in the owning crate's tests that holds
 the input (as `a_header_past_the_limit_is_refused_before_decoding` holds its
 header), not with the raw file; a PNG's case restates the checksums the
 fuzzer left wrong, or the test's decoder refuses it before the defect. A new
-parser of foreign bytes adds its target as a row of `TARGETS` in
-`tools/xtask/src/tasks/fuzz.rs`.
+parser of foreign bytes adds its target as an example of its crate and a row
+of `fuzz.yml`'s matrix.
 
 ## Benchmarks
 
@@ -747,30 +780,36 @@ record also carries what the measured frames asked of the heap on the test
 thread, counted by the target's `#[global_allocator]`: `allocations` (a
 `realloc` included), `reallocations` (buffers that outgrew their capacity) and
 `allocated_bytes`.
-`cargo xtask perf` runs that target with `FLUI_PERF_OUT` set and compares every
-count with its scenario's file under `crates/flui-widgets/perf/baseline/`:
+With `FLUI_PERF_BASELINE` set, each scenario holds every count to its file
+under `crates/flui-widgets/perf/baseline/` before it asserts its budget (the
+target's `tests/perf/baseline.rs`):
 
 ```bash
-cargo nextest run -p flui-widgets --test perf   # the budget assertions alone
-cargo xtask perf                                # advisory: prints differences, exits 0
-cargo xtask perf --check                        # a failing finding fails (see below)
-cargo xtask perf --bless                        # rewrite every scenario file from this run
-cargo xtask perf --instructions --check         # each perf_scaling_ scenario under callgrind (needs valgrind)
-cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `cargo test -p xtask`)
+cargo nextest run -p flui-widgets --test perf                          # the budget assertions alone
+FLUI_PERF_BASELINE=check cargo nextest run -p flui-widgets --test perf -E 'test(/^perf_/)'   # and every count against its file
+FLUI_PERF_BASELINE=bless cargo nextest run --no-fail-fast -p flui-widgets --test perf -E 'test(/^perf_/)'   # rewrite the file of each scenario that passed
 ```
 
 The comparison is exact, and how a difference counts depends on the counter.
 A work counter (elements rebuilt, nodes laid out or painted, layers, frames) has
 to match its baseline: a rise is a regression, and a fall is work that went
-missing until `--bless` records it as meant, in the PR that changed it. A cost
+missing until a bless records it as meant, in the PR that changed it. A cost
 counter (a name with `alloc` or `bytes` in it) only has to stay at or under its
-baseline: a fall prints as an improvement and passes, so a PR that makes a
-scenario cheaper does not touch the baseline. After it merges, `cargo xtask
-perf --bless` on a fresh `main`, committed alone, ratchets the files down, and
-any thread may do it; from then on a rise back to the old value fails. Each
-scenario has its own file, so changes to different scenarios never conflict.
-The run writes the merged
-counts to `<target>/perf/current.toml`. A count is a function of the tree and
+baseline: a fall passes, so a PR that makes a scenario cheaper does not touch
+the baseline. After it merges, a bless on a fresh `main`, committed alone,
+ratchets the files down, and any thread may do it; from then on a rise back to
+the old value fails. A counter on one side only fails. A bless writes a
+scenario's file only when its body runs to its end, so a broken budget blesses
+nothing; a panic while the runtime the body mounted drops comes after the write.
+Each scenario has its own file, so changes to different scenarios never
+conflict, and `every_baseline_file_is_a_scenario` fails on a file whose name is
+not in the module's list of scenarios. With a mode set and `FLUI_PERF_OUT`
+naming a directory, each scenario writes its counts there; the `perf-gates`
+job then fails on a baseline file no scenario wrote a record for, and prints
+each record that moved, which is where a cost that fell shows. The files are
+blessed from `-p flui-widgets` with its default features: a run over the
+workspace unifies other features into it, which move the heap counters. A
+count is a function of the tree and
 the change, so it must not depend on a random seed: a per-frame table keyed by
 ids is slot-indexed (`flui_foundation::SlotIndex`, `SlotSet`) or hashed with a
 fixed hasher, never `std`'s `RandomState`, whose tombstones decide when a table
@@ -778,13 +817,13 @@ reallocates.
 
 A `perf_scaling_` scenario runs one change on a `small` and a `large` tree
 (`FLUI_PERF_SIZE` selects one) and asserts equal heap counts on both.
-`--instructions` runs each size alone under `valgrind --tool=callgrind`,
+The `perf-gates` job runs each size alone under `valgrind --tool=callgrind`,
 counting only inside the target's `perf_measured`, and fails when the large
 tree costs more than 5% over the small one: a frame that clears a table the
 mount grew or walks the whole tree for what a few nodes report is caught there,
 while every counter of its work stays put. The budget assertions run with
-flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
-`perf --instructions --check` in the `full` lane, which main runs.
+flui-widgets' suite on every PR; `perf-gates` runs the check against the
+baseline and the callgrind step in the `full` lane, which main runs.
 
 The perf targets of flui-widgets and flui-material also hold the heap level:
 `flui_testing::heap::assert_rounds_plateau`
@@ -813,37 +852,26 @@ adds its rounds there, one settled and one dropped in flight. A leak a round
 finds and its change does not fix is held by a `#[should_panic]` test of its
 own, named in [`gaps.md`](gaps.md).
 
-`perf --size` measures what an application costs before it does anything,
-against `perf/size.toml`: the packages of the facade's default graph on Linux,
-Windows, macOS, Android and wasm32 (`cargo tree -p flui`, each name and version
-once), and the release builds of projects `flui create --local` generates, with
-the release profile the templates write: a counter for the host and for wasm32,
-and the host of a `--hot-reload` project, which links the logic crate and
-installs no reload hook. A package count has to stay at or under its baseline,
-so a change that adds a package to an application's default graph runs
-`perf --size --bless` in the same PR and says why. A binary grows with every
-change to the code it links, so a size fails only past 2% over its baseline,
-and `--bless` on a fresh `main` moves it. The baseline is Linux x86_64's. The
-`size` job runs the builds on `main` (ADR-0375); a change to a manifest, `Cargo.lock`,
-the toolchain, `.cargo/`, the `flui create` templates or the baseline runs
-`cargo xtask perf --size --check` before its PR. That 2% is cumulative, so on `main` each push also compares its
-sizes with the commit before it (`--previous`, from a cache entry each push
-saves under its commit with `--record`): one push may grow a binary by 0.5%,
-and a push past that fails with both commits and the delta, for its author to
-make the binary smaller or justify the growth in a follow-up pull request. A
-push that restates the baseline says in its pull request why each counter
-it moves grew, so a restated counter is not compared. A push whose parent has
-no measurement (its run was cancelled or skipped, or a force push replaced it)
-is compared with the baseline alone, with a warning on the run, and a push
-that lands several merges at once compares them as one. The job summary lists
-each size at the baseline, the previous commit and this one, which a later
-`--bless` cites to say whose merges it restates.
-
-```bash
-cargo xtask perf --size --graph --check   # the package counts alone, no build (the `deps` job, every PR)
-cargo xtask perf --size --check           # counts and the three release builds (the `size` job)
-cargo xtask perf --size --bless           # rewrite perf/size.toml from this run
-```
+`perf/size.toml` holds what an application costs before it does anything, and
+two CI jobs hold it on Linux x86_64. The `deps` job, on every PR, counts the
+packages of the facade's default graph on Linux, Windows, macOS, Android and
+wasm32 (`cargo tree -p flui`, normal edges, each name and version once). A
+count is a function of `Cargo.lock` and the manifests, so it has to equal its
+line: a change that adds a package to an application's default graph raises
+that line in the same PR and says why, and one that removes a package lowers
+it. The
+`size` job, on `main` (ADR-0375), builds projects `flui create --local`
+generates in release, with the release profile the templates write: a counter
+for the host and for wasm32, and the host of a `--hot-reload` project, which
+links the logic crate and installs no reload hook. A binary grows with every
+change to the code it links, so a size fails only past 2% over its line, and
+warns past 2% under it so the line follows a fall; the job's summary lists
+each size beside its line, and a line is moved by hand from it, with the
+reason in the PR. A change that can move a size runs the `full` lane on its
+branch (`gh workflow run CI --ref <branch>`) before it merges: a manifest,
+`Cargo.lock`, the toolchain or the `flui create` templates. The checkout's `.cargo/` is not among them: the projects are
+generated outside the checkout, so it does not apply to their builds. Other
+code moves a size too, inside the 2%, which is what the tolerance is for.
 
 ## Linting
 
@@ -1107,7 +1135,7 @@ role rather than by node index.
 ### Text fields and IME
 
 `flui_testing::text_store_kit` is the conformance kit for any widget that
-implements `flui_platform::text_store::TextStore` (ADR-0090): write a
+implements `flui_platform::text::store::TextStore` (ADR-0090): write a
 `TextStoreFixture` for it and call `text_store_kit::assert_conforms(&mut fixture,
 KIT_VERSION)`. The kit holds frame transactions itself, through the
 `CommitGate` it installs with `TextStore::set_commit_gate`; the fixture only
@@ -1260,9 +1288,10 @@ cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown -
 cargo clippy -p flui-native --all-targets --locked --target wasm32-unknown-unknown -- -D warnings  # same job: flui-native's wasm32-only test targets
 cargo check -p flui-hot-reload --locked --target wasm32-unknown-unknown --all-features             # same job
 cargo clippy -p flui --test wasm_consumer --locked --target wasm32-unknown-unknown -- -D warnings   # same job: an application on wasm32 (ADR-0086)
-cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
-cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
-cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
+cargo build -p flui-web-demo -p flui-painting-demo --locked --target wasm32-unknown-unknown       # same job: links the demos; the job then runs wasm-bindgen over each and lists its import modules with node
+cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32         # same job: one crate's line of the step that EXECUTES wasm (each target on its own, flui-native's `web_browser` among them)
+cargo clippy --workspace --all-targets --locked --target aarch64-linux-android -- -D warnings  # cross-typecheck job, for each shipped native triple (type-check only: no link, no tests)
+cargo clippy --workspace --all-targets --all-features --locked --target aarch64-linux-android -- -D warnings  # same job: every feature; off Windows the Windows leg is `cargo xwin clippy`
 cargo deny --workspace --locked check bans licenses sources   # deps job: cargo-deny bans / licenses / sources
 cargo deny --workspace --locked check advisories              # same job: RustSec advisories, blocking on main, reported on a pull request; advisories.yml runs it daily on main
 cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native -E 'not (group(nested-cargo) | group(trybuild))'   # test job; ci.yml has its flui-native, Wayland, GPU and link steps
@@ -1274,9 +1303,9 @@ cargo +nightly miri test -p flui-rendering --lib storage::    # arena; ci.yml's 
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # miri job; NARROW — every
                                                               # unit test under that module, including PipelineCell
                                                               # checkout, an owner-local run_frame traversal, a
-                                                              # reentrant-layout walk, and two real-NodePtr walks
-                                                              # driving layout_dirty_root through every reborrow phase
-                                                              # of layout_subtree_borrowed_impl. Deeper sliver walks
+                                                              # reentrant-layout walk, and owner tests driving
+                                                              # layout_dirty_root through the node entries of
+                                                              # layout_subtree_borrowed_impl. Deeper sliver walks
                                                               # and intrinsics queries are not interpreted.
 ```
 
@@ -1306,9 +1335,10 @@ Each CI run takes one of three lanes. The `plan` job picks it with a shell step
   `flui-native`'s suite runs only on Linux and no other backend is compiled;
   main type-checks the Windows, macOS, iOS and Android backends and the
   nightly platform runs reach them after the merge, so a change to one of
-  them needs `cargo xtask cross-typecheck --target <triple>` by hand before
-  it, and a Windows or macOS backend change `cargo nextest run -p flui-native`
-  on that host.
+  them needs the `cross-typecheck` job's two `cargo clippy` lines for its
+  triple by hand before it, or a run of the job on the branch
+  (`gh workflow run CI --ref <branch>`), and a Windows or macOS backend change
+  `cargo nextest run -p flui-native` on that host.
 - **Full lane**: main, the merge queue and manual runs add the remaining
   Linux checks. Labels do not change the lane. `ci.yml` has no scheduled
   run: nothing it checks changes without a commit, except the RustSec
@@ -1355,12 +1385,14 @@ heavier ones need installed. One row per job:
 | `test-trybuild` | `cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --features flui/material,flui/cupertino,flui/native -E 'group(trybuild)'`, then `cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast` | compile-fail suites in three shards (`facade`, `core`, `view`) on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; a shard adds its `--test` list and its binaries' `binary_id` filter from the job's matrix, so it builds only its own test targets with the whole run's features; locally the command above runs every suite |
 | `test-features` | the job's `cargo nextest run` lines | — |
 | `doc` | `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --locked --document-private-items --features <every package's testing feature>` | the job reads the feature list from `cargo metadata`; its step shows how |
-| `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
+| `perf-gates` | `FLUI_PERF_BASELINE=check FLUI_PERF_OUT=<dir> cargo nextest run --locked -p flui-widgets --test perf --no-fail-fast -E 'test(/^perf_/)'`, then the job's comparison of `<dir>` with `crates/flui-widgets/perf/baseline/` and its callgrind loop over the `perf_scaling_` scenarios | main only; the callgrind step needs valgrind (Linux) |
+| `size` | the job's step: `flui create --local` twice, three `cargo build --release` runs and their binaries' bytes against `perf/size.toml` | main only, CI only: three cold release builds on Linux x86_64, the baseline's host |
+| `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories`, then for each triple `cargo tree --locked --quiet --edges normal --prefix none --package flui --target <triple> \| awk 'NF >= 2 { print $1, $2 }' \| LC_ALL=C sort -u \| wc -l` against `perf/size.toml` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |
 | `feature-matrix` | `cargo hack clippy --workspace --partition k/5 --locked --each-feature --keep-going -- -D warnings`, then with `--tests --benches --examples`; the `combinations` leg runs `cargo clippy -p flui --locked --all-targets <combination> -- -D warnings` for each combination ci.yml lists | locally, `-p <crate>` in place of `--workspace --partition k/5` lints the crates a change touched |
-| `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, then `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
-| `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>`, then the same command with `--all-features` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
+| `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, its `cargo build` of the two web demos, `wasm-bindgen` over each and node's list of their import modules, then `cargo test --target wasm32-unknown-unknown` for each crate with a wasm32 `wasm-bindgen-test` dev-dependency | the tests need the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it), and a crate whose tests are `run_in_browser` a ChromeDriver (`CHROMEDRIVER=<path>`) |
+| `cross-typecheck` | `cargo clippy --workspace --all-targets --locked --target <triple> -- -D warnings`, then the same command with `--all-features`, for each of `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-linux-android` and `aarch64-apple-ios` | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require; a shell step over the needed jobs' results |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main, and closes it after the next green one (`.github/actions/tracking-issue`, which `advisories.yml` shares) |
 
@@ -1419,39 +1451,36 @@ rust-cache keeps their dependency artifacts. `weekly.yml` saves no cache: an
 entry unused for seven days is dropped before the next weekly run would
 restore it.
 
-`cross-typecheck` discovers native cfg predicates in the module trees of every
-workspace Cargo target and in target-specific dependency declarations. It
-selects packages directly with `--all-targets`, including their tests,
-examples and benches; indirect dependency compilation does not cover those
-targets. Required target features and a declared `testing` feature are
-enabled together. `--all-features` additionally compiles every feature of the
-selected packages. CI runs both configurations: all-features alone can hide
-disabled-feature branches. This is not an exhaustive optional-feature matrix or a
-macro expansion: generated `include!` output needs an explicit target-specific
-manifest dependency to participate in discovery.
+`cross-typecheck` lints every workspace package with `--all-targets`, its
+tests, examples and benches included, for each shipped native triple: once
+with default features, as the `clippy` job does on Linux, then with
+`--all-features`, which reaches the `testing` code and the targets behind
+`required-features` (plain `--all-targets` skips those silently). Both runs
+are needed: all-features alone hides a disabled-feature branch. This is not an
+exhaustive optional-feature matrix: a configuration with some optional
+features on and others off is the `feature-matrix` job's, on Linux only.
 
 On a Windows host, Windows checks use the installed MSVC tools. Other hosts
-use `cargo-xwin` (CI pins 0.23.1) with clang/LLVM and its MSVC SDK/CRT
-provisioning. On a macOS host, Apple checks use Xcode; macOS checks elsewhere
-use `cargo-zigbuild clippy` (validated locally with 0.23.4) and Zig (0.17.0)
-for the required-target configuration. iOS needs a
+use `cargo xwin clippy` (CI pins cargo-xwin 0.23.1) with clang/LLVM and its
+MSVC SDK/CRT provisioning. On a macOS host, Apple checks use Xcode. Off macOS,
+`cargo-zigbuild clippy` (the binary's own subcommand; `doctor full` names the
+cargo-zigbuild and Zig versions) supplies Darwin libc headers for a
+default-feature macOS run, which CI does not run that way. iOS needs a
 genuine Apple SDK: generic Darwin libc headers are insufficient for native
 logging dependencies. Android needs the NDK's target compiler and archiver,
 for example `CC_aarch64_linux_android` set to its clang wrapper for the Android floor in `platform-support.toml` and
-`AR_aarch64_linux_android` to `llvm-ar`. CI uses its bundled NDK. Explicit
-target, `TARGET_CC`/`TARGET_AR`, and global compiler settings are preserved.
+`AR_aarch64_linux_android` to `llvm-ar`. CI uses its bundled NDK.
 `doctor full` checks that the selected Android compiler can parse the NDK's
 API-level header for that floor or later and that the archiver runs. A
 host compiler's successful version output alone does not establish NDK support.
 
 The macOS `flui-log/apple-unified-logging` configuration also needs genuine
 Apple SDK logging headers. All-features Apple checks therefore use Xcode SDK
-hosts in CI; generic Zig libc headers do not validate this configuration.
-Local all-features macOS checks are explicitly skipped on non-macOS hosts.
+hosts in CI; generic Zig libc headers do not validate this configuration, so
+an all-features macOS run off macOS is no evidence for it.
 
-`cargo xtask cross-typecheck` runs the required-target configuration for native
-targets. Optional native coverage requires the explicit `--all-features`
-command or CI; a local default check is not evidence for those paths.
+A local run with default features is no evidence for the optional native
+paths: those need the `--all-features` run, or CI.
 
 ## See Also
 

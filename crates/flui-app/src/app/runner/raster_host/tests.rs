@@ -1162,6 +1162,186 @@ fn window_frame(slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::
     presented == Some(true)
 }
 
+/// A window that draws a 10-px texture at [`AT`] over a background through a
+/// slot of an inline host over scripted slots, its first frames run, and
+/// the texture's registration.
+fn window_with_a_texture() -> (
+    crate::app::ui_runtime::UiRuntime,
+    RasterSlot,
+    ScriptedSlots,
+    flui_layer::TextureRegistration,
+) {
+    use flui_widgets::{Align, ColoredBox, Padding, SizedBox, Texture};
+
+    let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+    let presentation = ui_runtime.active_presentation_for_test();
+    let registry = ui_runtime
+        .texture_registry(presentation)
+        .expect("the window's registry");
+    let texture = registry.register().expect("a texture id");
+    ui_runtime
+        .attach_root_widget(
+            &ColoredBox::new(flui_painting::styling::Color::BLUE).child(
+                Align::new(flui_painting::Alignment::TOP_LEFT).child(
+                    Padding::only(AT.dx, AT.dy, 0.0, 0.0).child(
+                        SizedBox::new(TEN.width, TEN.height).child(Texture::new(texture.id())),
+                    ),
+                ),
+            ),
+        )
+        .expect("the root attaches");
+    let at = PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: presentation,
+    };
+    let slots = ScriptedSlots::new();
+    let shared = SharedRasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Inline,
+    );
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(1)),
+                None,
+                at,
+                &crate::app::AppConfig::default(),
+                Some(registry),
+                None,
+            )
+        })
+        .expect("the host is idle")
+        .expect("the scripted backend attaches any window");
+    let mut slot = RasterSlot {
+        host: shared,
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+        renderer_dead: false,
+    };
+    for _ in 0..3 {
+        let _ = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+    }
+    assert!(!renders(&slots).is_empty(), "the first frame draws");
+    (ui_runtime, slot, slots, texture)
+}
+
+/// A texture frame fed to a window whose tree changes nothing reaches its
+/// slot as the damage of the texture's user alone: the UI runtime publishes
+/// the version it holds with no scene damage (ADR-0304 §8), and the host
+/// takes the frame from the window's registry with it and adds the user's
+/// footprint (§9). The frame after asks nothing of the slot.
+///
+/// Red-check: let a frame that painted nothing publish nothing whatever the
+/// registry holds (`draw_prepared_frame_for_presentation` in flui-runtime),
+/// and the texture frame never reaches the slot.
+#[test]
+fn a_texture_frame_reaches_the_slot_as_its_users_damage() {
+    let (mut ui_runtime, mut slot, slots, texture) = window_with_a_texture();
+    let mut frame = |ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
+        slot.pump(ui_runtime, web_time::Instant::now(), None)
+    };
+    let drawn = renders(&slots).len();
+
+    texture.submit_frame(pixel());
+    assert!(frame(&mut ui_runtime), "the texture frame presents");
+    let _ = frame(&mut ui_runtime);
+    let renders = renders(&slots);
+    assert_eq!(
+        renders.len(),
+        drawn + 1,
+        "one frame for the texture: {renders:?}"
+    );
+    assert_eq!(
+        region_rects(renders[drawn]),
+        vec![covering_on_surface(AT.dx, AT.dy, TEN.width, TEN.height)],
+        "the texture's user alone is redrawn"
+    );
+}
+
+/// A window whose version the host refused costs no frame per texture frame
+/// (ADR-0334 §4), whether its size is one the device refused or its render
+/// panicked: the refused version is not drawn again, the frames a producer
+/// feeds wait in the registry, no frame stays owed for them, and the
+/// window's next change presents and takes the newest.
+///
+/// Red-check: drop the refusal the settlement records (`SceneSlot::refuse`
+/// in flui-runtime), and each texture frame republishes the refused version
+/// (a render after the panic; at the refused size, frame work left owed,
+/// which the runner's gate spins on).
+#[test]
+fn a_refused_window_costs_no_texture_frame() {
+    #[derive(Debug, Clone, Copy)]
+    enum Refusal {
+        SizeRefused,
+        RenderPanicked,
+    }
+    for refusal in [Refusal::SizeRefused, Refusal::RenderPanicked] {
+        let (mut ui_runtime, mut slot, slots, texture) = window_with_a_texture();
+        let refused = match refusal {
+            Refusal::SizeRefused => {
+                let over = (800_u32, 600_u32);
+                slots.script_resize(ScriptedAnswer::Fail(EngineError::InvalidTargetSize {
+                    width: over.0,
+                    height: over.1,
+                }));
+                // The window resizes past the device's limit, which asks for a frame.
+                slot.size = over;
+                ui_runtime.mark_primary_needs_full_repaint();
+                assert!(
+                    !slot.pump(&mut ui_runtime, web_time::Instant::now(), None),
+                    "{refusal:?}: the size is refused"
+                );
+                held_version(&ui_runtime)
+            }
+            Refusal::RenderPanicked => {
+                slots.script_render(ScriptedAnswer::Panic);
+                texture.submit_frame(pixel());
+                let mut caught = flui_foundation::panic::FirstPanic::new();
+                let presented =
+                    caught.contain(|| slot.pump(&mut ui_runtime, web_time::Instant::now(), None));
+                if let Some(payload) = caught.into_payload() {
+                    flui_foundation::panic::discard_payload(payload);
+                }
+                assert_ne!(presented, Some(true), "{refusal:?}: the render panicked");
+                held_version(&ui_runtime)
+            }
+        };
+        let drawn = renders(&slots).len();
+        for _ in 0..3 {
+            texture.submit_frame(pixel());
+            let _ = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+            assert!(
+                !ui_runtime.has_pending_work(),
+                "{refusal:?}: a texture frame leaves no frame owed"
+            );
+        }
+        assert_eq!(
+            renders(&slots).len(),
+            drawn,
+            "{refusal:?}: the refused version is not drawn again"
+        );
+        assert_eq!(held_version(&ui_runtime), refused, "{refusal:?}");
+        // The window's next change asks for a frame: a size the device
+        // takes, or a rebuild of the tree.
+        slot.size = SIZE;
+        ui_runtime.mark_primary_needs_full_repaint();
+        assert!(
+            slot.pump(&mut ui_runtime, web_time::Instant::now(), None),
+            "{refusal:?}: the window's next change presents"
+        );
+        assert_ne!(held_version(&ui_runtime), refused, "{refusal:?}");
+        assert!(
+            ui_runtime
+                .texture_registry(ui_runtime.active_presentation_for_test())
+                .expect("the window's registry")
+                .take_updates()
+                .is_empty(),
+            "{refusal:?}: and takes the waiting texture frame"
+        );
+    }
+}
+
 /// A retry whose probe answers no device, or whose device's adoption
 /// panics, tells the application the device is given up again, and the
 /// window's next frames probe nothing until the application asks once
@@ -1972,12 +2152,14 @@ fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
 /// deadline is kept, not refused: the executor is dead, but the thread may
 /// still hold the window's surface, so the native window outlives it as a
 /// dead executor's windows do. Its frames draw nothing and commit
-/// (`NoPresent`), so its UI runtime keeps taking input.
+/// (`NoPresent`), so its UI runtime keeps taking input, and take its
+/// texture frames into the slot's carry, so none stays owed to a frame.
 ///
 /// Red-check: decide from the slot's record after the deadline and the
 /// window is refused (`did not attach the slot`) while its surface is in
 /// the thread's hands; leave an unanswered attach out of `try_with`'s
-/// `wedged` and the window is not kept past its close.
+/// `wedged` and the window is not kept past its close; leave the texture
+/// frames in the registry at the death and one stays owed.
 #[test]
 fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     let (shared, slots, wakes) = threaded_host();
@@ -1991,6 +2173,8 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         presentation_id: PresentationId::new(2),
     };
     let late = Arc::new(FakeWindow::new(2));
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
     let woken = wakes.load(std::sync::atomic::Ordering::SeqCst);
     let attached = shared
         .try_with(|host| {
@@ -1999,7 +2183,7 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
                 None,
                 other,
                 &crate::app::AppConfig::default(),
-                None,
+                Some(registry.clone()),
                 None,
             )
         })
@@ -2015,6 +2199,7 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         "the window the thread did not attach is kept past its close"
     );
     let mut other_scene = TestScene::new(AT);
+    texture.submit_frame(pixel());
     let publication = other_scene.publication();
     let epoch = other_scene.next_epoch();
     let verdict = shared
@@ -2023,6 +2208,10 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     assert!(
         verdict == SubmitVerdict::NoPresent,
         "a dead executor draws nothing and the frame commits: {verdict:?}"
+    );
+    assert!(
+        !registry.has_updates_for(|_| true),
+        "the dead executor's window takes its texture frame into its carry, so none stays owed"
     );
     render.release();
 }

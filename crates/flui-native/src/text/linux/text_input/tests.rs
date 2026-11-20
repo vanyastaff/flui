@@ -4,8 +4,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::Bounds;
-use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{
+use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::store::{
     Capitalization, CommitGate, Composition, CompositionEnd, Correction, NumberFormat, Selection,
     TextInputOptions, TextInputPurpose, TextStore, TextStoreHost, TextStoreStatus,
 };
@@ -478,7 +478,7 @@ fn the_capitalization_and_correction_a_field_asks_for_are_its_hints() {
     // Nor is a one-time code shown in clear, which is sensitive data.
     assert_eq!(
         hint(
-            asked.autofill(flui_platform::text_store::Autofill::OneTimeCode),
+            asked.autofill(flui_platform::text::store::Autofill::OneTimeCode),
             false
         ),
         ContentType::HINT_SENSITIVE_DATA
@@ -793,11 +793,11 @@ impl TextStore for MovesFocusOnStatus {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, flui_platform::text_store::TextStoreError>
+    ) -> Result<flui_platform::text::store::PressTarget, flui_platform::text::store::TextStoreError>
     {
         self.inner.press_target_at(point)
     }
-    fn status(&self) -> flui_platform::text_store::TextStoreStatus {
+    fn status(&self) -> flui_platform::text::store::TextStoreStatus {
         let on_status = self.on_status.borrow_mut().take();
         if let Some(on_status) = on_status {
             on_status();
@@ -807,9 +807,9 @@ impl TextStore for MovesFocusOnStatus {
 
     fn request_lock(
         &self,
-        grant: flui_platform::text_store::LockGrant,
-        timing: flui_platform::text_store::LockTiming,
-    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+        grant: flui_platform::text::store::LockGrant,
+        timing: flui_platform::text::store::LockTiming,
+    ) -> Result<flui_platform::text::store::LockOutcome, flui_platform::text::store::TextStoreError>
     {
         self.inner.request_lock(grant, timing)
     }
@@ -822,7 +822,10 @@ impl TextStore for MovesFocusOnStatus {
         self.inner.set_commit_gate(gate);
     }
 
-    fn set_observer(&self, observer: Option<Rc<dyn flui_platform::text_store::TextStoreObserver>>) {
+    fn set_observer(
+        &self,
+        observer: Option<Rc<dyn flui_platform::text::store::TextStoreObserver>>,
+    ) {
         self.inner.set_observer(observer);
     }
 }

@@ -13,13 +13,13 @@ use flui_interaction::pointer::{
     EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget, SmartZoomDispatch,
     SmartZoomTarget,
 };
+use flui_interaction::{events::PointerEvent, pointer::HitTestBehavior};
 use flui_interaction::{
     gesture::{GestureRecognizer, RecognizerSet},
     pointer::{PointerDispatch, PointerTarget, PointerTargetHandler},
 };
 use flui_objects::RenderListener;
-use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
-use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
+use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     Child, EventContext, EventOutcome, IntoView, RenderObjectContext, RenderView, WriterSource,

@@ -1,10 +1,9 @@
-//! Sliver protocol for scrollable viewport layout.
-//!
-//! This module provides the SliverProtocol and its capability implementations:
-//! - [`SliverProtocol`]: Main protocol type for scrollable content
-//! - [`SliverLayout`]: Layout capability (SliverConstraints → SliverGeometry)
-//! - [`SliverHitTest`]: Hit test capability (MainAxisPosition →
-//!   SliverHitTestResult)
+//! Sliver protocol for scrollable viewport layout: [`SliverProtocol`]
+//! (`SliverConstraints` in, `SliverGeometry` out, hit-tested at a
+//! [`MainAxisPosition`]), its typed layout and hit-test contexts, the erased
+//! layout context the pipeline drives them through, and what a sliver parent
+//! learns about the children it builds and measures ([`ChildLayout`],
+//! [`BoxChildSize`]).
 
 use flui_foundation::Arity;
 use flui_foundation::RenderId;
@@ -14,10 +13,8 @@ use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::{ParentData, SliverParentData},
     protocol::{
-        capabilities::{
-            BoxChildSize, ChildLayout, HitTestCapability, HitTestContextApi, LayoutCapability,
-            LayoutContextApi,
-        },
+        box_protocol::BoxChildIntrinsicCallback,
+        context_api::{HitTestContextApi, LayoutContextApi},
         protocol::{Protocol, sealed},
     },
     storage::IntrinsicDimension,
@@ -38,8 +35,22 @@ pub struct SliverProtocol;
 impl sealed::Sealed for SliverProtocol {}
 
 impl Protocol for SliverProtocol {
-    type Layout = SliverLayout;
-    type HitTest = SliverHitTest;
+    type Constraints = SliverConstraints;
+    type Geometry = SliverGeometry;
+    type CacheKey = SliverConstraintsCacheKey;
+    type LayoutContext<'ctx, A: Arity, PD: ParentData + Default>
+        = RawSliverLayoutContext<'ctx, A, PD>
+    where
+        Self: 'ctx;
+
+    type Position = MainAxisPosition;
+    type HitResult = SliverHitTestResult;
+    type HitEntry = SliverHitTestEntry;
+    type HitTestContext<'ctx, A: Arity, PD: ParentData>
+        = RawSliverHitTestContext<'ctx, A, PD>
+    where
+        Self: 'ctx;
+
     type DefaultParentData = SliverParentData;
 
     // Protocol-layout-erasure — sanctioned erased layout-context boundary
@@ -49,8 +60,27 @@ impl Protocol for SliverProtocol {
     // queries, so invalidation never needs the cache-driven escalation.
     type LayoutCache = ();
 
+    // Out of line: a sliver record would size every slab slot.
+    type LayoutRecord = crate::storage::SliverLayoutRecord;
+
     fn name() -> &'static str {
         "sliver"
+    }
+
+    fn default_geometry() -> SliverGeometry {
+        SliverGeometry::ZERO
+    }
+
+    fn validate_constraints(constraints: &SliverConstraints) -> bool {
+        constraints.is_normalized()
+    }
+
+    fn cache_key(constraints: &SliverConstraints) -> Option<SliverConstraintsCacheKey> {
+        SliverConstraintsCacheKey::from_constraints(constraints)
+    }
+
+    fn normalize_constraints(constraints: SliverConstraints) -> SliverConstraints {
+        constraints.round_for_cache()
     }
 
     fn debug_assert_layout_output(constraints: &SliverConstraints, geometry: &SliverGeometry) {
@@ -102,16 +132,6 @@ impl Protocol for SliverProtocol {
         f(erased)
     }
 }
-
-// ============================================================================
-// SLIVER LAYOUT CAPABILITY
-// ============================================================================
-
-/// Layout capability for sliver (scrollable) layout.
-///
-/// Uses `SliverConstraints` for input and `SliverGeometry` for output.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SliverLayout;
 
 /// Cache key for SliverConstraints.
 ///
@@ -219,39 +239,76 @@ pub type BoxChildLayoutCallback<'a> =
 pub(crate) type ErasedBoxChildLayoutCallback<'a> =
     &'a dyn Fn(RenderId, BoxConstraints) -> crate::error::RenderResult<BoxChildSize>;
 
-/// Callback type for cross-protocol box child intrinsic queries driven by a
-/// Sliver parent.
-pub type BoxChildIntrinsicCallback<'a> =
-    &'a dyn Fn(RenderId, IntrinsicDimension, f64) -> crate::error::RenderResult<f64>;
+/// Outcome of an on-demand child-build request (the request strategy — see
+/// `request_child_build` on the sliver layout context).
+///
+/// - [`Scheduled`](ChildLayout::Scheduled) — the request was recorded and will
+///   be serviced by the element tree's child manager between layout passes,
+///   inside the same frame's layout↔build fixpoint. The consumer uses the
+///   item's *estimate* this pass; the real geometry arrives once the child is
+///   built and a later pass lays it out.
+/// - [`NoChild`](ChildLayout::NoChild) — the builder declined (no item at this
+///   index): the end of an unknown-length data source. The consumer stops.
+/// - [`Unwired`](ChildLayout::Unwired) — this context has no request sink (a
+///   leaf/test context, or a not-yet-wired path). **Distinct from `NoChild` on
+///   purpose**: a production consumer treats `Unwired` as a bug, because folding
+///   it into "end of data" is exactly how a wiring regression silently renders an
+///   empty list.
+///
+/// `#[non_exhaustive]` — the outcome taxonomy may yet gain a state (e.g. a
+/// partial/retry result); a contract whose reason to exist is "do not ossify"
+/// must not foreclose that with an exhaustive enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChildLayout {
+    /// Queued to be built before a later pass, inside the frame's fixpoint.
+    Scheduled,
+    /// The builder declined — no item at this index (end of the data source).
+    NoChild,
+    /// No request sink is wired in this context (a bug if reached in production).
+    Unwired,
+}
+
+/// The size a box child answered to its sliver parent, and whether the child
+/// itself produced it.
+///
+/// - [`Measured`](BoxChildSize::Measured): the child's own layout ran in this
+///   call, or a clean child answered with the geometry its last layout committed.
+///   A child laid out over a failed descendant is measured too: that is the size
+///   it paints at (ADR-0054 decision 2).
+/// - [`StandIn`](BoxChildSize::StandIn): the walk substituted this value for
+///   the child's own layout. The child's layout failed and the parent got
+///   `Size::ZERO`, the child is layout-poisoned and served its stand-in, or
+///   there is no child at that index. The value positions this pass's children
+///   and is not the child's size to keep.
+///
+/// A parent that keeps a child's size beyond the pass (a lazy list's measured
+/// extents) records only `Measured`. Exhaustive on purpose: a third case would
+/// change what every such parent may keep, so it has to fail to compile there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[must_use = "a stand-in is not a measurement; match on it or call size()"]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a child's size is measured or a stand-in, and a caller must tell them apart"
+)]
+pub enum BoxChildSize {
+    /// The child produced this size.
+    Measured(Size),
+    /// The walk substituted this size for the child's own layout.
+    StandIn(Size),
+}
+
+impl BoxChildSize {
+    /// The size to position the child with in this pass, whichever case it is.
+    pub fn size(self) -> Size {
+        match self {
+            Self::Measured(size) | Self::StandIn(size) => size,
+        }
+    }
+}
 
 /// Dense per-child geometry cache used by Proxy storage.
 type ProxySliverChildGeometryCache = Vec<Option<SliverGeometry>>;
-
-impl LayoutCapability for SliverLayout {
-    type Constraints = SliverConstraints;
-    type Geometry = SliverGeometry;
-    type CacheKey = SliverConstraintsCacheKey;
-    type Context<'ctx, A: Arity, P: ParentData + Default>
-        = RawSliverLayoutContext<'ctx, A, P>
-    where
-        Self: 'ctx;
-
-    fn default_geometry() -> Self::Geometry {
-        SliverGeometry::ZERO
-    }
-
-    fn validate_constraints(constraints: &Self::Constraints) -> bool {
-        constraints.is_normalized()
-    }
-
-    fn cache_key(constraints: &Self::Constraints) -> Option<Self::CacheKey> {
-        SliverConstraintsCacheKey::from_constraints(constraints)
-    }
-
-    fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
-        constraints.round_for_cache()
-    }
-}
 
 /// Sliver layout context implementation.
 ///
@@ -523,7 +580,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> RawSliverLayoutContext<'ctx, A, P>
     }
 }
 
-impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayout, A, P>
+impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverProtocol, A, P>
     for RawSliverLayoutContext<'ctx, A, P>
 {
     fn constraints(&self) -> &SliverConstraints {
@@ -657,8 +714,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 /// The trait surface mirrors the Box erased layout bridge: the pipeline
 /// owns parent-data-erased child slots, while the blanket impl rebuilds a
 /// typed `RawSliverLayoutContext<T::Arity, T::ParentData>` and delegates child
-/// layout / parent-data access through this trait. No longer `Send +
-/// Sync`-bound, for the same reason as
+/// layout / parent-data access through this trait. It has no `Send` or
+/// `Sync` supertrait, for the same reason as
 /// [`ErasedBoxLayoutContext`](super::box_protocol::ErasedBoxLayoutContext).
 pub trait ErasedSliverLayoutContext {
     /// Sliver constraints from parent.
@@ -780,12 +837,12 @@ impl<A: Arity, P: ParentData + Default> ErasedSliverLayoutContext
     fn constraints(&self) -> SliverConstraints {
         // Both Direct and Proxy cache constraints as an owned `Copy` value.
         // Disambiguate via `LayoutContextApi` since both traits define `constraints`.
-        *<Self as LayoutContextApi<'_, SliverLayout, A, P>>::constraints(self)
+        *<Self as LayoutContextApi<'_, SliverProtocol, A, P>>::constraints(self)
     }
 
     #[inline]
     fn child_count(&self) -> usize {
-        <Self as LayoutContextApi<'_, SliverLayout, A, P>>::child_count(self)
+        <Self as LayoutContextApi<'_, SliverProtocol, A, P>>::child_count(self)
     }
 
     #[inline]
@@ -794,7 +851,7 @@ impl<A: Arity, P: ParentData + Default> ErasedSliverLayoutContext
         index: usize,
         constraints: SliverConstraints,
     ) -> crate::error::RenderResult<SliverGeometry> {
-        <Self as LayoutContextApi<'_, SliverLayout, A, P>>::layout_child(self, index, constraints)
+        <Self as LayoutContextApi<'_, SliverProtocol, A, P>>::layout_child(self, index, constraints)
     }
 
     #[inline]
@@ -818,7 +875,7 @@ impl<A: Arity, P: ParentData + Default> ErasedSliverLayoutContext
 
     #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
-        <Self as LayoutContextApi<'_, SliverLayout, A, P>>::position_child(self, index, offset);
+        <Self as LayoutContextApi<'_, SliverProtocol, A, P>>::position_child(self, index, offset);
     }
 
     #[inline]
@@ -1111,26 +1168,6 @@ impl ErasedSliverLayoutContext for DriverSliverLayoutContext<'_> {
     }
 }
 
-// ============================================================================
-// SLIVER HIT TEST CAPABILITY
-// ============================================================================
-
-/// Hit test capability for sliver (scrollable) layout.
-///
-/// Uses main axis position for hit testing along scroll direction.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SliverHitTest;
-
-impl HitTestCapability for SliverHitTest {
-    type Position = MainAxisPosition;
-    type Result = SliverHitTestResult;
-    type Entry = SliverHitTestEntry;
-    type Context<'ctx, A: Arity, P: ParentData>
-        = RawSliverHitTestContext<'ctx, A, P>
-    where
-        Self: 'ctx;
-}
-
 /// Main axis position for sliver hit testing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MainAxisPosition {
@@ -1211,7 +1248,7 @@ impl SliverHitTestEntry {
 /// Driver-supplied child recursion for the sliver hit-test walk.
 ///
 /// The third parameter mirrors the box protocol's
-/// [`box_protocol::HitTestChildCallback`](crate::protocol::box_protocol::HitTestChildCallback)
+/// [`HitTestChildCallback`](super::HitTestChildCallback)
 /// for signature uniformity with the shared `RenderObject::hit_test_raw`
 /// trait method, but `RawSliverHitTestContext`'s own transform stack is a no-op
 /// (see its `push_transform`/`pop_transform` impl below — main-axis
@@ -1263,7 +1300,7 @@ impl<'ctx, A: Arity, P: ParentData> RawSliverHitTestContext<'ctx, A, P> {
     }
 }
 
-impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
+impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverProtocol, A, P>
     for RawSliverHitTestContext<'ctx, A, P>
 {
     fn position(&self) -> &MainAxisPosition {

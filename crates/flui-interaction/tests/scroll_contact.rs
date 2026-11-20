@@ -14,8 +14,8 @@ use flui_interaction::{
 };
 use flui_platform::{
     EventTime,
-    pointer::PointerEvent,
-    pointer::{
+    input::pointer::PointerEvent,
+    input::pointer::{
         DeviceId, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta, ScrollEvent,
         ScrollPhase, ScrollPrecision, ScrollUnit,
     },
@@ -234,7 +234,7 @@ fn momentum_after_a_fed_pan_reaches_nobody() {
 }
 
 mod identity {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerButton, PointerButtons, PointerPress, PointerRelease, PointerSample,
     };
 

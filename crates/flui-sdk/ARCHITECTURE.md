@@ -116,6 +116,8 @@ tests read the shadow op.
 `painting::{TextDecoration, TextDecorationLines, TextDecorationStyle, DecorationThickness}`
 are added because `TextStyle::decoration` names them (ADR-0310): a package underlines a link
 or strikes through a price.
+`painting::AlignmentDirectional` is added for `flui-material`'s `DataTable`, whose cells align
+to the start or end edge of the ambient `Directionality`.
 `flui-devtools`, measured the same way when it moved, adds `hooks::FrameSnapshot` and the
 `foundation::observe` paths (see Consumers). Their
 tests under `tests/` also use `flui-interaction`'s `testing` feature and `flui-testing` (whose
@@ -145,9 +147,10 @@ not SDK surface.
 - **`flui-hot-reload`** (`packages/flui-hot-reload`) builds on this crate alone (ADR-0311 §6):
   its normal dependencies are `flui-sdk`, `tracing` and, behind `app-plugin`, `parking_lot`,
   plus the target crates of its dlopen loader. A plugin image mounts its view tree on
-  `hooks::PluginPipeline`, which keeps the binding, pipeline owner and layer tree behind one
+  `hooks::PluginPipeline`, which keeps the binding, pipeline owner and scene owner behind one
   `draw_frame` call and reports a frame that drew nothing as `hooks::PluginFrameError`; the
-  image returns `hooks::Scene`, built from `hooks::LayerTree`, and measures text through a
+  image returns `hooks::Scene`, the version its pipeline published or a `hooks::LayerTree` it
+  built by hand, which `Scene::new` makes a version, and measures text through a
   `hooks::TextContextHandle` of its own (`standalone()`: the host's context cannot cross the
   dlopen boundary, see the package's ARCHITECTURE). The facade names none of them.
 

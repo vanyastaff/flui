@@ -19,12 +19,12 @@ use flui_foundation::panic::FirstPanic;
 use flui_protocol::method::{self, Method, WindowMethod};
 use flui_protocol::{
     act::ActOutcome, act::ActParams, act::ActionRequest, act::ActionabilityParams,
-    events::AnnouncementJournal, events::AnnouncementsParams, input::InputParams, input::InputPath,
-    input::Journal, input::JournalParams, input::Released, inspect::InspectParams,
-    inspect::InspectReading, locator::LocateParams, locator::Locator, locator::Matches,
-    locator::Pick, locator::Target, motion::MotionParams, motion::MotionState,
-    session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId, wait::WaitOutcome,
-    wait::WaitParams,
+    events::AnnouncementJournal, events::AnnouncementsParams, geometry::LogicalSize,
+    input::InputParams, input::InputPath, input::Journal, input::JournalParams, input::Released,
+    inspect::InspectParams, inspect::InspectReading, locator::LocateParams, locator::Locator,
+    locator::Matches, locator::Pick, locator::Target, motion::MotionParams, motion::MotionState,
+    session::Placement, session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId,
+    wait::WaitOutcome, wait::WaitParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
@@ -265,8 +265,25 @@ not_answered!(
     PerfStop,
     WaitFrames,
     WaitSettled,
-    WindowPlacement,
 );
+
+impl Serve for method::WindowPlacement {
+    /// The surface's logical size and scale as the presentation's root media query holds them,
+    /// and whether the window is shown and focused as the host last reported. Where the surface
+    /// sits on screen is the platform's to say, which this runtime is not told, so `position` is
+    /// left out: an OS lane locates the window itself.
+    fn serve(ctx: &mut ServeContext<'_, Placement>, _: WindowParams) -> Answer<Placement> {
+        let media = ctx.state.media_query.snapshot();
+        let size = LogicalSize::new(media.size.width, media.size.height);
+        Answer::Now(Ok(Placement::new(
+            ctx.window,
+            size,
+            media.device_pixel_ratio,
+        )
+        .visible(ctx.state.window_visible.get())
+        .focused(ctx.state.window_focused.get())))
+    }
+}
 
 impl Serve for method::SemanticsRead {
     fn record(tree: &Tree, issued: &mut IssuedHandles) {
@@ -450,7 +467,7 @@ fn inspect_now(
     target: InspectTarget,
     params: &InspectParams,
 ) -> Answer<InspectReading> {
-    // A render object's `debug_name` or an `inspect` override is app code.
+    // A render object's `kind` or an `inspect` override is app code.
     ctx.if_panics.set(AgentError::InspectPanicked);
     Answer::Now(super::agent_inspect::inspect(ctx.state, target, params))
 }

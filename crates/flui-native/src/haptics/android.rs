@@ -38,7 +38,7 @@ const PERMISSION_GRANTED: i32 = 0;
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
-use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, input::pointer::DeviceId};
 
 /// The primitives the composition plan can choose from.
 const PRIMITIVES: [AndroidPrimitive; 4] = [
@@ -533,9 +533,5 @@ impl PlatformHaptics for AndroidHaptics {
             vibrator.amplitude_control,
             vibrator.envelopes,
         )
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

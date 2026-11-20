@@ -8,16 +8,21 @@
 
 mod subtree_arena;
 
-mod accessors;
 mod actions;
 mod buffer_pool;
 mod cell;
 mod compositing;
 mod construction;
 mod counters;
+mod dirty_marks;
+mod geometry;
 mod hit_slop;
+mod hit_test;
 mod input_regions;
+mod insertion;
+mod invalidation;
 mod layout;
+mod layout_inputs;
 mod leader_watch;
 mod paint;
 mod placement;
@@ -25,9 +30,13 @@ mod poison;
 #[cfg(any(test, feature = "testing"))]
 mod presented;
 mod query;
+#[cfg(any(test, feature = "testing"))]
+mod queues_for_testing;
 mod reassemble;
 mod relocation;
 mod semantics;
+mod semantics_enablement;
+mod tree_edit;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
@@ -41,12 +50,9 @@ pub use relocation::{
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
     ReleaseDetachedRenderSubtreesFailure,
 };
+pub use tree_edit::{ParentDataSlot, RenderChildrenEdit};
 
-use std::{
-    marker::PhantomData,
-    rc::Rc,
-    sync::atomic::{AtomicBool, AtomicU64},
-};
+use std::{marker::PhantomData, rc::Rc};
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Matrix4;
@@ -83,13 +89,6 @@ pub struct LayoutPremise {
 /// rather than silently growing the queue. Tunable at owner construction
 /// via [`PipelineOwner::new_with_capacity`].
 const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
-
-// ============================================================================
-// Pipeline ID Counter
-// ============================================================================
-
-/// Global counter for unique pipeline owner IDs.
-static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 // ============================================================================
 // PipelineOwner
@@ -139,9 +138,6 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// resources in the remaining fields run their destructors.
     local_dirty: std::rc::Rc<super::local_invalidation::LocalDirtyInbox>,
 
-    /// Unique identifier for this pipeline owner.
-    id: u64,
-
     /// The UI runtime's text context, lent to every measurement in this
     /// pipeline's layout, intrinsic and dry queries (ADR-0092 §10 step 3).
     /// A constructor argument: no pipeline exists without one.
@@ -170,7 +166,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
 
-    /// The visual-update and semantics-owner-lifecycle callbacks
+    /// The visual-update callback
     /// ([`crate::pipeline::VisualUpdateNotifier`]), shared through
     /// [`SharedNotifier`]: callers take owned snapshots and deliver them with
     /// no guard held.
@@ -209,12 +205,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     root_constraints: Option<BoxConstraints>,
 
     /// Whether semantics are enabled.
-    semantics_enabled: AtomicBool,
+    semantics_enabled: bool,
 
     /// The semantics tree owner (flui-semantics ARCHITECTURE.md, semantics assembly). `None` until semantics is enabled via
-    /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
-    /// then delivers the semantics-owner-created callback; disposed on the
-    /// next `false` transition, which then delivers the disposed callback.
+    /// [`Self::set_semantics_enabled`]`(true)`, which
+    /// lazily creates it; disposed on the next `false` transition.
     /// `Semantics::run_semantics` (`pipeline/owner/semantics.rs`) is the
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,
@@ -265,14 +260,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// Composite-resolved transforms for `Layer::Follower` render nodes,
     /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing), resolved
-    /// against each applied scene version (`scene_applied`) by
     /// against each applied scene version (`scene_applied`) through
-    /// `SceneVersion::follower_transform`, the same resolution the engine
-    /// draws by over the flattened version.
-    /// against. Present ⟹ the follower is visible this frame under the
+    /// `SceneVersion::follower_transform`, the resolution the engine's walk
+    /// draws by. Present ⟹ the follower is visible this frame under the
     /// resolved transform; absent ⟹ either not a follower, or a hidden one
     /// (see `last_hidden_follower_ids`). Consulted generically by the
-    /// hit-test walk (`accessors.rs`) so a visually-displaced
+    /// hit-test walk (`hit_test.rs`) so a visually-displaced
     /// `RenderFollowerLayer` hit-tests at its RESOLVED on-screen position,
     /// not its plain tree-relative position — cached from the last
     /// composite, one frame stale by design.
@@ -344,7 +337,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// `last_follower_transforms`. The hit-test walk must distinguish "not a
     /// follower" (fall through to normal traversal) from "a follower that
     /// is currently hidden" (skip the subtree entirely, mirroring
-    /// `resolve_follower_transform -> None -> don't descend` on the render
+    /// `SceneVersion::follower_transform -> None -> don't descend` on the render
     /// path); `last_follower_transforms`'s absence alone conflates both
     /// cases, so this set carries follower identity independent of
     /// resolution outcome.
@@ -410,7 +403,6 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PipelineOwner")
             .field("phase", &Phase::NAME)
-            .field("id", &self.id)
             .field("root_id", &self.root_id)
             .field("render_tree_len", &self.render_tree.len())
             .field("nodes_needing_layout", &self.scheduler.layout_queue_len())
@@ -445,7 +437,6 @@ where
     To: PipelinePhase,
 {
     PipelineOwner {
-        id: from.id,
         text: from.text,
         text_measurers: from.text_measurers,
         text_sizing: from.text_sizing,
@@ -640,7 +631,7 @@ mod tests {
 
         fn describe_semantics_configuration(
             &self,
-            config: &mut crate::semantics::SemanticsConfiguration,
+            config: &mut flui_semantics::SemanticsConfiguration,
         ) {
             config.set_semantics_boundary(self.boundary.load(std::sync::atomic::Ordering::Relaxed));
             config.set_label(
@@ -670,7 +661,7 @@ mod tests {
 
         fn describe_semantics_configuration(
             &self,
-            config: &mut crate::semantics::SemanticsConfiguration,
+            config: &mut flui_semantics::SemanticsConfiguration,
         ) {
             config.set_semantics_boundary(self.boundary);
             if self.merge_descendants {
@@ -959,9 +950,7 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
-        ) -> crate::error::RenderResult<
-            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        > {
+        ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
             Ok(self.size)
         }
 
@@ -976,12 +965,12 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _position: flui_foundation::geometry::Offset,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
-                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+                Option<flui_foundation::geometry::Offset>,
                 Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
@@ -1019,9 +1008,7 @@ mod tests {
             _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<
                 '_,
             >,
-        ) -> crate::error::RenderResult<
-            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        > {
+        ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
             // Intentional unstructured panic — exercises the catch_unwind →
             // Poisoned path in `RenderEntry::layout_leaf_only`. This test
             // fixture is one explicit way to produce
@@ -1047,12 +1034,12 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
+            _position: flui_foundation::geometry::Offset,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
-                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+                Option<flui_foundation::geometry::Offset>,
                 Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
@@ -1474,7 +1461,7 @@ mod tests {
             "the message names the ancestors: {named}"
         );
 
-        let anonymous = owner.in_tree(crate::error::RenderError::InvalidParentChild);
+        let anonymous = owner.in_tree(crate::error::RenderError::ViewportOffsetChanged);
         assert!(
             anonymous.context().path().is_empty(),
             "an error that names no node has no path"

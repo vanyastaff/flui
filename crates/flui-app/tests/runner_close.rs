@@ -15,9 +15,12 @@ use flui_app::app::{
     FrameFailureKind, WindowPolicy, open_window, request_presentation_close,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
+use flui_foundation::Leaf;
 use flui_foundation::PresentationAddress;
 use flui_foundation::geometry::Size;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
+use flui_rendering::{
+    BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+};
 use flui_testing::{DropLedger, DropSentinel};
 use flui_view::element::FutureBuilder;
 use flui_view::prelude::*;

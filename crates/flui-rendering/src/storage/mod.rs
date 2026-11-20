@@ -16,9 +16,8 @@
 //!        └─ RenderNode::Box(RenderEntry<BoxProtocol>)
 //!             ├─ render_object: Box<dyn RenderObject<P>>  (owned by value, no lock)
 //!             ├─ state: RenderState<BoxProtocol>
-//!             │    ├─ flags: AtomicRenderFlags
-//!             │    ├─ geometry: Option<ProtocolGeometry<P>>
-//!             │    ├─ constraints: Option<ProtocolConstraints<P>>
+//!             │    ├─ flags: RenderFlagsCell
+//!             │    ├─ layout: P::LayoutRecord  (last geometry and constraints)
 //!             │    └─ offset: OffsetCell
 //!             └─ links: NodeLinks
 //!                  ├─ parent: Option<RenderId>
@@ -26,11 +25,11 @@
 //!                  └─ depth: u16
 //! ```
 //!
-//! # Slab Offset Pattern
+//! # Ids
 //!
-//! RenderId uses 1-based indexing (NonZeroUsize), while Slab uses 0-based:
-//! - `RenderId(1)` → `nodes[0]`
-//! - `RenderId(2)` → `nodes[1]`
+//! A `RenderId` is a generational key: its index names a slab slot and its
+//! generation the occupant, so an id kept past `remove` misses instead of
+//! naming the node inserted into the same slot later.
 //!
 //! # Why a separate tree
 //!
@@ -43,16 +42,15 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_rendering::storage::{RenderTree, RenderNode};
+//! use flui_rendering::{TextContextHandle, pipeline::PipelineOwner};
 //!
-//! let mut tree = RenderTree::new();
-//!
-//! // Insert a Box protocol node
-//! let root_id = tree.insert_box(Box::new(MyRenderBox::new()));
-//! tree.set_root(Some(root_id));
+//! // The owner holds the tree and edits it, marking what each edit
+//! // invalidates; code outside this crate only reads the tree.
+//! let mut owner = PipelineOwner::new(TextContextHandle::standalone());
+//! let root_id = owner.set_root_render_object(Box::new(MyRenderBox::new()));
 //!
 //! // Access the node
-//! if let Some(node) = tree.get(root_id) {
+//! if let Some(node) = owner.render_tree().get(root_id) {
 //!     assert!(node.is_box());
 //!     assert!(node.needs_layout());
 //! }
@@ -72,12 +70,13 @@ pub use entry::RenderEntry;
 pub use erased::{
     ErasedConstraints, ErasedConstraintsMismatch, ErasedGeometry, ErasedGeometryMismatch,
 };
-pub use flags::{AtomicRenderFlags, RenderFlags};
+pub use flags::{RenderFlags, RenderFlagsCell};
 pub use links::NodeLinks;
 pub use node::RenderNode;
 pub use state::RenderState;
 pub use state::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
+pub(crate) use state::{BoxLayoutRecord, LayoutRecord, SliverLayoutRecord};
 // Type aliases for convenience
-pub(crate) use node_slab::TreeLease;
+pub(crate) use node_slab::{EnterRefusal, EnteredNode, TreeLease};
 pub use state::{BoxRenderState, SliverRenderState};
 pub use tree::{ChildrenUpdate, RenderTree};

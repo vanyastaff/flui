@@ -175,7 +175,7 @@ pub struct RenderSliverGrid {
     grid_delegate: Rc<dyn SliverGridDelegate>,
     /// Total known item count.
     item_count: usize,
-    collection: Option<flui_rendering::semantics::SemanticsCollection>,
+    collection: Option<flui_semantics::SemanticsCollection>,
     /// The collection's accessible name, published on its list or grid node.
     collection_label: Option<std::sync::Arc<str>>,
     /// Logical-index → dense-slot map rebuilt each pass from parent-data.
@@ -233,7 +233,7 @@ impl RenderSliverGrid {
         &mut self,
         count: Option<usize>,
     ) -> flui_rendering::RenderUpdateImpact {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         let collection = SemanticsCollection::new(SemanticsCollectionKind::Grid, count);
         if self.collection == Some(collection) {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -292,7 +292,8 @@ impl RenderSliverGrid {
         &mut self,
         new_delegate: Rc<dyn SliverGridDelegate>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let type_changed = new_delegate.as_any().type_id() != self.grid_delegate.as_any().type_id();
+        let type_changed =
+            !crate::dynamic_type::same_concrete_type(&*new_delegate, &*self.grid_delegate);
         let impact = if type_changed || new_delegate.should_relayout(&*self.grid_delegate) {
             flui_rendering::RenderUpdateImpact::LAYOUT
         } else {
@@ -368,9 +369,9 @@ impl RenderSliver for RenderSliverGrid {
 
     fn describe_semantics_configuration(
         &self,
-        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+        config: &mut flui_semantics::SemanticsConfiguration,
     ) {
-        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        use flui_semantics::{SemanticsCollection, SemanticsCollectionKind};
         config.set_lazy_collection(self.collection.unwrap_or_else(|| {
             SemanticsCollection::new(SemanticsCollectionKind::Grid, Some(self.item_count))
         }));
@@ -394,7 +395,7 @@ impl RenderSliver for RenderSliverGrid {
         }
 
         // ── 2. Grid layout from delegate ──────────────────────────────────────
-        let tile_layout = self.grid_delegate.get_layout(constraints);
+        let tile_layout = self.grid_delegate.layout(constraints);
 
         // Cache-extended viewport window — classify before any float→index
         // conversion so NaN/+∞ cannot saturate at usize::MAX. Policy ledger:
@@ -435,7 +436,7 @@ impl RenderSliver for RenderSliverGrid {
                 cache_end,
             } => {
                 let last = tile_layout
-                    .get_max_child_index_for_scroll_offset(cache_end)
+                    .max_child_index_for_scroll_offset(cache_end)
                     .min(self.item_count - 1);
                 (cache_start, last, self.item_count)
             }
@@ -497,7 +498,7 @@ impl RenderSliver for RenderSliverGrid {
             }
         };
 
-        let first_in_window = tile_layout.get_min_child_index_for_scroll_offset(cache_start_offset);
+        let first_in_window = tile_layout.min_child_index_for_scroll_offset(cache_start_offset);
 
         // Guard: window is entirely past the last item (e.g. scrolled to end).
         if first_in_window > last_in_window {
@@ -565,9 +566,9 @@ impl RenderSliver for RenderSliverGrid {
         let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
 
         // ── 8. Paint geometry ──────────────────────────────────────────────────
-        let leading_row_offset = tile_layout.get_scroll_offset_of_child(first_in_window);
-        let trailing_row_offset = tile_layout.get_scroll_offset_of_child(last_in_window)
-            + tile_layout.child_main_axis_extent;
+        let leading_row_offset = tile_layout.scroll_offset_of_child(first_in_window);
+        let trailing_row_offset =
+            tile_layout.scroll_offset_of_child(last_in_window) + tile_layout.child_main_axis_extent;
 
         // `from` clamps to the viewport start so partial leading rows don't
         // drive paint_extent negative (`min(scroll_offset, leading)`).
@@ -587,7 +588,7 @@ impl RenderSliver for RenderSliverGrid {
             // Omitting this left `visible` at `SliverGeometry::ZERO`'s `false`
             // unconditionally, which blocked the viewport's hit-test walk
             // (`sliver_child_is_visible`,
-            // `flui-rendering/src/pipeline/owner/accessors.rs`) from ever
+            // `flui-rendering/src/pipeline/owner/hit_test.rs`) from ever
             // reaching a grid's children.
             visible: paint_extent > 0.0,
             has_visual_overflow: scroll_extent > paint_extent
@@ -611,8 +612,8 @@ impl RenderSliver for RenderSliverGrid {
         self.placed.clear();
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
-                let tile_scroll_offset = tile_layout.get_scroll_offset_of_child(logical_index);
-                let tile_cross_offset = tile_layout.get_cross_axis_offset_of_child(logical_index);
+                let tile_scroll_offset = tile_layout.scroll_offset_of_child(logical_index);
+                let tile_cross_offset = tile_layout.cross_axis_offset_of_child(logical_index);
                 self.placed.push(Placed {
                     slot,
                     logical: logical_index,
@@ -664,8 +665,8 @@ impl RenderSliver for RenderSliverGrid {
         self.pinned
             .lay_out(first_in_window..last_in_window + 1, ctx, |index| {
                 (index < effective_item_count).then(|| {
-                    let layout_offset = tile_layout.get_scroll_offset_of_child(index);
-                    let cross = tile_layout.get_cross_axis_offset_of_child(index);
+                    let layout_offset = tile_layout.scroll_offset_of_child(index);
+                    let cross = tile_layout.cross_axis_offset_of_child(index);
                     PinnedPlace {
                         constraints: tile_constraints,
                         layout_offset,

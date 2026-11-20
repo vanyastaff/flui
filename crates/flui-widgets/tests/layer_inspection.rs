@@ -85,9 +85,7 @@ pub(crate) fn a_superellipse_clip_composites_and_updates_its_radius() {
             .expect("a pumped frame composites a tree")
             .iter()
             .filter_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::ClipSuperellipse(layer) => {
-                    Some(*layer.clip_superellipse())
-                }
+                flui_layer::Layer::ClipSuperellipse(layer) => Some(*layer.clip_superellipse()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -140,7 +138,7 @@ pub(crate) fn backdrop_filters_in_one_group_share_a_stable_identity() {
             .expect("a pumped frame composites a tree")
             .iter()
             .filter_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.group().cloned()),
+                flui_layer::Layer::BackdropFilter(layer) => Some(layer.group().cloned()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -178,8 +176,8 @@ fn magnifier_layers(
     flui_foundation::geometry::Rect<f64>,
     Vec<flui_foundation::geometry::Rect<f64>>,
 ) {
+    use flui_layer::Layer;
     use flui_painting::paint::ImageFilter;
-    use flui_rendering::layer::Layer;
 
     let tree = laid.layer_tree().expect("a pumped frame composites a tree");
     let mut filters = Vec::new();

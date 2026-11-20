@@ -3,8 +3,9 @@
 //! A [`NodeSlab`] is a `Vec` of slots with a free list, and the only place that mints a
 //! [`RenderId`] or empties a slot. Each slot has a header (its generation, an in-flight bit and
 //! the parent link, all outside the `UnsafeCell`) and a state: vacant, occupied by a
-//! [`RenderNode`], or retired. The layout walk takes one [`TreeLease`] and acquires slots one at a
-//! time as it reaches them, instead of borrowing every node of the dirty subtree up front.
+//! [`RenderNode`], or retired. The layout walk takes one [`TreeLease`] and enters slots one at a
+//! time as it reaches them, instead of borrowing every node of the dirty subtree up front; an
+//! [`EnteredNode`] is the walk's only way to a node.
 //!
 //! # Generations
 //!
@@ -22,8 +23,10 @@
 //!    reallocates while it exists, every slot pointer stays valid and no generation changes.
 //! 2. Every slot pointer derives from the one base pointer taken from `Vec::as_mut_ptr`, so each
 //!    carries whole-allocation provenance.
-//! 3. A slot's `&mut RenderNode` is created only by the walk and only for a slot whose in-flight
-//!    bit it just set, so at most one is live per slot.
+//! 3. A reference into a slot's node exists only through an [`EnteredNode`]. [`TreeLease::enter`]
+//!    makes one only after setting the slot's in-flight bit and refuses a slot whose bit is set,
+//!    and the entry clears the bit when it drops, so at most one entry, and through it at most
+//!    one `&mut RenderNode`, is live per slot.
 //! 4. The headers are read and written through field projections of the raw slot pointer, never
 //!    through a reference to the whole slot, so reading the header of a slot whose node is borrowed
 //!    up the call stack touches no memory that borrow covers.
@@ -33,6 +36,7 @@
 use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
+use std::ptr::NonNull;
 
 use flui_foundation::RenderId;
 use flui_foundation::generation::Generation;
@@ -43,10 +47,14 @@ use super::node::RenderNode;
 /// id carries it and no id matches a retired slot.
 const RETIRED: NonZeroU32 = NonZeroU32::MAX;
 
-/// What a slot holds.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a vacant slot is the rare, short-lived state; boxing the node would put an allocation on every insert"
+/// What a slot holds. On a 32-bit target the node is under clippy's 200-byte variant gap, so
+/// the lint fires only where pointers are 64 bits.
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "a vacant slot is the rare, short-lived state; boxing the node would put an allocation on every insert"
+    )
 )]
 enum SlotState {
     /// No node. `next_free` is the next vacant slot in the free list.
@@ -62,7 +70,7 @@ struct Slot {
     /// The occupant's generation, the next id's while vacant, [`RETIRED`] once retired. Written
     /// through `&mut NodeSlab` alone.
     generation: NonZeroU32,
-    /// Set while a layout walk holds the slot's `&mut RenderNode`.
+    /// Set while an [`EnteredNode`] of the slot lives.
     in_flight: Cell<bool>,
     /// The occupant's parent, written by [`NodeSlab::set_parent`] alone. It lives here and not in
     /// the node, so the walk can check a parent-to-child edge without reading a node that is
@@ -118,10 +126,6 @@ impl NodeSlab {
 
     pub(super) const fn is_empty(&self) -> bool {
         self.len == 0
-    }
-
-    pub(super) fn reserve(&mut self, additional: usize) {
-        self.slots.reserve(additional);
     }
 
     /// The slot `id`'s node occupies, or `None` for a stale id.
@@ -191,6 +195,7 @@ impl NodeSlab {
 
     /// Takes every node out, leaving each slot vacant under its next generation or retired, and
     /// returns the nodes for the caller to drop after its own bookkeeping.
+    #[cfg(any(test, feature = "testing"))]
     pub(super) fn take_all(&mut self) -> Vec<RenderNode> {
         let mut nodes = Vec::with_capacity(self.len);
         for index in 0..self.slots.len() {
@@ -242,19 +247,6 @@ impl NodeSlab {
         })
     }
 
-    pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = (RenderId, &mut RenderNode)> + '_ {
-        self.slots
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(index, slot)| {
-                let generation = slot.generation;
-                match slot.state.get_mut() {
-                    SlotState::Occupied(node) => Some((id_at(index, generation), node)),
-                    SlotState::Vacant { .. } | SlotState::Retired => None,
-                }
-            })
-    }
-
     /// The occupant's parent as the slot header holds it, or `None` for a stale id.
     pub(super) fn parent(&self, id: RenderId) -> Option<RenderId> {
         self.resolve(id)?.parent.get()
@@ -297,15 +289,26 @@ pub(crate) struct TreeLease<'a> {
     _slab: PhantomData<&'a mut NodeSlab>,
 }
 
-impl TreeLease<'_> {
+/// Why [`TreeLease::enter`] lent no node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnterRefusal {
+    /// The id is stale, its slot vacant or retired, or it never existed.
+    Missing,
+    /// The node is entered up the call stack: only a cyclic child link reaches it again.
+    InFlight,
+}
+
+impl<'tree> TreeLease<'tree> {
     /// The slot `id`'s node occupies, or `None` for a stale id. A retired slot carries a
     /// generation no id has, so the generation alone answers.
+    #[inline]
     fn slot(&self, id: RenderId) -> Option<*mut Slot> {
         let index = id.index() as usize;
         if index >= self.len {
             return None;
         }
-        // SAFETY: `index < len` keeps the offset inside the allocation `base` came from.
+        // SAFETY: `index < len` keeps the offset inside the allocation `base` came from
+        // (invariants 1 and 2).
         let slot = unsafe { self.base.add(index) };
         // SAFETY: a field projection of a slot inside the leased allocation; the generation is a
         // header outside the `UnsafeCell` (invariant 4) and nothing writes it while the lease
@@ -314,67 +317,110 @@ impl TreeLease<'_> {
         (generation == id.generation().as_nonzero()).then_some(slot)
     }
 
+    /// The in-flight bit of a slot [`Self::slot`] resolved.
+    #[inline]
+    #[expect(
+        clippy::unused_self,
+        reason = "the borrow of the lease is what bounds the header borrow (invariant 1)"
+    )]
+    fn in_flight(&self, slot: *mut Slot) -> &Cell<bool> {
+        // SAFETY: a header field projection of a slot inside the leased allocation (invariant 4),
+        // which stays in place for as long as this borrow of the lease (invariant 1).
+        unsafe { &(*slot).in_flight }
+    }
+
     /// `true` when `child` is a current id and its header names `parent`. Reads headers only, so
-    /// it is sound while `parent`'s node is borrowed by the walk.
+    /// it is sound while `parent`'s node is entered.
     pub(crate) fn is_child_of(&self, child: RenderId, parent: RenderId) -> bool {
         self.parent(child) == Some(parent)
     }
 
     /// The parent of a current id, from its header. Reads no node, so it is sound while the node
-    /// (or any other) is borrowed by the walk.
+    /// (or any other) is entered.
     pub(crate) fn parent(&self, id: RenderId) -> Option<RenderId> {
         let slot = self.slot(id)?;
         // SAFETY: a header field projection (invariant 4).
         unsafe { (*slot).parent.get() }
     }
 
-    /// `true` while the node `id` names is borrowed up the call stack.
-    pub(crate) fn is_in_flight(&self, id: RenderId) -> bool {
-        self.slot(id).is_some_and(|slot| {
-            // SAFETY: a header field projection (invariant 4).
-            unsafe { (*slot).in_flight.get() }
-        })
-    }
-
-    /// Sets the in-flight bit; `false` if the id is stale or the bit was already set.
-    pub(crate) fn try_enter(&self, id: RenderId) -> bool {
-        let Some(slot) = self.slot(id) else {
-            return false;
-        };
-        // SAFETY: a header field projection (invariant 4).
-        unsafe { !(*slot).in_flight.replace(true) }
-    }
-
-    /// Clears the in-flight bit of a current id.
-    pub(crate) fn leave(&self, id: RenderId) {
-        if let Some(slot) = self.slot(id) {
-            // SAFETY: a header field projection (invariant 4).
-            unsafe { (*slot).in_flight.set(false) }
-        }
-    }
-
-    /// A pointer to the node `id` names, or `None` for a stale id.
+    /// Enters `id`: sets its in-flight bit and lends its node until the entry drops.
     ///
-    /// The caller must hold no live `&mut RenderNode` for this slot (it is not in flight, or it is
-    /// the caller's own in-flight slot); the returned pointer is then the only access to it.
-    pub(crate) fn node(&self, id: RenderId) -> Option<*mut RenderNode> {
-        let slot = self.slot(id)?;
-        // SAFETY: the state cell is a field projection of a slot inside the leased allocation;
-        // the match reads the discriminant through the raw place and takes `&mut` to the payload
-        // only, turned into a pointer at once. No other reference to this slot's state is live
-        // (the contract above).
-        unsafe {
+    /// A slot already in flight is refused with [`EnterRefusal::InFlight`] before its state is
+    /// read, since the entry up the stack may hold its `&mut RenderNode`. A stale id, or a slot
+    /// that holds no node, is [`EnterRefusal::Missing`] and leaves the bit as it found it.
+    #[inline]
+    pub(crate) fn enter(&self, id: RenderId) -> Result<EnteredNode<'_, 'tree>, EnterRefusal> {
+        let slot = self.slot(id).ok_or(EnterRefusal::Missing)?;
+        if self.in_flight(slot).replace(true) {
+            return Err(EnterRefusal::InFlight);
+        }
+        // SAFETY: the state cell is a field projection of a slot inside the leased allocation
+        // (invariants 1 and 2). The bit was clear and is now set, so no entry of this slot is
+        // live and no reference into its state exists (invariant 3); the `&mut` to the payload
+        // taken here becomes the entry's pointer at once.
+        let node = unsafe {
             let state = UnsafeCell::raw_get(&raw const (*slot).state);
             match *state {
-                SlotState::Occupied(ref mut node) => Some(std::ptr::from_mut(node)),
+                SlotState::Occupied(ref mut node) => Some(NonNull::from(node)),
                 SlotState::Vacant { .. } | SlotState::Retired => None,
             }
-        }
+        };
+        let Some(node) = node else {
+            self.in_flight(slot).set(false);
+            return Err(EnterRefusal::Missing);
+        };
+        Ok(EnteredNode {
+            lease: self,
+            id,
+            node,
+        })
     }
 
     /// Slots in the slab: an upper bound on how many nodes a walk can reach.
     pub(crate) fn capacity(&self) -> usize {
         self.len
+    }
+}
+
+/// One node entered through a [`TreeLease`]: its slot's in-flight bit is set while this value
+/// lives, and the node is reachable only through it. Dropping it clears the bit, on unwind too.
+pub(crate) struct EnteredNode<'lease, 'tree> {
+    lease: &'lease TreeLease<'tree>,
+    id: RenderId,
+    node: NonNull<RenderNode>,
+}
+
+impl EnteredNode<'_, '_> {
+    /// The id this entry was made for.
+    #[inline]
+    pub(crate) fn id(&self) -> RenderId {
+        self.id
+    }
+
+    /// The entered node, shared for as long as this borrow of the entry.
+    #[inline]
+    pub(crate) fn node(&self) -> &RenderNode {
+        // SAFETY: the pointer came from the lease, whose slab borrow outlives this entry
+        // (invariant 1), with the allocation's provenance (invariant 2). This entry holds the
+        // slot's in-flight bit, so it is the only way to the node (invariant 3), and `&self`
+        // excludes the `&mut` that `node_mut` lends.
+        unsafe { self.node.as_ref() }
+    }
+
+    /// The entered node, exclusive for as long as this borrow of the entry.
+    #[inline]
+    pub(crate) fn node_mut(&mut self) -> &mut RenderNode {
+        // SAFETY: as in `node`; `&mut self` excludes every other reference this entry lent.
+        unsafe { self.node.as_mut() }
+    }
+}
+
+impl Drop for EnteredNode<'_, '_> {
+    fn drop(&mut self) {
+        // The id resolves: no generation changes while the lease lives (invariant 1).
+        if let Some(slot) = self.lease.slot(self.id) {
+            self.lease.in_flight(slot).set(false);
+        }
     }
 }
 
@@ -428,20 +474,42 @@ mod tests {
         assert_ne!(reused, a, "under the next generation");
 
         let lease = slab.lease();
-        assert!(lease.try_enter(b));
-        assert!(!lease.try_enter(b), "a second enter is refused");
-        assert!(lease.is_in_flight(b));
-        lease.leave(b);
-        assert!(!lease.is_in_flight(b));
-        assert!(lease.node(b).is_some());
-        assert!(lease.node(a).is_none(), "a stale id names no node");
-        assert!(
-            lease
-                .node(RenderId::new_gen(
-                    99,
-                    flui_foundation::generation::Generation::FIRST
-                ))
-                .is_none()
+        let entered = lease.enter(b).expect("BUG: b is live");
+        assert_eq!(entered.id(), b);
+        assert_eq!(
+            lease.enter(b).err(),
+            Some(EnterRefusal::InFlight),
+            "a second enter is refused"
+        );
+        drop(entered);
+        assert!(lease.enter(b).is_ok(), "dropping the entry clears the bit");
+        assert_eq!(
+            lease.enter(a).err(),
+            Some(EnterRefusal::Missing),
+            "a stale id names no node"
+        );
+        let never = RenderId::new_gen(99, flui_foundation::generation::Generation::FIRST);
+        assert_eq!(lease.enter(never).err(), Some(EnterRefusal::Missing));
+    }
+
+    #[test]
+    fn lease_refuses_a_vacant_slot_and_leaves_its_bit_clear() {
+        let mut slab = NodeSlab::new();
+        let a = slab.insert(node());
+        let _ = slab.remove(a);
+        // The id the vacant slot's next occupant will carry matches its generation.
+        let next = RenderId::new_gen(
+            a.index(),
+            flui_foundation::generation::Generation::try_from(slab.slots[0].generation)
+                .expect("BUG: a vacant slot's generation is an id's"),
+        );
+
+        let lease = slab.lease();
+        assert_eq!(lease.enter(next).err(), Some(EnterRefusal::Missing));
+        assert_eq!(
+            lease.enter(next).err(),
+            Some(EnterRefusal::Missing),
+            "a refused vacant slot is not left in flight"
         );
     }
 
@@ -453,11 +521,13 @@ mod tests {
         slab.set_parent(b, Some(a));
 
         let lease = slab.lease();
-        assert!(lease.try_enter(a));
-        let held = lease.node(a).expect("occupied");
-        // SAFETY: the slot is in flight and this is the only access to it.
-        let _live: &mut RenderNode = unsafe { &mut *held };
+        let mut held = lease.enter(a).expect("BUG: a is live");
+        let _live: &mut RenderNode = held.node_mut();
         assert_eq!(lease.parent(b), Some(a));
-        assert!(lease.is_in_flight(a));
+        assert!(lease.is_child_of(b, a));
+        assert_eq!(lease.enter(a).err(), Some(EnterRefusal::InFlight));
+        drop(held);
     }
+
+    static_assertions::assert_not_impl_any!(EnteredNode<'_, '_>: Send, Sync);
 }

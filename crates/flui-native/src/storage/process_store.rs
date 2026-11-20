@@ -24,7 +24,7 @@ pub(super) type FindStore =
 /// The store of `app`, which `find` finds at the first call.
 pub(super) struct ProcessStore {
     app: AppDataDir,
-    /// [`super::process_store`], or a test's stand-in.
+    /// [`super::process_store()`], or a test's stand-in.
     find: FindStore,
     /// What a find answered, kept for good: read with no lock.
     found: OnceLock<Found>,

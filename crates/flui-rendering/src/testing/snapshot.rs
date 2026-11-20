@@ -557,10 +557,6 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
 
     // One header line describing this layer with its defining parameter.
     match node.layer() {
-        Layer::Canvas(_) => {
-            out.push_str(&indent);
-            out.push_str("Canvas\n");
-        }
         Layer::Picture(p) => {
             out.push_str(&indent);
             match p.bounds() {
@@ -578,18 +574,6 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             }
             // Emit commands one level deeper.
             write_display_list(out, p.picture(), depth + 1);
-        }
-        Layer::Texture(_) => {
-            out.push_str(&indent);
-            out.push_str("Texture\n");
-        }
-        Layer::PlatformView(_) => {
-            out.push_str(&indent);
-            out.push_str("PlatformView\n");
-        }
-        Layer::PerformanceOverlay(_) => {
-            out.push_str(&indent);
-            out.push_str("PerformanceOverlay\n");
         }
         Layer::ClipRect(c) => {
             let r = c.clip_rect();

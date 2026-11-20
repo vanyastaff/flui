@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 is built and under review, FD11 is built and under review (its runs on the input desktop owed), FD14 has merged (#2927; its runs on a Mac owed), FD16 is built and under review (its runs in a real Linux session owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -536,12 +536,13 @@ graph LR
   - the coordinates module;
   - `Error` with the code mapping, and `Report` with its verdict and exit codes;
   - `Launch` with the artifact kinds and `cargo_example`;
-  - lane worker threads and the host-wide input lock;
+  - lane worker threads and the desktop's input lock (one session per user's desktop);
   - `InputPolicy::default()` set to `Synthetic`;
-  - the OS-input announcement (scenario-declared devices and duration, the CLI grace period);
+  - the OS-input announcement (scenario-declared devices and duration; the interactive grace
+    period and `--yes` are `flui drive`'s, built with the CLI in FD17);
   - the `ActivityGuard` trait lanes implement;
-  - `IsolationMode` in the session and the report, and the refusal of OS input on a `shared`
-    desktop without a guard;
+  - `Isolation` (`flui-protocol`'s) in the session and the report, and the refusal of OS input on
+    a `shared` desktop without a guard;
   - the scenario window-size rule and splitting moves into single steps.
 
   Update `docs/crates.md` and the layer diagram in `docs/architecture.md`.
@@ -553,7 +554,103 @@ graph LR
   - a wrong window size refuses;
   - the coordinates table passes (scales 0.5–8, negative origins, fractional edges, RTL);
   - the report verdict table passes;
-  - `cargo xtask workspace`, `reach`, `globals` and `deps` are green.
+  - the manifest's tier, order, `allowed-dependents` and `reach-forbid`, the crate's globals and
+    its dependencies are read against "Rules a reader holds" (the `cargo xtask workspace`,
+    `reach`, `globals` and `deps` gates are gone, ADR-0371).
+- **Status (2026-11-19):** built; the pull request is under review.
+- **Evidence (2026-11-19):**
+  - `flui-driver`'s `driver_it`:
+    - `failure_matrix::every_failure_row_holds_on_every_fixture`: every failure scenario on the
+      counter and on a local gallery fixture (`tests/fixtures.rs`, standing in for
+      `interaction_gallery`). The app exits mid-command (its window closes in the frame its
+      handler runs: `gone` of the process, then and for every later call); the driver goes with a
+      contact held (the app sees it cancelled); an accepted tap times out (`may_have_run`, retry
+      `never`, and it runs once); app code panics on the semantic path (`platform`) and in a frame
+      (contained), and the next request is answered; a callback replaces what was tapped (`ran`);
+      a handle outlives its element (`gone`); a second OS-input session on the desktop is `busy`
+      until the first ends; a required path the target lacks is `not_supported` naming
+      `os_input`, and the report is `cannot_verify` listing it; a point outside the window is
+      `outside_target` with nothing sent; a read past its budget is `truncated`; a scripted lane
+      whose guard reports a foreign event stops before its next event, releases, and the report
+      is `cannot_verify` (`uninterrupted_os_input`).
+    - `policy::a_default_session_never_selects_os_input` (a guarded lane attached, a tap, a move
+      and a semantic-preferred move all go synthetic, the lane sends nothing and nothing is
+      announced), `a_certification_scenario_takes_the_os_path_announced_once_before_its_first_event`,
+      `a_scenario_written_for_another_window_size_refuses_to_run` (size and scale, naming both),
+      `os_input_without_a_guard_runs_only_where_it_is_isolated`,
+      `a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send` (in process even
+      guarded, shared unguarded),
+      `an_rtl_windows_button_is_aimed_at_from_the_surfaces_physical_left` (an OS tap on an RTL
+      row's first button: the lane gets the point the app published, unmirrored).
+    - `coordinates::a_point_maps_to_the_device_pixel_it_covers_or_is_refused` (scales 0.5, 1.25,
+      1.5, 2 and 8, negative origins, fractional edges, RTL, overflow, non-finite input).
+    - `report::the_verdict_is_fail_then_cannot_verify_then_pass`,
+      `a_check_asked_for_and_not_run_keeps_the_report_from_passing`,
+      `a_scenario_that_checked_nothing_cannot_be_verified`,
+      `the_report_names_the_isolation_and_the_announcements`,
+      `an_error_reads_into_its_code_with_the_retry_and_effect_it_carries` (the app's `retry` kept
+      for every code).
+    - `steps::every_move_is_a_single_step_followed_by_a_pause` (two contacts of one tick step
+      together, each at its own pace, steps within one millisecond merged),
+      `no_pause_is_shorter_than_a_millisecond_and_a_tick_keeps_its_length`,
+      `a_very_long_move_takes_longer_steps_not_more_of_them`,
+      `input_no_lane_sends_is_refused_before_any_event`.
+    - `socket::a_driver_that_goes_closes_its_connection_on_every_exit` (dropped, closed, and a
+      panic unwinding past it: the app sees the connection close),
+      `a_connection_the_app_closed_between_calls_answers_gone_at_once`,
+      `actionability_is_waited_for_by_the_clock_on_a_window_that_draws_nothing`,
+      `os_input_whose_effect_cannot_be_read_back_may_have_run`,
+      `the_desktop_lock_is_busy_only_while_another_session_holds_it`,
+      `a_lock_file_this_user_may_only_read_still_takes_the_lock`,
+      `this_users_lock_is_in_a_directory_only_this_user_can_write`,
+      `a_caller_that_stops_reading_stops_the_connection_reading_and_loses_nothing`,
+      `lines_the_app_sent_before_it_closed_still_reach_the_caller_after_a_failed_send`,
+      `lines_waiting_for_the_caller_still_reach_it_when_a_write_to_the_app_fails`,
+      `an_unfinished_last_line_is_named_when_the_app_closes`,
+      `an_element_that_turns_actionable_on_the_last_frame_is_acted_on`,
+      `an_app_that_closes_mid_call_answers_its_process_gone_then_and_after`,
+      `an_app_that_exits_before_its_agent_answers_reports_its_exit_code` (exit code 3, without
+      waiting out the connect timeout), `an_artifact_without_its_lane_is_named_as_the_capability_missing`,
+      `a_lane_worker_cancels_a_queued_job_and_serves_past_a_panicking_one`,
+      `a_driver_moves_to_the_thread_that_runs_it`.
+  - Taking out, one at a time, the agent's `window.placement`, the headless frame containment, the
+    guard's per-event check, the isolation rule (and its check at every send), the desktop lock
+    (its `busy` only for a lock another handle holds, and its directory only the user can write),
+    the never-the-OS fallback, the clamp refusal, the empty-report and empty-scenario rules, the
+    release frame after the driver goes, the liveness check of a launched app, the kept `retry`,
+    the interleaved steps (each move's own pace, and steps within one millisecond merged), the
+    effect after unread OS input, the clock-bound actionability wait (and the facts read after its
+    last frame), the connection's bound on lines waiting for the caller, the lines kept when a send
+    finds the thread ended or a write fails, and the unfinished line named at the end each fails a
+    test above; the previous socket transport fails the two connection tests.
+  - As built:
+    - The isolation mode is `flui_protocol::session::Isolation`, which main already carries.
+    - The agent answers `window.placement` now (size and scale from the root media query,
+      visibility and focus), without a position; a lane locates its window
+      (`Lane::locate_window`), and `Placement::new` is new in `flui-protocol`.
+    - The headless target serves the agent's own `Session` in process through
+      `flui_testing::HeadlessAgentService`, since `flui-runtime` admits only the hosts.
+    - No `batch` method exists: `element.tap` sends `element.actionability`, then `input.inject`,
+      and `wait.until` with `Frames(1)` between unstable readings (`wait.frames` is not served).
+    - `Lane` carries the input half (`capabilities`, `guard`, `locate_window`, `send`,
+      `release_all`); capture, the OS tree and launching through a lane join with FD10 and the
+      OS-lane tasks. `Launch::from_env_or_headless` is not built: `Launch::headless`,
+      `executable`, `artifact` and `cargo_example` are; an artifact whose lane is absent is
+      `not_supported` naming the lane.
+    - The kill-mid-call test of FD7 (a FLUI app launched on a Linux CI host and killed) still
+      waits for a CI job that opens a window; the driver's `gone` of the process with its exit
+      code is held by the socket tests above.
+    - `OsInputLock` holds one OS-input session per user's desktop: a file lock in a directory only
+      that user can write (`$XDG_RUNTIME_DIR` where it names an existing directory, or else a
+      `flui-driver-<uid>` of mode 0700 in the temporary directory that
+      `OsInputLock::acquire_in_private_dir` makes, on Unix; the user's own
+      temporary directory on Windows), `busy` only while another handle holds it; a lock file this
+      user may only read is opened for reading, and one it cannot open is `Error::Io`, never
+      retried.
+    - Left for later tasks, which take them: `Driver::call_value` (by wire name) is the entry
+      `flui drive call` and the MCP adapter use (FD17); `Report::set_trace` is filled by the trace
+      writer (FD10); monitor-aware mapping for mixed-DPI desktops comes with the first lane that
+      reads monitors (the OS-lane tasks).
 
 ### FD10. Pixels and trace
 
@@ -568,6 +665,97 @@ graph LR
   - a headless record → replay round trip has no divergence, and a changed app diverges at the
     expected `seq`;
   - codegen output compiles and passes in a trybuild-style nested test.
+- **Status (2026-11-20):** built; the pull request is under review. Two items of the card are met
+  another way or in part, and three of R21–R27 wait on other tasks (below).
+- **Evidence (2026-11-20, `driver_it` on Windows 11 build 26300 and WSL Ubuntu 24.04):**
+  - Metric: `pixels::the_metric_measures_pixelmatchs_yiq_distance` (distances worked out by hand
+    from pixelmatch's formula, its `35215` bound), `the_threshold_lets_close_colours_pass_and_far_ones_fail`,
+    `anti_aliased_pixels_count_unless_the_tolerance_excuses_them`. pixelmatch's own PNG fixture
+    pairs (`1a.png`/`1b.png` and their expected counts) are not in the tree: vendoring them is a
+    download the owner approves, so the table pins the formula, not those counts.
+  - Masks, baselines and predicates: `pixels::a_mask_hides_a_changing_clock` (the count's bounds
+    from the headless counter's semantics, its pixels from a scripted lane's screen that shades
+    them anew at every capture; unmasked, the capture never settles),
+    `a_missing_baseline_fails_and_leaves_the_capture_as_new`,
+    `update_modes_write_baselines_and_a_written_one_still_fails`,
+    `an_update_is_refused_in_ci_and_a_misspelled_one_everywhere`,
+    `a_baseline_past_its_bounds_or_not_a_png_is_refused_before_it_is_decoded` (a header declaring
+    20000 x 20000 refused before any pixel buffer), `a_logical_region_covers_every_device_pixel_it_touches`,
+    `the_predicates_check_one_capture_without_a_baseline`,
+    `a_window_stable_for_n_frames_passes_and_a_moving_one_names_the_frame`,
+    `the_apps_own_sources_are_named_as_not_supported_until_the_app_serves_them`.
+  - Trace: `trace::a_headless_trace_matches_its_golden_rows` (`tests/golden/counter.trace.jsonl`),
+    `a_trace_records_commands_as_written_with_their_results`, `a_trace_cut_short_reads_as_incomplete`
+    (a session ended unfinished, and a last line torn mid-write),
+    `a_reader_refuses_a_newer_format_an_unknown_row_and_a_row_after_the_end`,
+    `evidence_is_kept_once_and_past_the_budget_becomes_a_gap`,
+    `text_is_redacted_unless_the_session_keeps_it`,
+    `every_text_field_of_the_wire_is_redacted_or_named_as_kept` (every free string field of
+    `protocol-0.28.json` is in `trace::TEXT_FIELDS` or the test's kept list),
+    `a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`,
+    `a_headless_replay_has_no_divergence_and_a_changed_app_diverges_at_its_wait` (a counter
+    stepping by 2 diverges at seq 4, `wait.until`, `/satisfied`),
+    `codegen_writes_the_checked_in_test_from_a_trace` with `trace_generated::a_generated_test_taps_the_counter`
+    compiled and run in the same suite,
+    `a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core` (over a scripted
+    agent's socket: `record.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
+    `flui-protocol`, the stream's `gap` in place), `a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`.
+  - After the review of `f45a3b4b`, each with its test failing with the fix taken out by hand:
+    `trace_bounds::scripted::events_lost_mid_trace_mark_every_stream_and_the_callers_count`
+    (a `gap` in `input.jsonl` and in every native stream, and the caller's dropped count),
+    `trace_bounds::scripted::a_trace_that_cannot_start_leaves_the_app_recording_nothing`
+    (the trace's files before `record.start`, `record.stop` after a hold that fails),
+    `trace_bounds::a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction`,
+    `trace_bounds::scripted::a_replay_maps_handles_where_the_schema_has_them_only` (an input
+    source's `id` of `e1` stays text, a node's `id` pairs),
+    `trace::no_field_the_trace_redacts_holds_a_handle`,
+    `trace_bounds::native_recordings_are_read_from_the_index_under_their_one_name` (another
+    name, `../`, a stream twice, past 256 streams, an index past its bytes, no index),
+    `trace_bounds::native_streams_past_their_total_budget_are_refused_before_any_is_read`,
+    `trace_bounds::a_native_stream_through_a_link_is_refused` and
+    `trace_bounds::evidence_through_a_link_is_refused` (a junction on Windows, a symbolic link on
+    Unix, and a linked file on Unix), `trace_bounds::a_command_numbered_twice_is_refused`,
+    `trace_bounds::a_native_recording_past_its_byte_or_row_budget_or_reading_an_undeclared_device_is_refused`,
+    `pixels::an_image_too_large_to_count_is_refused`, `pixels::the_metric_matches_pixelmatch_5_worked_by_hand`
+    (deltas worked out by hand from pixelmatch 5's published formula, the arithmetic in the test),
+    a `cannot_verify` run keeping its trace in
+    `trace::a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`, and the
+    codegen golden marking `capture.os` as not generated and sending a control character as a
+    Rust literal. The reader's running byte bound (a file that grows as it is read) and the
+    linear `Trace::steps` have no test of their own: the first needs a file past 1 GiB, the
+    second changes no answer.
+- **As built:**
+  - `flui_driver::pixels` and `flui_driver::trace`, as the Rust API; their protocol rows
+    (`capture.os`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
+    FD11's `os.*` rows do, so a replay lists a pixel command as skipped rather than compare it.
+  - One image type: `lane::OsCapture` became `pixels::Image`, and `Window::capture_os` became
+    `Window::capture(CaptureSource::Os)`.
+  - The `presented` and `rendered` sources answer `not_supported` naming the method while the app
+    does not serve it (FD8 is not built), and naming `capture_payload` once it does, since the
+    connections read no binary frame yet; the headless target has no pixel source until FD8's
+    `rendered`, so the pixel tests on it take their pixels from `ScriptedLane::screen`.
+  - A comparison records its source, backend, OS and scale; the renderer (adapter, backend) and
+    the font set R22 also asks for are not reported by any source yet, and wait for FD8's capture
+    answer to carry them.
+  - Codegen is held by a checked-in module of the suite (`tests/trace_generated.rs`) that the
+    golden test compares and the suite compiles and runs, instead of a nested cargo build: the same
+    proof, on every PR. A command codegen cannot write (a pixel command until its row joins the
+    method table, a session's start or end) is a `// not generated:` line where it was sent, and
+    the file's header counts them, as a replay lists the same commands as skipped: emitting the
+    pixel commands would need their masks and tolerance in the trace's parameters, which the
+    rows the front ends add will carry.
+  - The writer of a recording's native layer moved from `flui-cli` into the driver
+    (`trace::native::NativeFiles`), which `flui record --native` and a trace share; its files are
+    one per stream (`native/<n>.jsonl` with `index.json`), as ADR-0241 §1 now says.
+  - Three parts of ADR-0241 are not built, each a bullet of `docs/gaps.md` ("Accepted ADR
+    sections not built yet"): reading a packed trace (§1, with `flui drive trace pack`), the
+    header's `target.backend` and `target.profile` (§2, which no app's hello reports yet), and
+    tree snapshots as evidence files (§1; a tree stays in its `result` row).
+  - `retain_on_failure` writes the trace in place and removes it when the report passes (a `cannot_verify` run keeps it, as a failing one does).
+  - Left for later tasks: blessing `flui-native`'s native goldens through the driver in place of
+    `FLUI_NATIVE_RECORDING_BLESS` (R26) comes with the scenarios that record through
+    `record.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,
+    `trace codegen`, `trace pack` and the inspector's player (R25) are FD17's and FD18's.
 
 ### FD11. Windows lane
 
@@ -596,6 +784,147 @@ graph LR
     released;
   - the other scenarios run on W, and each check that existed before is present;
   - the pure mapping tables run on L.
+- **Status (2026-11-19):** built; the pull request is under review. Open until the runs on the
+  input desktop below are made, which this host's owner does not run by hand: they are the
+  `OS input through the driver` and `assistive technology conformance` rows of
+  `crates/flui-native/platform-parity.toml`.
+- **Evidence (2026-11-19):**
+  - On every host (`driver_it`, the tables): `windows_lane::a_key_name_maps_to_its_virtual_key_or_to_the_layout`,
+    `text_is_typed_as_packets_and_line_breaks_as_keys`,
+    `the_role_table_was_read_against_the_locked_adapter`,
+    `every_role_that_publishes_a_node_has_a_row_in_vocabulary_order`,
+    `a_control_type_reads_back_from_its_id`,
+    `a_control_type_folds_to_its_wire_role_with_its_aria_role_and_flags`,
+    `each_safety_rule_refuses_with_its_code`, `shell_hotkeys_are_refused_and_app_chords_are_not`,
+    `the_lane_runs_on_the_shared_desktop_and_refuses_unproven_isolation`,
+    `only_input_with_both_of_the_lanes_marks_is_its_own`,
+    `touch_and_pen_frames_carry_every_contact_and_their_phases`,
+    `a_client_origin_maps_back_to_its_device_pixel_at_every_scale`,
+    `an_absolute_move_lands_on_the_pixel_it_names`,
+    `the_projection_drops_what_one_backend_reports_and_names_the_differences`,
+    `a_release_that_would_complete_a_shell_shortcut_is_masked`,
+    `typed_text_goes_through_the_shell_hotkey_check_as_the_keys_it_sends`,
+    `keys_and_text_are_planned_against_what_the_lane_holds`, `a_release_windows_refused_stays_held`,
+    `a_pause_is_waited_out_whole_in_watched_slices`, `a_contact_is_held_only_once_windows_took_it`,
+    `the_primary_contact_is_the_first_down_and_stays_so`,
+    `a_long_text_is_cut_at_the_same_place_on_both_sides`,
+    `the_walk_reads_the_window_and_leaves_a_gone_element_out`,
+    `a_provider_that_times_out_fails_the_read_with_a_timeout`,
+    `the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart`,
+    `the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_included`,
+    `a_key_windows_took_is_held_even_when_its_echo_never_comes`,
+    `no_property_is_read_after_the_first_timeout`,
+    `a_pattern_request_and_an_invoke_tell_their_failures_apart`;
+    `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`;
+    `steps::small_scrolls_add_up_and_a_part_of_a_pixel_is_carried`;
+    `socket::a_lane_worker_tries_once_more_to_release_when_it_ends`,
+    `a_panicking_release_after_a_panicking_job_keeps_the_jobs_panic`.
+  - The scenarios on the headless target (CI): `scenarios::the_gallery_scenario_passes_on_the_headless_target`,
+    `the_accessibility_scenario_passes_on_the_headless_target`,
+    `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
+    `flui-semantics`' own fold, through the agent), `the_input_scenario_passes_on_the_headless_target`,
+    `the_notes_scenario_passes_on_the_headless_target`,
+    `the_conformance_scenario_passes_on_the_headless_target` (the conformance row the platform-layer
+    spec names).
+  - On W, a nextest desktop of its own (Windows 11 build 26300): `windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`
+    (the scenario app's UI Automation tree projects equal to its semantics, `AutomationId` is the
+    identifier, an `InvokePattern` invoke acts, an unknown id is `not_found`),
+    `every_role_reads_back_as_its_control_type_through_ui_automation`,
+    `the_guard_watches_and_stops_on_a_desktop_of_its_own`,
+    `a_guard_whose_watcher_died_ends_the_run`,
+    `the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey`,
+    `the_lanes_check_allows_chords_whose_release_is_masked`,
+    `a_job_ends_its_processes_when_it_closes`,
+    `a_process_joins_its_job_before_it_runs`,
+    `a_launched_app_ends_with_its_session`; `the_conformance_scenario_runs_through_the_os_lane` and
+    `the_device_check_scenarios_run_through_the_os_lane` announce their OS run and come out
+    `cannot_verify` (`windows_lane`) with nothing sent, `windows-a11y`, which sends no OS input,
+    passing; `the_compositor_captures_the_apps_window_alone` is `cannot_verify` (a window there has
+    no compositor area); `a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input` reports
+    `CANNOT_VERIFY`.
+  - Taken out one at a time, each fails a test above: the check before the first event, the
+    millionth-of-a-pixel origin lift, the headless window's text input, the framework
+    namespace in the projection, recording a key or button before its echo is confirmed, a
+    release of everything reaching the shortcut counts, the refusal of a chord left down, the
+    mask key and the refusal of a completing release in the release of everything, a pointer
+    press not resetting the run of Shift taps, the lane's check reading typed text, the scroll
+    remainder carry, the stop at the first property timeout and the pattern request's typed
+    failures.
+  - Owed on W, by hand on the desktop that takes the user's input (`FLUI_TEST_VISIBLE_DESKTOP=1`;
+    no automated run reaches that desktop: `nightly-platforms.yml` runs only `flui-native`
+    there): the gallery, input and notes scenarios and the conformance scenario passing through the
+    OS lane, a foreign mouse move ending a run `cannot_verify` with its contact released
+    (`a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input`), the guard's hook seeing the
+    lane's own input come back, the foreground read again before each typed stroke, the mask key
+    keeping the release of a held Control+Shift or Alt+Shift from switching the input language
+    and the fifth Shift press or release from turning on Sticky Keys (the app sees the mask as a
+    key event of virtual key `0xE8`: a scenario that compares the exact keys the app received
+    leaves it out; the driver's journal check compares only the kinds of input, so it needs
+    nothing),
+    Windows
+    Graphics Capture of the app's window, a Narrator session over the scenario app, and the
+    isolation spikes below.
+- **As built:**
+  - The lane is `lane::windows`: `keys`, `roles`, `safety`, `held`, `contacts`, `screen`,
+    `activity` and `walk` are pure; `win32`, `guard`, `uia`, `capture` and `job` call Windows. Key
+    events and typed text go through one plan (`held::HeldKeys`), which the shell-hotkey check
+    reads and the lane sends stroke by stroke; held keys, buttons and contacts are recorded once
+    Windows took them, before the guard confirms the echo; `HeldKeys` is the one owner of the
+    shell's shortcut counts too, and only another key restarts the run of Shift taps (Windows
+    documents five presses and nothing about a pause or pointer input between them); a release
+    that would complete a shell shortcut, the release of everything's included, is masked with
+    the unassigned key `0xE8`, so only a press the shell takes is refused; the worker releases
+    once more when it ends after a failed release and logs what stays held; reading an element
+    stops at its first property timeout, and an invoke tells a timeout, a gone element (both
+    `may_have_run`) and a missing pattern apart; a pause is waited out whole; a launched app starts suspended and joins its
+    job before its first instruction. UI Automation, Windows
+    Graphics Capture and the job object go through the `windows` crate the workspace already pins,
+    not `uiautomation` and `windows-capture`.
+  - `Lane` gains `check` (asked by `send_guarded` before the guard arms), `read_tree`, `invoke` and
+    `capture_window`, each `not_supported` by default; the Rust API reaches them as
+    `Window::os_tree`, `compare_projection`, `os_invoke` and `capture(CaptureSource::Os)` (FD10's
+    `os` source). The protocol rows `os.tree`, `os.compare_projection` and `capture.os` are not in
+    `flui_protocol::method` yet: they join it with the front ends.
+  - ADR-0095 §4's projection is `flui_protocol::tree::normalized_outline`; it leaves out the
+    window node, a title bar and the framework's own identifiers (`flui:`, the announcer's live
+    regions), and reads an OS automation id as the identifier.
+  - The guard watches the low-level hooks and the digitizers' raw input (a synthetic pointer
+    device sends no raw input) rather than `GetPointerInfo`, which only the app's window can call;
+    an event is the lane's when it is injected and carries the lane's tag, so a second `SendInput`
+    caller ends a run too. A hook procedure posts to its own thread's queue: no trampoline.
+  - The window is found among the app's visible top-level windows by its client size and DPI
+    against the placement; its logical origin is lifted a millionth of a device pixel so it maps
+    back to its device column at every scale.
+  - A scroll of `n` device pixels turns the wheel `n` wheel units; the app's distance is its own,
+    so the scenarios check that a scroll arrived, not how far.
+  - A composition goes through `input.inject` on every target, the session's path whatever it is.
+  - The device checks became scenarios on the apps in `tests/apps.rs`, which the headless target
+    and `examples/scenario_app.rs` (a window, `flui-app` a Windows-only dev-dependency) share:
+    the gallery (`windows-gallery`), the accessibility checks with the roles page
+    (`windows-a11y`, on a page of every role of the table instead of `a11y_probe`), `windows-input`
+    and `windows-notes` (on a note field instead of `two_screens`). DPI after a resize and native
+    goldens through `record.start{native}` are not checked: the driver resizes no window, and its
+    trace records the native layer (FD10) only from an app built with the `native-capture`
+    journal, which no scenario run on Windows has made yet.
+  - The headless target's window offers text input (`HeadlessWindow::with_text_input`): without it
+    `element.type_text` and a composition reached no field.
+  - The isolation modes are refused, `not_supported` naming `windows_isolation_<mode>`
+    (`WindowsLane::try_new`), until their spikes pass:
+    - **Windows Sandbox.** Generate a `.wsb` that maps the built driver test binary and the
+      scenario app read-only and a results folder read-write, with `vGPU` enabled and a logon
+      command that runs the `windows_desktop` tests of `driver_it` with
+      `FLUI_REQUIRE_INPUT_DESKTOP=1`, writing their output to the results folder. Go when, with the
+      host's mouse moved and keys pressed throughout, every certification scenario passes inside
+      the Sandbox, the host sees no input it did not make (a hook logger on the host stays empty),
+      and `the_compositor_captures_the_apps_window_alone` passes there (GPU presentation); no-go
+      otherwise, and the spec drops the mode.
+    - **A second interactive session.** A second local user signed in by fast user switching runs
+      the same command; go on the same three criteria, the host session's hook logger empty while
+      the second session takes input; no-go otherwise.
+    - **A loopback RDP session.** An RDP session from the machine to itself (a second user, since
+      a session of the same user takes the console) runs the same command; go on the same criteria
+      with the RDP window minimized and then restored, since a minimized RDP client stops
+      rendering the remote desktop; no-go otherwise.
 
 ### FD12. Chrome lane (IC)
 
@@ -626,12 +955,121 @@ graph LR
 
 ### FD14. macOS lane
 
-- **Changes:** `lane::macos`: `CGEventPostToPid` with tablet fields, AX through
+- **Changes:** `lane::macos`: `CGEventPostToPid` (a pen's tablet fields once the AppKit host reads
+  them; until then a pen is refused), AX through
   `objc2-application-services`, ScreenCaptureKit, process group, and a listen-only `CGEventTap`
-  user-activity guard. The `macos-*` scenarios replace
-  the Python and Swift scripts, which are deleted.
+  user-activity guard. The `macos-*` scenarios replace the Python and Swift scripts, which #1827
+  already deleted.
 - **Done when:** clippy is clean for `aarch64-apple-darwin`, and the scenarios run on M. Without a
   run, parity rows stay 🟡 and the PR says "not run on this host".
+- **Status (2026-11-20):** built; the pull request is under review. The macOS code is written
+  against the bindings' sources; its compile is the `aarch64-apple-darwin` cross-typecheck of CI's
+  full lane, and no Mac has run it. Open until the runs on a Mac below are made: the
+  `OS input through the driver` and `assistive technology conformance` rows of
+  `crates/flui-native/platform-parity.toml`.
+- **Evidence (2026-11-19):**
+  - On every host (`driver_it`, the tables): `macos_lane::a_key_name_maps_to_its_key_code_and_the_character_it_types`,
+    `text_is_typed_in_runs_of_at_most_twenty_units_and_line_breaks_as_keys`,
+    `the_role_table_was_read_against_the_locked_adapter`,
+    `every_role_has_a_row_in_the_order_of_the_windows_table`,
+    `an_ax_role_folds_to_its_wire_role_with_its_subrole`,
+    `the_accessibility_api_folds_each_role_as_ui_automation_does_but_these`,
+    `each_safety_rule_refuses_with_its_code` (the three permissions among them),
+    `the_lane_runs_on_the_shared_desktop_and_refuses_unproven_isolation`,
+    `system_shortcuts_are_refused_and_app_chords_are_not`,
+    `lone_modifier_taps_that_toggle_a_system_feature_are_refused`,
+    `keys_and_text_are_planned_against_what_the_lane_holds`,
+    `every_event_carries_the_modifiers_the_lane_holds`, `a_key_is_held_only_once_its_event_was_posted`,
+    `a_release_that_would_complete_a_tap_shortcut_is_not_posted`,
+    `only_events_with_all_three_marks_of_the_lanes_source_are_its_own`,
+    `a_move_with_a_button_down_is_a_drag_and_a_press_lands_where_the_pointer_went`,
+    `input_the_app_would_not_read_as_itself_is_refused_before_any_event` (touch and the pen),
+    `a_pointer_change_is_held_only_once_its_event_was_posted`,
+    `a_scroll_turns_the_wheels_by_points_the_other_way` (1x and 2x, the part of a point carried),
+    `a_release_without_accessibility_is_refused_and_names_what_stays_held`,
+    `a_callback_that_panics_answers_its_failure`,
+    `a_guard_that_stopped_watching_ends_the_run_as_cannot_verify` (a tap turned off, a watcher
+    gone, a panic reading an event), `the_held_scan_leaves_out_the_modifiers_and_caps_lock`,
+    `a_surface_point_lands_in_the_backing_pixel_it_was_aimed_at_on_every_display` (scales 1, 2
+    and 3, displays left of and above the main one, a content edge half a point into a pixel),
+    `the_content_sits_at_the_bottom_left_of_its_window_frame`,
+    `the_window_under_a_point_is_the_frontmost_that_shows_there`,
+    `a_window_capture_is_cut_to_its_content`,
+    `the_frame_controls_are_left_out_and_the_content_root_gives_the_window_its_children`,
+    `a_release_is_read_by_its_version_and_gates_its_calls`; on every Unix host,
+    `launch::a_launched_apps_process_group_ends_with_its_session` (a grandchild ends with the
+    session).
+  - The scenarios on the headless target (CI): `scenarios::the_macos_input_scenario_and_the_published_roles_pass_on_the_headless_target`,
+    `the_macos_notes_scenario_passes_with_the_macos_conventions_on_the_headless_target` (Command
+    and A select the note under macOS's conventions; Control and A fail there), and the shared
+    `gallery`, `accessibility` and `conformance` runs FD11 lists.
+  - Taken out one at a time, each fails a test above: the post point inside the content (a
+    pixel's own centre left a content edge at half a point), a modifier's own flag on its press,
+    the pending fifth tap, the refusal of a completing release in the release of everything,
+    the frame's content root lifted into the window, the macOS select-all chord, the scroll in
+    points, the permission asked before a release, the gone watcher's stop, Caps Lock left out
+    of the held scan and the pen's refusal.
+  - Owed on M (`cargo heli nextest run -p flui-driver -E 'test(/macos_desktop/)'` with
+    Accessibility, Input Monitoring and Screen Recording granted to the terminal, and
+    `FLUI_REQUIRE_MACOS_PERMISSIONS=1` so a missing one fails): `macos_desktop::the_accessibility_api_reads_and_presses_the_app_as_voiceover_does`,
+    `every_role_reads_back_as_its_ax_role_through_the_accessibility_api`,
+    `the_window_server_captures_the_apps_window_alone`, `the_guard_listens_and_stops`,
+    `the_lanes_check_refuses_typed_text_that_completes_a_system_shortcut`,
+    `a_launched_app_ends_with_its_session`, `the_conformance_scenario_runs_through_the_os_lane`,
+    `the_device_check_scenarios_run_through_the_os_lane` (`macos-gallery`, `macos-a11y`,
+    `macos-input`, `macos-notes`), `a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input`;
+    a VoiceOver session over the scenario app; whether a session tap sees the lane's own
+    `CGEventPostToPid` events and whether they carry the private state (`-1`), without which the
+    guard stops on the lane's own input; whether `CGEventSourceKeyState` reads a locked Caps Lock
+    as held; a second session and a virtual machine as isolation modes.
+- **As built:**
+  - The lane is `lane::macos`: `keys`, `held`, `pointer`, `roles`, `safety`, `screen`, `activity`,
+    `frame`, `callback` and `version` are pure; `quartz`, `ax`, `guard`, `capture` and `MacosLane`
+    call macOS. Events go out through `CGEventPostToPid` from a `kCGEventSourceStatePrivate` source
+    tagged with the lane's user data, each carrying the held modifiers as its flags; a modifier is
+    a flags-changed event. A character key is its ANSI key code with the character as the event's
+    text; a character no ANSI key types is typed as text, never pressed. Text goes out in runs of
+    at most twenty UTF-16 units. The mouse is the one pointer: touch has no Quartz event, and a pen
+    is refused while the AppKit host reads tablet events as the mouse. A scroll goes out in
+    points, the unit a pixel-unit Quartz scroll counts, its part of a point carried.
+  - Accessibility is asked before every event and release, not only before a sequence: a release
+    refused for it leaves its key or button held and named (`Error::ReleaseFailed`). The guard's
+    tap callback and ScreenCaptureKit's completion handlers run under `FirstPanic`
+    (`callback::contained_or`); a tap turned off, a watcher gone and a panicking callback stop
+    the guard (`activity::tap_report`, `guard_report`).
+  - The lane posts at the centre of the part of the aimed device pixel inside the window's
+    content. Every source it reads (the window list, the accessibility API, Quartz events) is in
+    global display points from the main display's top left, so nothing is flipped; the content
+    sits at the bottom left of the window frame.
+  - The safety rules read the hardware's held state (`kCGEventSourceStateHIDSystemState`), which
+    the lane's own events never reach, so anything held there refuses the event. The foreground
+    is the frontmost ordinary window and the focused application together; the window under the
+    point is read from the window server's order.
+  - The privacy permissions are preflighted from macOS 10.15 (below it, posting needs the
+    accessibility trust and nothing guards listening or capture) and refused as `not_supported`
+    naming `macos_permission_<name>`.
+  - The AX tree is walked through the bounded walk every reader shares (`lane::walk`), each
+    child read alone by index (`AXUIElementCopyAttributeValues`) so the walk's budget bounds what
+    is copied, the frame's close, minimize, zoom and full-screen buttons left out and the
+    adapter's untitled root group lifted into the window. `native_role` reads `AXRole` or
+    `AXRole/AXSubrole`. The macOS and X11 lanes fold their releases with
+    `lane::release_outcome`; the Windows lane folds its three with `.and`, which a follow-up moves
+    onto it.
+  - ScreenCaptureKit is loaded by path and its classes found by name, since FLUI runs on releases
+    without it; `SCScreenshotManager` (macOS 14) captures the window's frame without its shadow,
+    and the lane cuts it to the content. `objc2-screen-capture-kit` is not a dependency.
+  - The macOS scenarios are the FD11 set with `macos_input` (the mouse alone: Quartz has no touch,
+    and the AppKit host reads a pen's tablet events as the mouse), `macos_notes` (Command and A)
+    and `roles`, which reads the accessibility API's roles where the lane's capabilities name AX
+    (`AccessibilityApi::Ax`); the old `tools/device-checks` macOS scripts
+    were already deleted (#1827), and the AppKit exit, reopen and workload probes they drove are no
+    driver scenarios.
+  - Isolation: a second session and a virtual machine are refused (`macos_isolation_<mode>`)
+    until a run on a Mac shows the lane's input stays out of the host session there.
+  - On every Unix host a launched app leads a process group of its own (`process_group(0)`),
+    which the session kills whole while its leader runs unreaped.
+  - The held-input scan leaves out Caps Lock: Apple does not document whether a locked Caps Lock
+    reads as held, which a run on a Mac settles.
 
 ### FD15. iOS Simulator lane
 
@@ -649,11 +1087,114 @@ graph LR
 - **Changes:**
   - `lane::x11`: XTEST via `x11rb`, AT-SPI via `atspi`, `GetImage`, `PDEATHSIG`, and an XInput2
     user-activity guard;
-  - `lane::wayland`: libei via `reis` through the RemoteDesktop portal with `ashpd`, ScreenCast
-    capture, and portal refusal as cannot-verify. It has no guard, so it runs OS input only in an
-    isolated compositor. The `live-smoke` checks become scenarios, and
-  `tools/live-smoke` is deleted.
+  - `lane::wayland`: libei via `reis`, from a compositor's EIS socket or through the
+    RemoteDesktop portal (asked over zbus, the `atspi` proxies' zbus 5), and portal refusal as
+    cannot-verify. It has no guard, so it runs OS input only in an isolated compositor. ScreenCast
+    capture needs PipeWire, which no Linux build of the workspace links: it is a `docs/gaps.md`
+    entry. `tools/live-smoke` was deleted with the probes (#1827).
 - **Done when:** the x11 scenarios run in CI under Xvfb, and the Wayland scenarios run on WL.
+- **Status (2026-11-19):** built; the pull request is under review. Open until the runs below that
+  need a real session are made: they are the `OS input through the driver` and `assistive
+  technology conformance` rows of `crates/flui-native/platform-parity.toml`.
+- **Evidence (2026-11-19):**
+  - On every host (`driver_it`, the tables): `x11_lane::a_key_name_maps_to_its_keysym_and_a_character_to_its_own`,
+    `text_is_typed_as_its_characters_and_line_breaks_as_keys`,
+    `the_atspi_role_table_was_read_against_the_locked_adapter`,
+    `every_role_that_publishes_a_node_has_an_atspi_row_in_vocabulary_order`,
+    `an_atspi_role_reads_back_by_its_name`,
+    `an_atspi_role_folds_to_the_wire_role_the_app_publishes_where_atspi_keeps_it_apart`,
+    `each_safety_rule_refuses_with_its_code`,
+    `the_lane_runs_on_a_desktops_server_or_an_xvfb_and_refuses_other_modes`,
+    `the_keymap_says_which_key_and_level_carries_a_keysym`,
+    `keys_and_text_are_planned_against_the_keymap_and_what_the_lane_holds`,
+    `chords_the_desktop_takes_are_refused_and_app_chords_are_not`,
+    `only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut`,
+    `a_key_the_server_took_is_held_even_when_its_echo_never_comes`,
+    `a_release_or_emptying_the_server_refused_stays_held`, `a_scroll_turns_the_wheel_in_whole_clicks`,
+    `only_the_xtest_events_the_lane_sent_are_its_own`, `an_image_reads_into_rgba_rows_whatever_its_layout`,
+    `a_wheel_click_left_down_is_released_with_the_rest`, `a_scroll_past_the_click_limit_is_refused`,
+    `the_release_of_everything_completes_no_sticky_keys_shortcut`,
+    `a_release_failure_names_every_key_and_button_still_held`;
+    `wayland_lane::the_desktop_sessions_portal_is_refused_for_a_compositor_of_the_runs_own`;
+    `wayland_lane::a_device_point_lands_in_the_compositors_logical_space_or_is_refused`,
+    `a_button_is_its_evdev_code_and_a_scroll_its_logical_distance`,
+    `the_lane_sends_only_into_a_compositor_of_its_own_and_reads_a_shared_session`,
+    `a_portal_that_refuses_or_ends_cannot_be_verified`.
+  - On Linux (CI's `test` job, which installs Xvfb, `dbus` and at-spi2-core and sets
+    `FLUI_REQUIRE_ATSPI`; run in WSL Ubuntu 24.04): each `x11_desktop` test starts its own Xvfb,
+    session bus and AT-SPI bus and launches `examples/scenario_app.rs` on them:
+    `x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does` (the AT-SPI projection
+    equals the app's, `AccessibleId` is the identifier, a click through the AT-SPI action acts, an
+    unknown id is `not_found`), `every_role_reads_back_as_its_at_spi_role`,
+    `the_server_captures_the_apps_window_alone`,
+    `the_guard_takes_input_another_client_fakes_for_the_persons`,
+    `the_lanes_check_refuses_what_xtest_cannot_send_or_the_desktop_takes`,
+    `the_conformance_scenario_runs_through_the_os_lane` (announced, passing),
+    `the_device_check_scenarios_run_through_the_os_lane` (`x11-gallery`, `x11-a11y` and
+    `x11-notes`, "Grüße 日本" typed through spare keys, pass; `x11-input` passes for the mouse, the
+    wheel and keys and is `cannot_verify` naming `os_input_device` for touch and pen),
+    `a_foreign_motion_mid_run_ends_it_and_releases_its_button`,
+    `a_launched_app_lives_as_long_as_its_session_whatever_thread_launched_it`;
+    `wayland_lane::libei::the_lanes_events_reach_the_compositor_as_ei_events` (an EIS server the test
+    plays with `reis`'s server half hears an absolute motion, the primary button by its evdev code,
+    a scroll, keys as keysyms and UTF-8 text, then the releases),
+    `the_shared_session_takes_no_input_from_the_lane`,
+    `a_compositor_that_does_not_answer_cannot_be_verified`,
+    `the_lane_refuses_the_desktop_sessions_portal_for_its_own_compositor`;
+    `socket::what_an_app_started_ends_with_its_session_after_the_app_exited`.
+  - Taken out one at a time, each fails a test above: the count of the lane's own XTEST events
+    (the table, the guard and the foreign-motion tests), the session's starter thread (the app
+    dies with the thread that launched it), an EI frame after each event (the EIS server hears
+    nothing), a wheel click held as a button's press is, the mask key before the release of
+    everything, the group killed after the app exited (its child outlives the session), and
+    X-Resource's process of a window's client (in WSL, whose apps write no
+    `_NET_WM_PID` outside the first PID namespace, every desktop test finds no window).
+  - Owed, needing a real session: the X11 lane on a desktop's own X server under a window manager
+    (GNOME, KDE); an Orca session over the scenario app; the Wayland lane through the RemoteDesktop
+    portal of a GNOME and a KDE session, and into a headless compositor that serves EIS (mutter),
+    since neither Weston 13 nor sway (both in WSL and CI) serves EIS, which is why the Wayland
+    scenarios have not run on WL.
+- **As built:**
+  - The lanes are `lane::x11` (`keys`, `held`, `safety`, `activity`, `image` pure; `server`,
+    `guard` and `X11Lane` Linux only), `lane::wayland` (`mapping` pure; `libei`, `portal` and
+    `WaylandLane` Linux with the `wayland` feature) and `lane::atspi` (`roles` pure, the client
+    Linux only), which both read through. The AT-SPI client walks through
+    `lane::walk`, the bounded walk every accessibility reader shares, and the lanes map with
+    `lane::screen` and wait in `lane::pacing`'s slices.
+  - A window is the app's by the process X-Resource reports for its client, else its
+    `_NET_WM_PID`: an app outside the first PID namespace (WSL, a container) writes no
+    `_NET_WM_PID`.
+  - The guard tells the lane's XTEST input from another program's by counting: each faked request
+    makes one raw event, and one past the count is foreign, as a second XTEST client must be.
+  - A character the keymap carries on no key is typed through a spare key mapped for the text
+    (each distinct character its own key), with a pause after mapping and before emptying, since
+    an app reads its keymap again only when told it changed; the release of everything empties
+    them.
+  - XTEST fakes a core pointer and keyboard only: the X11 lane refuses touch and pen before any
+    event, so `x11-input`'s touch and pen rows are `cannot_verify` on every X server.
+  - The Wayland lane sends keys and text through EI's text interface (keysyms and UTF-8, libei
+    1.6), so it reads no keymap; it maps from an origin its owner gives it
+    (`WaylandLane::window_origin`), since a Wayland client is told nothing of where its window is,
+    and captures nothing (`docs/gaps.md`, "The driver's Wayland lane captures no window and is told
+    no window position"). Its positions are order-only until measured on a compositor.
+  - AT-SPI off in a session is a lane the host cannot run; the lane never turns it on. The X11
+    lane reads AT-SPI through the session bus it is given (`X11Lane::with_session_bus`), which the
+    tests point at their private bus.
+  - A launched app on Linux leads its own process group and dies when its starter thread ends
+    (`PR_SET_PDEATHSIG`); that thread is the session's own, so a driver moved to another thread
+    keeps its app. The session kills the group when it ends, what the app started included after
+    the app exited: the app is read without being reaped (`waitid` with `WNOWAIT`) until then, so
+    its id names its group and no other process's.
+  - The release of everything completes no desktop shortcut (a spare key with nothing on it
+    pressed and released first while a modifier is held, and a release that would still complete
+    StickyKeys not sent), and a release the server refused is `release_failed` naming what stays
+    held, in both Linux lanes. A wheel click is held as a button's press is; a scroll of more than
+    `MAX_WHEEL_CLICKS` clicks is refused. The Wayland lane refuses the portal of the driver's own
+    session bus for a compositor of the run's own, and takes a portal `Response` only from the
+    portal's connection.
+  - `live-smoke`'s checks are not ported: its launch and its drag and wheel scrolls are the input
+    scenario's press and wheel rows; its occlusion gating and its clean and programmatic closes need
+    driver operations (occluding, closing a window) that do not exist yet.
 
 ### FD17. CLI and MCP
 

@@ -42,7 +42,8 @@ use super::degradation::{
 use crate::owner::windows::WindowRef;
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
-    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics,
+    input::pointer::DeviceId,
 };
 
 /// Nothing plays now: no pen is in range, or the worker cannot take the
@@ -523,10 +524,6 @@ impl PlatformHaptics for WindowsHaptics {
     fn capabilities(&self, source: Option<DeviceId>) -> HapticCapabilities {
         windows_capabilities(self.pen(source).ok().as_ref().map(|pen| &pen.facts))
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// A real window's actuator on a host with no haptic pen: the window has
@@ -542,7 +539,7 @@ mod tests {
     use flui_platform::haptics::{
         HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
     };
-    use flui_platform::pointer::{PenTool, PointerKind};
+    use flui_platform::input::pointer::{PenTool, PointerKind};
 
     use crate::WindowsPlatform;
     use crate::input::assembly::{

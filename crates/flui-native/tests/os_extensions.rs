@@ -126,7 +126,7 @@ mod cases {
     #[cfg(target_os = "windows")]
     fn a_win32_window_opens_with_its_options() {
         use flui_native::os::windows::WindowsWindowExt;
-        use flui_platform::os_options::{
+        use flui_platform::window::os_options::{
             OsWindowOptions, Win32WindowOptions, WindowsCornerPreference, WindowsTheme,
         };
 
@@ -160,7 +160,7 @@ mod cases {
     #[cfg(target_os = "windows")]
     fn a_win32_view_refuses_a_closed_window() {
         use flui_native::os::windows::{Win32WindowError, WindowsWindowExt};
-        use flui_platform::os_options::WindowsCornerPreference;
+        use flui_platform::window::os_options::WindowsCornerPreference;
         use flui_platform::{Unsupported, UnsupportedReason};
 
         let platform: Box<dyn Platform> =

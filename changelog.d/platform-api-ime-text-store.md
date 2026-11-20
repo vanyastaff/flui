@@ -1,6 +1,6 @@
 ### Added
 
-- **The IME text-store contract** (`flui_platform::text_store`,
+- **The IME text-store contract** (`flui_platform::text::store`,
   [ADR-0090](/docs/adr/ADR-0090-ime-pull-text-store-contract.md)): a text field is a
   `TextStore` an input method locks, reads and edits in UTF-16 offsets, the shape of TSF's
   `ITextStoreACP`. A lock is a closure (`LockGrant::Read`/`ReadWrite`, so an edit under a read

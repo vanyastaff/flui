@@ -28,7 +28,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_platform::EventTime;
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::pointer::PointerKind;
 use flui_platform::{
     DisplaySnapshot, ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences, WindowState,
 };

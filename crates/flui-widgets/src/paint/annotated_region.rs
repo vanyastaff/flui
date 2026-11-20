@@ -14,7 +14,7 @@ use flui_view::{Child, IntoView, RenderView};
 /// [`SystemUiOverlayStyle`](flui_platform::SystemUiOverlayStyle) region at
 /// the top edge of the window after every frame and hands the topmost one to
 /// the window's system chrome. Any other `T` is found with
-/// [`LayerTree::find_annotations`](flui_rendering::layer::LayerTree::find_annotations).
+/// [`SceneVersion::find_annotation`](flui_layer::SceneVersion::find_annotation).
 /// Layout and hit testing are the child's; an equal value on rebuild does not
 /// repaint.
 pub struct AnnotatedRegion<T> {

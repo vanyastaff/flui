@@ -183,8 +183,9 @@ pub(crate) fn reset_restores_initial_values_and_clears_errors_and_interaction() 
 pub(crate) fn a_text_form_field_validates_and_saves_the_committed_text() {
     use std::cell::RefCell;
 
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let form = FormHandle::new();
@@ -258,8 +259,9 @@ pub(crate) fn a_text_form_field_validates_and_saves_the_committed_text() {
 pub(crate) fn dropping_a_composing_controller_keeps_the_preedit_out_of_the_value() {
     use std::cell::RefCell;
 
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let form = FormHandle::new();
@@ -330,8 +332,9 @@ pub(crate) fn dropping_a_composing_controller_keeps_the_preedit_out_of_the_value
 /// Red-check: write the value with `set_text` alone — the equal buffer makes
 /// it a no-op, the composition stays, and the field still reports "abc".
 pub(crate) fn setting_the_shown_text_as_the_value_ends_a_reconversion() {
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let form = FormHandle::new();
@@ -383,8 +386,9 @@ pub(crate) fn setting_the_shown_text_as_the_value_ends_a_reconversion() {
 /// Red-check: write the value with `set_text` alone — the equal buffer makes
 /// it a no-op and the field keeps reporting "ab".
 pub(crate) fn setting_the_shown_preedit_as_the_value_commits_it() {
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let field = FormFieldHandle::new();
@@ -431,8 +435,9 @@ pub(crate) fn setting_the_shown_preedit_as_the_value_commits_it() {
 /// Red-check: write the reset through the change path — the committed text
 /// equals the value, so nothing is written and "abX" stays composing.
 pub(crate) fn a_reset_mid_composition_removes_the_preedit() {
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let form = FormHandle::new();

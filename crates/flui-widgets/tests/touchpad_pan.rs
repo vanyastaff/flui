@@ -9,7 +9,7 @@ use crate::common::{LaidOut, lay_out, tight};
 use flui_foundation::geometry::Point;
 use flui_platform::{
     EventTime,
-    pointer::{
+    input::pointer::{
         DeviceId, PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource,
         ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
     },
@@ -142,7 +142,7 @@ mod swipes {
 
     use flui_foundation::geometry::{Axis, Offset};
     use flui_interaction::gesture::{PhysicalEdge, SwipeGestureRecognizer, SwipeStart};
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
     use flui_view::environment::GestureArenaScope;
     use flui_view::prelude::*;
     use flui_widgets::prelude::HitTestBehavior;
@@ -239,7 +239,7 @@ mod swipes {
 pub(crate) fn a_touchpad_swipe_is_a_gesture_and_no_scroll() {
     use flui_foundation::geometry::{Axis, Offset};
     use flui_interaction::gesture::{PhysicalEdge, SwipeStart};
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
 
     let anywhere = SwipeStart::Anywhere(Axis::Horizontal);
     let from_left = SwipeStart::FromEdge(PhysicalEdge::Left);

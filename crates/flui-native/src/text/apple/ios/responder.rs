@@ -24,9 +24,9 @@ use std::sync::Weak;
 
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{Autofill, EditCommand, PressTarget, TextStoreStatus};
+use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::store::{Autofill, EditCommand, PressTarget, TextStoreStatus};
 use flui_platform::{EventTime, PlatformInput};
 use objc2::rc::{Retained, Weak as ObjcWeak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -51,6 +51,18 @@ use super::super::selection_rects::{SelectionRect, gesture_begins};
 use super::super::traits::{KeyboardTraits, keyboard_traits};
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::window_delivery::WindowDelivery;
+use crate::version::gate::apple::AppleVersion;
+use crate::version::gate::{Gate, Since};
+
+/// The text interaction's edit menu as a `UIEditMenuInteraction` on its view
+/// (iOS 16). Before it the edit menu is `UIMenuController`'s.
+#[derive(Debug, Clone, Copy)]
+struct EditMenuInteraction;
+
+impl Gate for EditMenuInteraction {
+    type Version = AppleVersion;
+    const SINCE: u64 = AppleVersion::new(16, 0, 0).rank();
+}
 
 /// What the target of the keyboard's log lines is.
 const LOG: &str = "flui.text.ios";
@@ -217,6 +229,9 @@ pub(super) struct ResponderIvars {
     /// focused field: set once the view exists, and on the window's view
     /// exactly while a field is served ([`TextInputView::serve`]).
     interaction: OnceCell<Retained<UITextInteraction>>,
+    /// Whether the system presents the edit menu through a
+    /// `UIEditMenuInteraction`, from the version read when the view was made.
+    edit_menu: Option<Since<EditMenuInteraction>>,
 }
 
 define_class!(
@@ -733,6 +748,7 @@ impl TextInputView {
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
             interaction: OnceCell::new(),
+            edit_menu: AppleVersion::read().since::<EditMenuInteraction>(),
         }));
         // SAFETY: UIView's designated initializer, on a fresh allocation.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: CGRect::ZERO] };
@@ -866,8 +882,7 @@ impl TextInputView {
             client
                 .selected_range()
                 .filter(|range| !range.is_empty())
-                .map(|selection| client.selection_rects(selection))
-                .unwrap_or_default()
+                .map_or_default(|selection| client.selection_rects(selection))
         } else {
             Vec::new()
         };
@@ -947,7 +962,7 @@ impl TextInputView {
     /// `dismissMenu` closes; before iOS 16 the menu is `UIMenuController`'s,
     /// which `hideMenu` (iOS 13) closes.
     fn dismiss_edit_menu(&self) {
-        if objc2::available!(ios = 16.0) {
+        if self.ivars().edit_menu.is_some() {
             let views = [
                 self.ivars()
                     .interaction
@@ -956,7 +971,7 @@ impl TextInputView {
                 Some(Retained::into_super(self.retain())),
             ];
             for view in views.iter().flatten() {
-                for interaction in view.interactions().iter() {
+                for interaction in &view.interactions() {
                     let object: &AnyObject = interaction.as_ref();
                     if let Some(menu) = object.downcast_ref::<UIEditMenuInteraction>() {
                         menu.dismissMenu();

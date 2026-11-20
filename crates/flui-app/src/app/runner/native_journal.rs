@@ -98,7 +98,7 @@ mod tests {
 
     use flui_native::input::assembly::{ContactRegistry, NativeClock, NativeDevice};
     use flui_platform::EventTime;
-    use flui_platform::pointer::PointerKind;
+    use flui_platform::input::pointer::PointerKind;
 
     use super::*;
 

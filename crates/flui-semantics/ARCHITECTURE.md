@@ -242,8 +242,8 @@ conflict rows; `nested_merge_semantics_keeps_its_own_node` in
 ### 3. Semantics assembly is mark-scoped with a whole-tree fallback, and the tree reaches the OS through AccessKit
 
 **Rule.** The `SemanticsOwner` lives on `PipelineOwner` as `Option<SemanticsOwner>`, created
-when semantics is enabled and disposed when it is disabled (firing the owner-created/disposed
-notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_semantics`,
+when semantics is enabled and disposed when it is disabled.
+Assembly runs in the existing post-paint semantics phase (`run_semantics`,
 `crates/flui-rendering/src/pipeline/owner/semantics.rs`):
 
 - Each render object describes itself through `describe_semantics_configuration`; non-boundary
@@ -754,13 +754,12 @@ nothing itself: a flush runs inside the pipeline's checkout and the widgets bind
 queue onto itself, so disabling semantics or replacing the owner does not drop it. Every frame
 driver reports it once its locks are released (`PipelineCell::report_semantics_diagnostics`: the
 runtime's frame, a failed one included, once layout availability reflects it;
-`RenderingBinding::draw_frame`; the headless harness's frames): the findings move out under one
+the headless harness's frames): the findings move out under one
 brief checkout, so a subscriber that replaces the owner cannot retire another's finding, and a
 subscriber that panics puts back what it left unreported, its own finding included, ahead of
 anything queued since. The runtime contains a reporting panic, so the frame's outcome or error
 stays the one returned; the runtime also schedules another frame to retry the report.
-`RenderingBinding::draw_frame` lets the panic propagate and first gives the painted tree back to
-the pipeline, with no call out, so the next draw delivers the frame. A finding still queued and the same finding from a
+A finding still queued and the same finding from a
 newer change are two reports. `flui-testing`'s `HeadlessHost::pump` fails every frame in which an open window's publication
 left anything out (`a_bare_host_frame_fails_on_an_attribute_its_role_does_not_support`), from a record the pipeline keeps apart from the
 report queue (`PipelineOwner::take_unchecked_semantics_diagnostics`, with the `testing` feature),
@@ -784,8 +783,7 @@ and `a_range_is_supported_on_a_separator_only_when_focusable` in `src/applicabil
 `a_diagnostic_is_reported_outside_the_pipeline_checkout` in
 `crates/flui-widgets/tests/semantics.rs`; `a_selectable_tile_is_an_option_whether_or_not_selected`
 and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-material/tests/`;
-`draw_frame_reports_semantics_diagnostics` and `a_panicking_report_leaves_the_frame_for_the_next_draw` in
-`crates/flui-runtime/src/renderer_binding.rs`; `a_panicking_semantics_report_schedules_its_retry` in
+`a_frame_reports_its_semantics_diagnostics` and `a_panicking_semantics_report_schedules_its_retry` in
 `crates/flui-runtime/src/ui_runtime/tests/frame_failure_containment.rs`;
 `a_headless_frame_fails_on_an_attribute_its_role_does_not_support` in
 `crates/flui-testing/tests/a11y_query.rs`.

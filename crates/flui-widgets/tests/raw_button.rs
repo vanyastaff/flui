@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_testing::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::prelude::*;
 use flui_view::{SignalError, WriterSource};
@@ -177,7 +177,7 @@ pub(crate) fn a_refused_write_in_a_press_is_reported_not_panicked() {
 pub(crate) fn raw_button_activates_from_the_keyboard() {
     use std::cell::Cell;
 
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::interaction::{ButtonActivateIntent, Shortcuts, SingleActivator};
     use flui_widgets::{Row, SizedBox};
 
@@ -578,7 +578,7 @@ impl ViewState<Switched> for SwitchedState {
 /// press to run, so the pointer and action rows of the switch are checked
 /// on the node itself (`switch_tests` beside it).
 pub(crate) fn disabled_raw_button_is_disabled_in_every_part() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
 
     use crate::keyboard_focus::{press as press_key, tab};
 
@@ -663,6 +663,196 @@ pub(crate) fn disabled_raw_button_is_disabled_in_every_part() {
         *log.borrow(),
         ["press", "press", "press", "press"],
         "the activation key reaches neither the disabled button nor the action above it"
+    );
+}
+
+/// A button under a gesture scope whose settings the test switches.
+#[derive(Clone, StatefulView)]
+struct UnderPolicy {
+    slow: flui_testing::widgets::SharedSignal<bool>,
+    log: PressLog,
+}
+
+struct UnderPolicyState {
+    slow: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for UnderPolicy {
+    type State = UnderPolicyState;
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        UnderPolicyState {
+            slow: self.slow.clone(),
+        }
+    }
+}
+
+impl ViewState<UnderPolicy> for UnderPolicyState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.slow.bind(ctx);
+    }
+
+    fn build(&self, view: &UnderPolicy, ctx: &dyn BuildContext) -> impl IntoView {
+        let timeout = if self.slow.get(ctx) { 400 } else { 300 };
+        let settings = flui_interaction::gesture::GestureSettings::default()
+            .with_double_tap_timeout(std::time::Duration::from_millis(timeout));
+        crate::gesture_settings::SettingsScope::new(
+            settings,
+            button(
+                Made::Raw,
+                Some(logging(&view.log, "press")),
+                flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")),
+            ),
+        )
+    }
+}
+
+/// A changed gesture policy rebuilds a button's recognizers from the press
+/// it holds, and the scope's rebuild updates the button: the button
+/// presses before the change, after it, and after it is changed back.
+///
+/// Red-check: rebuild the node's recognizers from an empty factory list on
+/// a dependency change, and the tap after the policy change presses
+/// nothing.
+pub(crate) fn a_raw_button_presses_after_its_gesture_policy_changes() {
+    let slow = flui_testing::widgets::SharedSignal::new(false);
+    let log = PressLog::default();
+    let mut app = lay_out(
+        UnderPolicy {
+            slow: slow.clone(),
+            log: Rc::clone(&log),
+        },
+        loose(400.0),
+    );
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert_eq!(*log.borrow(), ["press"], "the button presses");
+
+    slow.set(true);
+    app.pump();
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert_eq!(
+        *log.borrow(),
+        ["press", "press"],
+        "the button presses under the changed policy"
+    );
+
+    slow.set(false);
+    app.pump();
+    contact(&mut app, Contact::Tap, 20.0, 20.0);
+    assert_eq!(
+        *log.borrow(),
+        ["press", "press", "press"],
+        "the button presses under the policy it started with"
+    );
+}
+
+/// An intent no button binds, which a binding above the button answers.
+#[derive(Clone, Copy, Debug)]
+struct Archive;
+impl flui_widgets::interaction::Intent for Archive {}
+
+/// Logs `name` when it answers `Archive`.
+struct Archiving {
+    log: PressLog,
+    name: &'static str,
+}
+
+impl IntentAction<Archive> for Archiving {
+    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &Archive) -> ActionOutcome {
+        self.log.borrow_mut().push(self.name);
+        ActionOutcome::Performed
+    }
+}
+
+/// A button under an `Actions` whose binding for `Archive` the test
+/// switches, under a shortcut that sends `Archive` from the focus.
+#[derive(Clone, StatefulView)]
+struct UnderSwitchedBinding {
+    second: flui_testing::widgets::SharedSignal<bool>,
+    log: PressLog,
+}
+
+struct UnderSwitchedBindingState {
+    second: flui_testing::widgets::SharedSignal<bool>,
+}
+
+impl StatefulView for UnderSwitchedBinding {
+    type State = UnderSwitchedBindingState;
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        UnderSwitchedBindingState {
+            second: self.second.clone(),
+        }
+    }
+}
+
+impl ViewState<UnderSwitchedBinding> for UnderSwitchedBindingState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.second.bind(ctx);
+    }
+
+    fn build(&self, view: &UnderSwitchedBinding, ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_widgets::interaction::{Shortcuts, SingleActivator};
+
+        let name = if self.second.get(ctx) {
+            "second"
+        } else {
+            "first"
+        };
+        Shortcuts::new(
+            Actions::new(button(
+                Made::Raw,
+                Some(logging(&view.log, "press")),
+                flui_widgets::SizedBox::new(120.0, 60.0).child(Text::new("Press")),
+            ))
+            .action::<Archive>(Archiving {
+                log: Rc::clone(&view.log),
+                name,
+            }),
+        )
+        .shortcut(SingleActivator::character("a"), Archive)
+    }
+}
+
+/// A focused button that binds its own intents hangs them under the chain
+/// above it, and follows that chain when it changes: an intent the button
+/// does not bind, sent from its focus, reaches the binding above as it is
+/// now, not the one the button mounted under.
+///
+/// Red-check: keep the old enclosing chain when the button's shared link
+/// is rehung (`ActionChain::rehang`), and the shortcut after the switch
+/// reaches the first binding.
+pub(crate) fn a_focused_raw_button_follows_the_bindings_above_it() {
+    use flui_platform::input::keyboard::Key;
+
+    use crate::keyboard_focus::{press as press_key, tab};
+
+    let second = flui_testing::widgets::SharedSignal::new(false);
+    let log = PressLog::default();
+    let mut app = lay_out(
+        UnderSwitchedBinding {
+            second: second.clone(),
+            log: Rc::clone(&log),
+        },
+        loose(400.0),
+    );
+    let manager = app.focus_manager();
+    assert!(
+        app.enter_owner_scope(|| tab(&manager)),
+        "the button is a Tab stop"
+    );
+    let archive = |app: &LaidOut| {
+        let manager = app.focus_manager();
+        app.enter_owner_scope(|| press_key(&manager, &Key::character("a")))
+    };
+    assert!(archive(&app), "the shortcut is handled");
+    assert_eq!(*log.borrow(), ["first"]);
+
+    second.set(true);
+    app.pump();
+    assert!(archive(&app), "the shortcut is handled after the switch");
+    assert_eq!(
+        *log.borrow(),
+        ["first", "second"],
+        "the intent reaches the binding above the button as it is now"
     );
 }
 
@@ -769,7 +959,7 @@ pub(crate) fn raw_button_writes_its_states_to_the_controller() {
     // A pen is a second pointer: it hovers beside the mouse.
     let pen_hover = |app: &LaidOut, x: f64, y: f64| {
         use flui_interaction::events::{PointerEvent, make_move_event_for_id};
-        use flui_platform::pointer::{PenTool, PointerButtons, PointerId, PointerKind};
+        use flui_platform::input::pointer::{PenTool, PointerButtons, PointerId, PointerKind};
         let mut event = make_move_event_for_id(
             PointerId::try_from(2_u64).expect("non-zero"),
             flui_foundation::geometry::Offset::new(x, y),
@@ -907,10 +1097,6 @@ impl flui_rendering::delegates::CustomPainter for StateReader {
 
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(Rc::new(self.states.clone()))
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

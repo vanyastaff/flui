@@ -18,11 +18,11 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable};
 use flui_interaction::gesture::{GestureEndReason, GestureRecognizer, LongPressGestureRecognizer};
 use flui_interaction::haptics::HapticsHandle;
+use flui_interaction::pointer::HitTestBehavior;
+use flui_layer::LayerLink;
 use flui_painting::typography::TextPosition;
 use flui_platform::TargetPlatform;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::layer::LayerLink;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_rendering::pipeline::{LeaderWatch, PipelineCell};
 use flui_view::environment::GesturePolicy;
 use flui_view::prelude::*;
@@ -953,7 +953,7 @@ impl FieldHandles {
             .as_ref()
             .map(|parts| parts.commit.clone());
         if let Some(commit) = commit {
-            let mut calls = flui_platform::text_store::OwnerCalls::new();
+            let mut calls = flui_platform::text::store::OwnerCalls::new();
             commit.run(&mut calls);
             calls.resume();
         }

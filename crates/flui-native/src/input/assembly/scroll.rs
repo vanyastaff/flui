@@ -7,8 +7,8 @@
 //! [`ScrollReading`]s; [`ScrollPhases`] turns them into the owned phase.
 
 use flui_platform::EventTime;
-use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{
+use flui_platform::input::keyboard::Modifiers;
+use flui_platform::input::pointer::{
     PointerEvent, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
 };
 

@@ -58,9 +58,9 @@ pub mod decode {
     use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::EventTime;
     use flui_platform::PlatformInput;
-    use flui_platform::input_capabilities::PointerKindSet;
-    use flui_platform::keyboard::Modifiers;
-    use flui_platform::pointer::{
+    use flui_platform::input::capabilities::PointerKindSet;
+    use flui_platform::input::keyboard::Modifiers;
+    use flui_platform::input::pointer::{
         MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerEvent, PointerKind,
         PointerMove, ScrollDelta, ScrollInversion, ScrollPrecision, ScrollUnit,
     };
@@ -1112,7 +1112,7 @@ pub mod decode {
                 let held = self
                     .contacts
                     .buttons(on, Some(previous.device), previous.contact);
-                if held.is_some_and(flui_platform::pointer::PointerButtons::is_empty) {
+                if held.is_some_and(flui_platform::input::pointer::PointerButtons::is_empty) {
                     let leave = Self::reading(event, on, scale, previous, ReadingAction::Leave);
                     self.assemble(&leave, out);
                     self.inside.remove(&(on, previous.device, previous.contact));
@@ -1570,9 +1570,9 @@ mod live {
     use std::time::Duration;
 
     use cursor_icon::CursorIcon;
-    use flui_platform::input_capabilities::InputCapabilities;
-    use flui_platform::keyboard::{KeyPress, KeyState};
-    use flui_platform::pointer::MotionDelta;
+    use flui_platform::input::capabilities::InputCapabilities;
+    use flui_platform::input::keyboard::{KeyPress, KeyState};
+    use flui_platform::input::pointer::MotionDelta;
     use flui_platform::{
         Cursor, CursorError, CursorGrab, CursorImage, EventTime, PlatformFailure, PlatformInput,
         Unsupported, UnsupportedReason,

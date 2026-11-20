@@ -12,7 +12,7 @@ use std::sync::{
 
 use flui_foundation::RenderId;
 use flui_foundation::Single;
-use flui_foundation::geometry::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_objects::{RenderColoredBox, RenderRepaintBoundary, RenderStack};
 use flui_rendering::{
     TextContextHandle,
@@ -21,7 +21,7 @@ use flui_rendering::{
     error::RenderError,
     parent_data::BoxParentData,
     pipeline::{PipelineCell, PipelineOwner},
-    protocol::{BoxProtocol, ProtocolGeometry},
+    protocol::BoxProtocol,
     testing::SceneHost,
     traits::{HitTestOutcome, RenderBox, RenderObject},
 };
@@ -108,7 +108,7 @@ impl RenderObject<BoxProtocol> for Rigged {
     fn perform_layout_raw(
         &mut self,
         _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+    ) -> flui_rendering::error::RenderResult<Size> {
         if self.fails_layout.load(Ordering::SeqCst) {
             return Err(RenderError::contract_violation(
                 "Rigged",
@@ -136,14 +136,10 @@ impl RenderObject<BoxProtocol> for Rigged {
 
     fn hit_test_raw(
         &self,
-        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _position: Offset,
         _child_count: usize,
         _size: Size,
-        _hit_child: &mut dyn FnMut(
-            usize,
-            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
-            Option<Matrix4>,
-        ) -> bool,
+        _hit_child: &mut dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool,
     ) -> HitTestOutcome {
         HitTestOutcome::miss()
     }
@@ -443,10 +439,8 @@ fn layout_report_after_a_boundary_laid_out() {
     );
     f.fails_layout.store(false, Ordering::SeqCst);
     assert!(
-        f.cell.with(|owner| owner
-            .nodes_needing_paint()
-            .iter()
-            .any(|entry| entry.id == f.boundary)),
+        f.cell
+            .with(|owner| owner.queued_for_paint().contains(&f.boundary)),
         "the boundary that laid out owes its paint"
     );
     assert!(
@@ -506,10 +500,8 @@ fn compositing_hook() {
         "the walk took the first leaf's change"
     );
     assert!(
-        f.cell.with(|owner| owner
-            .nodes_needing_paint()
-            .iter()
-            .any(|entry| entry.id == f.root)),
+        f.cell
+            .with(|owner| owner.queued_for_paint().contains(&f.root)),
         "the first leaf's change owes the paint of its repaint boundary"
     );
     assert!(
@@ -572,6 +564,7 @@ impl RenderBox for FailsAfterItsChild {
         ctx.layout_child(0, BoxConstraints::tight(size).loosen())?;
         if self.0.load(Ordering::SeqCst) {
             return Err(RenderError::invalid_constraints(
+                "FailsAfterItsChild",
                 "layout fails after the child laid out",
             ));
         }
@@ -625,10 +618,7 @@ fn an_error_in_the_layout_pass() {
     );
     assert!(!woke.load(Ordering::SeqCst), "the wake was sent");
     assert!(
-        cell.with(|owner| owner
-            .nodes_needing_paint()
-            .iter()
-            .any(|entry| entry.id == boundary)),
+        cell.with(|owner| owner.queued_for_paint().contains(&boundary)),
         "the boundary that laid out owes its paint"
     );
 }

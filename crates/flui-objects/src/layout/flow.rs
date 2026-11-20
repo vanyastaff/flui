@@ -177,15 +177,15 @@ impl RenderFlow {
 
     /// The single sizing formula reused by layout, dry layout, and all four
     /// intrinsics.
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
-        constraints.constrain(self.delegate.get_size(constraints))
+    fn size(&self, constraints: BoxConstraints) -> Size {
+        constraints.constrain(self.delegate.size(constraints))
     }
 
     /// Shared by both width intrinsics: min and max use the identical
     /// formula, and intrinsics never touch children.
     fn intrinsic_width(&self, height: f64) -> f64 {
         let width = self
-            .get_size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
+            .size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
             .width;
         if width.is_finite() { width } else { 0.0 }
     }
@@ -193,7 +193,7 @@ impl RenderFlow {
     /// Shared by both height intrinsics — see [`Self::intrinsic_width`].
     fn intrinsic_height(&self, width: f64) -> f64 {
         let height = self
-            .get_size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
+            .size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
             .height;
         if height.is_finite() { height } else { 0.0 }
     }
@@ -227,7 +227,8 @@ impl RenderFlow {
         let mut recovery = PanicRecovery::new();
         let mut impact = None;
         recovery.run(|| {
-            let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
+            let type_changed =
+                !crate::dynamic_type::same_concrete_type(&*self.delegate, &*delegate);
             impact = Some(
                 if type_changed || delegate.should_relayout(&*self.delegate) {
                     flui_rendering::RenderUpdateImpact::LAYOUT
@@ -297,12 +298,12 @@ impl RenderBox for RenderFlow {
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
-        let size = self.get_size(constraints);
+        let size = self.size(constraints);
         let n = ctx.child_count();
         self.child_sizes.clear();
         self.child_sizes.reserve(n);
         for i in 0..n {
-            let inner = self.delegate.get_constraints_for_child(i, constraints);
+            let inner = self.delegate.constraints_for_child(i, constraints);
             let child_size = ctx.layout_child(i, inner)?;
             // Children are NEVER positioned by layout, only by the
             // paint-time transform `FlowDelegate::paint_children` chooses.
@@ -318,7 +319,7 @@ impl RenderBox for RenderFlow {
         _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
         // Children are never touched for dry layout either.
-        Ok(self.get_size(constraints))
+        Ok(self.size(constraints))
     }
 
     fn compute_min_intrinsic_width(

@@ -61,8 +61,9 @@ use flui_objects::{
 };
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
-    semantics::SetSize, traits::RenderSliver,
+    traits::RenderSliver,
 };
+use flui_semantics::SetSize;
 
 use super::sparse_children::{ReconcileSource, build_item_or_report};
 use super::{
@@ -875,16 +876,11 @@ impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
             if let Some(handle) = pipeline_owner.local_render_invalidation_handle(render_id) {
                 owner.keep_alive.watch_pins(host, handle);
             }
-            let Some(render_object) = pipeline_owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .and_then(|node| node.downcast_render_object_mut::<R>())
-            else {
-                return false;
-            };
-            let impact = render_object.set_pinned_indices(&pinned);
-            pipeline_owner.apply_render_update_impact(render_id, impact);
-            !impact.is_none()
+            pipeline_owner
+                .update_render_object::<R>(render_id, |render_object| {
+                    render_object.set_pinned_indices(&pinned)
+                })
+                .is_some_and(|impact| !impact.is_none())
         })
     }
 
@@ -896,9 +892,7 @@ impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
         };
         pipeline.with(|owner| {
             owner
-                .render_tree()
-                .get(render_id)
-                .and_then(|node| node.downcast_render_object::<R>())
+                .render_object::<R>(render_id)
                 .map_or(usize::MAX, R::item_count)
         })
     }
@@ -910,20 +904,15 @@ impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
             return false;
         };
         pipeline.with_mut(|owner| {
-            let Some(render_object) = owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .and_then(|node| node.downcast_render_object_mut::<R>())
-            else {
-                return false;
-            };
-            let impact = if end_index < render_object.item_count() {
-                render_object.set_item_count(end_index)
-            } else {
-                flui_rendering::RenderUpdateImpact::NONE
-            };
-            owner.apply_render_update_impact(render_id, impact);
-            !impact.is_none()
+            owner
+                .update_render_object::<R>(render_id, |render_object| {
+                    if end_index < render_object.item_count() {
+                        render_object.set_item_count(end_index)
+                    } else {
+                        flui_rendering::RenderUpdateImpact::NONE
+                    }
+                })
+                .is_some_and(|impact| !impact.is_none())
         })
     }
 }
@@ -1192,23 +1181,16 @@ where
             let builder = &*core.view().builder;
             let current = pipeline.with(|pipeline_owner| {
                 pipeline_owner
-                    .render_tree()
-                    .get(render_id)
-                    .and_then(|node| node.downcast_render_object::<R>())
+                    .render_object::<R>(render_id)
                     .map(R::item_count)
             });
             if let Some(current) = current
                 && let Some(grown) = regrown_item_count(current, builder)
             {
                 pipeline.with_mut(|pipeline_owner| {
-                    if let Some(render_object) = pipeline_owner
-                        .render_tree_mut()
-                        .get_mut(render_id)
-                        .and_then(|node| node.downcast_render_object_mut::<R>())
-                    {
-                        let impact = render_object.set_item_count(grown);
-                        pipeline_owner.apply_render_update_impact(render_id, impact);
-                    }
+                    let _ = pipeline_owner.update_render_object::<R>(render_id, |render_object| {
+                        render_object.set_item_count(grown)
+                    });
                 });
             }
         }

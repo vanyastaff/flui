@@ -28,15 +28,15 @@ use crate::constraints::BoxConstraints;
 /// struct CenteringDelegate;
 ///
 /// impl SingleChildLayoutDelegate for CenteringDelegate {
-///     fn get_size(&self, constraints: BoxConstraints) -> Size {
+///     fn size(&self, constraints: BoxConstraints) -> Size {
 ///         constraints.biggest()
 ///     }
 ///
-///     fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+///     fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
 ///         constraints.loosen()
 ///     }
 ///
-///     fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset {
+///     fn position_for_child(&self, size: Size, child_size: Size) -> Offset {
 ///         Offset::new(
 ///             (size.width - child_size.width) / 2.0,
 ///             (size.height - child_size.height) / 2.0,
@@ -48,7 +48,7 @@ use crate::constraints::BoxConstraints;
 ///     }
 /// }
 /// ```
-pub trait SingleChildLayoutDelegate: Debug {
+pub trait SingleChildLayoutDelegate: Any + Debug {
     /// Get the size of the parent for the given constraints.
     ///
     /// Called during layout to determine the parent's size.
@@ -60,7 +60,7 @@ pub trait SingleChildLayoutDelegate: Debug {
     /// # Returns
     ///
     /// The size of this render object.
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
@@ -76,7 +76,7 @@ pub trait SingleChildLayoutDelegate: Debug {
     /// # Returns
     ///
     /// The constraints to pass to the child.
-    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+    fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
         constraints
     }
 
@@ -93,7 +93,7 @@ pub trait SingleChildLayoutDelegate: Debug {
     /// # Returns
     ///
     /// The offset of the child from the parent's origin.
-    fn get_position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
+    fn position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
         Offset::ZERO
     }
 
@@ -110,12 +110,6 @@ pub trait SingleChildLayoutDelegate: Debug {
     ///
     /// `true` if layout should be recalculated, `false` otherwise.
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool;
-
-    /// Returns self as `Any` for downcasting.
-    ///
-    /// This enables comparing delegates of the same concrete type in
-    /// `should_relayout`.
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// A layout delegate that centers the child.
@@ -123,15 +117,15 @@ pub trait SingleChildLayoutDelegate: Debug {
 pub struct CenterLayoutDelegate;
 
 impl SingleChildLayoutDelegate for CenterLayoutDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+    fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
         constraints.loosen()
     }
 
-    fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset {
+    fn position_for_child(&self, size: Size, child_size: Size) -> Offset {
         Offset::new(
             (size.width - child_size.width) / 2.0,
             (size.height - child_size.height) / 2.0,
@@ -140,10 +134,6 @@ impl SingleChildLayoutDelegate for CenterLayoutDelegate {
 
     fn should_relayout(&self, _old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
         false
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -162,7 +152,7 @@ impl AspectRatioDelegate {
 }
 
 impl SingleChildLayoutDelegate for AspectRatioDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         let width = constraints.max_width;
         let height = width / self.aspect_ratio;
 
@@ -175,12 +165,12 @@ impl SingleChildLayoutDelegate for AspectRatioDelegate {
         }
     }
 
-    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
-        let size = self.get_size(constraints);
+    fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+        let size = self.size(constraints);
         BoxConstraints::tight(size)
     }
 
-    fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset {
+    fn position_for_child(&self, size: Size, child_size: Size) -> Offset {
         Offset::new(
             (size.width - child_size.width) / 2.0,
             (size.height - child_size.height) / 2.0,
@@ -188,14 +178,10 @@ impl SingleChildLayoutDelegate for AspectRatioDelegate {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+        if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
             (self.aspect_ratio - old.aspect_ratio).abs() > f64::EPSILON
         } else {
             true
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

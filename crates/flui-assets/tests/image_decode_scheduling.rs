@@ -22,6 +22,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use flui_assets::{ImageCache, ImageCacheConfig, ImageSource};
+use flui_platform::assets::{AssetBundle, AssetKey, DirectoryAssets};
 use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 use lanes::{ThreadLanes, block_on};
 
@@ -47,8 +48,12 @@ fn register_signed_png(
     image::hooks::register_format_detection_hook(extension, signature, None);
 }
 
-/// Files of the signed format in a directory removed on drop.
-struct SignedFiles(PathBuf);
+/// Files of the signed format in a directory removed on drop, served by one
+/// bundle so that every source of one file shares its identity.
+struct SignedFiles {
+    directory: PathBuf,
+    bundle: AssetBundle,
+}
 
 impl SignedFiles {
     fn new(name: &str) -> Self {
@@ -61,21 +66,26 @@ impl SignedFiles {
                 .as_nanos()
         ));
         std::fs::create_dir(&directory).expect("test directory is created");
-        Self(directory)
+        let bundle = AssetBundle::new(Arc::new(DirectoryAssets::new(&directory)));
+        Self { directory, bundle }
     }
 
-    fn write(&self, signature: &[u8; 8], name: &str) -> String {
-        let path = self.0.join(name);
+    /// Writes the signed file `name` and returns its source.
+    fn write(&self, signature: &[u8; 8], name: &str) -> ImageSource {
+        let path = self.directory.join(name);
         let mut bytes = signature.to_vec();
         bytes.extend_from_slice(PNG);
         std::fs::write(&path, bytes).expect("signed fixture is written");
-        path.to_string_lossy().into_owned()
+        ImageSource::asset(
+            AssetKey::try_new(name).expect("the test's asset key is valid"),
+            &self.bundle,
+        )
     }
 }
 
 impl Drop for SignedFiles {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 
@@ -103,10 +113,10 @@ fn decodes_leave_the_io_lane_free() {
             .map_err(|_| std::io::Error::other("the IO lane's worker is blocked"))
     });
     let files = SignedFiles::new("worker-probe");
-    let path = files.write(SIGNATURE, "probe.img");
+    let source = files.write(SIGNATURE, "probe.img");
     let registry = ImageCache::default();
 
-    let image = block_on(registry.load(&ImageSource::asset(path), &lanes.services()))
+    let image = block_on(registry.load(&source, &lanes.services()))
         .expect("the decode reaches a free IO worker");
     assert_eq!((image.width(), image.height()), (4, 2));
 }
@@ -159,15 +169,12 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
     let lanes = ThreadLanes::new();
     let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
 
-    let blocker = registry.load(
-        &ImageSource::asset(files.write(SIGNATURE, "blocker.img")),
-        &lanes.services(),
-    );
+    let blocker = registry.load(&files.write(SIGNATURE, "blocker.img"), &lanes.services());
     gate.wait_for_decodes(1);
     let stale: Vec<_> = (0..5)
         .map(|index| {
             registry.load(
-                &ImageSource::asset(files.write(SIGNATURE, &format!("stale-{index}.img"))),
+                &files.write(SIGNATURE, &format!("stale-{index}.img")),
                 &lanes.services(),
             )
         })
@@ -175,8 +182,8 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
     // Let the stale reads finish so they wait for the decode slot.
     std::thread::sleep(Duration::from_millis(100));
     drop(stale);
-    let live_path = files.write(SIGNATURE, "live.img");
-    let live = registry.load(&ImageSource::asset(live_path.clone()), &lanes.services());
+    let live_source = files.write(SIGNATURE, "live.img");
+    let live = registry.load(&live_source, &lanes.services());
     gate.open();
 
     let runtime = current_thread();
@@ -193,7 +200,7 @@ fn abandoned_loads_never_decode_and_do_not_delay_a_live_one() {
         "only the blocker and the live load decode; the abandoned ones never do"
     );
     assert!(
-        registry.get(&ImageSource::asset(live_path)).is_some(),
+        registry.get(&live_source).is_some(),
         "the live image is kept"
     );
 }
@@ -220,10 +227,7 @@ fn loads_past_admission_are_bounded_by_count() {
     let lanes = ThreadLanes::new();
     let registry = ImageCache::new(ImageCacheConfig::default().decode_threads(NonZeroUsize::MIN));
 
-    let blocker = registry.load(
-        &ImageSource::asset(files.write(BLOCKER, "blocker.img")),
-        &lanes.services(),
-    );
+    let blocker = registry.load(&files.write(BLOCKER, "blocker.img"), &lanes.services());
     gate.wait_for_decodes(1);
     let held: Vec<_> = urls
         .iter()
@@ -309,10 +313,7 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
         &lanes.services(),
     );
     arrive(&http, slow);
-    finish(registry.load(
-        &ImageSource::asset(files.write(FILE, "ready.img")),
-        &lanes.services(),
-    ));
+    finish(registry.load(&files.write(FILE, "ready.img"), &lanes.services()));
     assert_eq!(
         *order.lock().expect("order log"),
         ["file"],
@@ -327,20 +328,14 @@ fn decode_slots_go_to_the_earliest_admitted_ready_load() {
     http.hold(held);
     http.respond(held, ScriptedResponse::ok(response));
 
-    let blocker = registry.load(
-        &ImageSource::asset(files.write(BLOCKER, "blocker.img")),
-        &lanes.services(),
-    );
+    let blocker = registry.load(&files.write(BLOCKER, "blocker.img"), &lanes.services());
     gate.wait_for_decodes(1);
     let network = registry.load(
         &ImageSource::network(held, &http.handle()),
         &lanes.services(),
     );
     arrive(&http, held);
-    let file = registry.load(
-        &ImageSource::asset(files.write(FILE, "file.img")),
-        &lanes.services(),
-    );
+    let file = registry.load(&files.write(FILE, "file.img"), &lanes.services());
     // The file's read finishes and it waits for the slot before the response
     // is even sent; then the network load's bytes arrive and it waits too.
     std::thread::sleep(Duration::from_millis(100));

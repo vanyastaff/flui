@@ -4,7 +4,7 @@
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect};
 use flui_painting::styling::Color;
-use flui_platform::input_regions::{
+use flui_platform::input::regions::{
     CaptionButton, ChromeHit, DeviceInputRegion, InputRegionKind, ResizeEdge, chrome_hit,
 };
 use flui_platform::{AppTitleBar, PlatformWindow as _, WindowCommand, WindowFrame, WindowMode};

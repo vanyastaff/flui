@@ -181,11 +181,11 @@ It applies each requested phase at most once, in this order:
    layer change gets the paint (the condition, not the call order, decides);
 5. semantics through `mark_needs_semantics`.
 
-`crates/flui-rendering/src/pipeline/owner/accessors.rs:1920` is the single
+`crates/flui-rendering/src/pipeline/owner/dirty_marks.rs:127` is the single
 implementation of this order. `mark_needs_composited_layer_update` degrades to a
 paint mark when no ancestor boundary owns retained output to patch, and refuses
 itself when the node already needs paint or already carries the update
-(`accessors.rs:1884`; `crates/flui-rendering/src/pipeline/scheduler.rs:552`).
+(`dirty_marks.rs:71`; `crates/flui-rendering/src/pipeline/scheduler.rs:552`).
 
 Self-marking render objects hand the same value to
 `LocalRenderInvalidationHandle::request_update(RenderUpdateImpact)`
@@ -194,7 +194,7 @@ every phase of the impact together before it wakes the frame driver
 ([ADR-0190](ADR-0190-owner-local-render-invalidation.md)). That lane does not
 call `apply_render_update_impact`: the frame-entry drain replays each admitted
 phase through its own commit path, layout, compositing, paint, semantics, then
-the composited-layer update (`accessors.rs:265`). Paint still wins there,
+the composited-layer update (`invalidation.rs:187`). Paint still wins there,
 because the layer update refuses itself on a node that needs paint. The truth
 table of the named constants, including that `COMPOSITED_LAYER_UPDATE` does not
 imply paint, is pinned by the unit test

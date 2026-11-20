@@ -106,7 +106,7 @@ fn a_failed_frame_is_painted_again_after_a_backoff_that_grows() {
     let clock = ManualClock::new();
     let mut runtime = crate::owner_publication::runtime_on_manual_clock(&clock);
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("refused"))
         .expect("mount text");
     let mut sink = Failing::new(SubmitVerdict::Failed, 3);
     assert!(
@@ -164,7 +164,7 @@ fn runtime_whose_wake_panics(panics: &Arc<AtomicBool>, clock: &ManualClock) -> U
         flui_scheduler::ClockSource::Manual(clock.clone()),
     );
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("refused"))
         .expect("mount text");
     runtime
 }
@@ -225,7 +225,7 @@ fn a_refused_frame_waits_for_its_windows_next_change() {
     let clock = ManualClock::new();
     let mut runtime = crate::owner_publication::runtime_on_manual_clock(&clock);
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("refused"))
         .expect("mount text");
     let mut sink = Failing::new(SubmitVerdict::Refused, 1);
     assert!(
@@ -260,13 +260,11 @@ fn a_withdrawn_surface_is_retried_after_the_backoff_and_then_takes_the_held_pres
     let downs = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let seen = std::rc::Rc::clone(&downs);
     runtime
-        .attach_root_widget_with_size(
+        .attach_root_widget(
             &flui_widgets::Listener::new()
-                .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+                .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                 .on_pointer_down(move |_, _| seen.set(seen.get() + 1))
                 .child(flui_widgets::SizedBox::new(400.0, 400.0)),
-            400.0,
-            400.0,
         )
         .expect("mount the press's handler");
     let mut sink = Failing::new(SubmitVerdict::NotShown, usize::MAX);

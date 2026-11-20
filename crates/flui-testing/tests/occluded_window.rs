@@ -11,9 +11,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use flui_foundation::Leaf;
 use flui_foundation::geometry::Size;
 use flui_platform::{SystemNotice, WindowCommand, WindowMode};
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
+use flui_rendering::{
+    BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::{HeadlessHost, HeadlessWindow, UnshownFrame};
 use flui_view::prelude::*;
@@ -303,6 +306,528 @@ fn run(case: &Case) {
         shown,
         "{name}: the window shows its content once seen"
     );
+}
+
+/// A covered window beside a shown one that draws a frame every 16 ms: the
+/// covered window is asked for its owed frame once, at the end of its quiet
+/// period, however many frames the shown window draws before and after; the
+/// frame served then draws the covered window's change; the request is
+/// withdrawn once that frame ran with nothing left, asked again for the next
+/// change at the next quiet period's end, and withdrawn when the window is
+/// seen again, which draws the change then. Fails when the owed frame rides
+/// the application's wake deadline: the covered window is asked for nothing.
+#[test]
+fn a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(40, 40));
+    let shown = SharedSignal::new(0_u32);
+    host.attach(&Content {
+        number: shown.clone(),
+        painted: Arc::new(AtomicU32::new(0)),
+    })
+    .expect("a fresh host has no root");
+    let covered = host.open_window(HeadlessWindow::new(40, 40).with_occlusion_reports());
+    let number = SharedSignal::new(1);
+    let painted = Arc::new(AtomicU32::new(0));
+    host.attach_to(
+        covered,
+        &Content {
+            number: number.clone(),
+            painted: Arc::clone(&painted),
+        },
+    )
+    .expect("the opened window has no root");
+    let _ = host.pump(FRAME);
+    assert_eq!(painted.load(Ordering::SeqCst), 1, "the first frame");
+
+    // The shown window changes before each of its frames.
+    let mut shown_frame = 0;
+    let mut draw_shown = |host: &mut HeadlessHost, frames: u32| {
+        for _ in 0..frames {
+            shown_frame += 1;
+            shown.set(shown_frame);
+            let _ = host.pump(FRAME);
+        }
+    };
+    let quiet_ends = host.clock().elapsed() + Duration::from_secs(1);
+    let owed = flui_platform::EventTime::from_nanos(
+        u64::try_from(quiet_ends.as_nanos()).expect("BUG: a test's time fits the event timeline"),
+    );
+    host.set_window_occluded(covered, true);
+    number.set(2);
+
+    draw_shown(&mut host, 50);
+    assert_eq!(
+        host_requests(&host, covered),
+        [Some(owed)],
+        "asked once, at the quiet period's end, through 50 frames of the shown window"
+    );
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        1,
+        "nothing drawn before then"
+    );
+
+    draw_shown(&mut host, 20);
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        2,
+        "the owed frame draws the change"
+    );
+    assert_eq!(
+        host_requests(&host, covered),
+        [Some(owed), None],
+        "drawn with nothing left, the request is withdrawn, and the shown window's \
+         frames ask nothing again"
+    );
+
+    number.set(3);
+    draw_shown(&mut host, 30);
+    let next = match host_requests(&host, covered)[..] {
+        [Some(first), None, Some(next)] if first == owed && next > owed => next,
+        ref other => panic!("the next change is asked for once, later: {other:?}"),
+    };
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        2,
+        "the next change waits for its quiet period"
+    );
+    host.set_window_occluded(covered, false);
+    assert_eq!(
+        host_requests(&host, covered),
+        [Some(owed), None, Some(next), None],
+        "the window seen again: its request is withdrawn"
+    );
+    draw_shown(&mut host, 1);
+    assert_eq!(painted.load(Ordering::SeqCst), 3, "and it draws its change");
+}
+
+/// A covered window whose content changes between two pumps, with no pump,
+/// observation or notice after the change: the host's loop still waits for
+/// the owed frame and draws it, as a runner's owner delivery asks at the end
+/// of the work item that made the change. Fails when the host asks for owed
+/// frames only after its own turns: the loop finds nothing to wait for,
+/// `pump_until_settled` settles at once, and the change is never drawn.
+#[test]
+fn a_change_between_pumps_is_still_owed_its_frame() {
+    let (mut host, number, painted) = mounted(HeadlessWindow::new(40, 40).with_occlusion_reports());
+    host.set_window_occluded(host.primary_window(), true);
+    let _ = host.pump(FRAME);
+    number.set(2);
+    let wait = host
+        .time_to_next_frame()
+        .expect("the change leaves the covered window owing its frame");
+    assert!(wait > FRAME, "after its quiet period: {wait:?}");
+    let frames = host
+        .pump_until_settled(FRAME, 200)
+        .expect("the owed frame settles the host");
+    assert!(frames > 0, "the host pumped for the owed frame");
+    assert_eq!(
+        painted.load(Ordering::SeqCst),
+        2,
+        "the owed frame draws the change"
+    );
+}
+
+/// Text at a size the number it shows sets, so each new number is a size the
+/// window's text-sizing provider has not answered yet.
+#[derive(Clone, StatefulView)]
+struct SizedNumber {
+    number: SharedSignal<u32>,
+}
+
+struct SizedNumberState {
+    number: SharedSignal<u32>,
+}
+
+impl StatefulView for SizedNumber {
+    type State = SizedNumberState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        SizedNumberState {
+            number: self.number.clone(),
+        }
+    }
+}
+
+impl ViewState<SizedNumber> for SizedNumberState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.number.bind(ctx);
+    }
+
+    fn build(&self, _view: &SizedNumber, ctx: &dyn BuildContext) -> impl IntoView {
+        let number = self.number.get(ctx);
+        flui_widgets::Text::new(number.to_string()).style(
+            flui_painting::typography::TextStyle::default()
+                .with_font_size(10.0 + f64::from(number)),
+        )
+    }
+}
+
+/// A covered window whose text waits on its text-sizing provider, set up to
+/// the point where the frame its window's served request brings is held:
+/// `window` shows [`SizedNumber`] measured by a scripted provider, is covered,
+/// changes to a size the provider holds unanswered (its owed frame runs and
+/// its text preparation waits), and owes its frame again (`request_frame`,
+/// which asks the primary: `window` is the host's primary), so the next served
+/// frame meets the waiting preparation. Returns the provider and the number of
+/// frames submitted before the hold.
+fn held_owed_frame(
+    host: &mut HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+    number: &SharedSignal<u32>,
+) -> (flui_testing::ScriptedTextSizing, u64) {
+    let sizing = parked_owed_frame(host, window, number);
+    host.request_frame();
+    host.pump_until_settled(FRAME, 200)
+        .expect("the held frame keeps no loop turning");
+    (sizing, host.sink().submits())
+}
+
+/// [`held_owed_frame`] up to the hold: `window`'s text waits on the held
+/// provider, its owed frame drawn with the text parked. The next owed frame,
+/// once something owes it, meets the waiting preparation.
+fn parked_owed_frame(
+    host: &mut HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+    number: &SharedSignal<u32>,
+) -> flui_testing::ScriptedTextSizing {
+    let sizing = host.script_text_sizing(window);
+    host.attach_to(
+        window,
+        &SizedNumber {
+            number: number.clone(),
+        },
+    )
+    .expect("the window has no root");
+    host.pump_until_settled(FRAME, 50)
+        .expect("the text is measured and drawn");
+    host.set_window_occluded(window, true);
+    let _ = host.pump(FRAME);
+    sizing.hold();
+    number.set(2);
+    // The host's loop, until the frame its served request brings runs.
+    for _ in 0..200 {
+        if sizing.held() > 0 {
+            break;
+        }
+        let wait = host
+            .time_to_next_frame()
+            .expect("the change is owed its frame");
+        let _ = host.pump(wait.max(FRAME));
+    }
+    assert_eq!(
+        sizing.held(),
+        1,
+        "the owed frame's text waits on the provider"
+    );
+    sizing
+}
+
+/// A covered window's served owed frame held by its text preparation is not
+/// asked for again while the preparation waits, and is asked again, and
+/// drawn, once the provider answers. Fails with the hold not marked (the
+/// answer asks nothing and the frame is never drawn) and with the hold taken
+/// as ended whatever the preparation (the window is asked again at once, while
+/// nothing can draw).
+#[test]
+fn a_held_owed_frame_is_asked_again_once_its_text_is_answered() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 100).with_occlusion_reports());
+    let window = host.primary_window();
+    let number = SharedSignal::new(1);
+    let (_sizing, before) = held_owed_frame(&mut host, window, &number);
+    let asked = host_requests(&host, window);
+    let held_at = asked
+        .last()
+        .copied()
+        .flatten()
+        .expect("the held frame's instant is the one last asked");
+    let _ = host.pump(Duration::from_secs(3));
+    let _ = host.time_to_next_frame();
+    assert_eq!(
+        host_requests(&host, window),
+        asked,
+        "nothing is asked again while the preparation waits"
+    );
+    assert_eq!(host.sink().submits(), before, "and nothing is drawn");
+
+    assert_eq!(host.answer_text_sizing(), 1, "the provider answers");
+    assert_eq!(
+        host_requests(&host, window).last(),
+        Some(&Some(held_at)),
+        "the answer asks the window for the held frame again"
+    );
+    assert_eq!(host_requests(&host, window).len(), asked.len() + 1, "once");
+    host.pump_until_settled(FRAME, 50)
+        .expect("the frame is served and drawn");
+    assert!(
+        host.sink().submits() > before,
+        "the held frame is drawn once its text is answered"
+    );
+}
+
+/// A covered window's served owed frame held by its text preparation, beside
+/// an idle shown window: the held frame is no work a frame of the shown
+/// window runs, so the host's loop does not keep waking for it and the host
+/// settles. Fails when a due owed frame counts as due work: the shown
+/// window's frames run it at once, forever.
+#[test]
+fn a_held_owed_frame_keeps_no_loop_turning() {
+    // The covered window is the primary, which `request_frame` asks; the
+    // shown window beside it has nothing to draw.
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 100).with_occlusion_reports());
+    let covered = host.primary_window();
+    let _shown = host.open_window(HeadlessWindow::new(40, 40));
+    let number = SharedSignal::new(1);
+    let (_sizing, before) = held_owed_frame(&mut host, covered, &number);
+    assert_ne!(
+        host.time_to_next_frame(),
+        Some(Duration::ZERO),
+        "the held frame wakes the loop for nothing now"
+    );
+    assert!(
+        host.pump_until_settled(FRAME, 20).is_ok(),
+        "and the host settles"
+    );
+    assert_eq!(host.sink().submits(), before, "with nothing drawn");
+}
+
+/// A covered window's served owed frame held by its text preparation, whose
+/// premises move: after the hold, a signal its view reads is written or the
+/// window's scale changes; or, in the frame that serves the held instant, the
+/// shown window beside it writes that signal from its animation, which ticks
+/// as that window is sampled, after the covered window's reconciliation and
+/// before its admission, so the frame is held on a segment already refused.
+/// The provider's answer to the old segment is refused and no export serves
+/// it, so the move asks the window for the frame again, whose reconciliation
+/// withdraws the segment and draws. The rows differ in what moves, and when:
+/// in the last, the frame's revalidation before drawing withdraws the segment
+/// the hold kept, so the preparation's outcome moves on in the hold's own
+/// frame. Fails when a held frame is not asked again at all (every row: the
+/// answer is refused, nothing is asked, and the window draws nothing until it
+/// is seen), and when only a moved outcome releases the hold (the first two).
+#[test]
+fn a_moved_premise_asks_a_held_owed_frame_again() {
+    // (case, whether the premise moves in the frame that holds, the move)
+    let rows: [(&str, bool, Move); 3] = [
+        (
+            "a signal the view reads is written",
+            false,
+            |_, _, number| number.set(3),
+        ),
+        ("the window's scale changes", false, |host, windows, _| {
+            host.set_scale_factor(
+                windows.covered,
+                flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
+                    .expect("a ratio in range"),
+            );
+        }),
+        (
+            "the shown window's animation writes the signal between reconciliation and admission",
+            true,
+            |host, windows, _| {
+                windows.start.notify_listeners();
+                // The run anchors at the next frame and advances at the one
+                // after, the frame that serves the held instant.
+                let _ = host.pump(FRAME);
+                let _ = host.pump(Duration::from_secs(2));
+            },
+        ),
+    ];
+    let failed: Vec<&str> = rows
+        .iter()
+        .filter(|(name, in_hold, moved)| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                moved_premise_case(name, *in_hold, *moved);
+            }))
+            .is_err()
+        })
+        .map(|(name, ..)| *name)
+        .collect();
+    assert!(failed.is_empty(), "failing cases: {failed:?}");
+}
+
+/// The windows of a moved-premise row.
+struct Windows {
+    /// The primary, covered, its text held on the provider; sampled first.
+    covered: flui_testing::HeadlessWindowId,
+    /// What starts the shown window's animation, which writes the covered
+    /// window's signal as it ticks.
+    start: flui_foundation::ChangeNotifier,
+}
+
+/// What a moved-premise row moves.
+type Move = fn(&mut HeadlessHost, &Windows, &SharedSignal<u32>);
+
+/// A box whose animation, once `start` notifies, writes 3 into `written` at
+/// its first tick that advances it: inside the sampling of its window.
+#[derive(Clone, StatefulView)]
+struct SignalAnimator {
+    start: flui_foundation::ChangeNotifier,
+    written: SharedSignal<u32>,
+}
+
+struct SignalAnimatorState {
+    start: flui_foundation::ChangeNotifier,
+    written: SharedSignal<u32>,
+    /// The start and tick subscriptions, dropped before the run they observe,
+    /// which the window's frame registry drives.
+    driven: Option<(
+        [flui_foundation::Subscription; 2],
+        flui_animation::DrivenController,
+    )>,
+}
+
+impl StatefulView for SignalAnimator {
+    type State = SignalAnimatorState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        SignalAnimatorState {
+            start: self.start.clone(),
+            written: self.written.clone(),
+            driven: None,
+        }
+    }
+}
+
+impl ViewState<SignalAnimator> for SignalAnimatorState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        use flui_animation::Animation as _;
+        use flui_foundation::Listenable as _;
+
+        let vsync = flui_view::environment::VsyncScope::maybe_of(ctx);
+        assert!(vsync.is_some(), "the runtime installs a frame registry");
+        let driven = flui_animation::AnimationController::builder(Duration::from_millis(1500))
+            .build_on(vsync.as_ref());
+        let started = driven.controller().clone();
+        let on_start = self.start.listen(std::rc::Rc::new(move || {
+            let _ = started.forward();
+        }));
+        let ticked = driven.controller().clone();
+        let written = self.written.clone();
+        let wrote = std::cell::Cell::new(false);
+        let on_tick = driven.controller().listen(std::rc::Rc::new(move || {
+            if ticked.value() > 0.0 && !wrote.replace(true) {
+                written.set(3);
+            }
+        }));
+        self.driven = Some(([on_start, on_tick], driven));
+    }
+
+    fn build(&self, _view: &SignalAnimator, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+fn moved_premise_case(name: &str, in_hold: bool, moved: Move) {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 100).with_occlusion_reports());
+    let window = host.primary_window();
+    let number = SharedSignal::new(1);
+    let start = flui_foundation::ChangeNotifier::new();
+    let shown = host.open_window(HeadlessWindow::new(40, 40));
+    host.attach_to(
+        shown,
+        &SignalAnimator {
+            start: start.clone(),
+            written: number.clone(),
+        },
+    )
+    .expect("the shown window has no root");
+    let (sizing, before) = if in_hold {
+        // The held instant asked, not yet served: the move's frame serves it.
+        let sizing = parked_owed_frame(&mut host, window, &number);
+        host.request_frame();
+        let _ = host.time_to_next_frame();
+        (sizing, host.sink().submits())
+    } else {
+        held_owed_frame(&mut host, window, &number)
+    };
+    let asked = host_requests(&host, window).len();
+    moved(
+        &mut host,
+        &Windows {
+            covered: window,
+            start,
+        },
+        &number,
+    );
+    // The provider answers what it holds, and from now on at once.
+    sizing.answer_at_once();
+    let _ = host.answer_text_sizing();
+    let _ = host.time_to_next_frame();
+    assert_eq!(
+        host_requests(&host, window).len(),
+        asked + 1,
+        "{name}: the move asks the window for the held frame again"
+    );
+    host.pump_until_settled(FRAME, 100)
+        .unwrap_or_else(|unsettled| panic!("{name}: {unsettled:?}"));
+    assert!(
+        host.sink().submits() > before,
+        "{name}: the held frame is drawn"
+    );
+}
+
+/// A window that cannot be seen is asked for no frame by the host while a
+/// window beside it draws, as a window system asks none of a covered window:
+/// a recording of the session holds frame rows of the shown window and none
+/// of the covered one, which owes its surface nothing. Fails when every open
+/// window is delivered every frame.
+#[test]
+fn a_covered_window_is_delivered_no_frame_it_did_not_ask_for() {
+    use flui_runtime::{HostInput, InputRecord};
+    use flui_testing::recording::{
+        Privacy, RecordingReader, RecordingWriter, ReplayableRecording, record,
+    };
+
+    let (mut host, shown_number, _) = mounted(HeadlessWindow::new(40, 40));
+    let covered = host.open_window(HeadlessWindow::new(40, 40).with_occlusion_reports());
+    host.attach_to(
+        covered,
+        &Content {
+            number: SharedSignal::new(1),
+            painted: Arc::new(AtomicU32::new(0)),
+        },
+    )
+    .expect("the opened window has no root");
+    let _ = host.pump(FRAME);
+    host.set_window_occluded(covered, true);
+    let _ = host.pump(FRAME);
+    let writer = RecordingWriter::try_new(Vec::new(), &host.recording_header(Privacy::Redact))
+        .expect("the header writes");
+    let recording = record(host.input_taps(), writer).expect("first tap registration");
+    for frame in 0..10 {
+        shown_number.set(10 + frame);
+        let _ = host.pump(FRAME);
+    }
+    let bytes = recording.finish().expect("a complete recording");
+    let recorded = ReplayableRecording::read(
+        RecordingReader::try_new(bytes.as_slice()).expect("the recording reads"),
+    )
+    .expect("a whole recording");
+    let frames_of = |window: flui_testing::HeadlessWindowId| {
+        let id = flui_platform::PlatformWindow::id(host.window_of(window));
+        recorded
+            .rows()
+            .iter()
+            .filter(|row| {
+                matches!(row, InputRecord::Input(row)
+                    if row.window == id && matches!(row.input, HostInput::Frame { .. }))
+            })
+            .count()
+    };
+    assert!(
+        frames_of(host.primary_window()) >= 10,
+        "the shown window is delivered its frames"
+    );
+    assert_eq!(frames_of(covered), 0, "the covered window none");
+}
+
+/// Every timed frame request `window` took, oldest first.
+fn host_requests(
+    host: &HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+) -> Vec<Option<flui_platform::EventTime>> {
+    host.window_of(window).timed_frame_requests()
 }
 
 /// A covered window minimized owes nothing, and restored while still covered

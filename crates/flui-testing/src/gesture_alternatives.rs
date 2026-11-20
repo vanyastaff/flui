@@ -47,10 +47,10 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::gesture::GestureSettings;
-use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::pointer::PointerButton;
+use flui_platform::input::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::input::pointer::PointerButton;
 use flui_platform::{
-    EventTime, MotionPreference, SystemPreferences, TargetPlatform, pointer::DeviceId,
+    EventTime, MotionPreference, SystemPreferences, TargetPlatform, input::pointer::DeviceId,
 };
 use flui_rendering::constraints::BoxConstraints;
 use flui_view::{BoxedView, View, ViewExt};

@@ -30,8 +30,8 @@ use flui_foundation::geometry::{Axis, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_interaction::gesture::GestureSettingsProvider;
 use flui_interaction::gesture::{HoldEnd, RemainderHandoff};
-use flui_platform::keyboard::Code;
-use flui_platform::pointer::{DeviceId, PointerKind};
+use flui_platform::input::keyboard::Code;
+use flui_platform::input::pointer::{DeviceId, PointerKind};
 use flui_rendering::view::{OffsetWriteCause, ScrollDirection, ScrollOffsetWriter};
 
 use super::nested::presentation_device_pixel_ratio;

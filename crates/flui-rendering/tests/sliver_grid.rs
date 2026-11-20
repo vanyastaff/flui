@@ -138,8 +138,7 @@ fn build_grid_tree(
 
     let root_id = owner.insert(Box::new(SliverHost { constraints }) as BoxedRenderObject);
     let grid_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             root_id,
             Box::new(RenderSliverGrid::new(delegate, child_count)) as BoxedSliverObject,
         )
@@ -148,8 +147,7 @@ fn build_grid_tree(
     let mut child_ids = Vec::with_capacity(child_count);
     for index in 0..child_count {
         let child_id = owner
-            .render_tree_mut()
-            .insert_box_child(
+            .insert_child_render_object(
                 grid_id,
                 Box::new(FixedHitBox::new(1000.0, 1000.0)) as BoxedRenderObject,
             )
@@ -159,11 +157,11 @@ fn build_grid_tree(
         // `fixed_extent_tree`): the request-strategy grid reconciles resident
         // children by reading this back before its own layout pass, so it
         // must already be correct, not merely default-initialized.
-        owner
-            .render_tree_mut()
-            .get_mut(child_id)
-            .expect("just inserted")
-            .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(index)));
+        crate::common::seed_parent_data(
+            &mut owner,
+            child_id,
+            Box::new(SliverMultiBoxAdaptorParentData::new(index)),
+        );
         child_ids.push(child_id);
     }
 

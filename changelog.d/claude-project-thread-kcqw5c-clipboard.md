@@ -1,6 +1,6 @@
 ### Changed
 
-- `flui_platform::data_transfer::DataTransferSource` is renamed `DragTransport`, and
+- `flui_platform::transfer::data::DataTransferSource` is renamed `DragTransport`, and
   `NullDataTransferSource` is renamed `NullDragTransport` (also re-exported at the crate root):
   the transport carries drag and drop only (ADR-0312). `Platform::data_transfer()` and
   `RuntimeHostServices::with_data_transfer` keep their names and take or return

@@ -19,8 +19,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use flui_app::app::{AppConfig, AppHandle, Application};
+use flui_foundation::Leaf;
 use flui_foundation::geometry::Size;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
+use flui_rendering::{
+    BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+};
 use flui_view::prelude::*;
 
 /// Set in the child's environment: the child case runs the application only

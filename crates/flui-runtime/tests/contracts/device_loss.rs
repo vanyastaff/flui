@@ -58,7 +58,7 @@ impl Lost {
             flui_scheduler::ClockSource::Manual(clock.clone()),
         );
         runtime
-            .attach_root_widget_with_size(&flui_widgets::Text::new("lost"), 400.0, 400.0)
+            .attach_root_widget(&flui_widgets::Text::new("lost"))
             .expect("mount text");
         let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let seen = Arc::clone(&reports);
@@ -300,7 +300,7 @@ fn a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work() {
 
     let runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
     runtime
-        .attach_root_widget_with_size(&flui_widgets::Text::new("tree"), 400.0, 400.0)
+        .attach_root_widget(&flui_widgets::Text::new("tree"))
         .expect("mount text");
     runtime.mark_primary_needs_full_repaint();
     assert!(
@@ -328,7 +328,7 @@ fn a_pointer_move_is_input_work_and_neither_tree_nor_due_work() {
         "a presented frame leaves nothing pending"
     );
     let at = flui_foundation::geometry::Offset::new(5.0, 5.0);
-    let touch = flui_platform::pointer::PointerKind::Touch;
+    let touch = flui_platform::input::pointer::PointerKind::Touch;
     for event in [
         flui_interaction::events::make_down_event(at, touch).expect("finite touch"),
         flui_interaction::events::make_move_event(

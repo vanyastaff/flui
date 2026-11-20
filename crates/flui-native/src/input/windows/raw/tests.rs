@@ -84,7 +84,7 @@ mod message_clock_contract {
     #[test]
     fn a_coarse_stamp_never_precedes_a_delivered_precise_one() {
         use flui_platform::EventTime;
-        use flui_platform::pointer::{
+        use flui_platform::input::pointer::{
             CancelReason, PointerCancel, PointerEvent, PointerId, PointerKind, PointerSource,
         };
         let clock = MessageClock::anchored(100, None, 1_000_000);
@@ -107,7 +107,7 @@ mod message_clock_contract {
 #[cfg(test)]
 mod native_pointer_contracts {
     use super::super::*;
-    use flui_platform::pointer::{PointerEvent, PointerRole, PointerSample, Pressure};
+    use flui_platform::input::pointer::{PointerEvent, PointerRole, PointerSample, Pressure};
 
     /// Two device pixels per logical pixel.
     const TWO: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {
@@ -167,7 +167,9 @@ mod native_pointer_contracts {
     }
 
     /// The sample of the move `packet` makes for a hovering contact.
-    fn sampled(packet: PointerPacket) -> (flui_platform::pointer::PointerSource, PointerSample) {
+    fn sampled(
+        packet: PointerPacket,
+    ) -> (flui_platform::input::pointer::PointerSource, PointerSample) {
         let events = assemble(&mut registry(), &[packet], WM_POINTERUPDATE);
         events
             .into_iter()
@@ -416,7 +418,10 @@ mod native_pointer_contracts {
         })
     }
 
-    fn down(registry: &mut ContactRegistry, id: u32) -> flui_platform::pointer::PointerSource {
+    fn down(
+        registry: &mut ContactRegistry,
+        id: u32,
+    ) -> flui_platform::input::pointer::PointerSource {
         assemble(
             registry,
             &[touch_packet(
@@ -531,7 +536,7 @@ mod native_pointer_contracts {
     /// A 240 Hz burst inside one system tick: every reading carries the same
     /// `dwTime`, and only the performance count tells them apart. Native
     /// history is newest first; the contact went down at the burst's start.
-    fn assembled_burst(clock: &MessageClock) -> flui_platform::pointer::PointerMove {
+    fn assembled_burst(clock: &MessageClock) -> flui_platform::input::pointer::PointerMove {
         let mut registry = ContactRegistry::new(clock.native());
         let start = timed_touch(5_016, 1_160_000, 130);
         assemble_history(

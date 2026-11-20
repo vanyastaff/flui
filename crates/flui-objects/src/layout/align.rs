@@ -1,7 +1,8 @@
 //! `RenderAlign` — positions a single child according to an [`Alignment`].
 //!
-//! Stores a **resolved** [`Alignment`] (not `AlignmentGeometry`); RTL
-//! resolution is not wired in yet.
+//! Stores a **resolved** [`Alignment`] (not `AlignmentGeometry`): the widget
+//! that configures it resolves a directional alignment against the ambient
+//! reading direction first, as `flui-widgets`' `Align` does.
 //!
 //! Width and height factors are optional multipliers that control how much of
 //! the parent's space this object claims when an axis is unconstrained.  See
@@ -94,8 +95,6 @@ pub(crate) fn positioned_box_size_no_child(
 /// (or `child_size * 1.0 = child_size` when only the unbounded flag fires).
 ///
 /// Factors must be `>= 0.0` (asserted in debug builds).
-///
-/// RTL resolution (`AlignmentGeometry` + `text_direction`) is not wired in yet.
 #[derive(Debug, Clone)]
 pub struct RenderAlign {
     inner: AligningShiftedBox,

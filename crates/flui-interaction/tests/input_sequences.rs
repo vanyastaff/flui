@@ -21,7 +21,7 @@ use flui_interaction::{
     pointer::{EventPropagation, HitTestEntry, HitTestResult, InteractionLane, RenderId},
 };
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::pointer::{DeviceId, ScrollPhase};
+use flui_platform::input::pointer::{DeviceId, ScrollPhase};
 use flui_platform::testing::FakeHaptics;
 use flui_platform::{HapticFeedback, haptics::PlatformHaptics};
 use static_assertions::assert_impl_all;

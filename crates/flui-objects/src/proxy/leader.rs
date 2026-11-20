@@ -34,7 +34,7 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
-use flui_rendering::layer::LayerLink;
+use flui_layer::LayerLink;
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintContext},

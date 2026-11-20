@@ -62,7 +62,7 @@ use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 #[cfg(test)]
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::NamedKey;
+use flui_platform::input::keyboard::NamedKey;
 use flui_view::prelude::StatefulView;
 use flui_view::{
     AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView,

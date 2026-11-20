@@ -134,7 +134,7 @@ impl Rig {
             .expect("valid fixture sample");
         if let PointerEvent::Down(data) = &mut event {
             data.sample.pressure = Some(
-                flui_platform::pointer::Pressure::try_new(pressure)
+                flui_platform::input::pointer::Pressure::try_new(pressure)
                     .expect("valid pressure fixture"),
             );
         }
@@ -151,7 +151,7 @@ impl Rig {
         if let PointerEvent::Move(data) = &mut event {
             {
                 let sample = data.current().with_pressure(
-                    flui_platform::pointer::Pressure::try_new(pressure)
+                    flui_platform::input::pointer::Pressure::try_new(pressure)
                         .expect("valid pressure fixture"),
                 );
                 *data =
@@ -274,7 +274,7 @@ pub(crate) fn scale_recognizes_native_pan_zoom_source_lifecycle() {
     use flui_foundation::geometry::Point;
     use flui_platform::{
         EventTime,
-        pointer::{
+        input::pointer::{
             DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerPosition, PointerSource,
         },
     };
@@ -853,7 +853,7 @@ fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -864,7 +864,7 @@ fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
             100.0,
             100.0,
             PointerKind::Pen {
-                tool: flui_platform::pointer::PenTool::Tip,
+                tool: flui_platform::input::pointer::PenTool::Tip,
             },
             pressure,
         );
@@ -874,7 +874,7 @@ fn press(rig: &Rig, pointer: u64, pressures: &[f32]) {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
     );
 }
@@ -931,7 +931,7 @@ fn force_press_start_panic_then_next_press() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -942,7 +942,7 @@ fn force_press_start_panic_then_next_press() {
             100.0,
             100.0,
             PointerKind::Pen {
-                tool: flui_platform::pointer::PenTool::Tip,
+                tool: flui_platform::input::pointer::PenTool::Tip,
             },
             0.7,
         );
@@ -952,7 +952,7 @@ fn force_press_start_panic_then_next_press() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
     );
     press(&rig, 2, &[0.7]);
@@ -970,7 +970,7 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -982,7 +982,7 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
             100.0,
             100.0,
             PointerKind::Pen {
-                tool: flui_platform::pointer::PenTool::Tip,
+                tool: flui_platform::input::pointer::PenTool::Tip,
             },
             0.9,
         );
@@ -992,7 +992,7 @@ fn force_press_start_panic_still_delivers_peak_and_end() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
     );
     assert_eq!(
@@ -1010,7 +1010,7 @@ fn force_press_cancel_ends_once() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -1020,7 +1020,7 @@ fn force_press_cancel_ends_once() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
         0.7,
     );
@@ -1048,7 +1048,7 @@ fn force_press_released_from_its_start_publishes_no_peak() {
                     id(1),
                     at,
                     PointerKind::Pen {
-                        tool: flui_platform::pointer::PenTool::Tip,
+                        tool: flui_platform::input::pointer::PenTool::Tip,
                     },
                 )
                 .expect("valid fixture sample");
@@ -1065,7 +1065,7 @@ fn force_press_released_from_its_start_publishes_no_peak() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
         0.2,
     );
@@ -1076,7 +1076,7 @@ fn force_press_released_from_its_start_publishes_no_peak() {
         100.0,
         100.0,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
         0.9,
     );
@@ -2328,7 +2328,7 @@ fn route<R: GestureRecognizer>(recognizer: &R, event: &PointerEvent) {
 /// publish an update or peak from a stale pressure paired with a new position.
 fn force_press_ignores_a_non_finite_pressure_sample() {
     assert!(
-        flui_platform::pointer::Pressure::try_new(f32::NAN).is_err(),
+        flui_platform::input::pointer::Pressure::try_new(f32::NAN).is_err(),
         "the checked sensor boundary refuses NaN before dispatch"
     );
     let updates_after = |pressures: &[f32]| {
@@ -2466,7 +2466,7 @@ fn declared_constant_pressure_sensor_force_presses() {
         PointerKind::Mouse,
         PointerKind::Touch,
         PointerKind::Pen {
-            tool: flui_platform::pointer::PenTool::Tip,
+            tool: flui_platform::input::pointer::PenTool::Tip,
         },
     ] {
         let rig = Rig::new();

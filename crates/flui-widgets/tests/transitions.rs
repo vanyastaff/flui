@@ -268,7 +268,7 @@ impl Headless {
         let tree = self.laid.layer_tree().expect("a painted frame");
         tree.iter()
             .filter_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::Picture(picture) => Some(picture.picture().clone()),
+                flui_layer::Layer::Picture(picture) => Some(picture.picture().clone()),
                 _ => None,
             })
             .flat_map(|picture| {
@@ -554,7 +554,7 @@ pub(crate) fn a_moving_slide_preserves_selected_pointer_coordinates() {
 
     use flui_animation::Vsync;
     use flui_foundation::geometry::Point;
-    use flui_platform::pointer::PointerEvent;
+    use flui_platform::input::pointer::PointerEvent;
     use flui_view::environment::VsyncScope;
     use flui_widgets::Listener;
 

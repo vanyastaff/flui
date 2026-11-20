@@ -4,7 +4,7 @@
 //! The pipeline operates on `&mut RenderNode` (a protocol-erased enum over
 //! `RenderEntry<BoxProtocol>` and `RenderEntry<SliverProtocol>`).
 //! `RenderEntry::layout` is generic over `P: Protocol` and takes
-//! protocol-typed `ProtocolConstraints<P>` / returns `ProtocolGeometry<P>`.
+//! protocol-typed `P::Constraints` / returns `P::Geometry`.
 //! Bridging the two ends requires an erased enum + per-variant dispatch
 //! through `RenderNode::layout_erased`.
 //!
@@ -40,7 +40,7 @@ use flui_foundation::geometry::Size;
 /// Protocol-erased constraints enum carrying either a `BoxConstraints` or a
 /// `SliverConstraints` payload.
 ///
-/// Pattern-matched by [`RenderNode::layout_leaf_erased`](super::RenderNode::layout_leaf_erased);
+/// Recorded by the layout-poison bookkeeping as the attempt a stand-in answers;
 /// caller-side construction via `From<BoxConstraints>` / `From<SliverConstraints>`;
 /// callee-side downcast via `TryFrom`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -106,7 +106,7 @@ impl TryFrom<ErasedConstraints> for SliverConstraints {
 /// Protocol-erased geometry enum carrying either a box `Size` or a
 /// `SliverGeometry` payload.
 ///
-/// Returned from [`RenderNode::layout_leaf_erased`](super::RenderNode::layout_leaf_erased);
+/// The protocol-erased counterpart of [`ErasedConstraints`];
 /// caller-side construction via `From<Size>` / `From<SliverGeometry>`;
 /// callee-side downcast via `TryFrom`.
 #[derive(Clone, Copy, PartialEq, Debug)]

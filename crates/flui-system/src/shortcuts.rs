@@ -15,7 +15,7 @@ use std::{any::Any, fmt, rc::Rc};
 use flui_platform::capability::{
     Capability, Completion, CompletionSource, ProviderContext, Resolver,
 };
-use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+use flui_platform::input::keyboard::{Key, Modifiers, NamedKey};
 use flui_platform::{SystemFailure, Unsupported};
 
 /// The global-shortcut capability:
@@ -639,7 +639,7 @@ impl fmt::Debug for ShortcutBinding {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Key, Modifiers, NamedKey};
 
     use super::{ShortcutId, Trigger};
 

@@ -50,12 +50,9 @@ pub enum SemanticsClip {
 use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::inspect::Inspect;
 
-use crate::{
-    hit_testing::{CursorRequest, MouseTrackerAnnotation, PointerTarget},
-    protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
-    semantics::SemanticsConfiguration,
-    traits::PaintEffects,
-};
+use crate::{protocol::Protocol, traits::PaintEffects};
+use flui_interaction::pointer::{CursorRequest, MouseTrackerAnnotation, PointerTarget};
+use flui_semantics::SemanticsConfiguration;
 
 /// Result of a raw hit-test bridge call.
 ///
@@ -145,7 +142,7 @@ impl HitTestOutcome {
 /// All default to no-op / `None`. Override on `RenderBox` or `RenderSliver`
 /// (the blanket impls forward every call from `RenderObject<P>` to the
 /// protocol-specific trait). Direct `RenderObject<P>` impls (e.g.
-/// `RenderViewAdapter`) get the defaults for free.
+/// `RenderView`) get the defaults for free.
 ///
 /// # Hot-reload note
 ///
@@ -207,12 +204,12 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// # Signature evolution
     ///
     /// 1. **Originally** — `fn perform_layout_raw(&mut self, constraints:
-    ///    ProtocolConstraints<P>) -> ProtocolGeometry<P>`. Blanket impl
+    ///    P::Constraints) -> P::Geometry`. Blanket impl
     ///    shipped as a no-op returning `*self.size()` because the trait
     ///    surface didn't carry children.
     ///
     /// 2. **Next revision** — signature changed to
-    ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>) -> ProtocolGeometry<P>`
+    ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>) -> P::Geometry`
     ///    so the blanket impl can construct a typed [`RawBoxLayoutContext`]
     ///    with children access. Contract-violation signalling went
     ///    through `std::panic::panic_any(RenderError::ContractViolation)`
@@ -224,7 +221,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///    handle.
     ///
     /// 3. **Current shape** — signature returns
-    ///    `RenderResult<ProtocolGeometry<P>>` so contract violations
+    ///    `RenderResult<P::Geometry>` so contract violations
     ///    propagate as typed `Err(RenderError::...)` directly through
     ///    `?`. `panic_any` removed; `catch_unwind` in
     ///    `RenderEntry::layout_leaf_only` retained only to wrap genuine
@@ -243,7 +240,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <P as Protocol>::ErasedLayoutContext<'_>,
-    ) -> crate::error::RenderResult<ProtocolGeometry<P>>;
+    ) -> crate::error::RenderResult<P::Geometry>;
 
     /// Records this render object's paint fragment.
     ///
@@ -262,7 +259,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// `size` is the node's laid-out paint size in local pixels — for
     /// the box protocol it is `RenderState::geometry` (the box's
     /// `Size`); for the sliver protocol it is the absolute paint size
-    /// (`get_absolute_size(paint_extent)`). The pipeline resolves it
+    /// (`absolute_size(paint_extent)`). The pipeline resolves it
     /// from [`RenderState`](crate::storage::RenderState) — the **sole**
     /// owner of geometry — and hands it in, so paint code reads
     /// `ctx.size()` instead of a per-object `size` field (2B field
@@ -309,12 +306,12 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// [`hit_test_transform`]: Self::hit_test_transform
     fn hit_test_raw(
         &self,
-        position: ProtocolPosition<P>,
+        position: P::Position,
         child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
-            Option<ProtocolPosition<P>>,
+            Option<P::Position>,
             Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome;
@@ -362,9 +359,9 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// in layout tests without poisoning release builds).
     fn dry_layout_raw(
         &self,
-        _constraints: ProtocolConstraints<P>,
+        _constraints: P::Constraints,
         _ctx: &mut crate::context::BoxDryLayoutContext<'_>,
-    ) -> crate::error::RenderResult<ProtocolGeometry<P>> {
+    ) -> crate::error::RenderResult<P::Geometry> {
         Ok(P::default_geometry())
     }
 
@@ -377,7 +374,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// memoizes every level in the per-node layout cache.
     fn dry_baseline_raw(
         &self,
-        _constraints: ProtocolConstraints<P>,
+        _constraints: P::Constraints,
         _baseline: crate::traits::TextBaseline,
         _ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {
@@ -655,7 +652,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// entry, if any.
     ///
     /// When a hit lands on this node, the pipeline attaches the returned
-    /// identity to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
+    /// identity to the node's [`HitTestEntry`](flui_interaction::pointer::HitTestEntry);
     /// pointer dispatch resolves it through the owner-local interaction lane
     /// and invokes the registered handler with the locally transformed
     /// [`PointerEvent`]. Delivery is leaf-first to every target with no
@@ -664,8 +661,8 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// The executable callback never lives in render storage; the render
     /// object registers itself as the `HitTestEntry`'s target by identity.
     ///
-    /// [`PointerEvent`]: crate::hit_testing::PointerEvent
-    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+    /// [`PointerEvent`]: flui_interaction::events::PointerEvent
+    fn pointer_target(&self) -> Option<flui_interaction::pointer::PointerTarget> {
         None
     }
 
@@ -686,7 +683,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// it. Like [`pointer_target`](Self::pointer_target), the identity is
     /// data-only; the executable handler lives in the owner-local interaction
     /// lane.
-    fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
+    fn scroll_target(&self) -> Option<flui_interaction::pointer::ScrollTarget> {
         None
     }
 
@@ -703,7 +700,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Default `None` — only a render object that arbitrates pan-zoom (e.g.
     /// `RenderListener` configured with a claiming handler) overrides it.
-    fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
+    fn pan_zoom_target(&self) -> Option<flui_interaction::pointer::PanZoomTarget> {
         None
     }
 
@@ -714,7 +711,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Default `None`; a `RenderListener` configured with a claiming handler
     /// overrides it.
-    fn smart_zoom_target(&self) -> Option<crate::hit_testing::SmartZoomTarget> {
+    fn smart_zoom_target(&self) -> Option<flui_interaction::pointer::SmartZoomTarget> {
         None
     }
 
@@ -731,7 +728,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// it, for searchers that cannot otherwise identify it.
     ///
     /// When a hit lands here, the pipeline attaches the returned value to the
-    /// node's [`HitTestEntry`](crate::hit_testing::HitTestEntry), where a
+    /// node's [`HitTestEntry`](flui_interaction::pointer::HitTestEntry), where a
     /// caller downcasts it with `metadata_as::<T>()`. This is how a drag finds
     /// the `DragTarget`s it has moved over: it cannot ask the element tree who
     /// is under a point, and a bare `RenderId` is only resolvable inside the
@@ -739,7 +736,7 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     ///
     /// Default `None` — only a render object that exists to be *found*
     /// overrides it.
-    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
+    fn metadata(&self) -> Option<flui_interaction::pointer::HitMetadata> {
         None
     }
 
@@ -803,8 +800,8 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     fn semantics_regions(
         &self,
         _size: flui_foundation::geometry::Size,
-    ) -> crate::semantics::SemanticsRegions {
-        crate::semantics::SemanticsRegions::default()
+    ) -> flui_semantics::SemanticsRegions {
+        flui_semantics::SemanticsRegions::default()
     }
 
     /// Whether the semantics assembly walk should skip this render
@@ -963,26 +960,6 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     /// implementors keep the box-protocol default.
     fn child_parent_data_type_id(&self) -> TypeId {
         TypeId::of::<crate::parent_data::BoxParentData>()
-    }
-
-    /// Stable static identifier for this render object.
-    ///
-    /// Used by the pipeline owner in error messages (specifically
-    /// [`crate::error::RenderError::Poisoned`]) to identify the offending
-    /// render object without holding a `String` or allocating per call.
-    ///
-    /// The default body monomorphizes per concrete `Self` and returns
-    /// [`core::any::type_name::<Self>()`]. Vtables for `dyn
-    /// RenderObject<P>` carry a pointer to that monomorphized default,
-    /// so calling `obj.debug_name()` through a dyn pointer yields the
-    /// concrete type name. Concrete impls may override to provide a
-    /// shorter / more human-readable name.
-    ///
-    /// Introduced 2026-05-20 alongside the `std::panic::catch_unwind`
-    /// plumbing that turns trait-call panics into `RenderError::Poisoned`
-    /// rather than process aborts.
-    fn debug_name(&self) -> &'static str {
-        core::any::type_name::<Self>()
     }
 
     // ========================================================================

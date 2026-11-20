@@ -98,7 +98,7 @@ framework does not control is contained.
    text service re-reads the document. There is no merge: nothing gives a base for a three-way
    comparison. The count never wraps: a store that exhausts it drops every later session, so
    no session can find its count again after the application moved past it. The controller and
-   the in-memory store share the count's type, `flui_platform::text_store::EditGeneration`.
+   the in-memory store share the count's type, `flui_platform::text::store::EditGeneration`.
 4. **A field losing its input resolves its composition by committing it.** Pointer-down in the
    presentation (inside the composing field too), an accepted close request, the end of the
    session, blur, paste and undo, and unmount commit the visible composition before the event's

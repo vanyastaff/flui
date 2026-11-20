@@ -16,6 +16,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
 use slab::Slab;
+use smallvec::SmallVec;
 
 use crate::element::ElementKind;
 use crate::owner::LifecycleHook;
@@ -159,7 +160,10 @@ pub struct ElementNode {
     /// Ordering is meaningful: entry `i` is the element occupying child
     /// slot `i` after the most recent id-reconcile, matching the new
     /// view order.
-    pub(crate) child_ids: Vec<ElementId>,
+    ///
+    /// Two ids sit inline, in the bytes a `Vec` header takes, so a leaf, a
+    /// single-child wrapper and a pair allocate no list.
+    pub(crate) child_ids: SmallVec<[ElementId; 2]>,
     /// The set of [`InheritedView`](crate::view::InheritedView) providers in
     /// scope at this node — `provider view TypeId → provider ElementId` — so
     /// `BuildContext::depend_on_inherited` / `get_inherited` resolve the
@@ -204,7 +208,7 @@ impl ElementNode {
             slot,
             key: None,
             registered_global_key: None,
-            child_ids: Vec::new(),
+            child_ids: SmallVec::new(),
             // Empty until the tree sets the real scope against the parent's
             // map (insert / mount_root_*), mirroring how `key`/`depth` are
             // finalised by the caller right after construction.
@@ -374,7 +378,7 @@ impl ElementNode {
     pub(crate) fn set_child_ids(&mut self, ids: &[ElementId]) {
         let capacity = self.child_ids.capacity();
         if capacity < ids.len() || capacity / 4 > ids.len() {
-            self.child_ids = ids.to_vec();
+            self.child_ids = SmallVec::from_slice(ids);
         } else {
             self.child_ids.clear();
             self.child_ids.extend_from_slice(ids);
@@ -1220,7 +1224,7 @@ impl ElementTree {
                      (incompatible child parent-data TypeId). `{provider_name}` must be \
                      placed under {typical_ancestor}. Element ancestry \
                      (child → … → root): {}",
-                    parent_node.debug_name(),
+                    parent_node.kind(),
                     self.format_element_ancestry(child_id),
                 );
             }
@@ -1228,11 +1232,10 @@ impl ElementTree {
             let parent_data_element = self
                 .get(parent_data_element_id)
                 .expect("BUG: located ParentDataView element must remain live");
-            let impact = {
-                let Some(node) = owner.render_tree_mut().get_mut(child_render_id) else {
-                    return;
-                };
-                if let Some(parent_data) = node.parent_data_mut() {
+            // The owner marks the child's render parent, the node that reads
+            // its parent data, with the impact the update reports.
+            let _ = owner.update_parent_data(child_render_id, |slot| {
+                if let Some(parent_data) = slot.get_mut() {
                     parent_data_element
                         .element()
                         .apply_parent_data_config(parent_data)
@@ -1241,13 +1244,10 @@ impl ElementTree {
                         .element()
                         .parent_data_config()
                         .expect("BUG: located ParentDataView must create parent data");
-                    node.set_parent_data(config);
+                    slot.set(config);
                     flui_rendering::RenderUpdateImpact::NONE
                 }
-            };
-            if let Some(parent_render_id) = parent_render_id {
-                owner.apply_render_update_impact(parent_render_id, impact);
-            }
+            });
         });
     }
 
@@ -1278,9 +1278,10 @@ impl ElementTree {
         };
         if let Some(pipeline) = child.element().pipeline_owner() {
             pipeline.with_mut(|owner| {
-                if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
-                    let _ = node.clear_parent_data();
-                }
+                let _ = owner.update_parent_data(render_id, |slot| {
+                    let _ = slot.clear();
+                    flui_rendering::RenderUpdateImpact::NONE
+                });
             });
         }
         self.apply_ancestor_parent_data(child_id);
@@ -1398,19 +1399,7 @@ impl ElementTree {
                 render_parent_id,
                 &mut desired_children,
             );
-            let update = owner
-                .render_tree_mut()
-                .set_children(render_parent_id, &desired_children);
-            if !update.changed {
-                return;
-            }
-            let impact = flui_rendering::RenderUpdateImpact::LAYOUT
-                | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
-                | flui_rendering::RenderUpdateImpact::SEMANTICS;
-            owner.apply_render_update_impact(render_parent_id, impact);
-            for donor in update.donors {
-                owner.apply_render_update_impact(donor, impact);
-            }
+            let _ = owner.set_render_children(render_parent_id, &desired_children);
         });
         visited
     }
@@ -1498,26 +1487,19 @@ impl ElementTree {
         let mut desired_children: FrameVec<'_, RenderId> = Vec::new_in(arena);
 
         // Tree borrows are dropped; the checkout guards only the render tree.
+        // The owner marks each parent the batch changed once it ends.
         pipeline_owner.with_mut(|owner| {
-            let mut dirty_render_parents: flui_foundation::SlotSet<flui_foundation::RenderId> =
-                flui_foundation::SlotSet::new();
-            let mut membership_changed_parents: flui_foundation::SlotSet<
-                flui_foundation::RenderId,
-            > = flui_foundation::SlotSet::new();
-            {
-                let render_tree = owner.render_tree_mut();
+            owner.edit_render_children(|edit| {
                 for &(render_id, desired) in &desired_parent {
-                    if !render_tree.contains(render_id) {
+                    if !edit.tree().contains(render_id) {
                         continue;
                     }
                     // A render root in the element graph leaves the render
                     // parent it still holds.
                     if desired == RenderEdge::Parent(None)
-                        && let Some(current) = render_tree.parent(render_id)
+                        && let Some(current) = edit.tree().parent(render_id)
                     {
-                        render_tree.drop_child(current, render_id);
-                        dirty_render_parents.insert(current);
-                        membership_changed_parents.insert(current);
+                        edit.detach_child(current, render_id);
                     }
 
                     // Every element-managed render node's child list follows
@@ -1534,18 +1516,8 @@ impl ElementTree {
                             .take_while(|&&(parent, _)| parent == render_id)
                             .map(|&(_, child)| child),
                     );
-                    append_sparse_sliver_children(render_tree, render_id, &mut desired_children);
-                    let update = render_tree.set_children(render_id, &desired_children);
-                    if update.changed {
-                        dirty_render_parents.insert(render_id);
-                    }
-                    if update.membership_changed {
-                        membership_changed_parents.insert(render_id);
-                    }
-                    for donor in update.donors {
-                        dirty_render_parents.insert(donor);
-                        membership_changed_parents.insert(donor);
-                    }
+                    append_sparse_sliver_children(edit.tree(), render_id, &mut desired_children);
+                    let _ = edit.set_children(render_id, &desired_children);
                 }
 
                 #[cfg(debug_assertions)]
@@ -1553,30 +1525,17 @@ impl ElementTree {
                     let RenderEdge::Parent(desired) = desired else {
                         continue;
                     };
-                    if !render_tree.contains(render_id) {
+                    if !edit.tree().contains(render_id) {
                         continue;
                     }
                     debug_assert_eq!(
-                        render_tree.parent(render_id),
+                        edit.tree().parent(render_id),
                         desired,
                         "reorder pass: render node {render_id:?}'s parent link disagrees with the \
                          desired parent the DFS computed for it"
                     );
                 }
-            }
-
-            for &parent in dirty_render_parents.as_slice() {
-                if owner.render_tree().contains(parent) {
-                    let impact = if membership_changed_parents.contains(parent) {
-                        flui_rendering::RenderUpdateImpact::LAYOUT
-                            | flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
-                            | flui_rendering::RenderUpdateImpact::SEMANTICS
-                    } else {
-                        flui_rendering::RenderUpdateImpact::LAYOUT
-                    };
-                    owner.apply_render_update_impact(parent, impact);
-                }
-            }
+            });
         });
         visited
     }
@@ -3286,16 +3245,13 @@ mod tests {
                     Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
                 )
                 .expect("early sparse child");
-            owner
-                .render_tree_mut()
-                .get_mut(sparse_late)
-                .expect("late sparse node")
-                .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(9)));
-            owner
-                .render_tree_mut()
-                .get_mut(sparse_early)
-                .expect("early sparse node")
-                .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(3)));
+            for (id, index, what) in [(sparse_late, 9, "late"), (sparse_early, 3, "early")] {
+                let stamped = owner.update_parent_data(id, |slot| {
+                    slot.set(Box::new(SliverMultiBoxAdaptorParentData::new(index)));
+                    flui_rendering::RenderUpdateImpact::NONE
+                });
+                assert!(stamped.is_some(), "{what} sparse node");
+            }
             (sparse_late, sparse_early)
         });
 

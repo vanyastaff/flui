@@ -30,12 +30,12 @@ use crate::{constraints::BoxConstraints, context::PaintContext};
 /// }
 ///
 /// impl FlowDelegate for CircularFlowDelegate {
-///     fn get_size(&self, constraints: BoxConstraints) -> Size {
+///     fn size(&self, constraints: BoxConstraints) -> Size {
 ///         let diameter = self.radius * 2.0;
 ///         constraints.constrain(Size::new(diameter, diameter))
 ///     }
 ///
-///     fn get_constraints_for_child(&self, _index: usize, _constraints: BoxConstraints) -> BoxConstraints {
+///     fn constraints_for_child(&self, _index: usize, _constraints: BoxConstraints) -> BoxConstraints {
 ///         BoxConstraints::loose(Size::new(100.0, 100.0))
 ///     }
 ///
@@ -56,7 +56,7 @@ use crate::{constraints::BoxConstraints, context::PaintContext};
 ///     }
 ///
 ///     fn should_relayout(&self, old_delegate: &dyn FlowDelegate) -> bool {
-///         if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+///         if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
 ///             self.radius != old.radius
 ///         } else {
 ///             true
@@ -68,7 +68,7 @@ use crate::{constraints::BoxConstraints, context::PaintContext};
 ///     }
 /// }
 /// ```
-pub trait FlowDelegate: Debug {
+pub trait FlowDelegate: Any + Debug {
     /// Get the size of the flow layout for the given constraints.
     ///
     /// # Arguments
@@ -78,7 +78,7 @@ pub trait FlowDelegate: Debug {
     /// # Returns
     ///
     /// The size of this render object.
-    fn get_size(&self, constraints: BoxConstraints) -> Size;
+    fn size(&self, constraints: BoxConstraints) -> Size;
 
     /// Get the constraints for a child at the given index.
     ///
@@ -90,11 +90,7 @@ pub trait FlowDelegate: Debug {
     /// # Returns
     ///
     /// The constraints to pass to the child.
-    fn get_constraints_for_child(
-        &self,
-        index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints;
+    fn constraints_for_child(&self, index: usize, constraints: BoxConstraints) -> BoxConstraints;
 
     /// Paint children with custom transforms.
     ///
@@ -147,9 +143,6 @@ pub trait FlowDelegate: Debug {
     fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
         None
     }
-
-    /// Returns self as `Any` for downcasting.
-    fn as_any(&self) -> &dyn Any;
 }
 
 /// Context for flow painting operations.
@@ -313,10 +306,5 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
                 ctx.with_opacity(opacity, |ctx| ctx.paint_child(index));
             });
         }
-    }
-
-    /// Returns whether all children have been painted.
-    pub fn all_children_painted(&self) -> bool {
-        self.painted.iter().all(|&p| p)
     }
 }

@@ -16,23 +16,16 @@ pub mod phase;
 pub(super) mod scheduler;
 mod text_context;
 
-// Re-export Clip from flui_painting
-// Re-export layer types from flui-layer
-pub use flui_layer::{Layer, LayerId, LayerTree, OffsetLayer, SceneBuilder};
-pub use flui_painting::paint::Clip;
-// Re-export additional types from flui_painting::paint for convenience
-pub use flui_painting::paint::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
-// Re-export canvas types from flui_painting
-pub use dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind, PaintQueue};
-pub use flui_painting::paint::{StrokeCap, StrokeJoin, TileMode};
+pub(crate) use dirty::PaintKind;
 pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
 pub use local_invalidation::LocalRenderInvalidationHandle;
-pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};
+pub use notifier::DeferredVisualUpdate;
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
-    DetachedRenderSubtrees, LayoutPremise, LeaderGeometry, LeaderWatch, PipelineCell,
-    PipelineCounters, PipelineOwner, PresentedPlacement, ReleaseDetachedRenderSubtreesError,
-    ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
+    DetachedRenderSubtrees, LayoutPremise, LeaderGeometry, LeaderWatch, ParentDataSlot,
+    PipelineCell, PipelineCounters, PipelineOwner, PresentedPlacement,
+    ReleaseDetachedRenderSubtreesError, ReleaseDetachedRenderSubtreesFailure, RenderChildrenEdit,
+    WeakPipelineCell,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use owner::{PresentedKind, PresentedNode};
@@ -40,6 +33,3 @@ pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics}
 pub(crate) use text_context::lend as lend_text;
 pub use text_context::{TextContextHandle, TextContextMut, TextSource};
 pub(crate) use text_context::{TextLender, TextMeasurers};
-
-// Re-export contexts from context module (canonical location)
-pub use crate::context::{Canvas, DisplayList, Paint, PaintStyle};

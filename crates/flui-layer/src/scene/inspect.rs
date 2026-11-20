@@ -2,7 +2,7 @@
 //!
 //! A node of the tree is a boundary's [`SceneNode`](super::SceneNode), or an effect or a chunk of
 //! its content; a slot entry is not a node of its own, the child boundary it names stands there.
-//! Each is named by the boundary's slot, generation and the scene's lineage, and an entry by its
+//! Each is named by the boundary's `SceneNodeId` (its lineage, slot and generation), and an entry by its
 //! position in the boundary's content as well (`l4.2:3@7`, see [`SceneLayer`]). A boundary keeps
 //! its node across frames, so an id read before a repaint elsewhere still names it after; one
 //! kept from a retired node, from another lineage, or from an entry its content no longer holds
@@ -12,15 +12,13 @@
 //! `Picture`: its command count and fingerprint, as a picture layer reports them, linked to the
 //! render object that painted it.
 
-use std::num::NonZeroU64;
-
 use flui_foundation::geometry::Offset;
 use flui_foundation::inspect::{
     Fields, Inspect, InspectId, InspectTree, Level, Link, Links, NodeView, SceneLayer, Unit,
 };
 
 use super::content::{Bounds, Chunk, Entry, EntryIndex};
-use super::id::NodeKey;
+use super::id::{NodeKey, SceneNodeId};
 use super::version::{NodeRecord, SceneVersion};
 
 impl Inspect for NodeRecord {
@@ -49,39 +47,37 @@ impl Inspect for Chunk {
 /// What a [`SceneLayer`] names in one version.
 #[derive(Clone, Copy)]
 struct Named<'v> {
+    node: SceneNodeId,
     record: &'v NodeRecord,
     entry: Option<usize>,
 }
 
+/// The link naming `entry` of `node`, or `node` itself: the node's id, lineage included, and
+/// the entry's position in its content.
+fn link_of(node: SceneNodeId, entry: Option<usize>) -> InspectId {
+    let key = node.key();
+    InspectId::from(Link::Layer(SceneLayer {
+        scene: node.lineage().as_non_zero(),
+        slot: key.slot(),
+        generation: key.generation(),
+        entry: entry.map(|entry| {
+            u32::try_from(entry).expect("BUG: a boundary's entries are indexed by u32")
+        }),
+    }))
+}
+
 impl SceneVersion {
-    /// The scene's lineage, as a layer link carries it.
-    fn scene(&self) -> NonZeroU64 {
-        NonZeroU64::new(self.id().lineage().get()).expect("BUG: a lineage is never zero")
-    }
-
-    /// `entry` of the node `key` names, or the node itself.
-    fn link_of(&self, key: NodeKey, entry: Option<usize>) -> InspectId {
-        InspectId::from(Link::Layer(SceneLayer {
-            scene: self.scene(),
-            slot: key.slot(),
-            generation: key.generation(),
-            entry: entry.map(|entry| {
-                u32::try_from(entry).expect("BUG: a boundary's entries are indexed by u32")
-            }),
-        }))
-    }
-
     /// What `id` names here: a live node of this lineage, or an effect or chunk of its content.
     fn named(&self, id: InspectId) -> Option<Named<'_>> {
         let Link::Layer(layer) = id.link() else {
             return None;
         };
-        if layer.scene != self.scene() {
+        let lineage = self.id().lineage();
+        if layer.scene != lineage.as_non_zero() {
             return None;
         }
-        let record = self
-            .inner()
-            .record(NodeKey::new(layer.slot, layer.generation))?;
+        let node = SceneNodeId::new(lineage, NodeKey::new(layer.slot, layer.generation));
+        let record = self.inner().record(node.key())?;
         let entry = match layer.entry {
             None => None,
             Some(entry) => {
@@ -93,19 +89,21 @@ impl SceneVersion {
                 }
             }
         };
-        Some(Named { record, entry })
+        Some(Named {
+            node,
+            record,
+            entry,
+        })
     }
 
-    /// The tree node standing at `position` of `record`'s content: the entry, or the child
+    /// The tree node standing at `position` of `node`'s content: the entry, or the child
     /// boundary a slot names.
-    fn standing(&self, record: &NodeRecord, position: usize, entry: &Entry) -> Option<InspectId> {
+    fn standing(&self, node: SceneNodeId, position: usize, entry: &Entry) -> Option<InspectId> {
         match entry {
-            Entry::Slot { node, .. } => self
-                .node(*node)
-                .map(|child| self.link_of(child.id().key(), None)),
-            Entry::Effect { .. } | Entry::Chunk { .. } => {
-                Some(self.link_of(record.key(), Some(position)))
+            Entry::Slot { node: child, .. } => {
+                self.node(*child).map(|child| link_of(child.id(), None))
             }
+            Entry::Effect { .. } | Entry::Chunk { .. } => Some(link_of(node, Some(position))),
         }
     }
 }
@@ -123,11 +121,11 @@ impl InspectTree for SceneVersion {
 
     fn root(&self) -> Option<InspectId> {
         let root = self.node(self.root())?;
-        Some(self.link_of(root.id().key(), None))
+        Some(link_of(root.id(), None))
     }
 
     fn node(&self, id: InspectId) -> Option<NodeView<'_, dyn Inspect>> {
-        let Named { record, entry } = self.named(id)?;
+        let Named { record, entry, .. } = self.named(id)?;
         let layer = match id.link() {
             Link::Layer(layer) => Some(layer),
             _ => None,
@@ -172,17 +170,21 @@ impl InspectTree for SceneVersion {
     }
 
     fn children(&self, id: InspectId) -> impl Iterator<Item = InspectId> + '_ {
-        self.named(id)
-            .into_iter()
-            .flat_map(move |Named { record, entry }| {
+        self.named(id).into_iter().flat_map(
+            move |Named {
+                      node,
+                      record,
+                      entry,
+                  }| {
                 // A node holds its top-level entries, an effect the entries under it, and
                 // a chunk nothing, which `children_of` answers for an index naming no effect.
                 let content = record.content();
                 content
                     .children_of(entry.map(EntryIndex::at))
                     .filter_map(move |position| {
-                        self.standing(record, position, &content.entries()[position])
+                        self.standing(node, position, &content.entries()[position])
                     })
-            })
+            },
+        )
     }
 }

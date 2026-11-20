@@ -318,9 +318,13 @@ fn reuse_decoded_source(fail_first: bool) {
         )));
             std::fs::create_dir(&directory.0).expect("test directory created");
             let path = directory.0.join("image.png");
+            let bundle = flui_platform::assets::AssetBundle::new(Arc::new(
+                flui_platform::assets::DirectoryAssets::new(&directory.0),
+            ));
             let services = flui_widgets::ImageServices::new()
+                .with_asset_bundle(bundle)
                 .with_image_cache(Arc::new(flui_assets::ImageCache::default()));
-            let provider = flui_widgets::AssetImage::new(path.to_string_lossy());
+            let provider = flui_widgets::AssetImage::new("image.png");
             assert!(provider.cached(&services).is_none(), "a new source is cold");
             if fail_first {
                 assert!(
@@ -369,13 +373,19 @@ fn asset_images_share_their_runtimes_cache_until_memory_pressure() {
     std::fs::create_dir(&directory).expect("test directory created");
     let path = directory.join("image.png");
     std::fs::write(&path, include_bytes!("fixtures/tiny.png")).expect("source fixture writes");
-    let path = path.to_string_lossy().into_owned();
-    let source = flui_assets::ImageSource::asset(path.as_str());
 
-    let mut host = flui_testing::HeadlessHost::new(flui_testing::HeadlessWindow::new(100, 100));
+    let mut host = flui_testing::HeadlessHost::new(
+        flui_testing::HeadlessWindow::new(100, 100)
+            .with_assets(flui_platform::assets::DirectoryAssets::new(&directory)),
+    );
     let cache = image_cache::runtime_image_cache(&mut host);
-    host.attach(&Image::asset(path.as_str()))
-        .expect("root attaches");
+    // The runtime's bundle is the identity of its assets' cache keys, so the
+    // probe is built from the bundle the runtime hands its widgets.
+    let bundle = image_cache::runtime_asset_bundle(&mut host, Image::asset("image.png"));
+    let source = flui_assets::ImageSource::asset(
+        flui_platform::assets::AssetKey::try_new("image.png").expect("the asset key is valid"),
+        &bundle,
+    );
     let deadline = Instant::now() + DECODE_BUDGET;
     while cache.get(&source).is_none() {
         assert!(

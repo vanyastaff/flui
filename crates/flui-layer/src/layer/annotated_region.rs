@@ -1,5 +1,5 @@
 //! `AnnotatedRegionLayer` — attaches a type-erased value to a region for a reader of the
-//! composited scene (`LayerTree::find_annotations`).
+//! composited scene (`SceneVersion::find_annotation`).
 
 use std::{any::Any, fmt, sync::Arc};
 

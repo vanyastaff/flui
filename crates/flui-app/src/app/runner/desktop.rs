@@ -96,8 +96,8 @@ impl OpeningWindow {
     /// `PlatformWindow::reveal_after_first_frame`, and
     /// [`install_desktop_window`] is what keeps it (the [`FirstReveal`]
     /// policy wired into its frame closure), so only the windows it installs
-    /// open this way. `run_direct` and the bare `open_secondary_window` take
-    /// the same options and reveal at open, because nothing in them would ever
+    /// open this way. The bare `open_secondary_window` takes
+    /// the same options and reveals at open, because nothing in it would ever
     /// perform the reveal.
     pub(super) fn open(
         &self,
@@ -201,14 +201,8 @@ where
     config.install_error_view_builder(&ui_runtime);
 
     ui_runtime.enter(|ui_runtime| ui_runtime.update_host_lifecycle(host_lifecycle));
-    let logical = geometry.logical;
-    let attach = ui_runtime.enter(|ui_runtime| {
-        ui_runtime.attach_root_widget_with_size(
-            &app_root(root.clone()),
-            logical.width,
-            logical.height,
-        )
-    });
+    let attach =
+        ui_runtime.enter(|ui_runtime| ui_runtime.attach_root_widget(&app_root(root.clone())));
     if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(crate::app::AppWindowError::Mount {
@@ -635,7 +629,8 @@ impl DesktopFrameDriver {
                 fallback_gate,
             );
             // Frames are off while no window is seen, but a covered window
-            // owing its kept surface a frame runs it (ADR-0357).
+            // whose timed request this wake serves runs the frame it owes its
+            // kept surface (ADR-0389).
             let action = wake_action(
                 ui_runtime.runs_frames(),
                 dirty,

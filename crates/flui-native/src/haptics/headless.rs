@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, input::pointer::DeviceId};
 
 use crate::host;
 
@@ -33,10 +33,6 @@ impl PlatformHaptics for HeadlessHaptics {
 
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
         HapticCapabilities::FULL
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

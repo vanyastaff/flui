@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::geometry::Size;
 use flui_platform::ImeEvent;
-use flui_platform::text_store::{
+use flui_platform::text::store::{
     CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, OwnerCalls, TextStore,
     TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
     project_ime_event,
@@ -213,7 +213,7 @@ impl TextStore for FailingStore {
     fn press_target_at(
         &self,
         point: flui_foundation::geometry::Point<f64>,
-    ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+    ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
         self.inner.press_target_at(point)
     }
     fn status(&self) -> TextStoreStatus {

@@ -42,7 +42,7 @@
 //! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
 //! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes | — |
 //! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
-//! | `RenderTexture` | `harness_texture_*` | yes | yes | yes | yes | revision repaint |
+//! | `RenderTexture` | `harness_texture_*` | yes | yes | yes | yes | another texture repaints |
 //! | `RenderAnnotatedRegion` | `harness_annotated_region_*` | yes | yes | yes | yes | scene lookup |
 //! | `RenderClipRSuperellipse` | `harness_clip_rsuperellipse_*` | yes | yes | yes | yes | drawn-curve hit test |
 //! | `RenderClipOval` | `harness_clip_oval_*` | yes | — | — | yes | — |
@@ -142,7 +142,9 @@ use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_foundation::inspect::{Fields, Inspect, OwnedValue, Rgba, Variant};
 use flui_interaction::pointer::InteractionLane;
+use flui_interaction::pointer::{HitTestBehavior, HitTestResult, MouseRegionCallbacks};
 use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
+use flui_layer::{LayerLink, LeaderClip};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
 use flui_painting::{Alignment, BoxFit, BoxShape, ImagePlacement};
@@ -162,13 +164,10 @@ use flui_rendering::{
         MultiChildLayoutDelegate, SingleChildLayoutDelegate, SliverGridDelegate,
         SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout,
     },
-    hit_testing::{HitTestBehavior, HitTestResult, MouseRegionCallbacks},
-    layer::{LayerLink, LeaderClip},
     parent_data::{
         HorizontalInsets, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
         StackParentData, TableCellParentData,
     },
-    semantics::{SemanticsConfiguration, SemanticsRole, Toggled},
     testing::{
         BoxQueryRun, DrawKind, FrameRun, ParentDataSeed, Probe, RenderTester, TreeNode,
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
@@ -177,6 +176,7 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
     view::{ScrollDirection, ScrollPosition},
 };
+use flui_semantics::{SemanticsConfiguration, SemanticsRole, Toggled};
 
 /// Describes a test double that has no fields of its own to report.
 macro_rules! inspect_nothing {
@@ -516,9 +516,6 @@ impl CustomPainter for ListeningPainter {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.0.clone())
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 fn listening_custom_paint(
@@ -654,14 +651,10 @@ fn harness_custom_paint_failed_replacement_commits_new_painter_and_revokes_old_r
 struct ListeningFlowDelegate(Rc<RemovalNotifier>);
 
 impl FlowDelegate for ListeningFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         constraints
     }
     fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
@@ -677,9 +670,6 @@ impl FlowDelegate for ListeningFlowDelegate {
     }
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.0.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -756,9 +746,6 @@ impl CustomPainter for FaultPainter {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         assert!(!self.faults.getter.replace(false), "repaint getter");
         Some(self.source.clone())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1006,18 +993,13 @@ impl CustomPainter for HarnessPainter {
     }
 
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old.color != self.color || old.hit != self.hit)
     }
 
     fn hit_test(&self, _position: Offset) -> Option<bool> {
         self.hit
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1043,31 +1025,26 @@ impl HarnessSingleChildLayoutDelegate {
 }
 
 impl SingleChildLayoutDelegate for HarnessSingleChildLayoutDelegate {
-    fn get_size(&self, _constraints: BoxConstraints) -> Size {
+    fn size(&self, _constraints: BoxConstraints) -> Size {
         self.size
     }
 
-    fn get_constraints_for_child(&self, _constraints: BoxConstraints) -> BoxConstraints {
+    fn constraints_for_child(&self, _constraints: BoxConstraints) -> BoxConstraints {
         self.child_constraints
     }
 
-    fn get_position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
+    fn position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
         self.offset
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| {
                 self.size != old.size
                     || self.child_constraints != old.child_constraints
                     || self.offset != old.offset
             })
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1095,7 +1072,7 @@ impl HarnessMultiChildLayoutDelegate {
 }
 
 impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
-    fn get_size(&self, _constraints: BoxConstraints) -> Size {
+    fn size(&self, _constraints: BoxConstraints) -> Size {
         self.size
     }
 
@@ -1116,14 +1093,9 @@ impl MultiChildLayoutDelegate for HarnessMultiChildLayoutDelegate {
     }
 
     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| self.size != old.size)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1386,10 +1358,6 @@ fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
 
         fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
             true
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 
@@ -1949,9 +1917,9 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
 }
 
 /// A texture fills the largest box its constraints allow (the smallest on an
-/// unbounded axis), draws its id over that box, and repaints on a new frame
-/// revision only.
-fn harness_texture_fills_its_box_and_repaints_per_frame() {
+/// unbounded axis), draws its id over that box, and repaints when it is given
+/// another texture only.
+fn harness_texture_fills_its_box_and_repaints_on_another_texture() {
     use flui_painting::paint::{FilterQuality, TextureId};
 
     let id = TextureId::new(7);
@@ -1978,16 +1946,12 @@ fn harness_texture_fills_its_box_and_repaints_per_frame() {
 
     let mut texture = RenderTexture::new(id, FilterQuality::Low);
     assert_eq!(
-        texture.set_revision(0),
-        flui_rendering::RenderUpdateImpact::NONE
-    );
-    assert_eq!(
-        texture.set_revision(1),
-        flui_rendering::RenderUpdateImpact::PAINT
-    );
-    assert_eq!(
         texture.set_texture(id),
         flui_rendering::RenderUpdateImpact::NONE
+    );
+    assert_eq!(
+        texture.set_texture(TextureId::new(8)),
+        flui_rendering::RenderUpdateImpact::PAINT
     );
 }
 fn harness_image_paints_placeholder_frame() {
@@ -2173,7 +2137,7 @@ fn harness_paragraph_describes_one_run_as_text_and_several_as_runs() {
 /// publishes its laid-out text as runs; the same paragraph not selectable
 /// publishes none (ADR-0214).
 fn harness_paragraph_publishes_runs_only_while_selectable() {
-    use flui_rendering::semantics::SemanticsAnchor;
+    use flui_semantics::SemanticsAnchor;
 
     let anchor = SemanticsAnchor::new();
     for (selectable, expected_runs) in [(Some(anchor.clone()), 2_usize), (None, 0)] {
@@ -2583,7 +2547,10 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
                     .unwrap()
                     .is_none()
             );
-            let mut recorder = flui_rendering::context::FragmentRecorder::new(Offset::ZERO, 1.0);
+            let mut recorder = flui_rendering::context::FragmentRecorder::new(
+                Offset::ZERO,
+                flui_foundation::geometry::DevicePixelRatio::ONE,
+            );
             icon.paint(&mut flui_rendering::context::PaintContext::new(
                 &mut recorder,
                 0,
@@ -2853,12 +2820,12 @@ fn harness_custom_single_child_layout_positions_child_with_delegate() {
     assert_eq!(
         run.box_geometry(run.root()),
         Size::new(120.0, 80.0),
-        "parent size must come from delegate.get_size constrained by incoming constraints",
+        "parent size must come from delegate.size constrained by incoming constraints",
     );
     assert_eq!(
         run.box_geometry(run.id("child")),
         Size::new(30.0, 20.0),
-        "child must be laid out under delegate.get_constraints_for_child",
+        "child must be laid out under delegate.constraints_for_child",
     );
     assert_eq!(run.offset(run.id("child")), Offset::new(70.0, 50.0));
     assert_eq!(run.hit_first(75.0, 55.0), Some(run.id("child")));
@@ -2897,7 +2864,7 @@ fn harness_custom_multi_child_layout_positions_children_by_layout_id() {
     assert_eq!(
         run.box_geometry(run.root()),
         Size::new(120.0, 90.0),
-        "parent size must come from delegate.get_size constrained by incoming constraints",
+        "parent size must come from delegate.size constrained by incoming constraints",
     );
     assert_eq!(
         run.box_geometry(run.id("header")),
@@ -3392,7 +3359,7 @@ fn harness_aspect_ratio_infinite_minima_reject_without_panicking() {
                 flui_rendering::RenderError::InvalidGeometry {
                     render_object,
                     ..
-                } if render_object == std::any::type_name::<RenderAspectRatio>()
+                } if render_object == "RenderAspectRatio"
             ),
             "expected typed geometry rejection, got {error:?}"
         );
@@ -4246,13 +4213,69 @@ fn harness_animated_opacity_semantics_follow_accepted_visibility() {
     }
 }
 
+/// Each static opacity setter reports what its change needs: the flag
+/// republishes semantics only when it changes what is visited, and repaints
+/// too when the node still paints at alpha 0 (a forced layer), because the
+/// same visit gates the input regions a painted frame restages.
+fn harness_static_opacity_setters_report_their_exact_impact() {
+    use flui_rendering::RenderUpdateImpact as Impact;
+    // (forced layer, alpha, flag before, flag after, impact of the flag change)
+    let flag_cases = [
+        (false, 0.0, false, true, Impact::SEMANTICS),
+        (false, 0.0, true, false, Impact::SEMANTICS),
+        (true, 0.0, false, true, Impact::SEMANTICS | Impact::PAINT),
+        (true, 0.0, true, false, Impact::SEMANTICS | Impact::PAINT),
+        (false, 0.5, false, true, Impact::NONE),
+        (true, 1.0, true, false, Impact::NONE),
+        (false, 0.0, true, true, Impact::NONE),
+    ];
+    for (force_layer, alpha, before, after, expected) in flag_cases {
+        let mut boxed = RenderOpacity::new(alpha);
+        let _ = boxed.set_always_needs_compositing(force_layer);
+        let _ = boxed.set_always_include_semantics(before);
+        let mut sliver = RenderSliverOpacity::new(alpha);
+        let _ = sliver.set_always_needs_compositing(force_layer);
+        let _ = sliver.set_always_include_semantics(before);
+        let case = format!("layer={force_layer}, alpha={alpha}, flag {before}->{after}");
+        assert_eq!(
+            boxed.set_always_include_semantics(after),
+            expected,
+            "box {case}"
+        );
+        assert_eq!(
+            sliver.set_always_include_semantics(after),
+            expected,
+            "sliver {case}"
+        );
+        assert_eq!(boxed.always_include_semantics(), after, "box {case}");
+        assert_eq!(sliver.always_include_semantics(), after, "sliver {case}");
+    }
+    // An opacity crossing zero republishes semantics only without the flag.
+    for always in [false, true] {
+        let mut boxed = RenderOpacity::new(0.0);
+        let _ = boxed.set_always_include_semantics(always);
+        let mut sliver = RenderSliverOpacity::new(0.0);
+        let _ = sliver.set_always_include_semantics(always);
+        assert_eq!(
+            boxed.set_opacity(1.0).needs_semantics_update(),
+            !always,
+            "box 0->1, flag={always}"
+        );
+        assert_eq!(
+            sliver.set_opacity(1.0).needs_semantics_update(),
+            !always,
+            "sliver 0->1, flag={always}"
+        );
+    }
+}
+
 fn harness_static_opacity_visibility_controls_semantics_and_actions() {
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
     };
     let mut failures = Vec::new();
     for sliver in [false, true] {
-        for force_layer in [false, true] {
+        for (force_layer, always) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut config = labelled("Static fade content");
             config.set_role(SemanticsRole::Button);
             config.add_action(SemanticsAction::Click, std::rc::Rc::new(|_| {}));
@@ -4264,6 +4287,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
             let spec = if sliver {
                 let mut opacity = RenderSliverOpacity::new(0.0);
                 let _ = opacity.set_always_needs_compositing(force_layer);
+                let _ = opacity.set_always_include_semantics(always);
                 viewport(
                     sliver_node(opacity)
                         .label("opacity")
@@ -4272,6 +4296,7 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
             } else {
                 let mut opacity = RenderOpacity::new(0.0);
                 let _ = opacity.set_always_needs_compositing(force_layer);
+                let _ = opacity.set_always_include_semantics(always);
                 box_node(opacity).label("opacity").child(child)
             };
             let mut run = RenderTester::mount(spec)
@@ -4303,8 +4328,9 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
                 let actionable = owner
                     .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
                     .is_ok();
-                if included != (alpha > 0.0) || actionable != (alpha > 0.0) {
-                    failures.push((sliver, force_layer, alpha, included, actionable));
+                let expected = always || alpha > 0.0;
+                if included != expected || actionable != expected {
+                    failures.push((sliver, force_layer, always, alpha, included, actionable));
                 }
                 if !sliver {
                     assert_eq!(
@@ -4318,12 +4344,12 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
     }
     assert!(
         failures.is_empty(),
-        "static opacity semantics (sliver, force layer, alpha, included, actionable): {failures:?}"
+        "static opacity semantics (sliver, force layer, always include, alpha, included, actionable): {failures:?}"
     );
 }
 
 fn harness_sliver_offstage_removes_hidden_semantics_and_stale_actions() {
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
     };
     let mut config = labelled("Offstage sliver content");
@@ -5996,8 +6022,8 @@ fn held<T: Clone + 'static>(value: T) -> ProxyAnimation<T> {
 /// Every rounded rectangle painted in the frame, in paint order, with the
 /// `from`/`to` points of its linear gradient (`None` for a flat fill).
 fn rrect_fills(run: &FrameRun) -> Vec<(Color, Option<(Offset, Offset)>)> {
+    use flui_layer::Layer;
     use flui_painting::DrawOp;
-    use flui_rendering::layer::Layer;
     let tree = run.layer_tree().expect("a painted frame");
     let mut fills = Vec::new();
     for (_, node) in tree.iter() {
@@ -6099,21 +6125,23 @@ fn harness_skeleton_sizes_by_width_factor_and_clamps_corners() {
         .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 12.0))
         .run_frame();
     assert_eq!(run.box_geometry(run.root()), Size::new(100.0, 12.0));
-    let rrect =
-        run.layer_tree()
-            .expect("a painted frame")
-            .iter()
-            .find_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::Picture(picture) => picture
+    let rrect = run
+        .layer_tree()
+        .expect("a painted frame")
+        .iter()
+        .find_map(|(_, node)| match node.layer() {
+            flui_layer::Layer::Picture(picture) => {
+                picture
                     .picture()
                     .iter()
                     .find_map(|command| match &command.op {
                         flui_painting::DrawOp::RRect { rrect, .. } => Some(*rrect),
                         _ => None,
-                    }),
-                _ => None,
-            })
-            .expect("the skeleton paints a rounded rectangle");
+                    })
+            }
+            _ => None,
+        })
+        .expect("the skeleton paints a rounded rectangle");
     assert_eq!(rrect.top_left.x, 6.0, "half the 12 px height");
 
     let unbounded = RenderTester::mount(box_node(RenderSkeleton::new(BONE, None, held(0.0))))
@@ -6308,7 +6336,7 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
 
 #[derive(Debug)]
 struct RegionPainter {
-    regions: Rc<std::cell::RefCell<Vec<flui_rendering::semantics::SemanticsRegion>>>,
+    regions: Rc<std::cell::RefCell<Vec<flui_semantics::SemanticsRegion>>>,
     size: Rc<Cell<Size>>,
 }
 
@@ -6317,18 +6345,15 @@ impl CustomPainter for RegionPainter {
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
         false
     }
-    fn semantics_regions(&self, size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+    fn semantics_regions(&self, size: Size) -> Vec<flui_semantics::SemanticsRegion> {
         self.size.set(size);
         self.regions.borrow().clone()
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
-fn semantic_region(key: u64, label: &str, x: f64) -> flui_rendering::semantics::SemanticsRegion {
-    flui_rendering::semantics::SemanticsRegion::new(
-        flui_rendering::semantics::SemanticsRegionKey(key),
+fn semantic_region(key: u64, label: &str, x: f64) -> flui_semantics::SemanticsRegion {
+    flui_semantics::SemanticsRegion::new(
+        flui_semantics::SemanticsRegionKey(key),
         Rect::from_origin_size(Point::new(x, 2.0), Size::new(8.0, 6.0)),
         labelled(label),
     )
@@ -6337,7 +6362,7 @@ fn semantic_region(key: u64, label: &str, x: f64) -> flui_rendering::semantics::
 #[derive(Debug)]
 struct RepaintingRegions {
     source: Rc<flui_foundation::ChangeNotifier>,
-    regions: Rc<std::cell::RefCell<Vec<flui_rendering::semantics::SemanticsRegion>>>,
+    regions: Rc<std::cell::RefCell<Vec<flui_semantics::SemanticsRegion>>>,
 }
 
 impl CustomPainter for RepaintingRegions {
@@ -6352,16 +6377,13 @@ impl CustomPainter for RepaintingRegions {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.source.clone())
     }
-    fn semantics_regions(&self, _size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+    fn semantics_regions(&self, _size: Size) -> Vec<flui_semantics::SemanticsRegion> {
         self.regions.borrow().clone()
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
 fn harness_custom_paint_repaint_refreshes_region_geometry_identity_and_actions() {
-    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
     use std::sync::atomic::{AtomicUsize, Ordering};
     for foreground in [false, true] {
         let old_calls = Arc::new(AtomicUsize::new(0));
@@ -6515,19 +6537,11 @@ fn harness_custom_paint_region_barriers_follow_painter_placement_and_updates() {
 
 fn semantics_content(
     run: &FrameRun,
-) -> Vec<(
-    String,
-    flui_rendering::semantics::AccessibilityNodeId,
-    Rect<f64>,
-)> {
+) -> Vec<(String, flui_semantics::AccessibilityNodeId, Rect<f64>)> {
     fn walk(
-        owner: &flui_rendering::semantics::SemanticsOwner,
+        owner: &flui_semantics::SemanticsOwner,
         id: flui_foundation::SemanticsId,
-        out: &mut Vec<(
-            String,
-            flui_rendering::semantics::AccessibilityNodeId,
-            Rect<f64>,
-        )>,
+        out: &mut Vec<(String, flui_semantics::AccessibilityNodeId, Rect<f64>)>,
     ) {
         let node = owner.get(id).expect("rooted semantics node");
         if let Some(label) = node.label() {
@@ -6576,7 +6590,7 @@ impl CustomPainter for CapturingRegionPainter {
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
         false
     }
-    fn semantics_regions(&self, _size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+    fn semantics_regions(&self, _size: Size) -> Vec<flui_semantics::SemanticsRegion> {
         if !self.invalid.get() {
             return vec![semantic_region(1, "Retained presentation", 1.0)];
         }
@@ -6588,24 +6602,20 @@ impl CustomPainter for CapturingRegionPainter {
                 };
                 let key = if self.duplicate { 1 } else { index as u64 + 1 };
                 let mut region = semantic_region(key, "Draft region", index as f64);
-                let handler: flui_rendering::semantics::SemanticsActionHandler =
-                    std::rc::Rc::new(move |_| {
-                        std::hint::black_box(&capture);
-                    });
+                let handler: flui_semantics::SemanticsActionHandler = std::rc::Rc::new(move |_| {
+                    std::hint::black_box(&capture);
+                });
                 if self.custom {
                     region.config.add_custom_action("Inspect region", handler);
                 } else {
                     region
                         .config
-                        .add_action(flui_rendering::semantics::SemanticsAction::Click, handler);
+                        .add_action(flui_semantics::SemanticsAction::Click, handler);
                 }
                 region.config.set_blocks_user_actions(self.blocked);
                 region
             })
             .collect()
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -6636,7 +6646,7 @@ impl RenderBox for CapturingSemanticsMerge {
                 fails: true,
             };
             config.add_action(
-                flui_rendering::semantics::SemanticsAction::Click,
+                flui_semantics::SemanticsAction::Click,
                 std::rc::Rc::new(move |_| {
                     std::hint::black_box(&capture);
                 }),
@@ -6837,7 +6847,7 @@ fn harness_accepted_semantics_drafts_retire_filtered_callbacks() {
 }
 
 fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_actions() {
-    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let calls = Arc::new(AtomicUsize::new(0));
     let mut first = semantic_region(1, "first", 1.0);
@@ -6974,7 +6984,7 @@ fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_action
 }
 
 fn harness_custom_paint_regions_obey_merge_exclude_and_action_blocking() {
-    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
     for policy in ["merge", "exclude", "blocked"] {
         let mut region = semantic_region(1, "painted", 1.0);
         region.config.set_role(SemanticsRole::Button);
@@ -7100,7 +7110,7 @@ fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
 }
 
 fn harness_custom_paint_regions_project_clip_and_rebind_owner() {
-    use flui_rendering::semantics::{SemanticsIdentitySource, SemanticsNode, SemanticsOwner};
+    use flui_semantics::{SemanticsIdentitySource, SemanticsNode, SemanticsOwner};
     let mut region = semantic_region(1, "projected", 2.0);
     region.transform = Matrix4::translation(3.0, 4.0, 0.0);
     let regions = Rc::new(std::cell::RefCell::new(vec![region]));
@@ -7553,9 +7563,7 @@ fn harness_clip_rsuperellipse_hit_tests_the_drawn_curve() {
         .expect("a painted frame")
         .iter()
         .filter_map(|(_, node)| match node.layer() {
-            flui_rendering::layer::Layer::ClipSuperellipse(layer) => {
-                Some(*layer.clip_superellipse())
-            }
+            flui_layer::Layer::ClipSuperellipse(layer) => Some(*layer.clip_superellipse()),
             _ => None,
         })
         .collect();
@@ -7682,7 +7690,7 @@ fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
 /// A grouped backdrop filter carries its group onto the layer it paints;
 /// joining or leaving the group is paint-only.
 fn harness_backdrop_filter_carries_its_group_to_the_layer() {
-    use flui_rendering::layer::BackdropGroupKey;
+    use flui_layer::BackdropGroupKey;
 
     let group = BackdropGroupKey::new();
     let run = RenderTester::mount(
@@ -7696,7 +7704,7 @@ fn harness_backdrop_filter_carries_its_group_to_the_layer() {
         .expect("a painted frame")
         .iter()
         .filter_map(|(_, node)| match node.layer() {
-            flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.group().cloned()),
+            flui_layer::Layer::BackdropFilter(layer) => Some(layer.group().cloned()),
             _ => None,
         })
         .collect();
@@ -7736,7 +7744,7 @@ fn harness_backdrop_filter_transform_follows_its_node() {
             .expect("a painted frame")
             .iter()
             .filter_map(|(_, node)| match node.layer() {
-                flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.filter().clone()),
+                flui_layer::Layer::BackdropFilter(layer) => Some(layer.filter().clone()),
                 _ => None,
             })
             .filter_map(|filter| match filter {
@@ -9381,7 +9389,7 @@ fn harness_input_regions_give_back_presses_no_press_taker_receives() {
 fn harness_input_regions_cut_routed_links_out_of_a_move_area() {
     use flui_objects::{SemanticsActionRoute, TextLinkKey, TextLinkRoute};
     use flui_rendering::input_regions::{InputRegion, InputRegionKind};
-    use flui_rendering::semantics::SemanticsActionHandler;
+    use flui_semantics::SemanticsActionHandler;
     let lane = flui_interaction::pointer::InteractionLane::try_new().expect("interaction lane");
     let route = lane.enter(|| {
         let handle = lane.dispatch_handle();
@@ -9616,7 +9624,7 @@ fn harness_sliver_carousel_geometry_and_frames() {
 /// `SliverGridLayout::compute_max_scroll_offset` divides by
 /// `cross_axis_count` (`(child_count - 1) / self.cross_axis_count`) with no
 /// zero guard — an unconditional (not debug-only) integer division-by-zero
-/// panic for any delegate whose `get_layout` returns `cross_axis_count: 0`.
+/// panic for any delegate whose `layout` returns `cross_axis_count: 0`.
 /// `SliverGridDelegate` is a public trait implemented by caller code, and
 /// nothing in its contract (or `SliverGridLayout`'s public fields) rules out
 /// a degenerate return value, so this is a real, externally reachable panic
@@ -9630,7 +9638,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     struct ZeroCrossAxisCountDelegate;
 
     impl SliverGridDelegate for ZeroCrossAxisCountDelegate {
-        fn get_layout(&self, _constraints: SliverConstraints) -> SliverGridLayout {
+        fn layout(&self, _constraints: SliverConstraints) -> SliverGridLayout {
             SliverGridLayout {
                 cross_axis_count: 0,
                 main_axis_stride: 100.0,
@@ -9643,10 +9651,6 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
 
         fn should_relayout(&self, _old_delegate: &dyn SliverGridDelegate) -> bool {
             true
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 
@@ -10098,7 +10102,7 @@ fn harness_lazy_slivers_keep_a_pinned_child_out_of_band() {
                 // which keeps a laid-out row past the cache addressable.
                 let mut revealing = SemanticsConfiguration::new();
                 revealing.add_action(
-                    flui_rendering::semantics::SemanticsAction::ScrollIntoView,
+                    flui_semantics::SemanticsAction::ScrollIntoView,
                     Rc::new(|_| {}),
                 );
                 let scrollable =
@@ -11210,6 +11214,45 @@ fn harness_single_child_layouts_preserve_live_and_dry_baselines() {
     );
 }
 
+/// A wrap's description names both directions that flip its axes, and marks
+/// only `VerticalDirection::Down` as the unremarkable vertical direction.
+fn harness_wrap_describes_its_reading_and_vertical_directions() {
+    for (vertical, text, vertical_name, text_name) in [
+        (VerticalDirection::Up, TextDirection::Rtl, "Up", "Rtl"),
+        (VerticalDirection::Down, TextDirection::Ltr, "Down", "Ltr"),
+    ] {
+        let run = RenderTester::mount(
+            box_node(
+                RenderWrap::new()
+                    .with_vertical_direction(vertical)
+                    .with_text_direction(text),
+            )
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+        )
+        .with_size(Size::new(100.0, 100.0))
+        .run_layout();
+        let tree = run.render_snapshot();
+        let wrap = tree.find_by_kind("RenderWrap").unique().expect("wrap");
+        assert_eq!(
+            wrap.get::<Variant<'_>>("vertical_direction")
+                .map(|direction| direction.name),
+            Ok(vertical_name),
+        );
+        assert_eq!(
+            wrap.get::<Variant<'_>>("text_direction")
+                .map(|direction| direction.name),
+            Ok(text_name),
+        );
+        assert_eq!(
+            wrap.field("vertical_direction")
+                .expect("described")
+                .is_default(),
+            vertical == VerticalDirection::Down,
+            "{vertical_name}"
+        );
+    }
+}
+
 fn harness_wrap_reports_its_highest_positioned_baseline() {
     for (name, wrap, sizes, baselines, expected) in [
         (
@@ -11816,7 +11859,7 @@ fn harness_sized_overflow_box_child_lays_out_under_incoming_constraints() {
 // ============================================================================
 
 fn harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_size() {
-    let mut run = RenderTester::mount(
+    let run = RenderTester::mount(
         box_node(RenderConstraintsTransformBox::new(
             Alignment::CENTER,
             None,
@@ -11829,10 +11872,8 @@ fn harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_siz
 
     let root = run.root();
     let node = run
-        .owner_mut()
-        .render_tree_mut()
-        .get_mut(root)
-        .and_then(|node| node.downcast_render_object_mut::<RenderConstraintsTransformBox>())
+        .owner()
+        .render_object::<RenderConstraintsTransformBox>(root)
         .expect("root should be a RenderConstraintsTransformBox");
     assert!(
         node.has_visual_overflow(),
@@ -11875,15 +11916,11 @@ struct StepFlowDelegate {
 }
 
 impl FlowDelegate for StepFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -11904,10 +11941,6 @@ impl FlowDelegate for StepFlowDelegate {
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         true
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 /// Paints child 0 with a degenerate (zero-scale, non-invertible) transform;
@@ -11923,15 +11956,11 @@ struct SemanticFlowDelegate {
 }
 
 impl FlowDelegate for SemanticFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -11955,9 +11984,6 @@ impl FlowDelegate for SemanticFlowDelegate {
     fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
         Some(self.notifier.clone())
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 fn semantic_flow(delegate: SemanticFlowDelegate) -> FrameRun {
@@ -11965,7 +11991,7 @@ fn semantic_flow(delegate: SemanticFlowDelegate) -> FrameRun {
         let mut config = labelled(label);
         config.set_role(SemanticsRole::Button);
         config.add_action(
-            flui_rendering::semantics::SemanticsAction::Click,
+            flui_semantics::SemanticsAction::Click,
             std::rc::Rc::new(|_| {}),
         );
         box_node(RenderSemanticsAnnotations::from_configuration(config).with_container(true))
@@ -12049,15 +12075,11 @@ struct FailingFlowDelegate {
 }
 
 impl FlowDelegate for FailingFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -12074,10 +12096,6 @@ impl FlowDelegate for FailingFlowDelegate {
 
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         true
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -12110,7 +12128,7 @@ fn harness_flow_keeps_hitting_its_last_presentation_after_a_failed_repaint() {
 }
 
 fn harness_flow_only_announces_presented_children_after_repaint_and_replacement() {
-    use flui_rendering::semantics::{ActionCall, SemanticsActionRequest};
+    use flui_semantics::{ActionCall, SemanticsActionRequest};
     let delegate = SemanticFlowDelegate {
         selected: Rc::new(Cell::new(0)),
         x: Rc::new(Cell::new(0.0)),
@@ -12185,15 +12203,11 @@ fn harness_flow_only_announces_presented_children_after_repaint_and_replacement(
 }
 
 impl FlowDelegate for DegenerateFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -12214,10 +12228,6 @@ impl FlowDelegate for DegenerateFlowDelegate {
 
     fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
         true
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -14728,8 +14738,8 @@ fn family_text_and_image() {
                 harness_image_paints_placeholder_frame,
             ),
             (
-                "texture_fills_its_box_and_repaints_per_frame",
-                harness_texture_fills_its_box_and_repaints_per_frame,
+                "texture_fills_its_box_and_repaints_on_another_texture",
+                harness_texture_fills_its_box_and_repaints_on_another_texture,
             ),
             (
                 "image_placement_slices_and_repeats_in_logical_units",
@@ -15096,6 +15106,10 @@ fn family_semantics() {
                 harness_static_opacity_visibility_controls_semantics_and_actions,
             ),
             (
+                "static_opacity_setters_report_their_exact_impact",
+                harness_static_opacity_setters_report_their_exact_impact,
+            ),
+            (
                 "sliver_offstage_removes_hidden_semantics_and_stale_actions",
                 harness_sliver_offstage_removes_hidden_semantics_and_stale_actions,
             ),
@@ -15342,6 +15356,10 @@ fn family_wrap_flow_table() {
             (
                 "wrap_horizontal_rtl_packs_its_run_against_the_right_edge",
                 harness_wrap_horizontal_rtl_packs_its_run_against_the_right_edge,
+            ),
+            (
+                "wrap_describes_its_reading_and_vertical_directions",
+                harness_wrap_describes_its_reading_and_vertical_directions,
             ),
             (
                 "flow_paints_children_in_delegate_order_under_per_child_transform_layers",

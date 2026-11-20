@@ -10,7 +10,9 @@ use crate::containment::keep_first;
 use std::cell::RefCell;
 
 use flui_foundation::geometry::Offset;
-use flui_platform::pointer::{CancelReason, DeviceId, TouchpadSwipeEvent, TouchpadSwipePhase};
+use flui_platform::input::pointer::{
+    CancelReason, DeviceId, TouchpadSwipeEvent, TouchpadSwipePhase,
+};
 use smallvec::SmallVec;
 
 use super::{GestureBinding, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};

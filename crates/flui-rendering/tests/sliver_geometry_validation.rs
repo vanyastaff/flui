@@ -96,23 +96,27 @@ impl RenderSliver for BadGeometrySliver {
 pub(crate) fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
     let text = flui_rendering::TextContextHandle::standalone();
     let mut owner = PipelineOwner::new(text.clone());
-    let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver(
-            Box::new(BadGeometrySliver::new(invalid_negative_paint_geometry()))
-                as BoxedSliverObject,
-        );
+    let sliver_id = flui_rendering::testing::raw_tree::insert_sliver(
+        &mut owner,
+        Box::new(BadGeometrySliver::new(invalid_negative_paint_geometry())) as BoxedSliverObject,
+    );
 
-    let entry = owner
-        .render_tree_mut()
-        .get_mut(sliver_id)
-        .and_then(|node| node.as_sliver_mut())
-        .expect("sliver entry");
-    let err = entry
-        .layout_leaf_only(sliver_constraints(), text.source(), false)
-        .expect_err("invalid sliver geometry must fail layout");
+    let err = flui_rendering::testing::raw_tree::layout_sliver_leaf(
+        &mut owner,
+        sliver_id,
+        sliver_constraints(),
+        text.source(),
+        false,
+    )
+    .expect("sliver entry")
+    .expect_err("invalid sliver geometry must fail layout");
 
     assert_invalid_geometry(err, "paint_extent is negative");
+    let entry = owner
+        .render_tree()
+        .get(sliver_id)
+        .and_then(|node| node.as_sliver())
+        .expect("sliver entry");
     assert!(
         entry.state().geometry().is_none(),
         "invalid geometry must not be committed to RenderState"

@@ -44,7 +44,7 @@ use flui_platform::haptics::{
 };
 use flui_platform::{
     EventTime, HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics,
-    pointer::DeviceId,
+    input::pointer::DeviceId,
 };
 
 use crate::gesture::arena::{DispatchedInput, DispatchedInputCell};

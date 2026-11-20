@@ -221,7 +221,7 @@ fn painter_update_impact(
                 | flui_rendering::RenderUpdateImpact::SEMANTICS
         }
         (Some(old), Some(new)) if Rc::ptr_eq(old, new) => flui_rendering::RenderUpdateImpact::NONE,
-        (Some(old), Some(new)) if old.as_any().type_id() != new.as_any().type_id() => {
+        (Some(old), Some(new)) if !crate::dynamic_type::same_concrete_type(&**old, &**new) => {
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS
         }
@@ -308,8 +308,8 @@ impl RenderBox for RenderCustomPaint {
 
     flui_rendering::forward_single_child_baselines!();
 
-    fn semantics_regions(&self, size: Size) -> flui_rendering::semantics::SemanticsRegions {
-        flui_rendering::semantics::SemanticsRegions {
+    fn semantics_regions(&self, size: Size) -> flui_semantics::SemanticsRegions {
+        flui_semantics::SemanticsRegions {
             before_children: self
                 .painter
                 .as_ref()

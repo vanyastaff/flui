@@ -1,34 +1,29 @@
 //! Basic dirty-flag accessors and boundary configuration for `RenderState<P>`.
 //!
-//! This file contains the lock-free flag accessors (`needs_layout`,
+//! The flag accessors (`needs_layout`,
 //! `needs_paint`, `clear_*`, `flags()`) and boundary configuration methods
 //! (`is_relayout_boundary`, `is_repaint_boundary`, `set_*_boundary`,
 //! `was_repaint_boundary`, `set_was_repaint_boundary`).
 
 use super::RenderState;
 use crate::protocol::Protocol;
-use crate::storage::flags::{AtomicRenderFlags, RenderFlags};
+use crate::storage::flags::{RenderFlags, RenderFlagsCell};
 
 // ============================================================================
-// BASIC DIRTY FLAGS (LOCK-FREE)
+// BASIC DIRTY FLAGS
 // ============================================================================
 
 impl<P: Protocol> RenderState<P> {
-    /// Returns a reference to the atomic render flags.
+    /// The node's flag set.
     ///
     /// This provides direct access to the flags for callers that need
     /// fine-grained control over flag operations.
     #[inline]
-    pub fn flags(&self) -> &AtomicRenderFlags {
+    pub(crate) fn flags(&self) -> &RenderFlagsCell {
         &self.flags
     }
 
-    /// Checks if layout is needed (lock-free, O(1)).
-    ///
-    /// This is called frequently in hot paths, so it's optimized for speed:
-    /// - Single atomic load operation
-    /// - No locks or blocking
-    /// - Inlined for zero-cost abstraction
+    /// Checks if layout is needed.
     ///
     /// # Example
     ///
@@ -43,7 +38,7 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::NEEDS_LAYOUT)
     }
 
-    /// Checks if paint is needed (lock-free, O(1)).
+    /// Checks if paint is needed.
     ///
     /// Similar performance characteristics to `needs_layout()`.
     #[inline]
@@ -52,14 +47,14 @@ impl<P: Protocol> RenderState<P> {
     }
 
     /// Checks if this node's own composited-layer properties changed while
-    /// nothing it painted did (lock-free, O(1)).
+    /// nothing it painted did.
     #[inline]
     pub fn needs_composited_layer_update(&self) -> bool {
         self.flags
             .contains(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE)
     }
 
-    /// Checks if compositing is needed (lock-free, O(1)).
+    /// Checks if compositing is needed.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         self.flags.contains(RenderFlags::NEEDS_COMPOSITING)
@@ -67,10 +62,10 @@ impl<P: Protocol> RenderState<P> {
 
     /// Marks the layout dirty flag.
     ///
-    /// Sets `NEEDS_LAYOUT` on the underlying atomic flags. Idempotent —
-    /// re-marking an already-dirty node is a no-op at the atomic level.
+    /// Sets `NEEDS_LAYOUT`. Idempotent: re-marking an already-dirty node
+    /// changes nothing.
     ///
-    /// Lock-free, `O(1)`. Used by [`PipelineOwner::mark_needs_layout`]
+    /// Used by [`PipelineOwner::mark_needs_layout`]
     /// to walk the ancestor chain marking each node up to the nearest
     /// relayout boundary.
     ///
@@ -85,7 +80,7 @@ impl<P: Protocol> RenderState<P> {
     /// assert!(state.needs_layout());
     /// ```
     #[inline]
-    pub fn mark_needs_layout(&self) {
+    pub(crate) fn mark_needs_layout(&self) {
         self.flags.mark_needs_layout();
     }
 
@@ -99,7 +94,7 @@ impl<P: Protocol> RenderState<P> {
     /// Only call this after layout succeeds. Clearing prematurely
     /// will cause incorrect rendering.
     #[inline]
-    pub fn clear_needs_layout(&self) {
+    pub(crate) fn clear_needs_layout(&self) {
         self.flags.remove(RenderFlags::NEEDS_LAYOUT);
     }
 
@@ -112,7 +107,7 @@ impl<P: Protocol> RenderState<P> {
     /// Only call this after paint succeeds. Clearing prematurely
     /// will cause visual artifacts.
     #[inline]
-    pub fn clear_needs_paint(&self) {
+    pub(crate) fn clear_needs_paint(&self) {
         self.flags.remove(RenderFlags::NEEDS_PAINT);
     }
 
@@ -121,24 +116,9 @@ impl<P: Protocol> RenderState<P> {
     /// Cleared wherever [`Self::clear_needs_paint`] is: a repaint rebuilds the
     /// layer from current properties anyway, so it subsumes the update.
     #[inline]
-    pub fn clear_needs_composited_layer_update(&self) {
+    pub(crate) fn clear_needs_composited_layer_update(&self) {
         self.flags
             .remove(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE);
-    }
-
-    /// Clears the compositing dirty flag.
-    #[inline]
-    pub fn clear_needs_compositing(&self) {
-        self.flags.remove(RenderFlags::NEEDS_COMPOSITING);
-    }
-
-    /// Clears all dirty flags (after all phases complete).
-    ///
-    /// Use this sparingly - usually you want to clear flags individually
-    /// as each phase completes.
-    #[inline]
-    pub fn clear_all_flags(&self) {
-        self.flags.clear();
     }
 }
 
@@ -160,7 +140,7 @@ impl<P: Protocol> RenderState<P> {
     /// ```rust,ignore
     /// if state.is_relayout_boundary() {
     ///     // boundary owns its layout pass
-    ///     pipeline_owner.add_node_needing_layout(element_id);
+    ///     pipeline_owner.mark_needs_layout(element_id);
     /// }
     /// ```
     #[inline]
@@ -187,7 +167,7 @@ impl<P: Protocol> RenderState<P> {
     /// Records whether the pass that just committed this node's geometry read
     /// a stand-in (see [`RenderFlags::GEOMETRY_DEGRADED`]).
     #[inline]
-    pub fn set_geometry_degraded(&self, degraded: bool) {
+    pub(crate) fn set_geometry_degraded(&self, degraded: bool) {
         self.flags.set_geometry_degraded(degraded);
     }
 
@@ -200,28 +180,11 @@ impl<P: Protocol> RenderState<P> {
     /// state.set_relayout_boundary(true);
     /// ```
     #[inline]
-    pub fn set_relayout_boundary(&self, is_boundary: bool) {
+    pub(crate) fn set_relayout_boundary(&self, is_boundary: bool) {
         if is_boundary {
             self.flags.set(RenderFlags::IS_RELAYOUT_BOUNDARY);
         } else {
             self.flags.remove(RenderFlags::IS_RELAYOUT_BOUNDARY);
-        }
-    }
-
-    /// Sets whether this render object is a repaint boundary.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Make this a repaint boundary to isolate paint changes
-    /// state.set_repaint_boundary(true);
-    /// ```
-    #[inline]
-    pub fn set_repaint_boundary(&self, is_boundary: bool) {
-        if is_boundary {
-            self.flags.set(RenderFlags::IS_REPAINT_BOUNDARY);
-        } else {
-            self.flags.remove(RenderFlags::IS_REPAINT_BOUNDARY);
         }
     }
 
@@ -231,16 +194,10 @@ impl<P: Protocol> RenderState<P> {
     /// compositing-bits propagation to detect repaint-boundary transitions.
     ///
     /// Hoisted off the `RenderObject<P>` trait surface: it lives on
-    /// `RenderState` so the paint phase flips a single atomic bit rather
-    /// than acquiring a write lock on the trait object.
+    /// `RenderState` so the paint phase flips it through `&self` without
+    /// borrowing the render object mutably.
     #[inline]
     pub fn was_repaint_boundary(&self) -> bool {
         self.flags.was_repaint_boundary()
-    }
-
-    /// Sets the previous-frame `IS_REPAINT_BOUNDARY` value.
-    #[inline]
-    pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
-        self.flags.set_was_repaint_boundary(was_boundary);
     }
 }

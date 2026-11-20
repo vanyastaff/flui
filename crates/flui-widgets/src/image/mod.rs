@@ -31,7 +31,7 @@ pub use provider::{
     DecodeJob, DirectImageProvider, FileImage, ImageProvider, ImageProviderError, ImageServices,
     MemoryImage,
 };
-pub use texture::{Texture, TextureState};
+pub use texture::Texture;
 
 #[cfg(feature = "asset-images")]
 pub use asset_image::AssetImage;

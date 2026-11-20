@@ -14,7 +14,7 @@ use objc2_app_kit::{
 
 use crate::haptics::degradation::{MacFeedback, macos_feedback, macos_pattern};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, input::pointer::DeviceId};
 
 /// The window's haptic actuator. Requests reach it on the owner thread, which
 /// on AppKit is the main thread.
@@ -59,9 +59,5 @@ impl PlatformHaptics for MacHaptics {
 
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
         HapticCapabilities::FEEDBACK_ONLY
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

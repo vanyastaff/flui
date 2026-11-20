@@ -50,7 +50,7 @@ use flui_interaction::gesture::MultiDragAxis;
 use flui_interaction::gesture::PanClaim;
 use flui_objects::{Placement, PlacementSlot, SubtreeAnchor};
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_rendering::constraints::SliverConstraints;
 use flui_rendering::delegates::{SliverGridDelegate, SliverGridLayout};
 use flui_rendering::pipeline::WeakPipelineCell;
@@ -62,10 +62,10 @@ use crate::{
     AnimatedBuilder, DecoratedBox, DefaultFocusRingStyle, Opacity, PhysicalModel, Transform,
 };
 use flui_foundation::TextDirection;
-use flui_platform::data_transfer::TransferActions;
-use flui_platform::keyboard::NamedKey;
-use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::semantics::{Announcer, Urgency};
+use flui_interaction::pointer::HitTestBehavior;
+use flui_platform::input::keyboard::NamedKey;
+use flui_platform::transfer::data::TransferActions;
+use flui_semantics::{Announcer, Urgency};
 use flui_view::element::ElementKind;
 use flui_view::environment::GestureArenaScope;
 use flui_view::environment::VsyncScope;
@@ -669,8 +669,8 @@ struct ShapeRecorder {
 }
 
 impl SliverGridDelegate for ShapeRecorder {
-    fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
-        let layout = self.inner.get_layout(constraints);
+    fn layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
+        let layout = self.inner.layout(constraints);
         self.shape.set(Some(GridShape {
             stride: layout.cross_axis_count.max(1),
             main_reversed: constraints.axis_direction.is_reversed(),
@@ -680,16 +680,12 @@ impl SliverGridDelegate for ShapeRecorder {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SliverGridDelegate) -> bool {
-        match old_delegate.as_any().downcast_ref::<Self>() {
+        match (old_delegate as &dyn Any).downcast_ref::<Self>() {
             Some(old) => {
                 !Rc::ptr_eq(&self.shape, &old.shape) || self.inner.should_relayout(&*old.inner)
             }
             None => true,
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -1766,7 +1762,7 @@ impl StatelessView for ReorderRow {
         let content = match view.handles {
             ReorderHandles::Default => {
                 let side = GestureArenaScope::settings_or_default_of(ctx)
-                    .min_target_for(flui_platform::pointer::PointerKind::Touch);
+                    .min_target_for(flui_platform::input::pointer::PointerKind::Touch);
                 let handle = source.handle(default_handle());
                 beside_handle(content, handle, side, &view)
             }

@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use flui_native::testing::x11::run_for;
 use flui_platform::WindowCommand;
-use flui_platform::pointer::PointerKind;
-use flui_platform::text_store::TextStore;
+use flui_platform::input::pointer::PointerKind;
+use flui_platform::text::store::TextStore;
 use flui_testing::backend_conformance::{
     BackendUnderTest, ClockProfile, ConformanceReport, ContactAction, ContactStep, FailureKind,
     HostInput, RowOutcome, Step, StepKey, TextInputPath, run_backend_conformance,
@@ -315,7 +315,7 @@ struct X11Window {
     root: u32,
     /// The window's content origin on the root window.
     origin: (i16, i16),
-    capabilities: flui_platform::input_capabilities::InputCapabilities,
+    capabilities: flui_platform::input::capabilities::InputCapabilities,
     /// The server's own master pointer.
     core_pointer: u16,
     /// The master pointer XTest moves, once a request picked it.
@@ -556,7 +556,7 @@ impl X11Window {
 impl BackendUnderTest for X11Window {
     type Reading = Vec<Request>;
 
-    fn capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
+    fn capabilities(&self) -> flui_platform::input::capabilities::InputCapabilities {
         self.capabilities
     }
 
@@ -637,11 +637,11 @@ impl BackendUnderTest for X11Window {
 
     fn drag_source(
         &mut self,
-    ) -> Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    ) -> Option<std::sync::Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         self.fixture.window.drag_source()
     }
 
-    fn drag_start(&self) -> flui_platform::drag::OsDragStart {
+    fn drag_start(&self) -> flui_platform::transfer::drag::OsDragStart {
         flui_native::input::availability::DESKTOP_DRAG_START
     }
 

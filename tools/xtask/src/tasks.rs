@@ -1,35 +1,16 @@
-//! The tasks that choose packages, targets or tools from the workspace and
-//! the host: `checks`, `cross-typecheck`, `wasm-link`, `wasm-test`, `fuzz`
-//! and `clean-nested`.
+//! The tasks `checks` and `clean-nested`.
 //!
-//! Each task prints every command before it runs it and stops at the first
-//! failure, except `checks` and `fuzz`, which run every step and then report
-//! all that failed. `--dry-run` prints the commands without running them.
+//! `checks` runs every check even after one fails and then reports all that
+//! failed. `--dry-run` prints what a task would run or remove without doing it.
 
 mod checks;
 mod exec;
-mod fuzz;
-mod native;
-mod web;
 
 use std::process::ExitCode;
 
-use exec::{Host, Runner, target_dir};
-pub(crate) use fuzz::{FuzzArgs, fuzz};
+use exec::{Runner, target_dir};
 
 use crate::util::{human_size, tree_size};
-
-const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
-const MACOS_TARGET: &str = "aarch64-apple-darwin";
-const ANDROID_TARGET: &str = "aarch64-linux-android";
-/// The device triple, not `-sim`: the two differ in the slice, not in the API
-/// surface a lint sees.
-const IOS_TARGET: &str = "aarch64-apple-ios";
-const WASM_TARGET: &str = "wasm32-unknown-unknown";
-
-/// flui-native's backends as they ship: MSVC, not
-/// the GNU ABI, and aarch64 for macOS, Android and iOS.
-const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGET, IOS_TARGET];
 
 /// Options every task takes.
 #[derive(Debug, Clone, Copy, clap::Args)]
@@ -45,11 +26,6 @@ impl RunOpts {
             dry_run: self.dry_run,
         }
     }
-}
-
-/// `-- -D warnings`: every lint step denies warnings, as CI does.
-fn deny_warnings(cmd: exec::Cmd) -> exec::Cmd {
-    cmd.args(["--", "-D", "warnings"])
 }
 
 /// The nested-cargo tests' build caches, relative to the target directory:
@@ -79,63 +55,6 @@ pub(crate) struct ChecksArgs {
 /// the rest), in this process. All of them run; exit 1 if any failed.
 pub(crate) fn checks(args: &ChecksArgs) -> anyhow::Result<ExitCode> {
     done(checks::run(args.run.runner()))
-}
-
-/// Arguments for `cargo xtask cross-typecheck`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct CrossTypecheckArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-    /// Check only this native triple (CI runs the triples in parallel).
-    #[arg(long, value_parser = PLATFORM_TARGETS)]
-    pub(crate) target: Option<String>,
-    /// Enable every feature of the selected packages (Apple targets need a genuine SDK).
-    #[arg(long)]
-    pub(crate) all_features: bool,
-}
-
-/// `cargo xtask cross-typecheck`: lint discovered native workspace targets without linking.
-///
-/// Needs `rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
-/// aarch64-linux-android aarch64-apple-ios`.
-pub(crate) fn cross_typecheck(args: &CrossTypecheckArgs) -> anyhow::Result<ExitCode> {
-    done(args.run.runner().steps(&native::plan(
-        &crate::util::repo_root(),
-        "",
-        Host::current(),
-        args.target.as_deref(),
-        if args.all_features {
-            native::FeatureSet::All
-        } else {
-            native::FeatureSet::RequiredTargets
-        },
-    )?))
-}
-
-/// Arguments for `cargo xtask wasm-link`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct WasmLinkArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask wasm-link`: link the wasm demos and check their imports.
-pub(crate) fn wasm_link(args: &WasmLinkArgs) -> anyhow::Result<ExitCode> {
-    done(web::link(args.run.runner()))
-}
-
-/// Arguments for `cargo xtask wasm-test`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct WasmTestArgs {
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask wasm-test`: run the wasm32 tests under wasm-bindgen-test-runner.
-///
-/// Installs the wasm-bindgen-cli matching Cargo.lock when it is missing.
-pub(crate) fn wasm_test(args: &WasmTestArgs) -> anyhow::Result<ExitCode> {
-    done(web::test(args.run.runner()))
 }
 
 /// Arguments for `cargo xtask clean-nested`.

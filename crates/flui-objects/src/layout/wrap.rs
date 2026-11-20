@@ -31,7 +31,7 @@ use flui_rendering::{
         BoxDryBaselineContext, BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext,
         BoxLayoutContext, PaintContext,
     },
-    parent_data::WrapParentData,
+    parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
 
@@ -149,7 +149,7 @@ struct WrapSizes {
 /// available main-axis extent.
 ///
 /// Child paint offsets are stored in
-/// [`WrapParentData::offset`](flui_rendering::parent_data::WrapParentData).
+/// [`BoxParentData::offset`](flui_rendering::parent_data::BoxParentData).
 ///
 /// # Alignment
 ///
@@ -316,6 +316,18 @@ impl RenderWrap {
     pub fn with_vertical_direction(mut self, vertical_direction: VerticalDirection) -> Self {
         self.vertical_direction = vertical_direction;
         self
+    }
+
+    /// Updates the vertical direction and reports layout when changed.
+    pub fn set_vertical_direction(
+        &mut self,
+        vertical_direction: VerticalDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.vertical_direction == vertical_direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.vertical_direction = vertical_direction;
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// `(flip_main, flip_cross)` for this wrap's own axes.
@@ -676,6 +688,9 @@ impl flui_foundation::inspect::Inspect for RenderWrap {
             .unit(flui_foundation::inspect::Unit::LogicalPx)
             .default(&0.0_f64);
         out.field("cross_axis_alignment", &self.cross_axis_alignment);
+        out.field("text_direction", &self.text_direction);
+        out.field("vertical_direction", &self.vertical_direction)
+            .default(&VerticalDirection::Down);
         out.field("clip_behavior", &self.clip_behavior);
         out.field("has_visual_overflow", &self.has_visual_overflow);
     }
@@ -685,7 +700,7 @@ impl flui_foundation::inspect::Inspect for RenderWrap {
 
 impl RenderBox for RenderWrap {
     type Arity = Variable;
-    type ParentData = WrapParentData;
+    type ParentData = BoxParentData;
 
     /// Three-phase layout.
     ///
@@ -698,7 +713,7 @@ impl RenderBox for RenderWrap {
     /// child with its `cross_axis_alignment` offset within the run.
     fn perform_layout(
         &mut self,
-        ctx: &mut BoxLayoutContext<'_, Variable, WrapParentData>,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
@@ -895,7 +910,7 @@ impl RenderBox for RenderWrap {
         }
     }
 
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, WrapParentData>) -> bool {
+    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
         if !ctx.is_within_own_size() {
             return false;
         }

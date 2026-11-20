@@ -187,6 +187,10 @@ fn action_component_contracts() {
             ink_well::disabled_ink_well_does_not_fire_a_tap_callback,
         ),
         (
+            "ink_well::a well with its painter attached follows its states without rebuilding",
+            ink_well::a_well_with_its_painter_attached_follows_its_states_without_rebuilding,
+        ),
+        (
             "ink_well::press highlight lasts its delay under reduced motion",
             ink_well::press_highlight_lasts_its_delay_under_reduced_motion,
         ),
@@ -257,6 +261,10 @@ fn action_component_contracts() {
         (
             "chip::tapping the delete icon fires on deleted only not the chip tap",
             chip::tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap,
+        ),
+        (
+            "chip::a right to left chip puts its delete icon on the left",
+            chip::a_right_to_left_chip_puts_its_delete_icon_on_the_left,
         ),
         (
             "list_tile::a selectable tile is an option whether or not selected",
@@ -422,6 +430,10 @@ fn selection_control_contracts() {
             "data_table::checkbox margin override beats theme and retains default spacing",
             data_table::checkbox_margin_override_beats_the_theme_without_changing_default_spacing,
         ),
+        (
+            "data_table::a data table lays out from the reading start edge",
+            data_table::a_data_table_lays_out_from_the_reading_start_edge,
+        ),
     ]);
 }
 
@@ -482,6 +494,8 @@ fn overlay_contracts() {
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
+        ("drawer::a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction", drawer::a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction),
+        ("drawer::a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_new_side", drawer::a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_new_side),
         ("drawer::grabbing_a_closing_drawer_preserves_its_panel", drawer::grabbing_a_closing_drawer_preserves_its_panel),
         ("drawer::drawer_slides_without_rebuilding_per_frame", drawer::drawer_slides_without_rebuilding_per_frame),
         ("drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel", drawer::incoming_end_drawer_scrim_covers_the_outgoing_start_panel),
@@ -584,6 +598,10 @@ fn navigation_and_layout_contracts() {
         (
             "app_bar::the title announces as a level one heading",
             app_bar::the_title_announces_as_a_level_one_heading,
+        ),
+        (
+            "app_bar::a right to left app bar starts its toolbar at the right",
+            app_bar::a_right_to_left_app_bar_starts_its_toolbar_at_the_right,
         ),
         (
             "sliver_app_bar::a pinned bar holds its collapsed height at deep scroll",
@@ -764,6 +782,10 @@ fn navigation_and_layout_contracts() {
         (
             "scaffold::floating action button floats above the keyboard",
             scaffold::floating_action_button_floats_above_the_keyboard,
+        ),
+        (
+            "scaffold::the floating action button sits at the reading end clear of that sides inset",
+            scaffold::the_floating_action_button_sits_at_the_reading_end_clear_of_that_sides_inset,
         ),
         (
             "scaffold::plain body text takes the theme body style and components keep theirs",

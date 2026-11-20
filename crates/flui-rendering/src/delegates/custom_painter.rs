@@ -20,7 +20,7 @@ use flui_semantics::SemanticsRegion;
 ///
 /// ```ignore
 /// use flui_rendering::delegates::CustomPainter;
-/// use flui_rendering::pipeline::Canvas;
+/// use flui_painting::Canvas;
 /// use flui_foundation::geometry::Size;
 ///
 /// #[derive(Debug)]
@@ -36,7 +36,7 @@ use flui_semantics::SemanticsRegion;
 ///     }
 ///
 ///     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
-///         if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
+///         if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
 ///             self.cell_size != old.cell_size
 ///         } else {
 ///             true
@@ -44,7 +44,7 @@ use flui_semantics::SemanticsRegion;
 ///     }
 /// }
 /// ```
-pub trait CustomPainter: Debug {
+pub trait CustomPainter: Any + Debug {
     /// Paint custom content on the canvas.
     ///
     /// The canvas coordinate space is configured such that the origin is at
@@ -115,10 +115,4 @@ pub trait CustomPainter: Debug {
     fn should_rebuild_semantics(&self, _old_delegate: &dyn CustomPainter) -> bool {
         true
     }
-
-    /// Returns self as `Any` for downcasting.
-    ///
-    /// This enables comparing delegates of the same concrete type in
-    /// `should_repaint` and `should_rebuild_semantics`.
-    fn as_any(&self) -> &dyn Any;
 }

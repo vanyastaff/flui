@@ -64,8 +64,6 @@ fn pipeline_callback_replacement_reentry() {
         ) {
             match event {
                 "visual" => owner.set_on_need_visual_update(callback),
-                "created" => owner.set_on_semantics_owner_created(callback),
-                "disposed" => owner.set_on_semantics_owner_disposed(callback),
                 _ => panic!("unknown callback event"),
             }
         }
@@ -84,9 +82,6 @@ fn pipeline_callback_replacement_reentry() {
         owner.set_on_need_visual_update(move || {
             wake_capture.fetch_add(1, Ordering::Relaxed);
         });
-        if event == "disposed" {
-            owner.set_semantics_enabled(true);
-        }
         let drops = Arc::new(AtomicUsize::new(0));
         let retired = RetiredWake {
             handle: handle.clone(),
@@ -114,51 +109,21 @@ fn pipeline_callback_replacement_reentry() {
             result.expect("healthy displaced capture retires");
         }
         assert_eq!(drops.load(Ordering::Relaxed), 1);
-        if event == "visual" {
-            assert_eq!(
-                latest.load(Ordering::Relaxed),
-                1,
-                "reentrant wake observes committed replacement"
-            );
-        } else {
-            assert_eq!(
-                wake_count.load(Ordering::Relaxed),
-                1,
-                "retirement wake remains deliverable"
-            );
-        }
+        assert_eq!(
+            latest.load(Ordering::Relaxed),
+            1,
+            "reentrant wake observes committed replacement"
+        );
         handle
             .mark_needs_paint()
             .expect("next independent handle wake");
-        match event {
-            "visual" => assert_eq!(latest.load(Ordering::Relaxed), 2),
-            "created" => {
-                owner.set_semantics_enabled(true);
-                assert_eq!(latest.load(Ordering::Relaxed), 1);
-            }
-            "disposed" => {
-                owner.set_semantics_enabled(false);
-                assert_eq!(latest.load(Ordering::Relaxed), 1);
-            }
-            _ => unreachable!(),
-        }
+        assert_eq!(latest.load(Ordering::Relaxed), 2);
         let final_count = Arc::new(AtomicUsize::new(0));
         let final_capture = Arc::clone(&final_count);
         install(&mut owner, event, move || {
             final_capture.fetch_add(1, Ordering::Relaxed);
         });
-        match event {
-            "visual" => owner.request_visual_update(),
-            "created" => {
-                owner.set_semantics_enabled(false);
-                owner.set_semantics_enabled(true);
-            }
-            "disposed" => {
-                owner.set_semantics_enabled(true);
-                owner.set_semantics_enabled(false);
-            }
-            _ => unreachable!(),
-        }
+        owner.request_visual_update();
         assert_eq!(
             final_count.load(Ordering::Relaxed),
             1,
@@ -166,27 +131,17 @@ fn pipeline_callback_replacement_reentry() {
         );
         crate::common::isolated_case_passed();
     }
-    let failures: Vec<String> = [
-        "visual-healthy",
-        "visual-drop",
-        "visual-inflight",
-        "created-healthy",
-        "created-drop",
-        "created-inflight",
-        "disposed-healthy",
-        "disposed-drop",
-        "disposed-inflight",
-    ]
-    .into_iter()
-    .filter_map(|case| {
-        crate::common::run_isolated(
-            "pipeline_scenarios::pipeline_callback_replacement_reentry",
-            CHILD,
-            case,
-        )
-        .err()
-    })
-    .collect();
+    let failures: Vec<String> = ["visual-healthy", "visual-drop", "visual-inflight"]
+        .into_iter()
+        .filter_map(|case| {
+            crate::common::run_isolated(
+                "pipeline_scenarios::pipeline_callback_replacement_reentry",
+                CHILD,
+                case,
+            )
+            .err()
+        })
+        .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 

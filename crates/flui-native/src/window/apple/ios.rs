@@ -529,6 +529,10 @@ struct ViewDisplay {
 impl FluiView {
     /// Build the content view for one window, sized to the screen's bounds,
     /// which hands its touches to `touches`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a part the window shares with its one view, built by its one caller"
+    )]
     fn new(
         mtm: MainThreadMarker,
         delivery: Arc<WindowDelivery>,
@@ -1360,6 +1364,10 @@ pub struct IOSWindow {
 
 impl IOSWindow {
     /// Allocate a stable view; a scene connection supplies its native container.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a host-owned part the window takes, from the host's one call"
+    )]
     fn new(
         mtm: MainThreadMarker,
         id: WindowId,
@@ -2130,7 +2138,7 @@ impl crate::host_window::HostWindow for IOSWindow {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
+    ) -> Option<std::rc::Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()
@@ -2191,6 +2199,10 @@ impl PlatformWindow for IOSWindow {
         self.redraw.request_redraw();
     }
 
+    /// Never asked: UIKit tells no covering and keeps no covered window's
+    /// surface (`occluded_surface`), so no frame is owed to one (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
         Arc::clone(&self.redraw) as _
     }
@@ -2235,7 +2247,7 @@ impl PlatformWindow for IOSWindow {
     /// Only a closed window refuses, with `NoWindow`.
     fn set_input_regions(
         &self,
-        regions: &[flui_platform::input_regions::InputRegion],
+        regions: &[flui_platform::input::regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
         if self.admission.closed.get() {
             return Err(flui_platform::Unsupported::new(
@@ -2304,7 +2316,7 @@ impl PlatformWindow for IOSWindow {
 
     /// UIKit starts no OS drag session from this window yet; its input
     /// capabilities say so.
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         None
     }
 
@@ -2976,10 +2988,6 @@ pub(crate) mod status_bar {
                     },
                 );
             });
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 }

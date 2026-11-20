@@ -16,11 +16,11 @@ use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::TextStyle;
 use flui_platform::EventTime;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
 };
-use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
+use flui_semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_view::{BoxedView, BuildContext, ViewExt};
 use flui_widgets::{

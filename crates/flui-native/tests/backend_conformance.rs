@@ -52,20 +52,26 @@ use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, OwnerPlatfor
 use flui_platform::Availability;
 use flui_platform::EventTime;
 use flui_platform::WindowOptions;
-use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
 };
-use flui_platform::input_capabilities::InputCapabilities;
-use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
-use flui_platform::pointer::{
+use flui_platform::input::capabilities::InputCapabilities;
+use flui_platform::input::keyboard::{
+    Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+};
+use flui_platform::input::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerKind, PointerPosition,
     PointerRole, PointerSource, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
-use flui_platform::text_store::{LockGrant, LockTiming, TextStore, Utf16Offset, Utf16Range};
+use flui_platform::input::regions::{CaptionButton, InputRegionKind, ResizeEdge};
+use flui_platform::text::store::{
+    LockGrant, LockTiming, TextStore,
+    utf16::{Utf16Offset, Utf16Range},
+};
+use flui_platform::transfer::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
-    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics,
+    input::pointer::DeviceId,
 };
 
 /// What a table answers for a request its actuator cannot play: this device
@@ -758,10 +764,6 @@ impl PlatformHaptics for TableHaptics {
                 HapticCapabilities::new(true, PatternPlayback::Approximated, false, false)
             }
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

@@ -35,7 +35,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use flui_platform::keyboard::{Modifiers, NamedKey};
+use flui_platform::input::keyboard::{Modifiers, NamedKey};
 use rustc_hash::FxHashMap;
 
 use crate::shortcuts::{
@@ -1049,7 +1049,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
 
     use flui_platform::capability::Abandoned;
-    use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Key, Modifiers, NamedKey};
 
     use super::{
         HotKey, HotKeyNumber, HotKeySystem, HotKeyTable, KeyLayout, ansi_key, bind, flag, hot_key,

@@ -6,15 +6,15 @@ use crate::{
 };
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Rect, Size};
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::{
     events::{Key, KeyState, NamedKey},
     focus::{FocusNode, KeyEventResult},
 };
 use flui_painting::{Canvas, paint::Paint, styling::Color};
-use flui_platform::keyboard::ImeComposition;
-use flui_rendering::{
-    delegates::CustomPainter, hit_testing::HitTestBehavior, semantics::NumericRange,
-};
+use flui_platform::input::keyboard::ImeComposition;
+use flui_rendering::delegates::CustomPainter;
+use flui_semantics::NumericRange;
 use flui_view::prelude::*;
 use std::{
     any::Any,
@@ -458,9 +458,6 @@ impl CustomPainter for SliderPainter {
         canvas.restore();
     }
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>() != Some(self)
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        (old as &dyn Any).downcast_ref::<Self>() != Some(self)
     }
 }

@@ -47,7 +47,7 @@ use crate::common::fresh_layout_pipeline;
 // ============================================================================
 
 // ============================================================================
-// Manual RenderObject<BoxProtocol> impls (RenderViewAdapter): the layout walk
+// Manual RenderObject<BoxProtocol> impls (RenderView): the layout walk
 // still drives perform_layout_raw on them via the trait dispatch.
 // ============================================================================
 
@@ -83,28 +83,27 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
     // the slab (without removing the link from Padding.children()) —
     // simulates a torn tree state where parent.children() contains a
     // stale id.
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
-        .expect("child insert must succeed");
+    let padding_id = flui_rendering::testing::raw_tree::insert_box(
+        &mut pipeline,
+        Box::new(RenderPadding::all(5.0)),
+    );
+    let child_id = flui_rendering::testing::raw_tree::insert_box_child(
+        &mut pipeline,
+        padding_id,
+        Box::new(RenderColoredBox::red(20.0, 20.0)),
+    )
+    .expect("child insert must succeed");
 
     // Remove the child node from the slab WITHOUT updating the
     // parent's children list — this synthesises the stale-id condition.
     // (In production this shouldn't happen; the test deliberately
     // constructs it.)
-    pipeline
-        .render_tree_mut()
-        .remove_shallow(child_id)
+    flui_rendering::testing::raw_tree::remove_shallow(&mut pipeline, child_id)
         .expect("shallow remove must succeed");
     // remove_shallow also strips the child from parent.children() per
     // its impl, so we have to re-add it manually to simulate the stale
     // link.
-    pipeline
-        .render_tree_mut()
-        .append_unlinked_child(padding_id, child_id);
+    flui_rendering::testing::raw_tree::append_unlinked_child(&mut pipeline, padding_id, child_id);
 
     let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(padding_id, constraints);
@@ -131,36 +130,6 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
              during the walk, so the next dirty pass re-runs the subtree",
     );
 }
-
-// ============================================================================
-// Review-fix regression — Sliver protocol mismatch surfaces as ProtocolMismatch
-// ============================================================================
-
-// ============================================================================
-// SubtreeArena thread-affinity smoke
-// ============================================================================
-
-// `subtree_borrows_worker_thread_pipeline_succeeds` used to prove that
-// handing a freshly-built, not-yet-shared `PipelineOwner` to a worker
-// thread and running layout there was a legitimate pattern -- as long as
-// `SubtreeArena` was constructed and queried on that same worker thread.
-// It no longer compiles, and that is the point: `PipelineOwner` stores a
-// `RenderTree` holding `Box<dyn RenderObject<P>>`, which is no longer
-// `Send` (a render object may now hold non-`Send` state). Moving a
-// `PipelineOwner` -- by value, not just by shared reference -- to any
-// thread other than the one it was created on is a compile error, full
-// stop; "single-owner, single-thread" is no longer a convention a runtime
-// check (`SubtreeArena::check_thread`, since deleted along with `NodePtr`'s
-// manual `unsafe impl Send/Sync` -- confinement needs no runtime check
-// when the type system already refuses to compile the violation) merely
-// encouraged, it is the only shape the type system allows. There is no
-// successor test: the capability this test exercised (worker-thread
-// layout of an unshared owner) is gone by design, not replaced.
-
-// ============================================================================
-// 4-level deep recursion (verifies pre-acquired subtree borrows
-// scale to deeper trees than the original thread-affinity tests covered)
-// ============================================================================
 
 // ============================================================================
 // Dirty-root order — element-mounted nodes lay out parents first
@@ -383,14 +352,7 @@ pub(crate) fn sibling_layout_marks_share_one_ancestor_walk() {
             (walk + SIBLINGS - 1) as u64,
             "round {round}: sibling marks walk the shared ancestors once"
         );
-        assert_eq!(
-            owner
-                .nodes_needing_layout()
-                .iter()
-                .map(|dirty| dirty.id)
-                .collect::<Vec<_>>(),
-            [root]
-        );
+        assert_eq!(owner.queued_for_layout(), [root]);
         owner.run_layout().expect("relayout");
         assert_eq!(
             leaf_layouts.load(Ordering::Relaxed),
@@ -428,7 +390,8 @@ pub(crate) fn a_moved_node_marks_its_new_ancestors() {
 
     // Settles the path leaf → moved → donor → root.
     owner.mark_needs_layout(leaf);
-    let update = owner.render_tree_mut().set_children(destination, &[moved]);
+    // Raw, so that the only mark the new parent can get is the moved node's own.
+    let update = flui_rendering::testing::raw_tree::set_children(&mut owner, destination, &[moved]);
     assert!(update.membership_changed);
     assert_eq!(update.donors, [donor]);
     assert_eq!(owner.render_tree().children(donor), &[]);

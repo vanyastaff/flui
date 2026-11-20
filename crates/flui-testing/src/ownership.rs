@@ -26,6 +26,7 @@ use std::{
 
 use flui_foundation::ValueKey;
 use flui_foundation::geometry::{Axis, EdgeInsets, Offset};
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::{
     gesture::{
         DragAxis, DragGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer,
@@ -36,9 +37,8 @@ use flui_interaction::{
     ids::PointerId,
 };
 use flui_painting::styling::Color;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::PointerKind;
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::PointerKind;
 use flui_view::environment::GestureArenaScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, LifecycleContext, ViewState};
@@ -710,7 +710,7 @@ fn swipe_row() -> BoxedView {
 /// How far the row's content is painted from its rest, through every layer
 /// above its picture.
 fn row_moved(laid: &LaidOut) -> bool {
-    use flui_rendering::layer::Layer;
+    use flui_layer::Layer;
     let tree = laid.layer_tree().expect("BUG: a laid-out tree has a scene");
     tree.iter()
         .filter_map(|(_, node)| match node.layer() {

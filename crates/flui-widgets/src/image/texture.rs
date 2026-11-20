@@ -3,24 +3,23 @@
 
 use flui_objects::RenderTexture;
 use flui_painting::paint::{FilterQuality, TextureId};
-use flui_rendering::layer::{TextureListener, TextureRegistry};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, ViewState};
-use flui_view::{
-    CreationSite, IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_view,
-};
+use flui_view::prelude::{BuildContext, StatelessView};
+use flui_view::{CreationSite, IntoView, RenderView, impl_render_view};
 
 /// Shows the newest frame of an external texture over its whole box.
 ///
 /// Register the texture with
-/// [`LifecycleContext::texture_registry`]
+/// [`LifecycleContext::texture_registry`](flui_view::prelude::LifecycleContext::texture_registry)
 /// and feed it with
-/// [`TextureRegistration::submit_frame`](flui_rendering::layer::TextureRegistration::submit_frame),
-/// from any thread. The widget isolates the texture in a repaint boundary, so
-/// a frame it receives repaints the texture alone and the content around it
-/// is replayed from its retained output, unless an enclosing boundary cannot
-/// keep its output. The box takes the largest size its constraints allow.
-#[derive(Clone, Debug, StatefulView)]
+/// [`TextureRegistration::submit_frame`](flui_layer::TextureRegistration::submit_frame),
+/// from any thread. A frame rebuilds and repaints nothing: the presentation
+/// publishes the scene it holds with the frame, and the raster side redraws
+/// the texture's box alone (ADR-0304 §8, §9). The widget rebuilds only when
+/// its parent gives it another texture or filter. The texture is composited
+/// in a layer of its own, and the box takes the largest size its constraints
+/// allow.
+#[derive(Clone, Debug, StatelessView)]
 pub struct Texture {
     id: TextureId,
     filter_quality: FilterQuality,
@@ -47,89 +46,22 @@ impl Texture {
     }
 }
 
-/// Follows the shown texture's frames.
-#[derive(Debug)]
-pub struct TextureState {
-    id: TextureId,
-    registry: Option<TextureRegistry>,
-    rebuild: RebuildHandle,
-    listener: Option<TextureListener>,
-}
-
-impl TextureState {
-    /// Rebuild after each frame the shown texture receives, replacing any
-    /// earlier listener.
-    fn follow(&mut self) {
-        self.listener = None;
-        let Some(registry) = &self.registry else {
-            return;
-        };
-        let rebuild = self.rebuild.clone();
-        self.listener = registry.listen(self.id, move || {
-            rebuild.schedule(RebuildReason::StateChange);
-        });
-    }
-}
-
-impl StatefulView for Texture {
-    type State = TextureState;
-
-    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
-        TextureState {
-            id: self.id,
-            registry: None,
-            rebuild: ctx.rebuild_handle(),
-            listener: None,
-        }
-    }
-}
-
-impl ViewState<Texture> for TextureState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.registry = ctx.texture_registry();
-        self.follow();
-    }
-
-    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.registry = ctx.texture_registry();
-        self.follow();
-    }
-
-    fn did_update_view(&mut self, _old_view: &Texture, new_view: &Texture) {
-        if self.id != new_view.id {
-            self.id = new_view.id;
-            self.follow();
-        }
-    }
-
-    fn build(&self, view: &Texture, _ctx: &dyn BuildContext) -> impl IntoView {
-        // A texture changes on its producer's clock, so it gets a layer of its
-        // own and its frames stop re-recording the content around it. The
-        // boundary sits above the leaf, not on it: while an ancestor hides the
-        // texture, the leaf's unreached paint flag absorbs the producer's later
-        // frames, where a boundary on the leaf would be queued again for each.
+impl StatelessView for Texture {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        // A texture changes on its producer's clock, so it is composited in a
+        // layer of its own, as a platform compositor would place it.
         crate::paint::RepaintBoundary::new().child(RawTexture {
-            id: view.id,
-            filter_quality: view.filter_quality,
-            revision: self
-                .registry
-                .as_ref()
-                .and_then(|registry| registry.revision(view.id))
-                .unwrap_or(0),
+            id: self.id,
+            filter_quality: self.filter_quality,
         })
     }
-
-    fn dispose(&mut self) {
-        self.listener = None;
-    }
 }
 
-/// The leaf a [`Texture`] builds once it knows the frame to show.
+/// The leaf a [`Texture`] builds.
 #[derive(Clone, Debug)]
 struct RawTexture {
     id: TextureId,
     filter_quality: FilterQuality,
-    revision: u64,
 }
 
 impl RenderView for RawTexture {
@@ -137,9 +69,7 @@ impl RenderView for RawTexture {
     type RenderObject = RenderTexture;
 
     fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> RenderTexture {
-        let mut render = RenderTexture::new(self.id, self.filter_quality);
-        let _ = render.set_revision(self.revision);
-        render
+        RenderTexture::new(self.id, self.filter_quality)
     }
 
     fn update_render_object(
@@ -147,9 +77,7 @@ impl RenderView for RawTexture {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render: &mut RenderTexture,
     ) -> flui_rendering::RenderUpdateImpact {
-        render.set_texture(self.id)
-            | render.set_filter_quality(self.filter_quality)
-            | render.set_revision(self.revision)
+        render.set_texture(self.id) | render.set_filter_quality(self.filter_quality)
     }
 
     fn has_children(&self) -> bool {

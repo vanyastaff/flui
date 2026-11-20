@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Size;
 use flui_layer::Scene;
+use flui_layer::{BoundaryContent, SceneOp, SceneOwner, SceneVersion, SurfaceKey};
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::layer::{BoundaryContent, SceneOp, SceneOwner, SceneVersion, SurfaceKey};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
 use flui_view::{__runtime::BindingRuntime as _, StatelessView, View, WidgetsBinding};
 
@@ -79,19 +79,17 @@ pub struct PluginPipeline {
 }
 
 impl PluginPipeline {
-    /// Mounts `root` on a binding of its own, laid out at `width` x `height`
-    /// and measuring text through `text`.
-    pub fn mount<V>(root: V, width: f64, height: f64, text: TextContextHandle) -> Self
+    /// Mounts `root` on a binding of its own, measuring text through `text`.
+    /// Each frame's size comes from [`draw_frame`](Self::draw_frame).
+    pub fn mount<V>(root: V, text: TextContextHandle) -> Self
     where
         V: View + StatelessView + Clone + 'static,
     {
-        Self::mount_with_boundary(&root, width, height, text, |_| {})
+        Self::mount_with_boundary(&root, text, |_| {})
     }
 
     fn mount_with_boundary<V>(
         root: &V,
-        width: f64,
-        height: f64,
         text: TextContextHandle,
         mount_boundary: impl FnOnce(&WidgetsBinding),
     ) -> Self
@@ -104,9 +102,9 @@ impl PluginPipeline {
 
         widgets.with_global_key_registry(|| {
             widgets
-                .attach_root_widget_with_size(root, width, height)
+                .attach_root_widget(root)
                 .expect("BUG: a fresh plugin binding accepts its root widget");
-            // `attach_root_widget_with_size` has released its binding lock,
+            // `attach_root_widget` has released its binding lock,
             // while the registry activation still encloses this boundary. The
             // production closure does nothing; tests observe it here.
             mount_boundary(&widgets);
@@ -241,8 +239,6 @@ mod tests {
         let key_at_mount = mount_probe_key.clone();
         let mut pipeline = PluginPipeline::mount_with_boundary(
             &root,
-            320.0,
-            240.0,
             TextContextHandle::standalone(),
             move |widgets| {
                 // The user root is built on the first draw, so mount uses a
@@ -296,15 +292,14 @@ mod tests {
     /// reads no leader).
     #[test]
     fn a_plugin_frame_publishes_its_leaders_attached() {
+        use flui_layer::LayerLink;
         use flui_objects::{RenderLeaderLayer, RenderSizedBox};
-        use flui_rendering::layer::LayerLink;
         use flui_rendering::testing::{box_node, tree};
 
         let root = KeyedRoot {
             key: GlobalKey::<()>::new(),
         };
-        let mut pipeline =
-            PluginPipeline::mount(root, 100.0, 100.0, TextContextHandle::standalone());
+        let mut pipeline = PluginPipeline::mount(root, TextContextHandle::standalone());
         let _built = pipeline.draw_frame(100.0, 100.0);
         let link = LayerLink::new();
         pipeline.pipeline_owner.with_mut(|owner| {

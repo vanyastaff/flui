@@ -64,17 +64,13 @@ mod registry_reentry {
     struct Key(u64);
 
     impl ViewKey for Key {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn key_hash(&self) -> u64 {
             inspect("hash");
             7
         }
         fn key_eq(&self, other: &dyn ViewKey) -> bool {
             inspect("equality");
-            other
-                .as_any()
+            (other as &dyn Any)
                 .downcast_ref::<Self>()
                 .is_some_and(|other| self.0 == other.0)
         }
@@ -176,7 +172,7 @@ mod registry_reentry {
             owner.with(|owner| owner
                 .render_tree()
                 .iter()
-                .any(|(_, node)| node.debug_name().ends_with("RenderIgnorePointer"))),
+                .any(|(_, node)| node.kind() == "RenderIgnorePointer")),
             "the accepted flight builds its shuttle"
         );
         for _ in 0..16 {
@@ -187,7 +183,7 @@ mod registry_reentry {
             !owner.with(|owner| owner
                 .render_tree()
                 .iter()
-                .any(|(_, node)| node.debug_name().ends_with("RenderIgnorePointer"))),
+                .any(|(_, node)| node.kind() == "RenderIgnorePointer")),
             "landing removes the real shuttle"
         );
         drop(flight);

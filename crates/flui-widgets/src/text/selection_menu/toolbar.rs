@@ -3,12 +3,12 @@
 //! the selection's start, or under its end where there is no room above,
 //! and pinned to the start's leader so it moves with the selection.
 
-use std::rc::Rc;
+use std::{any::Any, rc::Rc};
 
 use flui_foundation::geometry::{Offset, Point, Size};
+use flui_layer::LayerLink;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
-use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{FrameTiming, PostFrameHandle};
 use flui_view::prelude::*;
@@ -155,14 +155,14 @@ struct ToolbarLayout {
 }
 
 impl SingleChildLayoutDelegate for ToolbarLayout {
-    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+    fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
         let loose = constraints.loosen();
         // The toolbar keeps a gap from both edges.
         let width = (loose.max_width - 2.0 * TOOLBAR_GAP).max(0.0);
         BoxConstraints::new(0.0, width, 0.0, loose.max_height)
     }
 
-    fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset<f64> {
+    fn position_for_child(&self, size: Size, child_size: Size) -> Offset<f64> {
         let top = self.over.dy - TOOLBAR_GAP - child_size.height;
         let (x, y) = if top >= TOOLBAR_GAP {
             (self.over.dx, top)
@@ -184,13 +184,8 @@ impl SingleChildLayoutDelegate for ToolbarLayout {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old != self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

@@ -12,7 +12,7 @@ use flui_interaction::focus::{
 };
 use flui_platform::{
     EventTime,
-    keyboard::{Code, Key, KeyEvent, KeyPress, KeyState},
+    input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState},
 };
 
 fn geometric_focus_navigation_pins_ranking_and_admission() {

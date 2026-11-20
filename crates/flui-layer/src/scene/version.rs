@@ -15,8 +15,8 @@ use super::geometry::{Folded, Geometry, Links, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
 use super::table::{Spares, Table, TableCost};
+use crate::damage::DamageRegion;
 use crate::link::LayerLink;
-use crate::scene_snapshot::DamageRegion;
 
 /// Where an entry sits: its boundary's node and its index in that content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,10 +62,6 @@ impl NodeRecord {
             subtree: Bounds::Finite(Rect::ZERO),
             kernel: 0.0,
         }
-    }
-
-    pub(crate) fn key(&self) -> NodeKey {
-        self.key
     }
 
     pub(crate) fn parent(&self) -> Option<NodeKey> {
@@ -378,16 +374,30 @@ impl SceneVersion {
             .flat_map(|users| users.iter().map(|address| self.address(*address)))
     }
 
+    /// Whether an entry the root reaches draws `texture`: what a new image
+    /// of it would damage ([`Self::texture_damage`]). An unattached node's
+    /// users draw nothing. It costs the texture's users, each by the depth
+    /// of its node.
+    #[must_use]
+    pub fn draws_texture(&self, texture: TextureId) -> bool {
+        let geometry = Geometry::new(&self.0);
+        self.0
+            .textures
+            .get(texture.get())
+            .into_iter()
+            .flatten()
+            .any(|user| geometry.is_attached(user.node))
+    }
+
     /// The transform the renderer applies at the follower entry `at` so its
-    /// content lands on its leader: what [`resolve_follower_transform`]
-    /// answers over [`Self::flatten`]'s tree, read off the version without
-    /// building one. `None` when nothing is drawn or hit there: `at` is not an
-    /// attached follower of this version, it is unlinked and hidden, a clip
+    /// content lands on its leader under ADR-0276's rule, read off the version
+    /// in place; the `testing` feature's `resolve_follower_transform` answers
+    /// the same over `Self::flatten`'s tree. `None` when nothing is drawn or
+    /// hit there: `at` is not an attached follower of this version, it is
+    /// unlinked and hidden, a clip
     /// on the leader's chain leaves out its anchor under
     /// [`LeaderClip::Hide`](crate::LeaderClip::Hide), a chain is singular or
     /// not finite, or followers nest past the limit.
-    ///
-    /// [`resolve_follower_transform`]: crate::resolve_follower_transform
     #[must_use]
     pub fn follower_transform(&self, at: EntryAddress) -> Option<Matrix4> {
         if at.node.lineage() != self.lineage() {
@@ -416,8 +426,8 @@ impl SceneVersion {
     }
 
     /// Where the leader publishing `link` has its top-left corner on the
-    /// surface, as [`leader_origin`](crate::leader_origin) answers over
-    /// [`Self::flatten`]'s tree: `None` without an attached leader, or when a
+    /// surface, as the `testing` feature's `leader_origin` answers over
+    /// `Self::flatten`'s tree: `None` without an attached leader, or when a
     /// transform on its chain is singular or not finite, or a follower on it
     /// resolves to nothing.
     #[must_use]
@@ -427,7 +437,7 @@ impl SceneVersion {
 
     /// The size of the leader publishing `link` that a follower resolves
     /// against, the last attached one, as [`LayerTree::leaders`]' leader
-    /// answers over [`Self::flatten`]'s tree; `None` without one.
+    /// answers over `Self::flatten`'s tree; `None` without one.
     ///
     /// [`LayerTree::leaders`]: crate::LayerTree::leaders
     #[must_use]
@@ -477,7 +487,7 @@ impl SceneVersion {
     #[must_use]
     pub fn close_damage(&self, region: DamageRegion, surface: (u32, u32)) -> DamageRegion {
         let mut cost = super::footprint::FootprintCost::default();
-        let mut closures = crate::damage::Closures::new();
+        let mut closures = crate::damage::closure::Closures::new();
         super::footprint::close_filtered(
             region,
             &[(Geometry::shown(&self.0), &self.0)],
@@ -879,8 +889,7 @@ mod flatten {
             let root = self
                 .node(self.root())
                 .expect("BUG: a version holds its root");
-            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(root.placement().offset())))
-                .with_scene(self.id().seq());
+            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(root.placement().offset())));
             let at = tree.root();
             self.fill(&mut tree, self.root(), at, 0);
             tree
@@ -902,8 +911,7 @@ mod flatten {
                 && let Some(Entry::Effect { owner, .. }) = entries.first()
                 && let Some((_, layer)) = content.effect_layers().next()
             {
-                let mut tree = LayerTree::new(LayerNode::new(layer.clone()).with_render(*owner))
-                    .with_scene(self.id().seq());
+                let mut tree = LayerTree::new(LayerNode::new(layer.clone()).with_render(*owner));
                 let at = tree.root();
                 // An effect over one child at its origin holds that child's
                 // content directly: the root boundary under a frame's
@@ -919,8 +927,7 @@ mod flatten {
                 }
                 return Some(tree);
             }
-            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(held.placement().offset())))
-                .with_scene(self.id().seq());
+            let mut tree = LayerTree::new(Layer::from(OffsetLayer::new(held.placement().offset())));
             let at = tree.root();
             self.fill(&mut tree, node, at, 0);
             Some(tree)
@@ -996,15 +1003,12 @@ mod annotations {
     use crate::layer::Layer;
     use crate::scene::content::{Entry, EntryIndex};
     use crate::scene::id::SceneNodeId;
-    use crate::tree::annotations::clip_admits;
 
     impl SceneVersion {
         /// The topmost `T` an annotated region holds at `point` on the
-        /// surface, as [`LayerTree::find_annotation`] answers over
-        /// [`Self::flatten`]'s tree, read off the version without building
-        /// it.
-        ///
-        /// [`LayerTree::find_annotation`]: crate::LayerTree::find_annotation
+        /// surface, as the `testing` feature's `LayerTree::find_annotation`
+        /// answers over `Self::flatten`'s tree, read off the version without
+        /// building it.
         #[must_use]
         pub fn find_annotation<T: Any + Send + Sync>(&self, point: Point<f64>) -> Option<Arc<T>> {
             let root = self.node(self.root())?;
@@ -1037,7 +1041,7 @@ mod annotations {
                         .effect_layer(EntryIndex::at(index))
                         .and_then(|layer| {
                             self.point_in_effect(node, index, layer, under)
-                                .filter(|at| clip_admits(layer, *at))
+                                .filter(|at| layer.clip_admits(*at))
                         }),
                     _ => None,
                 });

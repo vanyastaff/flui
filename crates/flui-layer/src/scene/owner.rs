@@ -17,8 +17,8 @@ use super::id::{ContentVersion, Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::pending::{Contents, PendingLog};
 use super::table::{Table, TableCost};
 use super::version::{NodeRecord, SceneVersion, VersionInner, VersionSpares};
-use crate::layer::Layer;
-use crate::scene_snapshot::{DamageRegion, FullReason, NonFinite, ResyncReason};
+use crate::damage::{DamageRegion, FullReason, NonFinite, ResyncReason};
+use crate::layer::Effect;
 
 /// A node's offset in its parent's slot space; finite by construction.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -965,7 +965,7 @@ impl SceneWriter<'_> {
     pub fn with_effects(
         &mut self,
         content: &BoundaryContent,
-        replaced: impl IntoIterator<Item = (EntryIndex, Layer)>,
+        replaced: impl IntoIterator<Item = (EntryIndex, Effect)>,
     ) -> Result<Arc<BoundaryContent>, EntryIndex> {
         let owner = &mut *self.owner;
         // The spare with room for the layers, so the copy reuses its vector.

@@ -10,8 +10,10 @@
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;
 use flui_rendering::{
+    RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
-    pipeline::{PipelineOwner, phase::Layout},
+    parent_data::ParentData,
+    pipeline::{PipelineOwner, PipelinePhase, phase::Layout},
     protocol::{BoxProtocol, SliverProtocol},
     testing::{inspect, sliver as sliver_presets},
     traits::RenderObject,
@@ -24,10 +26,25 @@ pub type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
 pub type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
 
 /// A fresh pipeline owner already advanced into the Layout phase. Tests
-/// build the tree via `render_tree_mut` (phase-agnostic accessor) before
+/// build the tree through the owner (or `flui_rendering::testing::raw_tree`
+/// for a state the owner never builds) before
 /// driving layout.
 pub fn fresh_layout_pipeline() -> PipelineOwner<Layout> {
     PipelineOwner::new(flui_rendering::TextContextHandle::standalone()).into_layout()
+}
+
+/// Installs `data` as the parent data of `child`, as the element tree stamps
+/// a child at adoption, through the owner's marked edit.
+pub fn seed_parent_data<Phase: PipelinePhase>(
+    owner: &mut PipelineOwner<Phase>,
+    child: RenderId,
+    data: Box<dyn ParentData>,
+) {
+    let seeded = owner.update_parent_data(child, |parent_data| {
+        parent_data.set(data);
+        RenderUpdateImpact::NONE
+    });
+    assert!(seeded.is_some(), "the seeded node is live");
 }
 
 /// Installs `root` with the given root constraints, runs layout, and

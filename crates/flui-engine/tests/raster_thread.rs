@@ -20,7 +20,7 @@ use flui_foundation::{
     FrameEpoch, FrameStamp, ManualClock, PresentationAddress, PresentationId, SurfaceGeneration,
     UiRuntimeId, geometry::DeviceSize, memory::MemoryPressureLevel,
 };
-use flui_layer::{CanvasLayer, DamageRegion, Layer, LayerTree, Scene, SceneSnapshot};
+use flui_layer::{DamageRegion, Layer, LayerTree, Scene, SceneSnapshot};
 
 /// How long a test waits for the raster thread before it calls the wait a
 /// failure: far above a turn, far below a hung run.
@@ -121,7 +121,7 @@ fn frame(at: Attached, epoch: u64) -> RasterCommand {
         snapshot: SceneSnapshot::new(
             FrameStamp::new(at.address, frame_epoch, at.generation),
             DamageRegion::Unchanged,
-            Scene::new(LayerTree::new(Layer::from(CanvasLayer::new()))),
+            Scene::default(),
         ),
     }
 }

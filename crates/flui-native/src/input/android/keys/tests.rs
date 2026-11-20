@@ -9,7 +9,7 @@ use crate::input::android::keys::{
     DeadChars, DeadKeyComposer, KEYCODE_MENU, MappedChar, character_meta_state, key_composition,
     unnamed_key,
 };
-use flui_platform::keyboard::{ImeComposition, Key, NamedKey};
+use flui_platform::input::keyboard::{ImeComposition, Key, NamedKey};
 
 /// The Menu key opens the focused item's context menu on Android, so it
 /// must arrive named; character keys stay to the key map.

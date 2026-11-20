@@ -952,7 +952,7 @@ impl GpuContext {
     fn note_lineage(
         &mut self,
         slot: SlotId,
-        scene: flui_layer::SceneContent<'_>,
+        scene: &flui_layer::SceneVersion,
         painter: &mut WgpuPainter,
     ) {
         if let Some(dead) = self.lineages.draws(slot, Some(scene)) {
@@ -1092,7 +1092,7 @@ impl GpuContext {
     pub(crate) fn render_slot(
         &mut self,
         slot: SlotId,
-        scene: flui_layer::SceneContent<'_>,
+        scene: &flui_layer::SceneVersion,
         reads: crate::recording_cache::CacheReads,
         epoch: Option<flui_foundation::FrameEpoch>,
     ) -> EngineResult<()> {
@@ -1263,7 +1263,7 @@ impl GpuContext {
             });
             (painter, blit)
         });
-        self.note_lineage(slot, scene.content(), &mut painter);
+        self.note_lineage(slot, scene.version(), &mut painter);
         let own_textures = self.lend_textures(slot, &mut painter);
         let Self {
             adapter,
@@ -1804,7 +1804,7 @@ impl RasterBackend for GpuContext {
             Some(SurfaceSlot::Offscreen(_)) | None => {
                 self.render_slot(
                     slot,
-                    scene.content(),
+                    scene.version(),
                     crate::recording_cache::CacheReads::for_damage(&damage),
                     Some(frame.epoch),
                 )?;
@@ -1910,7 +1910,7 @@ mod tests {
         UiRuntimeId,
         geometry::{DeviceSize, Offset, Rect},
     };
-    use flui_layer::{DamageRegion, LayerTree, Scene, SceneBuilder, SceneSnapshot};
+    use flui_layer::{DamageRegion, Scene, SceneBuilder, SceneSnapshot};
     use flui_painting::{
         Canvas, TextPainter,
         paint::Paint,
@@ -1946,9 +1946,25 @@ mod tests {
         assert!(refusals.take(|_| true).is_empty(), "taken once");
     }
 
+    /// A scene that draws `texture` over `side`×`side` logical pixels at the
+    /// origin, the way `RenderTexture` paints one.
+    fn texture_scene(texture: flui_painting::paint::TextureId, side: f64) -> Scene {
+        let mut canvas = Canvas::new();
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(0.0, 0.0, side, side),
+            None,
+            flui_painting::paint::FilterQuality::Low,
+            1.0,
+        );
+        let mut builder = SceneBuilder::new();
+        builder.add_picture(canvas.finish());
+        builder.build()
+    }
+
     /// A red square beside a black glyph, so a frame samples both the shape
     /// pipelines and the glyph atlas.
-    fn square_and_glyph() -> LayerTree {
+    fn square_and_glyph() -> Scene {
         let mut painter = TextPainter::new()
             .with_text(
                 TextSpan::new("I").with_style(
@@ -2128,19 +2144,19 @@ mod tests {
         );
     }
 
-    /// A frame of `tree` for the slot at `address`, stamped with `generation`.
+    /// A frame of `scene` for the slot at `address`, stamped with `generation`.
     fn frame(
         slot: SlotId,
         address: PresentationAddress,
         generation: SurfaceGeneration,
-        tree: LayerTree,
+        scene: Scene,
     ) -> RasterCommand {
         RasterCommand::Frame {
             slot,
             snapshot: SceneSnapshot::new(
                 FrameStamp::new(address, FrameEpoch::ZERO, generation),
                 DamageRegion::Full(flui_layer::FullReason::FirstFrame),
-                Scene::new(tree),
+                scene,
             ),
         }
     }
@@ -2317,7 +2333,7 @@ mod tests {
                     snapshot: SceneSnapshot::new(
                         FrameStamp::new(address, FrameEpoch::from_raw(epoch), generation),
                         DamageRegion::Full(flui_layer::FullReason::FirstFrame),
-                        Scene::new(square_and_glyph()),
+                        square_and_glyph(),
                     ),
                 })
                 .expect("the frame is accepted");
@@ -2410,10 +2426,10 @@ mod tests {
             };
             (slot, address, generation)
         });
-        let draw = |executor: &mut RasterExecutor<GpuContext>, tree: fn() -> LayerTree| {
+        let draw = |executor: &mut RasterExecutor<GpuContext>, scene: fn() -> Scene| {
             for (slot, address, generation) in slots {
                 sender
-                    .send(frame(slot, address, generation, tree()))
+                    .send(frame(slot, address, generation, scene()))
                     .expect("the frame is accepted");
             }
             let _ = executor.turn();
@@ -2753,7 +2769,7 @@ mod tests {
     #[test]
     fn each_slot_draws_its_own_textures_under_the_same_id_across_a_rebuild() {
         use flui_foundation::ManualClock;
-        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_layer::TextureRegistry;
         use flui_painting::paint::Image;
 
         const SIDE: u32 = 8;
@@ -2797,12 +2813,9 @@ mod tests {
                     .record(*slot)
                     .expect("the owner holds the slot")
                     .required_generation;
-                let tree = LayerTree::new(Layer::from(TextureLayer::new(
-                    texture.id(),
-                    Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
-                )));
+                let scene = texture_scene(texture.id(), f64::from(SIDE));
                 let RasterCommand::Frame { slot, snapshot } =
-                    frame(*slot, *address, generation, tree)
+                    frame(*slot, *address, generation, scene)
                 else {
                     unreachable!("BUG: `frame` makes a frame command");
                 };
@@ -2882,7 +2895,7 @@ mod tests {
     #[test]
     fn a_frame_unwound_with_lent_textures_leaves_the_slot_its_images() {
         use flui_foundation::ManualClock;
-        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_layer::TextureRegistry;
         use flui_painting::paint::Image;
 
         const RED: [u8; 4] = [255, 0, 0, 255];
@@ -2916,11 +2929,8 @@ mod tests {
                 .record(slot)
                 .expect("the owner holds the slot")
                 .required_generation;
-            let tree = LayerTree::new(Layer::from(TextureLayer::new(
-                texture.id(),
-                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
-            )));
-            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            let scene = texture_scene(texture.id(), 8.0);
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, scene)
             else {
                 unreachable!("BUG: `frame` makes a frame command");
             };
@@ -2971,7 +2981,7 @@ mod tests {
     fn a_hidden_slot_keeps_its_newest_images_off_the_queue() {
         use crate::raster_executor::{SlotChange, SlotVisibility};
         use flui_foundation::ManualClock;
-        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_layer::TextureRegistry;
         use flui_painting::paint::Image;
 
         let Some(context) = context_or_skip() else {
@@ -3004,11 +3014,8 @@ mod tests {
                 .record(slot)
                 .expect("the owner holds the slot")
                 .required_generation;
-            let tree = LayerTree::new(Layer::from(TextureLayer::new(
-                texture.id(),
-                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
-            )));
-            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            let scene = texture_scene(texture.id(), 8.0);
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, scene)
             else {
                 unreachable!("BUG: `frame` makes a frame command");
             };
@@ -3072,7 +3079,7 @@ mod tests {
     #[test]
     fn a_frame_that_submits_nothing_flushes_its_texture_writes() {
         use flui_foundation::ManualClock;
-        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_layer::TextureRegistry;
         use flui_painting::paint::Image;
 
         let Some(context) = context_or_skip() else {
@@ -3107,11 +3114,8 @@ mod tests {
                 .record(slot)
                 .expect("the owner holds the slot")
                 .required_generation;
-            let tree = LayerTree::new(Layer::from(TextureLayer::new(
-                texture.id(),
-                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
-            )));
-            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, tree)
+            let scene = texture_scene(texture.id(), 8.0);
+            let RasterCommand::Frame { slot, snapshot } = frame(slot, address, generation, scene)
             else {
                 unreachable!("BUG: `frame` makes a frame command");
             };
@@ -3350,7 +3354,7 @@ mod tests {
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
             .expect("the slot's index is free");
-        let scene = Scene::new(square_and_glyph());
+        let scene = square_and_glyph();
         for _ in 0..2 {
             assert!(
                 context
@@ -3385,7 +3389,7 @@ mod tests {
     fn a_frame_the_ledger_refuses_writes_no_texture_image() {
         use std::sync::Arc;
 
-        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_layer::TextureRegistry;
         use flui_painting::paint::Image;
 
         use crate::raster_executor::RasterBackend;
@@ -3427,11 +3431,7 @@ mod tests {
             }
             let registry = TextureRegistry::new(Arc::new(|| {}));
             let texture = registry.register().expect("an id is left");
-            let tree = LayerTree::new(Layer::from(TextureLayer::new(
-                texture.id(),
-                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
-            )));
-            let scene = Scene::new(tree);
+            let scene = texture_scene(texture.id(), 8.0);
             for shade in [10, 20, 30] {
                 texture.submit_frame(Image::from_rgba8(2, 2, [shade, 0, 0, 255].repeat(4)));
                 context
@@ -3449,7 +3449,7 @@ mod tests {
                 } else {
                     context.render_slot(
                         slot,
-                        scene.content(),
+                        scene.version(),
                         crate::recording_cache::CacheReads::On,
                         None,
                     )
@@ -3504,7 +3504,7 @@ mod tests {
             context
                 .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
                 .expect("the slot's index is free");
-            let scene = Scene::new(square_and_glyph());
+            let scene = square_and_glyph();
             format!(
                 "{:?}",
                 context.render_window(
@@ -3554,7 +3554,7 @@ mod tests {
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
             .expect("the slot's index is free");
-        let scene = Scene::new(square_and_glyph());
+        let scene = square_and_glyph();
         let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
         assert!(matches!(
             context.render_window(slot, drawn_frame(), &scene, full),
@@ -3603,7 +3603,7 @@ mod tests {
         context
             .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
             .expect("the slot's index is free");
-        let scene = Scene::new(square_and_glyph());
+        let scene = square_and_glyph();
         let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
         assert!(
             context

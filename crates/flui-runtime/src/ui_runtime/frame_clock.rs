@@ -5,7 +5,6 @@ use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
 use flui_foundation::{PresentationAddress, PresentationId};
-use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -561,13 +560,16 @@ impl UiRuntime {
     }
 
     /// Whether a presentation's tree waits for a frame: a pending build, a
-    /// dirty render node, or a completion the next frame takes. A
-    /// presentation waiting out a dropped frame's backoff, one whose sink
-    /// holds as many frames as it may, one whose device rebuild was given
-    /// up and one that cannot be seen have none: the backoff's deadline and
-    /// the frame an unseen window owes its surface are
-    /// [due work](Self::has_pending_due_work), a settlement or a new
-    /// rebuild asks for the frame, and a window seen again asks for its own.
+    /// dirty render node, a completion the next frame takes, or a texture
+    /// update the held version owes a publication for (ADR-0304 §8), which a
+    /// frame fed while the previous one rendered leaves after the redraw mark
+    /// was cleared. A presentation waiting out a dropped frame's backoff, one
+    /// whose sink holds as many frames as it may, one whose device rebuild
+    /// was given up and one that cannot be seen have none: the backoff's
+    /// deadline is [due work](Self::has_pending_due_work), the frame an unseen
+    /// window owes its surface comes through its window's served request
+    /// ([`Self::owed_frame_served`]), a settlement or a new rebuild asks for
+    /// the frame, and a window seen again asks for its own.
     /// A frame that showed nothing and left tree work behind is what a runner
     /// paces (ADR-0353 decision 4).
     pub fn has_pending_tree_work(&self) -> bool {
@@ -577,7 +579,8 @@ impl UiRuntime {
                 && !presentation.frames_in_flight().is_saturated()
                 && !presentation.device_abandoned()
                 && (presentation.has_pending_work_snapshot()
-                    || presentation.has_eligible_completion())
+                    || presentation.has_eligible_completion()
+                    || presentation.owes_texture_frame())
         })
     }
 
@@ -595,11 +598,12 @@ impl UiRuntime {
     }
 
     /// Whether work is due now, at an instant of its own: a due task deadline,
-    /// a dropped frame whose backoff is over (a seen window's), the frame a
-    /// covered window owes its surface, a gesture deadline that came due, a
-    /// haptic delivery, or a frame-rate hold that ran out. A runner serves it
-    /// on the wake its deadline brings, never behind a pacing deferral
-    /// (ADR-0353 decision 4).
+    /// a dropped frame whose backoff is over (a seen window's), a gesture
+    /// deadline that came due, a haptic delivery, or a frame-rate hold that ran
+    /// out. A runner serves it on the wake its deadline brings, never behind a
+    /// pacing deferral (ADR-0353 decision 4). The frame a covered window owes
+    /// its surface is none of it: only its own window's served request makes it
+    /// due ([`Self::owed_frame_served`], ADR-0389).
     pub fn has_pending_due_work(&self) -> bool {
         // A deadline a task sleeps until is owner work once it is due.
         let deadline_due = self
@@ -607,7 +611,6 @@ impl UiRuntime {
             .next_deadline()
             .is_some_and(|due| flui_foundation::MonotonicClock::now(&self.clock) >= due);
         deadline_due
-            || self.owes_occluded_frame()
             || self.presentations.iter().any(|presentation| {
                 // A sink at its in-flight limit or a given-up device asks for
                 // no frame until a settlement or a new rebuild does, and an
@@ -629,22 +632,50 @@ impl UiRuntime {
 
     /// Whether a wake of this runtime runs a frame rather than a background
     /// turn ([`Self::pump_background`](crate::ui_runtime::UiRuntime::pump_background)):
-    /// frames are enabled (some window is seen), or a covered window whose
-    /// surface is kept has its owed frame due, which runs while no window is
-    /// seen (ADR-0357). Every runner's wake gate and the headless host ask
-    /// this, not the scheduler, so none can leave the owed frame out.
+    /// frames are enabled (some window is seen), or a frame of a covered
+    /// window's own window serves the frame it owes its surface
+    /// ([`Self::owed_frame_served`]), which runs while no window is seen.
+    /// Every runner's wake gate and the headless host ask this, not the
+    /// scheduler, so none can leave the owed frame out.
     #[must_use]
     pub fn runs_frames(&self) -> bool {
-        self.scheduler.frames_enabled() || self.owes_occluded_frame()
+        self.scheduler.frames_enabled() || self.owed_frame_served()
     }
 
-    /// Whether a covered window's owed frame is due now (ADR-0357).
-    fn owes_occluded_frame(&self) -> bool {
-        self.presentations.iter().any(|presentation| {
-            presentation
-                .occluded_frame_at()
-                .is_some_and(|at| presentation.clock().now() >= at)
-        })
+    /// Whether a frame its own window delivered serves the frame a covered
+    /// window owes its surface, and no attempt has taken it yet (ADR-0389):
+    /// the window's timed request came due and the host served it, so the
+    /// frame is due work of this wake, which a runner's dirty gate counts. It
+    /// is never due otherwise: neither the frames of other windows nor the
+    /// passing of its instant make it so, and the attempt takes the serve
+    /// whatever comes of it, so a held frame keeps no loop turning.
+    #[must_use]
+    pub fn owed_frame_served(&self) -> bool {
+        self.presentations
+            .iter()
+            .any(crate::presentation::PresentationState::serves_owed_frame)
+    }
+
+    /// What each presentation's window is to be asked for the frame a covered
+    /// window owes its surface, where that changed since the window was last
+    /// asked: a frame at the instant it comes due, or the withdrawal of the
+    /// instant asked before, once nothing is owed (uncovered, drawn with
+    /// nothing left, refused, held by a full sink, closing). The host serves
+    /// each for its window alone (ADR-0389).
+    ///
+    /// Each request asks a window only when delivered, which runs the host's
+    /// code: a host takes these at the end of every owner work item, with no
+    /// borrow of the runtime held, and delivers them. An instant a window was
+    /// asked for is not asked again, so the frames of other windows never
+    /// deliver it twice; a delivery that panicked is offered again by the next
+    /// call.
+    #[must_use]
+    pub fn owed_frame_requests(&self) -> Vec<super::OwedFrameRequest> {
+        let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+        self.presentations
+            .iter()
+            .filter_map(|presentation| presentation.owed_frame_request(epoch))
+            .collect::<Vec<_>>()
     }
 
     /// Whether `presentation`'s earliest armed gesture deadline (a long
@@ -751,8 +782,9 @@ impl UiRuntime {
                     presentation.text_preparation.borrow().next_wake(),
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
-                    // The frame an unseen window owes its surface (ADR-0357).
-                    presentation.occluded_frame_at(),
+                    // The frame an unseen window owes its surface is not here: the
+                    // presentation asks its own window for it (`owed_frame_requests`,
+                    // ADR-0389).
                     // A presentation at its in-flight limit attempts no frame when its backoff
                     // ends; the settlement that frees a place wakes it, and the in-flight floor
                     // bounds the sleep until then (ADR-0305 §5). An unseen one retries once it

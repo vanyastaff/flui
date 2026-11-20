@@ -24,6 +24,8 @@ flui-foundation = { workspace = true }
 flui-macros = { workspace = true }
 flui-painting = { workspace = true }
 flui-rendering = { workspace = true }
+flui-layer = { workspace = true }
+flui-semantics = { workspace = true }
 # Owner-routed interaction targets/dispatch handles (ADR-0027).
 flui-interaction = { workspace = true }
 # Concrete render-object catalog (moved out of flui-rendering into flui-objects).
@@ -54,6 +56,9 @@ parking_lot.workspace = true
 # `RoutePath` percent-encodes each segment it joins and decodes each segment it
 # yields, with the URL path-segment set.
 percent-encoding = { workspace = true }
+# A provider's index of its dependents keeps positions only; the ids it
+# hashes stay in the dependents' list (`element::provided`).
+hashbrown.workspace = true
 # Deterministic hashing of per-frame owner tables.
 rustc-hash.workspace = true
 slab.workspace = true

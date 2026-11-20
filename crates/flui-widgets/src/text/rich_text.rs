@@ -1,11 +1,11 @@
 //! [`RichText`] — displays a tree of styled inline spans in one paragraph.
 
 use flui_foundation::TextDirection;
+use flui_layer::LayerLink;
 use flui_objects::{RenderParagraph, TextLinkFocus};
 use flui_painting::typography::{InlineSpan, TextAlign, TextLink};
-use flui_rendering::layer::LayerLink;
 use flui_rendering::protocol::BoxProtocol;
-use flui_rendering::semantics::SemanticsAnchor;
+use flui_semantics::SemanticsAnchor;
 use flui_view::CreationSite;
 use flui_view::element::ElementKind;
 use flui_view::{
@@ -15,6 +15,7 @@ use flui_view::{
 
 use super::linked_paragraph::{LinkRouting, LinkedParagraph};
 use super::selection_area::{SelectableParagraph, SelectionScope};
+use crate::Directionality;
 use crate::support::{RefCallback, ref_callback};
 use flui_view::environment::MediaQuery;
 
@@ -69,7 +70,7 @@ use flui_view::environment::MediaQuery;
 pub struct RichText {
     pub(super) text: InlineSpan,
     align: TextAlign,
-    direction: TextDirection,
+    direction: Option<TextDirection>,
     max_lines: Option<u32>,
     pub(super) on_link: Option<RefCallback<TextLink>>,
     site: CreationSite,
@@ -90,13 +91,13 @@ impl std::fmt::Debug for RichText {
 impl RichText {
     /// Display `text` (any type convertible into an [`InlineSpan`] — most
     /// commonly a [`TextSpan`](flui_painting::typography::TextSpan)) with start
-    /// alignment and left-to-right direction.
+    /// alignment, in the ambient [`Directionality`]'s reading direction.
     #[track_caller]
     pub fn new(text: impl Into<InlineSpan>) -> Self {
         Self {
             text: text.into(),
             align: TextAlign::Start,
-            direction: TextDirection::Ltr,
+            direction: None,
             max_lines: None,
             on_link: None,
             site: CreationSite::here(),
@@ -110,10 +111,11 @@ impl RichText {
         self
     }
 
-    /// Set the reading direction (default left-to-right).
+    /// Set the reading direction. Unset, the ambient [`Directionality`] applies,
+    /// then left-to-right.
     #[must_use]
     pub fn direction(mut self, direction: TextDirection) -> Self {
-        self.direction = direction;
+        self.direction = Some(direction);
         self
     }
 
@@ -152,6 +154,10 @@ impl StatelessView for RichText {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let paragraph = ResolvedParagraph {
             authored: self.clone(),
+            // Read only when unset: an explicit direction takes no dependency.
+            direction: self
+                .direction
+                .unwrap_or_else(|| Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)),
             text_sizing: MediaQuery::text_sizing_of(ctx),
             font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
             links: None,
@@ -186,6 +192,8 @@ impl ResolvedParagraph {
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedParagraph {
     pub(super) authored: RichText,
+    /// The authored direction, else the ambient one.
+    pub(super) direction: TextDirection,
     pub(super) text_sizing: Option<flui_painting::TextSizing>,
     pub(super) font_weight_adjustment: i32,
     /// What reaches the links, when a handler activates them.
@@ -204,13 +212,12 @@ impl RenderView for ResolvedParagraph {
     type RenderObject = RenderParagraph;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        let mut paragraph =
-            RenderParagraph::new(self.authored.text.clone(), self.authored.direction)
-                .with_text_align(self.authored.align)
-                .with_max_lines(self.authored.max_lines)
-                .with_text_sizing(self.text_sizing.clone())
-                .with_font_weight_adjustment(self.font_weight_adjustment)
-                .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
+        let mut paragraph = RenderParagraph::new(self.authored.text.clone(), self.direction)
+            .with_text_align(self.authored.align)
+            .with_max_lines(self.authored.max_lines)
+            .with_text_sizing(self.text_sizing.clone())
+            .with_font_weight_adjustment(self.font_weight_adjustment)
+            .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
         let _ = paragraph.set_link_focus(self.link_focus);
         let _ = paragraph.set_selectable(self.selectable.clone());
         let _ = paragraph.set_selection(
@@ -238,7 +245,7 @@ impl RenderView for ResolvedParagraph {
         let (start, end) = self.handles();
         render_object.set_text(self.authored.text.clone())
             | render_object.set_text_align(self.authored.align)
-            | render_object.set_text_direction(self.authored.direction)
+            | render_object.set_text_direction(self.direction)
             | render_object.set_max_lines(self.authored.max_lines)
             | render_object.set_text_sizing(self.text_sizing.clone())
             | render_object.set_font_weight_adjustment(self.font_weight_adjustment)

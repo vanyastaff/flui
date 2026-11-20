@@ -7,7 +7,7 @@ use flui_engine::HeadlessRenderer;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_layer::{
-    BoundaryContent, Chunk, ClipRectLayer, Layer, OpacityLayer, Placement, Scene, SceneOp,
+    BoundaryContent, Chunk, ClipRectLayer, Effect, OpacityLayer, Placement, Scene, SceneOp,
     SceneOwner, SurfaceKey, TransformLayer,
 };
 use flui_painting::styling::Color;
@@ -70,16 +70,16 @@ fn version() -> flui_layer::SceneVersion {
     let mut content = BoundaryContent::builder();
     content.slot(boxes[0]);
     content.push_effect(
-        Layer::from(TransformLayer::new(Matrix4::rotation_z(0.2))),
+        Effect::from(TransformLayer::new(Matrix4::rotation_z(0.2))),
         RenderId::new(2),
         0,
     );
-    content.push_effect(Layer::from(OpacityLayer::new(0.5)), RenderId::new(2), 1);
+    content.push_effect(Effect::from(OpacityLayer::new(0.5)), RenderId::new(2), 1);
     content.slot(boxes[1]);
     content.pop_effect();
     content.pop_effect();
     content.push_effect(
-        Layer::from(ClipRectLayer::hard_edge(Rect::from_xywh(
+        Effect::from(ClipRectLayer::hard_edge(Rect::from_xywh(
             68.0, 8.0, 12.0, 24.0,
         ))),
         RenderId::new(3),

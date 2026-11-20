@@ -229,9 +229,6 @@ fn competitor_claim(id: u64, events: &Events) {
     });
 }
 impl ViewKey for TestKey {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn key_hash(&self) -> u64 {
         assert!(
             !self.control.forbidden_hash.load(Ordering::SeqCst),
@@ -244,8 +241,7 @@ impl ViewKey for TestKey {
             !self.control.forbidden_eq.load(Ordering::SeqCst),
             "rollback key equality called"
         );
-        let other = other
-            .as_any()
+        let other = (other as &dyn Any)
             .downcast_ref::<Self>()
             .expect("same key fixture");
         // Only this fixture's local registration clone may query the scope.

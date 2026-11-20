@@ -13,7 +13,7 @@
 //!
 //! ```rust
 //! use flui_interaction::{pointer::{PointerRouter, PointerRouteHandler}, ids::PointerId};
-//! use flui_platform::{EventTime, pointer::{CancelReason, PointerCancel,
+//! use flui_platform::{EventTime, input::pointer::{CancelReason, PointerCancel,
 //!     PointerEvent, PointerSource, PointerKind}};
 //! use std::{cell::Cell, rc::Rc};
 //!

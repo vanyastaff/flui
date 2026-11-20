@@ -402,6 +402,135 @@ pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
 }
 
 // ============================================================================
+// Directionality
+// ============================================================================
+
+/// A run with no direction of its own reads the ambient `Directionality`: in RTL
+/// its paragraph is right-to-left and start-aligned glyphs sit at the right
+/// edge, flipping the ambient direction re-lays the same paragraph, and with no
+/// `Directionality` above it the run is left-to-right. A linked run and a run
+/// in a selection area follow it too. An explicit direction wins over the
+/// ambient one and takes no dependency on it.
+pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
+    use crate::common::tight;
+    use flui_foundation::TextDirection;
+    use flui_objects::RenderParagraph;
+    use flui_painting::typography::TextSpan;
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::{Directionality, RichText, SelectionArea};
+
+    // The paragraph's direction and the left edge of its glyphs.
+    let read = |laid: &crate::common::LaidOut| {
+        let paragraph = laid.find_by_render_type("RenderParagraph");
+        laid.pipeline_owner().with(|owner| {
+            let render = owner
+                .render_tree()
+                .get(paragraph)
+                .and_then(|node| node.as_box())
+                .and_then(|node| node.render_object().downcast_ref::<RenderParagraph>())
+                .expect("a mounted paragraph");
+            let glyphs = render.painter().get_boxes_for_selection(0, 3);
+            assert!(!glyphs.is_empty(), "the run has glyphs");
+            let left = glyphs
+                .iter()
+                .map(|text_box| text_box.rect.left())
+                .fold(f64::INFINITY, f64::min);
+            (render.painter().text_direction(), left)
+        })
+    };
+    let under = |direction, view: BoxedView| Directionality::new(direction, view);
+
+    for (name, view) in [
+        ("Text", Text::new("abc").boxed()),
+        ("RichText", RichText::new(TextSpan::new("abc")).boxed()),
+        (
+            "a linked RichText",
+            RichText::new(TextSpan::new("abc").with_link("app://abc"))
+                .on_link(|_ctx, _link| {})
+                .boxed(),
+        ),
+        (
+            "Text in a SelectionArea",
+            SelectionArea::new(Text::new("abc")).boxed(),
+        ),
+    ] {
+        let alone = lay_out(view.clone(), tight(400.0, 50.0));
+        let (direction, left) = read(&alone);
+        assert_eq!(
+            direction,
+            Some(TextDirection::Ltr),
+            "{name}: left-to-right with no Directionality above it"
+        );
+        assert!(
+            left < 200.0,
+            "{name}: start-aligned glyphs at the left edge, got {left}"
+        );
+
+        let mut laid = lay_out(under(TextDirection::Rtl, view.clone()), tight(400.0, 50.0));
+        let paragraph = laid.find_by_render_type("RenderParagraph");
+        let (direction, left) = read(&laid);
+        assert_eq!(
+            direction,
+            Some(TextDirection::Rtl),
+            "{name}: the ambient direction"
+        );
+        assert!(
+            left > 200.0,
+            "{name}: start-aligned glyphs at the right edge, got {left}"
+        );
+
+        laid.pump_widget(under(TextDirection::Ltr, view));
+        assert_eq!(
+            laid.find_by_render_type("RenderParagraph"),
+            paragraph,
+            "{name}: the paragraph is preserved"
+        );
+        let (direction, left) = read(&laid);
+        assert_eq!(
+            direction,
+            Some(TextDirection::Ltr),
+            "{name}: the flipped direction"
+        );
+        assert!(
+            left < 200.0,
+            "{name}: start-aligned glyphs at the left edge, got {left}"
+        );
+    }
+
+    // The run's `RichText` element, which reads it in `build`, is the only reader
+    // of the ambient direction here, so the count of its dependents tells
+    // whether the run took the dependency.
+    for (name, view, dependents) in [
+        ("Text", Text::new("abc").boxed(), 1),
+        (
+            "Text with a direction",
+            Text::new("abc").direction(TextDirection::Ltr).boxed(),
+            0,
+        ),
+        (
+            "RichText with a direction",
+            RichText::new(TextSpan::new("abc"))
+                .direction(TextDirection::Ltr)
+                .boxed(),
+            0,
+        ),
+    ] {
+        let mut laid = lay_out(under(TextDirection::Rtl, view), tight(400.0, 50.0));
+        let expected = if dependents == 0 {
+            TextDirection::Ltr
+        } else {
+            TextDirection::Rtl
+        };
+        assert_eq!(read(&laid).0, Some(expected), "{name}");
+        assert_eq!(
+            laid.inherited_dependent_count::<Directionality>(),
+            dependents,
+            "{name}: a named direction takes no dependency on the ambient one"
+        );
+    }
+}
+
+// ============================================================================
 // DefaultTextStyle (text.dart:55-136, consumed by Text.build :716-765)
 // ============================================================================
 
@@ -772,14 +901,14 @@ fn links_between_buttons(
 }
 
 /// Press `key` (or Shift+Tab) as the platform delivers it; then a frame.
-fn press_key(laid: &mut crate::common::LaidOut, pressed: flui_platform::keyboard::Key) {
+fn press_key(laid: &mut crate::common::LaidOut, pressed: flui_platform::input::keyboard::Key) {
     let manager = laid.focus_manager();
     laid.enter_owner_scope(|| crate::keyboard_focus::press(&manager, &pressed));
     laid.pump();
 }
 
 fn shift_tab(laid: &mut crate::common::LaidOut) {
-    use flui_platform::keyboard::{Key, Modifiers, NamedKey};
+    use flui_platform::input::keyboard::{Key, Modifiers, NamedKey};
 
     let manager = laid.focus_manager();
     laid.enter_owner_scope(|| {
@@ -796,7 +925,7 @@ fn shift_tab(laid: &mut crate::common::LaidOut) {
 /// Red-check: drop the per-link `Focus` (Tab goes from the first button to
 /// the second, and Enter presses it).
 pub(crate) fn tab_stops_on_each_link_and_enter_opens_it() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let after = Rc::new(std::cell::Cell::new(0));
@@ -848,7 +977,7 @@ pub(crate) fn tab_stops_on_each_link_and_enter_opens_it() {
 pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
     use flui_painting::DrawOp;
     use flui_painting::styling::Color;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle};
 
     const STYLE: FocusRingStyle = FocusRingStyle {
@@ -929,7 +1058,7 @@ pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
 /// Red-check: drop the Focus action from the link node (the request is
 /// refused and Enter opens nothing).
 pub(crate) fn assistive_technology_focuses_a_link() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
@@ -978,7 +1107,7 @@ pub(crate) fn assistive_technology_focuses_a_link() {
 /// paragraph's top is already visible, so nothing scrolls).
 pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::{RichText, SingleChildScrollView, SizedBox};
 
     const VIEWPORT: f64 = 120.0;
@@ -1030,7 +1159,7 @@ pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
 /// label "Read " is not published).
 pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_testing::a11y::Role;
     use flui_view::ViewExt;
     use flui_widgets::{Column, RawButton, RichText};
@@ -1093,7 +1222,7 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
 /// button).
 pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_widgets::{RawButton, RichText};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
@@ -1130,7 +1259,7 @@ pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
 /// Enter opens it).
 pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
     use flui_painting::typography::TextSpan;
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_view::ViewExt;
     use flui_widgets::{Column, RawButton, RichText, SizedBox};
 
@@ -1198,7 +1327,7 @@ fn named_links(opened: &Rc<RefCell<Vec<String>>>, names: &[&str]) -> flui_widget
 /// place in the text (Enter opens the link now at the focused place, and the
 /// press opens the link that took the pressed one's place).
 pub(crate) fn links_keep_their_focus_and_presses_when_links_before_them_change() {
-    use flui_platform::keyboard::{Key, NamedKey};
+    use flui_platform::input::keyboard::{Key, NamedKey};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let last = || opened.borrow().last().cloned();

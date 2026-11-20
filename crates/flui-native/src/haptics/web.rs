@@ -14,7 +14,8 @@ use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
 use flui_platform::{
-    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics,
+    input::pointer::DeviceId,
 };
 
 /// The page's haptic actuator.
@@ -122,9 +123,5 @@ impl PlatformHaptics for WebHaptics {
             Ok(()) => HapticCapabilities::new(true, PatternPlayback::Approximated, false, false),
             Err(_) => HapticCapabilities::NONE,
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

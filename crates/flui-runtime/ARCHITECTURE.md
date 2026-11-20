@@ -754,6 +754,49 @@ and `raster_executor` tests and `flui-app`'s `every_settled_verdict_maps_to_its_
 and on the UI runtime side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
 `the_withheld_retry_is_bounded_and_then_waits_out_the_backoff`.
 
+### An idle frame publishes nothing; a texture frame publishes the held version
+
+A frame whose segment paints nothing publishes nothing (ADR-0304 §8): the retained
+scene already holds what the window shows. Two cases publish the current version again
+with nothing painted: a version the surface withheld (above), and a frame of an external
+texture. A texture frame or retirement waits in the presentation's `TextureRegistry` and
+wakes the runtime, as Flutter's `markTextureFrameAvailable` schedules a frame. One predicate
+says whether the held version owes a publication for it
+(`PresentationState::owes_texture_frame`, over `PresentationScene::owes_texture_frame`): the
+version was applied for the target the pipeline now lays out for (`SceneTarget::of` its root
+constraints and ratio), the window has not refused it, and a retirement waits or an attached
+entry of the version draws a texture with a pending frame. The runner's gate counts it as tree
+work (`UiRuntime::has_pending_tree_work`, under the holds tree work has), so a frame fed while
+the previous one renders outlives the redraw mark that frame's end clears; sampling admits the
+segment on it; and it is frame work a settlement or a shown window wakes for. A segment that
+paints nothing then publishes the held version, with the damage since the acknowledged base,
+which is none once the raster side showed it. A target change owes nothing: the repaint it asks
+for carries the frames, and one that cannot run (a layout waiting for input) leaves the gate
+nothing to spin on. The raster host takes the frames from the registry with the publication and
+damages the texture's users alone (ADR-0304 §9); a host whose executor died takes them into the
+slot's carry. A texture nothing attached draws (an offstage subtree) owes no frame, and a version
+the window refused (`SubmitVerdict::Refused`, `SceneSlot::refuse`) owes none while it is current,
+until the raster side shows it or a later version of its lineage, as a refused window costs none
+(ADR-0334 §4); their frames wait in the registry, the newest per id. The registry is the one
+record of what is owed: it keeps a frame until a host takes it, so a frame withheld before the
+host took it leaves it for the next, a texture frame that arrives with a tree change rides that
+change's frame, and a frame after the host took it publishes nothing. The `Texture` widget
+neither rebuilds nor repaints for a frame. Pinned by the `external_textures` rows of
+`frame_pacing_and_pump_matrix` (`a_fed_frame_republishes_the_held_version`,
+`a_texture_frame_not_taken_is_published_again`, `a_hidden_texture_repaints_nothing`,
+`a_frame_fed_during_a_submit_is_still_owed`, `a_refused_window_costs_no_texture_frame`,
+`a_shown_refused_version_takes_texture_frames_again`,
+`a_texture_frame_while_a_new_size_waits_owes_nothing`), `flui-widgets`' perf scenarios
+`perf_a_texture_frame_republishes_the_held_version`,
+`an_idle_frame_after_a_texture_frame_publishes_nothing`,
+`texture_frames_between_two_frames_go_out_in_one_publication` and
+`a_texture_frame_rides_the_frame_of_a_tree_change`, `flui-testing`'s
+`each_window_takes_its_own_texture_frames` and
+`a_frame_in_a_lineage_a_reload_renewed_takes_its_texture_frames`, and `flui-app`'s
+`a_texture_frame_reaches_the_slot_as_its_users_damage`,
+`a_refused_window_costs_no_texture_frame` and
+`a_window_whose_attach_the_raster_thread_does_not_answer_is_kept`.
+
 ### An unseen window waits, and a covered one owes its surface a frame
 
 A presentation whose window is not seen (`WindowState::is_seen`) has a hidden clock: its polls
@@ -769,14 +812,37 @@ last frame (`OccludedSurface::Kept`, which the host names through `PresentationW
 alone; X11 without a compositing manager keeps no image, a suspended Wayland toplevel's frames
 are held), and its session shows windows (`occluded_frame::Session`: the lock and the machine's
 sleep are two flags, set and cleared by `SessionLocked`/`SessionUnlocked` and `Sleep`/`Wake`, so
-a lock that outlasts a sleep still counts). Once `OCCLUDED_FRAME_QUIET` has passed with work
-waiting, and not before the dropped-frame retry, the deadline is due work in `next_wake`,
-`runs_frames` is true (every runner's wake gate and the headless host ask it, so a runner whose
-frames are off runs the frame), and `FrameClock::grant_hidden_frame` lets the first poll that can
-produce it. The frame stays due until it runs, however late the host serves its wake; a hold
-(the dropped-frame backoff, text preparation) leaves it due, and while the sink holds as many
-frames as it may it asks for no wake, the settlement that frees a place being the one. Only a
-frame that runs starts the next quiet period (`occluded_frame_drawn`). The owing follows every
+a lock that outlasts a sleep still counts). The frame is the window's own (ADR-0389): its instant,
+the end of `OCCLUDED_FRAME_QUIET` with work waiting and not before the dropped-frame retry, is
+asked of the presentation's window (`PlatformWindow::request_frame_at`, which the host serves for
+that window alone) and is no term of `next_wake`, which a host delivers to every window.
+`owed_frame_requests` makes the request only where the instant differs from what the window was
+last asked, so a window hears an instant once whatever other windows draw, and withdraws it once
+nothing is owed; `OwedFrameRequest::deliver` records it as asked after the host's call returns.
+`OwnerDelivery` delivers them at the end of every runtime work item that is not terminal and
+after an installation, with the runtime back; the headless host after each pump, observation and
+notice, and before it computes its wait or decides it has settled. Only a frame of the
+presentation's own window, delivered once its instant has come (`note_frame_request`), serves the
+owed frame (`note_owed_frame_served`): then `owed_frame_served` and `runs_frames` are true (every
+runner's wake gate and the headless host ask it, so a runner whose frames are off runs the frame,
+and a runner's dirty gate counts it), and `FrameClock::grant_hidden_frame` lets the first poll
+that can produce it. The owed frame is no due work otherwise (`has_pending_due_work` leaves it
+out): the passing of its instant never runs it, and the attempt takes the serve whatever comes of
+it. A grant a held preparation kept stays in the clock, so once the preparation can run the next
+poll of the presentation produces it, a frame another window delivered included in a runtime of
+several presentations. The frame stays owed until it runs, however late the host serves its
+request. A hold leaves it owed: the dropped-frame backoff moves the instant to the retry; while the
+sink holds as many frames as it may the request is withdrawn, the settlement that frees a place
+asking for it again; and a served frame held by its text preparation marks what the window was
+asked as held at the preparation's outcome generation (`hold_owed_frame`), so the same instant is
+asked again only once the preparation releases it (`PreparationOutcome::releases`, read by
+`text_preparation::outcome` with no side effect): the generation moved on (an answer made the
+segment resumable, or the segment left), or the segment's premises do not accept it now (a build,
+the layout, the text-sizing policy or the scale moved since the frame that held it), so the frame
+asked for withdraws the segment in reconciliation. A premise moved during the holding frame's own
+sampling is found by that frame's revalidation before drawing (`reconcile_for_segment`), which
+withdraws the segment and moves the generation. Never while it waits. Only a frame that runs
+starts the next quiet period (`occluded_frame_drawn`). The owing follows every
 change of sight (`follow_sight`: each window snapshot, the visibility edge, each session notice):
 a window whose frame would no longer be shown owes nothing, one that owes keeps its quiet period
 through any snapshot, and one that owed nothing starts one. A frame drawn while the window is
@@ -787,10 +853,20 @@ leaves open, that a covered window's uncovering shows the frame of before the co
 `an_occluded_window_draws_its_change_in_exactly_one_frame`,
 `a_covered_window_owes_by_its_sight_on_every_snapshot`, `a_late_wake_still_draws_the_owed_frame`,
 `an_owed_frame_the_surface_refuses_is_not_drawn_again`,
-`a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep` (`flui-testing`,
-`occluded_window`); `a_hidden_window_raises_no_redraw_flag`,
-`an_owed_frame_is_refused_by_its_own_settlement_only`, `a_hold_leaves_the_owed_frame_due`
-(`flui-runtime`, `occluded_frame`).
+`a_covered_window_owes_nothing_while_its_session_is_locked_or_asleep`,
+`a_covered_window_beside_a_shown_one_is_asked_for_its_owed_frame_alone`,
+`a_change_between_pumps_is_still_owed_its_frame`,
+`a_held_owed_frame_is_asked_again_once_its_text_is_answered`,
+`a_held_owed_frame_keeps_no_loop_turning`, `a_moved_premise_asks_a_held_owed_frame_again`,
+`a_covered_window_is_delivered_no_frame_it_did_not_ask_for` (`flui-testing`, `occluded_window`);
+`a_hidden_window_raises_no_redraw_flag`, `an_owed_frame_is_refused_by_its_own_settlement_only`,
+`a_hold_leaves_the_owed_frame_due`,
+`the_owed_frame_is_asked_of_its_window_and_not_of_the_wake_deadline`,
+`the_owed_frame_is_drawn_only_by_its_windows_served_frame`,
+`an_owner_work_item_asks_the_covered_window_for_its_owed_frame`,
+`a_window_installed_covered_is_asked_for_its_owed_frame_by_the_install` (`flui-runtime`,
+`occluded_frame`); `a_held_instant_is_asked_again_once_its_outcome_moved_on` (`flui-runtime`,
+`occluded_frame` unit tests).
 
 A sink that cannot answer within the call (the threaded raster placement) answers `Queued`, or
 `QueuedReplacing` with the stamp of the unrendered frame the new one replaced in its inbox, whose
@@ -1140,7 +1216,7 @@ fails leaves the read parked for the next one, and a reply that panics does not 
 theirs. A window that closes first answers `PresentationGone`.
 Pinned by `src/ui_runtime/tests/agent_inspect.rs` and, for the
 reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foundation`. A render
-object or view that panics while the tree is read (`debug_name`, `inspect`) answers
+object or view that panics while the tree is read (`kind`, `inspect`) answers
 `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does;
 pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
 
@@ -1282,8 +1358,9 @@ spawn exactly at that boundary, then proves both that task and the next task run
 An unmatched release or exhausted deferral count refuses its atomic update
 before mutation. Catching that refusal therefore leaves later valid operations
 usable. The public `unmatched_first_frame_release_preserves_the_next_deferral`
-row in `flui-testing`'s `headless_frame_driver_matrix` proves real painted output
-is withheld and then delivered after recovery. `draw_frame_returns_layer_tree_and_defers_when_gated`
+row in `flui-testing`'s `headless_frame_driver_matrix` proves the gate withholds and then
+releases after recovery; the production frame's use of it is
+`deferred_painted_frame_waits_for_the_later_present_to_commit`. `the_first_frame_gate_counts_deferrals` in `renderer_binding.rs`
 also contains the terminal-count row; only its initial count is injected
 privately because the public boundary requires billions of calls to reach.
 
@@ -1423,15 +1500,6 @@ Accessibility input uses the whole-request translator of ADR-0124 before
 presentation inbox admission, preserving numeric values and explicit
 expand/collapse requests. Payload admission remains with the current semantics
 owner at delivery.
-
-`RenderingBinding` keeps its semantics-enabled listeners in their own storage,
-and `set_semantics_enabled` calls an owned snapshot of them after releasing the
-lock, so a callback may add or remove listeners or toggle the state again. Both
-the storage (when the binding drops) and each snapshot retire their envelopes
-in registration order. A panic from a callback or a capture destructor
-propagates with the committed semantics state intact; while it unwinds, the
-snapshot is dropped as a `Vec` is, and a capture destructor that panics there
-aborts, as in std (ADR-0281).
 
 ### A dropping UI runtime destroys its application values before it raises a failure
 

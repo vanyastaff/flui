@@ -37,7 +37,7 @@ const DEFAULT_PLACEMENT: ImagePlacement =
 /// | [`from_image`] | Already-decoded [`PixelImage`] | Sync, O(1) Arc clone |
 /// | [`memory`] | Encoded bytes in memory | Async — decoded on the compute lane, once per bytes |
 /// | [`file`] | Local file read + decode | Async — read on the IO lane, decoded on the compute lane, once per path |
-/// | `asset` | `flui-assets` asset path | Async — cached, coalesced, off-thread |
+/// | `asset` | The application's asset, by key, through the host's bundle | Async — cached, coalesced, off-thread |
 /// | `network` | HTTP/HTTPS URL | Async — cached, coalesced, off-thread |
 /// | [`new`] | Any [`ImageProvider`] impl | Provider-dependent |
 ///
@@ -170,18 +170,21 @@ impl Image {
         Self::new(FileImage::new(path))
     }
 
-    /// Creates an `Image` that loads and decodes the asset at `path`
-    /// asynchronously, through the image cache of the UI runtime it mounts
-    /// in (`flui_assets::ImageCacheCapability`), so every image of one path
-    /// in that runtime shares a decode.
+    /// Creates an `Image` that reads the application's asset `key`
+    /// (`assets/logo.png`, its path from the project root as `[assets]
+    /// directories` in `flui.toml` declares it) through the host's asset
+    /// bundle (`flui_platform::assets::AssetBundleCapability`, ADR-0384), and
+    /// decodes it asynchronously through the image cache of the UI runtime
+    /// it mounts in (`flui_assets::ImageCacheCapability`), so every image of
+    /// one key in that runtime shares a decode.
     ///
     /// See the [async dispatch](#async-dispatch) section above.
     ///
     /// Requires the `flui-widgets/asset-images` feature.
     #[cfg(feature = "asset-images")]
     #[track_caller]
-    pub fn asset(path: impl Into<String>) -> Self {
-        Self::new(super::AssetImage::new(path))
+    pub fn asset(key: impl Into<String>) -> Self {
+        Self::new(super::AssetImage::new(key))
     }
 
     /// Creates an `Image` that fetches and decodes `url` asynchronously,

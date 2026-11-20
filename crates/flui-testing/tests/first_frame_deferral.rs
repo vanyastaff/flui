@@ -2,47 +2,28 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use flui_foundation::geometry::Size;
-use flui_objects::RenderColoredBox;
-use flui_rendering::binding::RendererBinding;
-use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
-use flui_rendering::testing::SceneHost;
 use flui_runtime::renderer_binding::RenderingBinding;
-use flui_scheduler::UpdateScheduler;
 
 pub(crate) fn unmatched_first_frame_release_preserves_the_next_deferral() {
-    let pipeline = PipelineCell::new(PipelineOwner::new(TextContextHandle::standalone()));
-    let root = pipeline.with_mut(|owner| {
-        let root = owner.insert::<flui_rendering::protocol::BoxProtocol>(Box::new(
-            RenderColoredBox::red(40.0, 40.0),
-        ));
-        owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
-        root
-    });
-    let scheduler = UpdateScheduler::new();
-    let binding = RenderingBinding::new_with_pipeline(pipeline, &scheduler);
+    let binding = RenderingBinding::new(flui_rendering::TextContextHandle::standalone());
     for _ in 0..2 {
         assert!(catch_unwind(AssertUnwindSafe(|| binding.allow_first_frame())).is_err());
+        assert!(
+            binding.send_frames_to_engine(),
+            "a refused release defers nothing"
+        );
     }
     binding.defer_first_frame();
-    let mut scene = SceneHost::new();
-    let cell = binding.root_pipeline_owner().clone();
-    let (painted, _) = scene.drive_cell(&cell, |writer| binding.draw_frame(writer));
-    assert!(!painted, "the new deferral withholds paint");
-    binding.allow_first_frame();
-    binding
-        .root_pipeline_owner()
-        .with_mut(|owner| owner.mark_needs_layout(root));
-    let (painted, tree) = scene.drive_cell(&cell, |writer| binding.draw_frame(writer));
-    assert!(painted, "the matched release permits paint");
-    let painted = tree.expect("the painted frame has a layer tree");
     assert!(
-        painted.len() > 1,
-        "the frame carries the colored render object"
+        !binding.send_frames_to_engine(),
+        "the new deferral withholds the frame"
     );
-    // The refusal remains harmless after a successful frame too.
+    binding.allow_first_frame();
+    assert!(
+        binding.send_frames_to_engine(),
+        "the matched release permits it"
+    );
+    // The refusal remains harmless after the gate reopened too.
     assert!(catch_unwind(AssertUnwindSafe(|| binding.allow_first_frame())).is_err());
     assert!(binding.send_frames_to_engine());
 }

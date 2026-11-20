@@ -357,6 +357,24 @@ impl ActionChain {
     pub(crate) fn is(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
+
+    /// The chain above the nearest scope.
+    pub(crate) fn enclosing(&self) -> Option<&Self> {
+        self.0.enclosing.as_ref()
+    }
+
+    /// Hang the nearest scope's bindings under `enclosing`. A link nobody
+    /// else holds yet is rewritten in place; one already shared is
+    /// replaced, so a holder of it keeps the chain it was given. Returns
+    /// what the link was hung under before, for the caller to drop.
+    pub(crate) fn rehang(&mut self, enclosing: Option<Self>) -> Option<Self> {
+        if let Some(link) = Rc::get_mut(&mut self.0) {
+            std::mem::replace(&mut link.enclosing, enclosing)
+        } else {
+            let own = Rc::clone(&self.0.own);
+            Some(std::mem::replace(self, layered_chain(enclosing, own)))
+        }
+    }
 }
 
 impl std::fmt::Debug for ActionChain {
@@ -519,15 +537,21 @@ impl FocusRecord {
 }
 
 /// The record a focused widget left on `node`. `None` for a node no `Focus`
-/// or text field hosts, or one with no `Actions` above it.
-fn record_at(node: &FocusNode) -> Option<Rc<FocusRecord>> {
-    node.context()?.downcast::<FocusRecord>().ok()
+/// or text field hosts, or one with no `Actions` above it. A text field
+/// leaves the record itself; a focus host leaves its shared state, which
+/// holds it.
+fn record_at(node: &FocusNode) -> Option<FocusRecord> {
+    let context = node.context()?;
+    match context.downcast_ref::<FocusRecord>() {
+        Some(record) => Some(record.clone()),
+        None => super::focus_host::hosted_record(&context),
+    }
 }
 
 /// The chain recorded on `node`: the bindings visible at the focused widget's
 /// position, which is where a shortcut's intent is resolved.
 pub(crate) fn chain_at(node: &FocusNode) -> Option<ActionChain> {
-    record_at(node).map(|record| record.chain.clone())
+    record_at(node).map(|record| record.chain)
 }
 
 /// The platform convention the widget that recorded on `node` was built

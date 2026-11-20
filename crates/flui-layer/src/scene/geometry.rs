@@ -21,7 +21,6 @@ use super::version::{Address, NodeRecord, VersionInner};
 use crate::damage::closure::{device_spread, footprint, moved};
 use crate::layer::Layer;
 use crate::link::{MAX_FOLLOWER_NESTING, invert};
-use crate::tree::annotations::clip_admits;
 use crate::{LayerLink, LeaderClip};
 
 /// One step from a space into the one it holds, as a footprint crosses it
@@ -719,19 +718,10 @@ impl<'v> Geometry<'v> {
             {
                 out.push(Link::Everywhere);
             }
-            Layer::ShaderMask(_)
-            | Layer::BackdropFilter(_)
-            | Layer::Texture(_)
-            | Layer::PlatformView(_)
-            | Layer::PerformanceOverlay(_) => match layer.bounds() {
+            Layer::ShaderMask(_) | Layer::BackdropFilter(_) => match layer.bounds() {
                 Some(bounds) => out.push(Link::Extent(bounds)),
                 None => out.push(Link::Everywhere),
             },
-            // A recording changes what its damage extent covers, which takes
-            // full-canvas fills, strokes, shadows and glyph overflow that its
-            // bounds leave out, as a chunk's bounds do.
-            Layer::Picture(picture) => out.push(extent_link(picture.picture().damage_extent())),
-            Layer::Canvas(canvas) => out.push(extent_link(canvas.display_list().damage_extent())),
             _ => {}
         }
     }
@@ -870,7 +860,7 @@ impl<'v> Geometry<'v> {
                         local: content.effect_scope(next_effect).chunks,
                         kernel: 0.0,
                     });
-                    let scale = match &content.layers()[next_effect] {
+                    let scale = match content.layers()[next_effect].as_layer() {
                         Layer::Transform(transform) => least_scale(transform.transform()),
                         // Resolved once here, for its scale and its links.
                         Layer::Follower(_) => {
@@ -906,7 +896,7 @@ impl<'v> Geometry<'v> {
                 Entry::Effect { .. } => {
                     effect -= 1;
                     let held = inside[offset];
-                    let layer = &content.layers()[effect];
+                    let layer = content.layers()[effect].as_layer();
                     let mut links = Links::new();
                     let at = Address {
                         node: key,
@@ -1233,7 +1223,7 @@ impl<'v> Geometry<'v> {
                         let (x, y) = chain
                             .project_plane_point(anchor.dx, anchor.dy)
                             .ok_or(Unresolved::Hidden)?;
-                        if !clip_admits(layer, Point::new(x, y)) {
+                        if !layer.clip_admits(Point::new(x, y)) {
                             return Err(Unresolved::Hidden);
                         }
                     }
@@ -1318,16 +1308,6 @@ fn in_scope(content: &BoundaryContent, entry: EntryIndex, effect: EntryIndex) ->
         at = content.entries()[parent.get()].parent();
     }
     false
-}
-
-/// The link a recording's damage extent gives: nothing when it draws
-/// nothing, everywhere when its extent has no finite cover.
-fn extent_link<'v>(extent: Option<DamageExtent>) -> Link<'v> {
-    match extent.map(DamageExtent::covering_rect) {
-        None => Link::Extent(Rect::ZERO),
-        Some(Some(rect)) if rect.is_finite() => Link::Extent(rect),
-        Some(_) => Link::Everywhere,
-    }
 }
 
 /// A step of a chain that reads a space other than the innermost, already

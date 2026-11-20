@@ -1,18 +1,15 @@
 //! Constraint cache validation methods for `RenderState<P>`.
 //!
-//! This file contains the `Option<ProtocolConstraints<P>>`-backed constraint
-//! methods (`constraints`, `set_constraints`, `clear_constraints`,
+//! This file contains the constraint methods over the protocol's layout
+//! record (`constraints`, `set_constraints`, `clear_constraints`,
 //! `has_constraints`).
 //!
-//! The prior `OnceCell`-backed `set_constraints` panicked on second
-//! invocation, which made any re-layout of the same node a crash. Each
-//! layout pass now straight-assigns the constraints: they are held in
-//! `Option<T>` and replaced unconditionally inside `set_constraints`. The method takes `&mut self`; the production caller
-//! (`RenderEntry::layout`) already holds `&mut self` on the entry so the
-//! borrow chain reaches the state mutably.
+//! Each layout pass overwrites the constraints. `set_constraints` takes
+//! `&mut self`; the production caller (`RenderEntry::layout`) already holds
+//! `&mut self` on the entry so the borrow chain reaches the state mutably.
 
-use super::RenderState;
-use crate::protocol::{Protocol, ProtocolConstraints};
+use super::{LayoutRecord as _, RenderState};
+use crate::protocol::Protocol;
 
 // ============================================================================
 // CONSTRAINTS (CACHE VALIDATION)
@@ -34,8 +31,8 @@ impl<P: Protocol> RenderState<P> {
     /// }
     /// ```
     #[inline]
-    pub fn constraints(&self) -> Option<&ProtocolConstraints<P>> {
-        self.constraints.as_ref()
+    pub fn constraints(&self) -> Option<&P::Constraints> {
+        self.layout.constraints()
     }
 
     /// Sets (or replaces) the constraints used for layout.
@@ -48,8 +45,8 @@ impl<P: Protocol> RenderState<P> {
     /// invocation. Re-layout of the same node now
     /// straight-assigns the constraints. See module-level doc for rationale.
     #[inline]
-    pub fn set_constraints(&mut self, constraints: ProtocolConstraints<P>) {
-        self.constraints = Some(constraints);
+    pub fn set_constraints(&mut self, constraints: P::Constraints) {
+        self.layout.set_constraints(constraints);
     }
 
     /// Clears the constraints, signalling no prior layout has run.
@@ -60,16 +57,16 @@ impl<P: Protocol> RenderState<P> {
     /// first is no longer required (the `OnceCell`-era invariant is gone).
     #[inline]
     pub fn clear_constraints(&mut self) {
-        self.constraints = None;
+        self.layout.clear_constraints();
     }
 
     /// Checks if constraints match the given value.
     ///
     /// Returns `false` if constraints are not set.
-    pub fn has_constraints(&self, constraints: &ProtocolConstraints<P>) -> bool
+    pub fn has_constraints(&self, constraints: &P::Constraints) -> bool
     where
-        ProtocolConstraints<P>: PartialEq,
+        P::Constraints: PartialEq,
     {
-        self.constraints.as_ref().is_some_and(|c| c == constraints)
+        self.layout.constraints().is_some_and(|c| c == constraints)
     }
 }

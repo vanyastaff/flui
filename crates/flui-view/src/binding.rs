@@ -57,24 +57,6 @@ use crate::{
     view::{RootRenderView, View},
 };
 
-/// Default physical size, in pixels, for the root [`RenderView`] created
-/// when [`WidgetsBinding::attach_root_widget`] bootstraps the render tree.
-///
-/// `flui-view`'s binding is intra-crate — it has no window object to
-/// query, so the root [`RootRenderView`] is seeded with a default size
-/// rather than a real window size. `800x600` is deliberately the same
-/// value `flui_app::AppConfig::default()` uses for the initial window
-/// size, keeping one consistent default across the workspace.
-///
-/// This is only a *seed*: the size is not permanent. `RootRenderView`
-/// is itself a [`View`], so a later rebuild with a differently-sized
-/// `RootRenderView` flows the real window dimensions in through
-/// `RootRenderElement::update`, which re-applies the
-/// [`ViewConfiguration`](flui_rendering::view::ViewConfiguration).
-///
-/// [`RenderView`]: flui_rendering::view::RenderView
-const DEFAULT_ROOT_VIEW_SIZE: (f64, f64) = (800.0, 600.0);
-
 // ============================================================================
 // Route Information
 // ============================================================================
@@ -754,34 +736,6 @@ impl WidgetsBinding {
     where
         V: View + Clone + 'static,
     {
-        self.attach_root_widget_with_size(view, DEFAULT_ROOT_VIEW_SIZE.0, DEFAULT_ROOT_VIEW_SIZE.1)
-    }
-
-    /// Attach a root widget sizing the root `RenderView` to an explicit
-    /// logical `width` × `height` (e.g. the platform window's surface size)
-    /// instead of the crate-internal default root view size.
-    ///
-    /// This is the entry point the platform runner uses so the root view is
-    /// born at the real window size rather than the 800×600 fallback. Per-frame
-    /// layout constraints are still supplied by `draw_frame`; this only sets the
-    /// root view object's intrinsic size at bootstrap. See [`attach_root_widget`]
-    /// for the full bootstrap contract.
-    ///
-    /// [`attach_root_widget`]: Self::attach_root_widget
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AttachError::AlreadyAttached`] if a root widget is already
-    /// attached.
-    pub fn attach_root_widget_with_size<V>(
-        &self,
-        view: &V,
-        width: f64,
-        height: f64,
-    ) -> Result<(), AttachError>
-    where
-        V: View + Clone + 'static,
-    {
         let mut inner = self.inner.write_in(TreePhase::Building);
 
         if inner.root_element.is_some() {
@@ -807,7 +761,7 @@ impl WidgetsBinding {
         // restriction in practice — every concrete `View` in this
         // codebase already satisfies it (see `Element<V, A, B>`'s
         // own bound).
-        let root_render_view = RootRenderView::new(view.clone(), width, height);
+        let root_render_view = RootRenderView::new(view.clone());
 
         // Mount the `RootRenderView` as the element-tree root with the
         // PipelineOwner. This ensures `RootRenderElement` (and the
@@ -1125,9 +1079,9 @@ impl WidgetsBinding {
     /// 1. **Build phase**: All dirty `Element`s in the widget tree are rebuilt.
     ///    See `State.setState` for details on marking a widget dirty.
     ///
-    /// 2. **Layout phase**: (handled by RendererBinding.drawFrame)
+    /// 2. **Layout phase**: (run by `UiRuntime` on the presentation's `PipelineOwner` after this build pass)
     ///
-    /// 3. **Paint phase**: (handled by RendererBinding.drawFrame)
+    /// 3. **Paint phase**: (run by `UiRuntime` on the presentation's `PipelineOwner` after this build pass)
     ///
     /// 4. **Finalization phase**: Inactive elements are unmounted. This causes
     ///    [State.dispose] to be invoked on removed widgets.
@@ -1217,8 +1171,8 @@ impl WidgetsBinding {
             inner.build_owner.clear_frame_build_report();
         }
 
-        // Note: Layout and paint phases would be called here via super.draw_frame()
-        // in a full implementation with RendererBinding
+        // Layout and paint run after this build pass, from the owning
+        // `UiRuntime`, not here.
 
         before_finalize();
 
@@ -1248,8 +1202,8 @@ impl WidgetsBinding {
     /// This is the **production entry point** for lazy `SliverList` /
     /// `ListView::builder` child building, on a platform runner and a headless
     /// host alike, and must be called immediately after
-    /// `PipelineOwner::run_frame` releases its write-lock so no `NodePtr`
-    /// alias is live.
+    /// `PipelineOwner::run_frame` releases its write-lock so no node of the
+    /// render tree is entered.
     ///
     /// `UiRuntime::draw_frame` (`flui-app`) calls this method after the
     /// `run_frame` write-guard drops, passing the same shared `PipelineOwner`
@@ -1299,7 +1253,7 @@ impl WidgetsBinding {
     pub fn run_frame_with_layout_builders(
         &self,
         pipeline: &PipelineCell,
-        writer: &mut flui_rendering::layer::SceneWriter<'_>,
+        writer: &mut flui_layer::SceneWriter<'_>,
     ) -> Result<bool, flui_foundation::TreeError<flui_rendering::error::RenderError>> {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {

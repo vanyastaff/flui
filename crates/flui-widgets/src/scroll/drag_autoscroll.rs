@@ -17,10 +17,10 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Axis, Vec2};
 use flui_interaction::drag::{Autoscroll, DragPoint, DragView, DropReceiver, DropReceiverSlot};
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::pointer::LocalPayloadTarget;
 use flui_objects::RenderMetaData;
-use flui_platform::data_transfer::{DropFeedback, TransferActions};
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_platform::transfer::data::{DropFeedback, TransferActions};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, RenderObjectContext, RenderView, impl_render_view};
 

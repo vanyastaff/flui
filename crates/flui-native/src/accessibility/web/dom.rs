@@ -30,7 +30,7 @@ use std::sync::Arc;
 use accesskit::{
     Action, ActionData, ActionRequest, NodeId, TextPosition, TextSelection, TreeId, TreeUpdate,
 };
-use flui_platform::keyboard::{KeyPress, KeyState};
+use flui_platform::input::keyboard::{KeyPress, KeyState};
 use flui_semantics::platform::AssistiveFocusSupport;
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,

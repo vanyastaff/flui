@@ -29,11 +29,11 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Rect, Size, WindowMetrics};
 use flui_platform::EventTime;
-use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{
+use flui_platform::input::keyboard::Modifiers;
+use flui_platform::input::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, TouchpadHoldPhase,
 };
-use flui_platform::text_store::TextStore;
+use flui_platform::text::store::TextStore;
 use flui_platform::{
     AppTitleBar, Brightness, CapabilityAbsence, CloseDecision, ColorGamut, ControlsOffset,
     CursorGrab, DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription, DisplayId,

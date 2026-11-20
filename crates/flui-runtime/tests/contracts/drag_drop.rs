@@ -22,10 +22,10 @@ use flui_native::{
 };
 use flui_objects::RenderMetaData;
 use flui_platform::WindowOptions;
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
-use flui_platform::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::transfer::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::{
     DispatchEventResult, PlatformInput, PlatformWindow, Unsupported, UnsupportedReason,
     WindowExecutionState,
@@ -35,7 +35,7 @@ use flui_testing::window_handler::RecordingWindowHandler;
 /// A drag the OS cannot take: the window has no drag source.
 const NO_OS_DRAG: DragError =
     DragError::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisPlatform));
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, RuntimeOperation};
 use flui_runtime::presentation::PresentationWindow;
@@ -408,7 +408,7 @@ fn mount<V: flui_view::View + Clone + 'static>(
     root: &V,
 ) {
     runtime
-        .attach_root_widget_with_size_to(presentation, root, 400.0, 300.0)
+        .attach_root_widget_to(presentation, root)
         .expect("root");
     runtime.synchronize_window_snapshot(presentation, WindowExecutionState::Running, true, true);
 }

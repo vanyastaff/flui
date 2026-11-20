@@ -116,15 +116,13 @@ pub(crate) fn sliver_to_box_adapter_lays_out_box_child_and_commits_geometry() {
         constraints: vertical_constraints(40.0),
     }) as BoxedRenderObject);
     let adapter_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
+        .insert_sliver_child_render_object(
             root_id,
             Box::new(RenderSliverToBoxAdapter::new()) as BoxedSliverObject,
         )
         .expect("sliver adapter child");
     let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
+        .insert_child_render_object(
             adapter_id,
             Box::new(FixedHitBox::new(50.0, 180.0)) as BoxedRenderObject,
         )

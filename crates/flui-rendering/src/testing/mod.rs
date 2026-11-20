@@ -36,7 +36,7 @@
 //!
 //! ```
 //! use flui_rendering::testing::{RenderTester, Probe, box_node};
-//! use flui_rendering::prelude::*;
+//! use flui_rendering::{BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox};
 //! use flui_foundation::Leaf;
 //! use flui_foundation::geometry::Size;
 //!
@@ -70,6 +70,7 @@ mod harness;
 pub mod inspect;
 pub mod parent_data;
 pub mod queries;
+pub mod raw_tree;
 mod report;
 pub mod scene;
 pub mod sliver;

@@ -1,12 +1,11 @@
 //! A widget registers an external texture through its lifecycle capability;
-//! a frame fed from another thread repaints the `Texture` showing it, and
-//! nothing around it, reaches the raster side through the presentation's
-//! registry, and unmounting the owner retires the texture.
-
-use std::sync::atomic::AtomicU32;
+//! a frame fed from another thread rebuilds and repaints nothing: the
+//! presentation publishes the version it holds, the raster side takes the
+//! frame with it from the registry, and unmounting the owner retires the
+//! texture.
 
 use flui_foundation::geometry::Rect;
-use flui_layer::{DamageRect, DamageRegion, Region, TextureRegistration};
+use flui_layer::{DamageRect, DamageRegion, TextureRegistration};
 use flui_painting::Alignment;
 use flui_painting::paint::{Image, TextureId};
 use flui_painting::styling::Color;
@@ -77,6 +76,9 @@ enum Placement {
     /// A 20-px surface at (100, 100) over a background; hiding it keeps it
     /// mounted, offstage.
     Small,
+    /// A 20-px surface beside a leaf whose layout waits for input at any
+    /// surface width but the test window's.
+    Gated,
 }
 
 /// Shows the surface while `shown` is non-zero.
@@ -110,7 +112,76 @@ impl StatelessView for Toggle {
                     ),
                 )
                 .boxed(),
+            Placement::Gated => flui_widgets::Column::new((
+                WidthGate,
+                SizedBox::new(20.0, 20.0).child(self.surface.clone()),
+            ))
+            .boxed(),
         }
+    }
+}
+
+/// A 10-px leaf whose layout fails as text whose context is busy, so the
+/// pipeline waits for input, at any width but the test window's.
+#[derive(Debug)]
+struct WidthGateBox;
+
+impl flui_foundation::inspect::Inspect for WidthGateBox {
+    fn kind(&self) -> &'static str {
+        "WidthGateBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for WidthGateBox {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::BoxLayoutContext<
+            '_,
+            flui_foundation::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        #[expect(
+            clippy::float_cmp,
+            reason = "the window's width is an exact logical extent at scale 1"
+        )]
+        if ctx.constraints().max_width != f64::from(SURFACE.0) {
+            return Err(flui_rendering::RenderError::TextContextBusy);
+        }
+        Ok(flui_foundation::geometry::Size::new(10.0, 10.0))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::PaintContext<'_, flui_foundation::Leaf>) {}
+}
+
+#[derive(Clone, Copy)]
+struct WidthGate;
+
+impl flui_view::RenderView for WidthGate {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = WidthGateBox;
+
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> WidthGateBox {
+        WidthGateBox
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut WidthGateBox,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl flui_view::View for WidthGate {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -121,7 +192,6 @@ struct Fixture {
     shared: Shared,
     shown: Signal<u32>,
     writer: flui_view::WriterSource,
-    submits: Arc<AtomicU32>,
     _window: Rc<dyn flui_platform::PlatformWindow>,
 }
 
@@ -154,26 +224,50 @@ fn mounted(placement: Placement) -> Fixture {
         shared,
         shown,
         writer,
-        submits: Arc::new(AtomicU32::new(0)),
         _window: window,
     }
 }
 
-fn counting_sink(submits: &Arc<AtomicU32>) -> ScriptedSink {
-    let submits = Arc::clone(submits);
-    ScriptedSink::new(move |_, _| {
-        submits.fetch_add(1, Ordering::SeqCst);
-        crate::sink::SubmitVerdict::Presented
-    })
+/// What a sink saw of one publication: the version it names, its scene
+/// damage, and the texture frames it took from the registry with it.
+#[derive(Debug, Clone, PartialEq)]
+struct Seen {
+    version: flui_layer::SceneVersionId,
+    damage: DamageRegion,
+    frames: Vec<(TextureId, u8)>,
 }
 
-/// A sink that keeps the damage each published frame carries, as the
-/// raster host reads it.
-fn damage_sink(damage: &Arc<Mutex<Vec<DamageRegion>>>) -> ScriptedSink {
-    let damage = Arc::clone(damage);
-    ScriptedSink::new(move |_, publication| {
-        damage.lock().push(publication.damage);
-        crate::sink::SubmitVerdict::Presented
+/// A sink that takes the presentation's texture updates with every frame it
+/// presents, as the raster host does, and answers `verdict` for each call;
+/// a frame it does not present leaves them in the registry.
+fn taking_sink(
+    fixture: &Fixture,
+    seen: &Arc<Mutex<Vec<Seen>>>,
+    mut verdict: impl FnMut(u32) -> crate::sink::SubmitVerdict + Send + 'static,
+) -> ScriptedSink {
+    let registry = fixture
+        .ui_runtime
+        .texture_registry(fixture.ui_runtime.presentation_id())
+        .expect("primary presentation");
+    let seen = Arc::clone(seen);
+    ScriptedSink::new(move |index, publication| {
+        let answer = verdict(index);
+        let frames = if answer == crate::sink::SubmitVerdict::Presented {
+            registry
+                .take_updates()
+                .frames
+                .iter()
+                .map(|(id, image)| (*id, image.data()[0]))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        seen.lock().push(Seen {
+            version: publication.scene.id(),
+            damage: publication.damage,
+            frames,
+        });
+        answer
     })
 }
 
@@ -190,69 +284,60 @@ fn feed(shared: &Shared, shade: u8) {
     .expect("producer thread");
 }
 
-/// A frame fed from another thread repaints the texture's widget, and the
-/// presentation's registry hands that frame to the raster side once.
-pub(crate) fn a_fed_frame_repaints_and_reaches_the_raster_side() {
-    let fixture = mounted(Placement::Whole);
-    let mut sink = counting_sink(&fixture.submits);
+fn texture_id(fixture: &Fixture) -> TextureId {
+    fixture
+        .shared
+        .lock()
+        .as_ref()
+        .map(TextureRegistration::id)
+        .expect("registered")
+}
+
+/// A frame fed from another thread, with nothing changed in the tree, wakes
+/// the runtime, and its frame publishes the version the scene holds, with no
+/// scene damage, for the raster side to take the frame with; the frame after
+/// publishes nothing.
+pub(crate) fn a_fed_frame_republishes_the_held_version() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Presented);
     fixture.ui_runtime.render_frame(&mut sink);
     fixture.ui_runtime.render_frame(&mut sink);
     assert_eq!(
-        fixture.submits.load(Ordering::SeqCst),
+        seen.lock().len(),
         1,
         "nothing changed after the first frame"
     );
-    feed(&fixture.shared, 9);
-    fixture.ui_runtime.render_frame(&mut sink);
-    assert_eq!(
-        fixture.submits.load(Ordering::SeqCst),
-        2,
-        "the new frame repaints the texture"
-    );
-    let registry = fixture
-        .ui_runtime
-        .texture_registry(fixture.ui_runtime.presentation_id())
-        .expect("primary presentation");
-    let id = fixture.shared.lock().as_ref().map(TextureRegistration::id);
-    let updates = registry.take_updates();
-    assert_eq!(updates.frames.len(), 1);
-    assert_eq!(Some(updates.frames[0].0), id);
-}
-
-/// A frame fed to a small texture over a background damages the texture's
-/// box alone: the texture's layer repaints and the background is replayed.
-pub(crate) fn a_fed_frame_damages_only_the_texture() {
-    let fixture = mounted(Placement::Small);
-    let damage = Arc::new(Mutex::new(Vec::new()));
-    let mut sink = damage_sink(&damage);
-    fixture.ui_runtime.render_frame(&mut sink);
-    fixture.ui_runtime.render_frame(&mut sink);
-    assert_eq!(
-        damage.lock().len(),
-        1,
-        "nothing changed after the first frame"
-    );
+    fixture.ui_runtime.mark_rendered();
 
     feed(&fixture.shared, 9);
+    assert!(
+        fixture.ui_runtime.needs_redraw(),
+        "a texture frame asks for a frame"
+    );
     fixture.ui_runtime.render_frame(&mut sink);
-    let damage = damage.lock();
-    assert_eq!(damage.len(), 2, "the texture's frame is submitted");
-    let texture = DamageRect::try_covering(Rect::from_ltrb(100.0, 100.0, 120.0, 120.0), SURFACE)
-        .expect("finite")
-        .expect("the texture is on the surface");
+    fixture.ui_runtime.render_frame(&mut sink);
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 2, "the texture frame is published once");
     assert_eq!(
-        damage[1],
-        DamageRegion::Region(Region::new(texture)),
-        "a texture frame damages the texture's box, not its enclosing boundary"
+        seen[1],
+        Seen {
+            version: seen[0].version,
+            damage: DamageRegion::Unchanged,
+            frames: vec![(texture_id(&fixture), 9)],
+        },
+        "the held version, no scene damage, and the frame"
     );
 }
 
-/// A texture an ancestor hides while it stays mounted stops costing frames:
-/// at most one frame follows the producer, and the texture's pending paint
-/// absorbs the rest.
-pub(crate) fn a_hidden_texture_stops_painting_after_one_frame() {
+/// A texture an ancestor hides while it stays mounted costs nothing for the
+/// frames its producer feeds: the held version draws no user of it, so no
+/// frame is published and none stays owed; the newest frame waits in the
+/// registry for the next publication.
+pub(crate) fn a_hidden_texture_repaints_nothing() {
     let fixture = mounted(Placement::Small);
-    let mut sink = counting_sink(&fixture.submits);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Presented);
     fixture.ui_runtime.render_frame(&mut sink);
     fixture
         .writer
@@ -263,29 +348,199 @@ pub(crate) fn a_hidden_texture_stops_painting_after_one_frame() {
         fixture.shared.lock().is_some(),
         "an offstage texture stays mounted"
     );
-    let hidden = fixture.submits.load(Ordering::SeqCst);
 
     for shade in 1..=3 {
         feed(&fixture.shared, shade);
         fixture.ui_runtime.render_frame(&mut sink);
+        assert!(
+            !fixture.ui_runtime.has_pending_work(),
+            "a hidden texture's frame owes no frame"
+        );
     }
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 2, "nothing is published: {seen:?}");
+    let registry = fixture
+        .ui_runtime
+        .texture_registry(fixture.ui_runtime.presentation_id())
+        .expect("primary presentation");
+    let frames = registry.take_updates().frames;
+    assert_eq!(frames.len(), 1, "the newest frame waits, one per texture");
+    assert_eq!(frames[0].1.data()[0], 3);
+}
+
+/// A frame fed while the previous one is submitted, after the raster side
+/// took the updates, outlives the redraw mark the frame's end clears: the
+/// runner's gate still sees it, and its next frame publishes it.
+pub(crate) fn a_frame_fed_during_a_submit_is_still_owed() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = {
+        let registry = fixture
+            .ui_runtime
+            .texture_registry(fixture.ui_runtime.presentation_id())
+            .expect("primary presentation");
+        let (seen, shared) = (Arc::clone(&seen), Arc::clone(&fixture.shared));
+        ScriptedSink::new(move |index, publication| {
+            let frames = registry
+                .take_updates()
+                .frames
+                .iter()
+                .map(|(id, image)| (*id, image.data()[0]))
+                .collect();
+            seen.lock().push(Seen {
+                version: publication.scene.id(),
+                damage: publication.damage,
+                frames,
+            });
+            if index == 1 {
+                // The producer's next frame lands while this one renders.
+                feed(&shared, 10);
+            }
+            crate::sink::SubmitVerdict::Presented
+        })
+    };
+    fixture.ui_runtime.render_frame(&mut sink);
+    feed(&fixture.shared, 9);
+    fixture.ui_runtime.render_frame(&mut sink);
     assert!(
-        fixture.submits.load(Ordering::SeqCst) <= hidden + 1,
-        "a hidden texture costs at most one frame, not one per producer frame"
+        !fixture.ui_runtime.needs_redraw(),
+        "the frame's end cleared the wake the feed raised"
     );
+    assert!(
+        fixture.ui_runtime.has_pending_work(),
+        "the runner's gate still sees the texture frame"
+    );
+    fixture.ui_runtime.render_frame(&mut sink);
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    assert_eq!(seen[2].version, seen[0].version, "the held version again");
+    assert_eq!(seen[2].frames, [(texture_id(&fixture), 10)]);
+    assert!(!fixture.ui_runtime.has_pending_work(), "and nothing more");
+}
+
+/// A window that refuses the version costs no frame per texture frame
+/// (ADR-0334 §4): the refused version is not published again for one, the
+/// runner's gate sees nothing owed, and the newest frame waits, one per
+/// texture, for the frame that applies a version.
+pub(crate) fn a_refused_window_costs_no_texture_frame() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Refused);
+    fixture.ui_runtime.render_frame(&mut sink);
+    for shade in 1..=3 {
+        feed(&fixture.shared, shade);
+        fixture.ui_runtime.render_frame(&mut sink);
+        assert!(
+            !fixture.ui_runtime.has_pending_work(),
+            "a refused window owes no texture frame"
+        );
+    }
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 1, "only the refused frame: {seen:?}");
+    let registry = fixture
+        .ui_runtime
+        .texture_registry(fixture.ui_runtime.presentation_id())
+        .expect("primary presentation");
+    let frames = registry.take_updates().frames;
+    assert_eq!(frames.len(), 1, "the newest frame waits, one per texture");
+    assert_eq!(frames[0].1.data()[0], 3);
+}
+
+/// A window that shows the version it refused takes texture frames again:
+/// of two republishes of one version in flight, the first is refused and the
+/// second shown, and the next texture frame is published with that version.
+pub(crate) fn a_shown_refused_version_takes_texture_frames_again() {
+    use crate::sink::{FrameSettlement, SubmitVerdict};
+
+    let mut fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |index| match index {
+        1 | 2 => SubmitVerdict::Queued,
+        _ => SubmitVerdict::Presented,
+    })
+    .holding(std::num::NonZeroUsize::new(2).expect("two"));
+    fixture.ui_runtime.render_frame(&mut sink);
+    for shade in [1, 2] {
+        feed(&fixture.shared, shade);
+        fixture.ui_runtime.render_frame(&mut sink);
+    }
+    let [_, refused, shown] = sink.epochs[..] else {
+        panic!("the first frame and two republishes, got {:?}", sink.epochs);
+    };
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: fixture.ui_runtime.id(),
+        presentation_id: fixture.ui_runtime.presentation_id(),
+    };
+    for (epoch, verdict) in [
+        (refused, SubmitVerdict::Refused),
+        (shown, SubmitVerdict::Presented),
+    ] {
+        let _ = fixture
+            .ui_runtime
+            .settle_frame(FrameSettlement::new(address, epoch, verdict));
+    }
+    feed(&fixture.shared, 3);
+    fixture.ui_runtime.render_frame(&mut sink);
+
+    let seen = seen.lock().clone();
+    assert_eq!(
+        seen.len(),
+        4,
+        "the shown version takes the next texture frame: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|frame| frame.version == seen[0].version),
+        "{seen:?}"
+    );
+    assert_eq!(seen[3].frames, [(texture_id(&fixture), 3)]);
+}
+
+/// A texture frame fed while the window's new size cannot be laid out (the
+/// layout waits for input that has not come) owes no frame: the held version
+/// was applied for the old size, and the repaint the new size asks for is
+/// what carries the frame. The runner's gate sees nothing to do, rather
+/// than a no-present frame every period.
+pub(crate) fn a_texture_frame_while_a_new_size_waits_owes_nothing() {
+    let fixture = mounted(Placement::Gated);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Presented);
+    fixture.ui_runtime.render_frame(&mut sink);
+    assert_eq!(seen.lock().len(), 1, "the first frame is shown");
+
+    let mut resized = taking_sink(&fixture, &seen, |_| crate::sink::SubmitVerdict::Presented)
+        .with_size(SURFACE.0 - 100, SURFACE.1);
+    feed(&fixture.shared, 9);
+    fixture.ui_runtime.render_frame(&mut resized);
+    assert!(
+        fixture
+            .ui_runtime
+            .presentations
+            .primary()
+            .pipeline()
+            .with(flui_rendering::pipeline::PipelineOwner::layout_waits_for_input),
+        "the new size's layout waits for input"
+    );
+    assert!(
+        !fixture.ui_runtime.has_pending_work(),
+        "the texture frame owes no frame under the new size"
+    );
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 1, "nothing more is published: {seen:?}");
 }
 
 /// Unmounting the widget that owns the registration retires its texture.
 pub(crate) fn unmounting_the_owner_retires_its_texture() {
     let fixture = mounted(Placement::Whole);
-    let mut sink = counting_sink(&fixture.submits);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = {
+        let seen = Arc::clone(&seen);
+        ScriptedSink::new(move |_, publication| {
+            seen.lock().push(publication.scene.id());
+            crate::sink::SubmitVerdict::Presented
+        })
+    };
     fixture.ui_runtime.render_frame(&mut sink);
-    let id = fixture
-        .shared
-        .lock()
-        .as_ref()
-        .map(TextureRegistration::id)
-        .expect("registered");
+    let id = texture_id(&fixture);
     fixture
         .writer
         .write(|ctx| fixture.shown.set(ctx, 0))
@@ -299,10 +554,45 @@ pub(crate) fn unmounting_the_owner_retires_its_texture() {
     assert_eq!(registry.take_updates().retired, [id]);
 }
 
+/// A texture frame whose publication the surface withheld is published
+/// again: the registry keeps it until a frame reaches the raster side, and
+/// the retry takes it.
+pub(crate) fn a_texture_frame_not_taken_is_published_again() {
+    let fixture = mounted(Placement::Small);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut sink = taking_sink(&fixture, &seen, |index| {
+        if index == 1 {
+            crate::sink::SubmitVerdict::NotShown
+        } else {
+            crate::sink::SubmitVerdict::Presented
+        }
+    });
+    fixture.ui_runtime.render_frame(&mut sink);
+    feed(&fixture.shared, 9);
+    fixture.ui_runtime.render_frame(&mut sink);
+    fixture.ui_runtime.render_frame(&mut sink);
+    fixture.ui_runtime.render_frame(&mut sink);
+
+    let seen = seen.lock();
+    assert_eq!(
+        seen.len(),
+        3,
+        "the refused frame is retried, once: {seen:?}"
+    );
+    assert_eq!(seen[1].version, seen[0].version);
+    assert!(seen[1].frames.is_empty(), "the refused frame took nothing");
+    assert_eq!(seen[2].version, seen[0].version, "the retry republishes");
+    assert_eq!(
+        seen[2].frames,
+        [(texture_id(&fixture), 9)],
+        "and the frame reaches the raster side"
+    );
+}
+
 /// A frame the sink did not show leaves its damage owed: the retry is
 /// published against the version still on screen and its damage covers the
-/// texture the unshown frame changed, though the retry itself changes
-/// nothing more.
+/// box the unshown frame changed, though the retry itself changes nothing
+/// more.
 pub(crate) fn a_refused_submit_keeps_its_damage_owed() {
     let fixture = mounted(Placement::Small);
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -318,7 +608,10 @@ pub(crate) fn a_refused_submit_keeps_its_damage_owed() {
         })
     };
     fixture.ui_runtime.render_frame(&mut sink);
-    feed(&fixture.shared, 9);
+    fixture
+        .writer
+        .write(|ctx| fixture.shown.set(ctx, 0))
+        .expect("write");
     fixture.ui_runtime.render_frame(&mut sink);
     fixture.ui_runtime.render_frame(&mut sink);
 
@@ -326,7 +619,7 @@ pub(crate) fn a_refused_submit_keeps_its_damage_owed() {
     assert_eq!(seen.len(), 3, "the refused frame is retried");
     assert!(
         seen[1].0.is_some(),
-        "the texture frame is published against the first"
+        "the change is published against the first"
     );
     assert_eq!(
         seen[2].0, seen[1].0,
@@ -346,6 +639,6 @@ pub(crate) fn a_refused_submit_keeps_its_damage_owed() {
                 && rect.top() <= texture.top()
                 && rect.right() >= texture.right()
                 && rect.bottom() >= texture.bottom()),
-        "the retry still owes the texture the unshown frame changed: {region:?}"
+        "the retry still owes the box the unshown frame changed: {region:?}"
     );
 }

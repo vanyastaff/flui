@@ -67,7 +67,7 @@ fn paragraph_width(ui_runtime: &UiRuntime) -> f64 {
         let paragraph = owner
             .render_tree()
             .iter()
-            .find(|(_, node)| node.debug_name().contains("RenderParagraph"))
+            .find(|(_, node)| node.kind() == "RenderParagraph")
             .map(|(id, _)| id)
             .expect("the Text mounted a RenderParagraph");
         owner
@@ -80,8 +80,8 @@ fn paragraph_width(ui_runtime: &UiRuntime) -> f64 {
 /// The width of every paragraph `scene` paints.
 fn painted_widths(scene: &flui_layer::Scene) -> Vec<f64> {
     scene
-        .tree()
-        .expect("draw_frame flattens the version into a tree")
+        .version()
+        .flatten()
         .iter()
         .filter_map(|(_, node)| match node.layer() {
             flui_layer::Layer::Picture(picture) => Some(picture),

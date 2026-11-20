@@ -288,14 +288,9 @@ mod agent_stability;
 mod agent_wait;
 
 // ========================================================================
-// Frame pipeline, first-frame deferral, and Vsync — migrated from the
-// retired `AppBinding`'s own test module (`binding.rs`, deleted alongside
-// it). These are the frame-loop parity oracle: `draw_frame_entered`'s
-// internal ordering (vsync tick before build, the async-driver
-// mid-frame slot, the pipeline-failure retry path) and the first-frame
-// deferral gate moved to `UiRuntime` verbatim; only the receiver syntax
-// changed (`binding.draw_frame(&ui_runtime, c)` -> `ui_runtime.draw_frame(c)`),
-// never the assertions themselves.
+// Frame pipeline, first-frame deferral, and Vsync: `draw_frame_entered`'s
+// internal ordering (vsync tick before build, the async-driver mid-frame
+// slot, the pipeline-failure retry path) and the first-frame deferral gate.
 mod frame_pipeline_and_vsync;
 
 // ========================================================================
@@ -503,10 +498,14 @@ fn frame_pacing_and_pump_matrix() {
             ("presentation_text_input::a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn", presentation_text_input::a_failure_parked_by_a_platform_grant_reaches_the_next_owner_turn as fn()),
             ("presentation_text_input::a_press_outside_the_field_commits_the_composition_before_its_handlers", presentation_text_input::a_press_outside_the_field_commits_the_composition_before_its_handlers as fn()),
             ("overlay_style::each_style_change_is_delivered_once", overlay_style::each_style_change_is_delivered_once as fn()),
-            ("external_textures::a_fed_frame_repaints_and_reaches_the_raster_side", external_textures::a_fed_frame_repaints_and_reaches_the_raster_side as fn()),
-            ("external_textures::a_fed_frame_damages_only_the_texture", external_textures::a_fed_frame_damages_only_the_texture as fn()),
+            ("external_textures::a_fed_frame_republishes_the_held_version", external_textures::a_fed_frame_republishes_the_held_version as fn()),
+            ("external_textures::a_texture_frame_not_taken_is_published_again", external_textures::a_texture_frame_not_taken_is_published_again as fn()),
             ("external_textures::a_refused_submit_keeps_its_damage_owed", external_textures::a_refused_submit_keeps_its_damage_owed as fn()),
-            ("external_textures::a_hidden_texture_stops_painting_after_one_frame", external_textures::a_hidden_texture_stops_painting_after_one_frame as fn()),
+            ("external_textures::a_hidden_texture_repaints_nothing", external_textures::a_hidden_texture_repaints_nothing as fn()),
+            ("external_textures::a_frame_fed_during_a_submit_is_still_owed", external_textures::a_frame_fed_during_a_submit_is_still_owed as fn()),
+            ("external_textures::a_refused_window_costs_no_texture_frame", external_textures::a_refused_window_costs_no_texture_frame as fn()),
+            ("external_textures::a_texture_frame_while_a_new_size_waits_owes_nothing", external_textures::a_texture_frame_while_a_new_size_waits_owes_nothing as fn()),
+            ("external_textures::a_shown_refused_version_takes_texture_frames_again", external_textures::a_shown_refused_version_takes_texture_frames_again as fn()),
             ("external_textures::unmounting_the_owner_retires_its_texture", external_textures::unmounting_the_owner_retires_its_texture as fn()),
             ("overlay_style::a_refused_frame_announces_nothing", overlay_style::a_refused_frame_announces_nothing as fn()),
             ("overlay_style::a_detached_presentation_resends_its_style", overlay_style::a_detached_presentation_resends_its_style as fn()),
@@ -533,6 +532,7 @@ fn frame_failure_containment_matrix() {
             ("frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_presented_frame", frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_presented_frame as fn()),
             ("frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported", frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported as fn()),
             ("frame_failure_containment::a_panicking_semantics_report_schedules_its_retry", frame_failure_containment::a_panicking_semantics_report_schedules_its_retry as fn()),
+            ("frame_failure_containment::a_frame_reports_its_semantics_diagnostics", frame_failure_containment::a_frame_reports_its_semantics_diagnostics as fn()),
             ("super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene", super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene as fn()),
             ("super::frame_failure_phase_tests::a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry", super::frame_failure_phase_tests::a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry as fn()),
             ("super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt", super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt as fn()),
@@ -561,6 +561,12 @@ fn frame_failure_containment_matrix() {
 // presentation.
 // ========================================================================
 mod text_context;
+
+// ========================================================================
+// The debug overlay is a node of its own: a clip over one chunk of the
+// readout, recorded anew each painted frame.
+// ========================================================================
+mod performance_overlay;
 
 // ========================================================================
 // A face registered on the app's collection re-lays out every ui_runtime's text

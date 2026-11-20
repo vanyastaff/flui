@@ -1,8 +1,8 @@
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::{
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerKind, ScrollPrecision, ScrollUnit,
 };
 
@@ -836,7 +836,7 @@ fn a_burst_keeps_the_spacing_of_the_servers_times() {
 /// to the scale the server says, about the cursor.
 #[test]
 fn a_touchpad_pinch_is_one_pan_zoom() {
-    use flui_platform::pointer::PanZoomPhase;
+    use flui_platform::input::pointer::PanZoomPhase;
     let mut pointers = pointers();
     let at = (30.0, 30.0);
     let update = |scale, rotation| event(XiAction::PinchUpdate { scale, rotation }, TOUCHPAD, at);
@@ -885,7 +885,7 @@ fn a_touchpad_pinch_is_one_pan_zoom() {
 /// of no swipe delivers nothing.
 #[test]
 fn a_touchpad_swipe_is_one_gesture_of_its_fingers() {
-    use flui_platform::pointer::TouchpadSwipePhase;
+    use flui_platform::input::pointer::TouchpadSwipePhase;
     const TWO: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {
         Some(ratio) => ratio,
         None => panic!("BUG: 2 is a ratio a screen can have"),
@@ -945,7 +945,7 @@ fn a_touchpad_swipe_is_one_gesture_of_its_fingers() {
 /// is a whole swipe of its own fingers.
 #[test]
 fn a_swipe_ended_on_another_window_is_cancelled_on_its_own() {
-    use flui_platform::pointer::TouchpadSwipePhase;
+    use flui_platform::input::pointer::TouchpadSwipePhase;
     const OTHER: NativeSurface = NativeSurface(2);
     let mut pointers = pointers();
     let at = (10.0, 10.0);
@@ -1172,7 +1172,7 @@ fn a_run_of_motions_is_one_move_through_them() {
     }
     let moved = |x: f64, through: &[f64]| Heard::Move(x, through.to_vec());
     // The positions a long burst's move keeps: the latest before its own.
-    let kept = u32::try_from(flui_platform::pointer::PointerMove::COALESCED_HISTORY_LIMIT)
+    let kept = u32::try_from(flui_platform::input::pointer::PointerMove::COALESCED_HISTORY_LIMIT)
         .expect("the limit fits");
     // (case, the run, what the window hears)
     let table: [(&str, Vec<XiEvent>, Vec<Heard>); 5] = [

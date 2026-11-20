@@ -353,7 +353,9 @@ impl UiRuntime {
     #[must_use]
     pub fn presentation_device_pixel_ratio_for_test(&self, id: PresentationId) -> Option<f64> {
         self.presentations.get(id).map(|presentation| {
-            flui_rendering::binding::RendererBinding::root_pipeline_owner(presentation.renderer())
+            presentation
+                .renderer()
+                .root_pipeline_owner()
                 .with(flui_rendering::PipelineOwner::device_pixel_ratio)
                 .get()
         })
@@ -824,14 +826,14 @@ impl UiRuntime {
 
 /// One OS drag session to start, with the drag source of the window it starts in.
 pub(crate) struct OsDragEntry {
-    source: Option<std::sync::Arc<dyn flui_platform::drag::PlatformDragSource>>,
+    source: Option<std::sync::Arc<dyn flui_platform::transfer::drag::PlatformDragSource>>,
     pending: flui_interaction::drag::PendingOsDrag,
 }
 
 /// A drag whose OS session could not start, to send back to its window.
 pub(crate) type OsDragRefusal = (
-    flui_platform::drag::DragSessionKey,
-    flui_platform::drag::DragError,
+    flui_platform::transfer::drag::DragSessionKey,
+    flui_platform::transfer::drag::DragError,
 );
 
 /// Start every one of `entries`, with the runtime released, so the OS loop a

@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::actions::{
@@ -180,10 +180,7 @@ impl StatelessView for RawButton {
         let mut node = InteractiveNode::new(self.child.clone())
             .behavior(HitTestBehavior::Opaque)
             .enabled(enabled)
-            .focus(FocusConfig {
-                debug_label: Some("RawButton"),
-                ..FocusConfig::new()
-            })
+            .focus(FocusConfig::labelled("RawButton"))
             .focus_ring()
             .bindings([
                 ActionBinding::shared::<ActivateIntent, Press>(&press),

@@ -948,13 +948,14 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # perf-gates — what a frame costs, by counts that do not depend on the
-  # runner: `cargo xtask perf --check` compares every perf scenario's frame
-  # counters and allocations with crates/flui-widgets/perf/baseline/, and
-  # `--instructions --check` runs each `perf_scaling_` scenario on its small
-  # and large tree under callgrind and fails when the large one costs more
-  # than 5% over the small. The scenarios' own assertions (equal allocations
-  # on both sizes) run on every PR with flui-widgets' suite; the baseline
-  # comparison and callgrind run in `full`.
+  # runner: with FLUI_PERF_BASELINE=check every perf scenario holds its frame
+  # counters and allocations to crates/flui-widgets/perf/baseline/ (the
+  # comparison is the perf target's `baseline` module), and each
+  # `perf_scaling_` scenario runs on its small and large tree under callgrind,
+  # failing when the large one costs more than 5% over the small. The
+  # scenarios' own assertions (equal allocations on both sizes) run on every
+  # PR with flui-widgets' suite; the baseline comparison and callgrind run in
+  # `full`.
   # ─────────────────────────────────────────────────────────────────────────
   perf-gates:
     name: perf-gates
@@ -988,20 +989,99 @@ jobs:
         with:
           packages: valgrind
 
-      - name: cargo xtask perf --check
-        run: cargo xtask perf --check
+      # flui-widgets alone, with its default features: the heap counters move
+      # with the features a workspace run unifies into it. Each scenario also
+      # writes its counts to FLUI_PERF_OUT, which a run with no mode does not.
+      - name: cargo nextest run the perf scenarios against their baseline
+        run: cargo nextest run --locked -p flui-widgets --test perf --no-fail-fast -E 'test(/^perf_/)'
+        env:
+          FLUI_PERF_BASELINE: check
+          FLUI_PERF_OUT: ${{ runner.temp }}/perf-records
 
-      - name: cargo xtask perf --instructions --check
-        run: cargo xtask perf --instructions --check
+      # The scenarios hold only what they ran: a baseline file with no record
+      # is a scenario that no longer runs or no longer reaches `baseline::hold`,
+      # and fails here. A record that differs from its file in a cost that fell
+      # passed the check above; its diff is printed so a bless on main follows.
+      - name: Every baseline file was held, and what moved
+        if: ${{ !cancelled() }}
+        env:
+          RECORDS: ${{ runner.temp }}/perf-records
+        run: |
+          set -euo pipefail
+          counts() { grep -v '^#' "$1" | sed '/^$/d'; }
+          failed=0
+          for file in crates/flui-widgets/perf/baseline/*.toml; do
+            record="$RECORDS/$(basename "$file")"
+            if [ ! -f "$record" ]; then
+              echo "::error::no scenario reached baseline::hold for $file in this run: it stopped running, failed before holding, or the mode variable is unset"
+              failed=1
+            elif ! diff -u --label "$file" --label "this run" <(counts "$file") <(counts "$record"); then
+              echo "::notice::$(basename "$file" .toml) moved: the check step judged it (a cost that fell passes there and is lowered by a bless on main)"
+            fi
+          done
+          exit "$failed"
+
+      # Instructions are collected only while `perf_measured` runs, so a count
+      # of zero means the window was renamed or skipped and fails. The libtest
+      # harness's own lines go to stdout, kept apart from callgrind's stderr.
+      # The products below stay far inside 64 bits: a count is tens of millions.
+      - name: callgrind each perf_scaling_ scenario on its small and large tree
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          binary=$(cargo test --locked -p flui-widgets --test perf --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "perf") | .executable // empty' \
+            | tail -n 1)
+          if [ ! -x "$binary" ]; then
+            echo "::error::cargo reported no executable for the perf target"
+            exit 1
+          fi
+          scenarios=$("$binary" --list --format terse | sed -n 's/^\(perf_scaling_[A-Za-z0-9_]*\): test$/\1/p')
+          if [ -z "$scenarios" ]; then
+            echo "::error::the perf target has no perf_scaling_ scenario"
+            exit 1
+          fi
+          logs=$RUNNER_TEMP/callgrind
+          mkdir -p "$logs"
+          collect() {  # collect <scenario> <size>: the instructions of its measured window
+            local log="$logs/$1.$2.log" count
+            if ! FLUI_PERF_SIZE=$2 valgrind --tool=callgrind \
+                --callgrind-out-file="$logs/$1.$2.callgrind" \
+                --toggle-collect='*perf_measured*' \
+                "$binary" --exact "$1" --test-threads=1 > "$log.out" 2> "$log"; then
+              cat "$log.out" "$log" >&2
+              echo "::error::$1 ($2) failed under callgrind" >&2
+              return 1
+            fi
+            count=$(sed -n 's/.*Collected : *\([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)
+            if [ -z "$count" ] || (( count == 0 )); then
+              echo "::error::callgrind collected nothing inside perf_measured for $1 ($2): '${count:-no Collected line}'" >&2
+              return 1
+            fi
+            echo "$count"
+          }
+          failed=0
+          printf '%-64s %12s %12s\n' scenario small large
+          for scenario in $scenarios; do
+            small=$(collect "$scenario" small)
+            large=$(collect "$scenario" large)
+            verdict=
+            if (( large * 100 > small * 105 )); then
+              verdict="  GROWS"
+              echo "::error::$scenario costs $large instructions on the large tree, more than 5% over the small tree's $small"
+              failed=1
+            fi
+            printf '%-64s %12s %12s%s\n' "$scenario" "$small" "$large" "$verdict"
+          done
+          exit "$failed"
 
   # ─────────────────────────────────────────────────────────────────────────
   # size — what an application costs before it does anything: the release
   # builds of projects `flui create --local` generates, with the profile the
   # templates write (a counter on Linux and its wasm32 module, and the host of
-  # a `--hot-reload` project), each within 2% of perf/size.toml, and the
-  # default graph's package counts (`cargo xtask perf --size --check`). Three
-  # cold release builds, so main runs them, on every push, where one push may
-  # grow a binary by 0.5% over the commit before it.
+  # a `--hot-reload` project), each within 2% of perf/size.toml. Three cold
+  # release builds, so main runs them; the default graph's package counts in
+  # the same file are the `deps` job's.
   # ─────────────────────────────────────────────────────────────────────────
   size:
     name: size
@@ -1027,60 +1107,87 @@ jobs:
           shared-key: workspace-size-v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # A push to main compares its sizes with the commit before it
-      # (`github.event.before`) as well as with the baseline: the baseline's 2%
-      # is cumulative, so merges that each add a little pass until a later one
-      # crosses it. Each push's measurement is a cache entry keyed by its
-      # commit and saved from main only, failing pushes included; a re-run
-      # reads the same parent, so it fails again until the growth is answered.
-      # A parent whose run was cancelled or skipped has no entry, and the push
-      # is compared with the baseline alone. One file serves both options:
-      # xtask reads the parent's measurement before it records this one.
-      - name: Restore the previous commit's sizes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/size-step/measurement.toml
-          key: size-step-${{ github.event.before }}
-
-      - name: cargo xtask perf --size --check
-        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
-        run: cargo xtask perf --size --check
-
-      - name: cargo xtask perf --size --check against the previous commit
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: >-
-          cargo xtask perf --size --check
-          --previous target/size-step/measurement.toml
-          --parent "$PARENT"
-          --record target/size-step/measurement.toml
-        env:
-          PARENT: ${{ github.event.before }}
-
-      # Only a file this commit wrote is saved under its key: a run that failed
-      # before it measured still holds the parent's file.
-      - name: Check this commit recorded its sizes
-        id: recorded
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Each project is generated outside the checkout, so its own release
+      # profile applies and the checkout's `.cargo/` does not; its lock starts
+      # from the checkout's, so it resolves the versions the workspace does.
+      # Every project builds into one target directory: they share the profile
+      # and the dependency graph. A binary fails past 2% over its line, a
+      # tolerance for the growth every change to linked code brings, and warns
+      # past 2% under it, so the line follows a fall. A line is moved by hand
+      # from this step's log, with the reason in the pull request (AGENTS.md
+      # "Before each push", item 14).
+      - name: Build the generated projects in release and compare their sizes
         run: |
-          if grep -qx "commit = \"$GITHUB_SHA\"" target/size-step/measurement.toml 2>/dev/null; then
-            echo "measured=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Save this commit's sizes
-        if: always() && steps.recorded.outputs.measured == 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/size-step/measurement.toml
-          key: size-step-${{ github.sha }}
+          set -euo pipefail
+          shopt -s inherit_errexit
+          projects=$RUNNER_TEMP/size-projects
+          target_dir=$PWD/target/perf-size-projects
+          mkdir -p "$projects"
+          create() {  # create <name> [flui create flags...]
+            cargo run --locked --quiet --package flui-cli --bin flui -- create "$1" \
+              --template counter --org com.perf --local --no-check --path "$projects" "${@:2}"
+            cp Cargo.lock "$projects/$1/Cargo.lock"
+            # Records the project's own members in the copied lock and moves
+            # no registry version, so the builds below can be --locked.
+            (cd "$projects/$1" && cargo update --workspace --offline --quiet)
+          }
+          # size_of <project> <binary> [<target>]: the bytes of the binary
+          # Cargo reports for this build (a wasm32 module is the `.wasm` among
+          # its files), never a path guessed under the target directory.
+          size_of() {
+            local artifact
+            artifact=$(cd "$projects/$1" \
+              && cargo build --locked --release --package "$2" --bin "$2" \
+                --target-dir "$target_dir" ${3:+--target "$3"} \
+                --message-format json-render-diagnostics \
+              | jq -r --arg name "$2" 'select(.reason == "compiler-artifact"
+                  and .target.name == $name and (.target.kind | index("bin")))
+                  | .executable // (.filenames[] | select(endswith(".wasm")))' \
+              | tail -n 1)
+            if [ ! -f "$artifact" ]; then
+              echo "::error::the build reported no executable for $2" >&2
+              return 1
+            fi
+            stat -c %s "$artifact"
+          }
+          create perf-counter
+          create perf-reload --hot-reload
+          # One assignment each, so a failed build stops the step (`set -e`).
+          declare -A bytes
+          bytes[counter_release_bytes]=$(size_of perf-counter perf-counter)
+          bytes[counter_wasm_bytes]=$(size_of perf-counter perf-counter wasm32-unknown-unknown)
+          bytes[hot_reload_host_release_bytes]=$(size_of perf-reload perf-reload-host)
+          failed=0
+          {
+            echo "### Release sizes"
+            echo
+            echo "| counter | perf/size.toml | this commit |"
+            echo "|---|---:|---:|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for counter in counter_release_bytes counter_wasm_bytes hot_reload_host_release_bytes; do
+            current=${bytes[$counter]}
+            base=$(sed -n "s/^$counter = \([0-9][0-9]*\)$/\1/p" perf/size.toml)
+            echo "$counter = $current  (perf/size.toml: ${base:-none})"
+            echo "| \`$counter\` | ${base:--} | $current |" >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "$base" ]; then
+              echo "::error::perf/size.toml has no $counter line"
+              failed=1
+            elif (( current * 100 > base * 102 )); then
+              echo "::error::$counter is $current bytes, more than 2% over perf/size.toml's $base"
+              failed=1
+            elif (( current * 100 < base * 98 )); then
+              echo "::warning::$counter is $current bytes, more than 2% under perf/size.toml's $base; lower the line"
+            fi
+          done
+          exit "$failed"
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — cargo-deny over every workspace member (bans, licenses and sources
   # against deny.toml, advisories against RustSec; `--workspace` because the
   # root manifest is the `flui` package, whose graph alone misses flui-cli, the
   # examples and the tools). Its advisories read the same RustSec database
-  # cargo-audit does, so cargo-audit is not run beside it. Nothing compiles
-  # but xtask, for the graph step. A dependency no code uses, a test-only one
+  # cargo-audit does, so cargo-audit is not run beside it. Nothing compiles:
+  # the last step counts packages with `cargo tree`. A dependency no code uses, a test-only one
   # declared as a normal one and a [workspace.dependencies] entry nothing
   # inherits are cargo's `unused_dependencies` lint, which CARGO_BUILD_WARNINGS
   # above makes fatal in every job that builds. Two steps, split by what
@@ -1124,20 +1231,38 @@ jobs:
         continue-on-error: ${{ github.event_name == 'pull_request' }}
         run: cargo deny --workspace --locked check advisories
 
-      - name: Rust cache (xtask)
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: false
-
-      # The packages of the facade's default graph on each target, against
-      # perf/size.toml (`cargo tree` only, nothing builds). A pull request that
-      # adds a package to an application's default graph fails here until
-      # `cargo xtask perf --size --bless` records it; the binary sizes of the
-      # same baseline are the `size` job's.
-      - name: cargo xtask perf --size --graph --check
-        run: cargo xtask perf --size --graph --check
+      # The distinct packages (`name version`) of the facade's default graph on
+      # each target, normal edges only, against perf/size.toml's
+      # `crates_<target>` lines (`cargo tree` only, nothing builds). A count is
+      # a function of Cargo.lock and the manifests, so it has to equal its
+      # line: a pull request that adds a package to an application's default
+      # graph raises the line and says why (AGENTS.md "Before each push", item
+      # 14), and one that removes a package lowers it, so no slack is left for
+      # the next. The binary sizes of the same file are the `size` job's.
+      - name: Count the facade's default graph on each target
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          failed=0
+          for pair in linux:x86_64-unknown-linux-gnu windows:x86_64-pc-windows-msvc \
+              macos:aarch64-apple-darwin android:aarch64-linux-android \
+              wasm32:wasm32-unknown-unknown; do
+            name=${pair%%:*}
+            triple=${pair#*:}
+            count=$(cargo tree --locked --quiet --edges normal --prefix none --package flui \
+                --target "$triple" \
+              | awk 'NF >= 2 { print $1, $2 }' | LC_ALL=C sort -u | wc -l)
+            base=$(sed -n "s/^crates_$name = \([0-9][0-9]*\)$/\1/p" perf/size.toml)
+            echo "crates_$name = $count  (perf/size.toml: ${base:-none})"
+            if [ -z "$base" ]; then
+              echo "::error::perf/size.toml has no crates_$name line"
+              failed=1
+            elif (( count != base )); then
+              echo "::error::the facade's default graph on $triple has $count packages; perf/size.toml says $base: set crates_$name = $count and say why"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
@@ -1396,14 +1521,16 @@ jobs:
   #                test targets, `flui-hot-reload` with every feature and the
   #                facade's `wasm_consumer`. It is the only lint over
   #                flui-native's wasm32-only web backend.
-  #   wasm-link  — really links the two web demos and checks their import
-  #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
-  #                on wasm32 an undefined symbol becomes an import, not a link
-  #                error.
-  #   wasm-test  — EXECUTES the wasm32 tests on node. Everything before it only
-  #                compiles; swapping `web_time::Instant` for std's stays green
-  #                there and panics at run time (issue #985).
-  #   then the DOM tests in headless Chrome, which node is not (below).
+  #   build      — really links the two web demos: `cargo check` does not
+  #                link, and an undefined symbol fails the link.
+  #   imports    — wasm-bindgen over each demo, and node lists the modules it
+  #                imports from: only wasm-bindgen's own two may appear.
+  #   test       — EXECUTES the wasm32 tests, each target on its own, on node
+  #                or, for a crate whose tests ask for a browser (flui-native's
+  #                DOM tests among them), in the job's headless Chrome.
+  #                Everything before it only compiles; swapping
+  #                `web_time::Instant` for std's stays green there and panics
+  #                at run time (issue #985).
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check
@@ -1449,76 +1576,196 @@ jobs:
           cargo check -p flui-hot-reload --locked --target "$target" --all-features
           cargo clippy -p flui --test wasm_consumer --locked --target "$target" -- -D warnings
 
-      - name: cargo xtask wasm-link
-        run: cargo xtask wasm-link
+      # `cargo check` does not link. rustc stopped passing `--allow-undefined`
+      # to the wasm linker in 1.96 (rust-lang/rust#149868), so an undefined
+      # symbol, such as an accidental native extern, fails this link instead
+      # of becoming an import no host provides.
+      - name: cargo build the web demos
+        run: cargo build --locked --target wasm32-unknown-unknown -p flui-web-demo -p flui-painting-demo
 
       # The test runner must equal the LOCKED wasm-bindgen exactly or it
-      # refuses to start. Installing the prebuilt binary here saves
-      # `cargo xtask wasm-test` from compiling it.
+      # refuses to start, so its version comes from Cargo.lock: a dependency
+      # bump moves the tool with the lock. With every feature, `cargo metadata`
+      # lists every package the lock holds, as `cargo xtask doctor full` reads.
       - name: Resolve the locked wasm-bindgen version
         id: wasm_bindgen_version
         run: |
-          set -euo pipefail
-          version="$(cargo xtask locked-version wasm-bindgen)"
+          set -o pipefail
+          version=$(cargo metadata --locked --all-features --format-version 1 | jq -er '
+            [.packages[] | select(.name == "wasm-bindgen") | .version] | unique
+            | if length == 1 then .[0]
+              else error("Cargo.lock pins \(length) wasm-bindgen versions, the runner matches one")
+              end')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "locked wasm-bindgen: $version"
 
       - name: Install wasm-bindgen-cli (matching the lockfile)
+        id: test_runner
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
 
-      - name: cargo xtask wasm-test
-        run: cargo xtask wasm-test
+      # The demos as a web build takes them. wasm-bindgen processes each (a
+      # binding it cannot generate fails here), and node compiles the linked
+      # module and lists the modules it imports from, which may only be
+      # wasm-bindgen's own two: the linker refuses an undefined symbol, but an
+      # extern that names its module (`#[link(wasm_import_module = …)]`), in
+      # the code the two demos link (the workspace crates they use and their
+      # dependencies), still links as an import no page provides.
+      - name: wasm-bindgen and the import modules of the web demos
+        run: |
+          target_dir=$(cargo metadata --locked --no-deps --format-version 1 | jq -r .target_directory)
+          status=0
+          for artifact in flui_web_demo flui_painting_demo; do
+            module="$target_dir/wasm32-unknown-unknown/debug/$artifact.wasm"
+            if ! wasm-bindgen --target web --out-dir "$RUNNER_TEMP/bindgen/$artifact" "$module"; then
+              echo "::error::wasm-bindgen refused $artifact"
+              status=1
+              continue
+            fi
+            node -e '
+              const [file, name] = process.argv.slice(1);
+              const allowed = new Set(["__wbindgen_placeholder__", "__wbindgen_externref_xform__"]);
+              const modulesOf = (bytes) => [...new Set(
+                WebAssembly.Module.imports(new WebAssembly.Module(bytes)).map((i) => i.module))];
+              // A module importing one function from "env": the check must
+              // refuse it, or it refuses nothing.
+              const canary = Uint8Array.of(0, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+                1, 4, 1, 0x60, 0, 0, 2, 9, 1, 3, 0x65, 0x6e, 0x76, 1, 0x66, 0, 0);
+              if (modulesOf(canary).filter((m) => !allowed.has(m)).join() !== "env") {
+                console.log("::error::the import check no longer refuses a module importing from env");
+                process.exit(1);
+              }
+              const modules = modulesOf(require("fs").readFileSync(file));
+              const unexpected = modules.filter((m) => !allowed.has(m));
+              if (unexpected.length > 0) {
+                console.log("::error::" + name + " imports from "
+                  + unexpected.map((m) => JSON.stringify(m)).join(", ")
+                  + ", which no web build provides");
+                process.exit(1);
+              }
+              console.log(name + " imports only from " + modules.join(", "));
+            ' "$module" "$artifact" || status=1
+          done
+          exit "$status"
 
-      # The web backend's DOM side needs a browser, which node is not, so
-      # `wasm-test` leaves `flui-native` alone and its `web_browser` target
-      # runs here in headless Chrome. It reuses this job's wasm dependency
-      # build, and the suite itself runs in about a second.
+      # The runner drives a browser through the driver its environment names;
+      # without one it takes whatever driver the runner image has on PATH.
+      # Chrome for Testing at an exact release, bumped deliberately like the
+      # other tools: a stable release of the day could turn main red with no
+      # commit at fault.
       - name: Install Chrome + matching ChromeDriver
         id: chrome
         uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
         with:
+          chrome-version: 158.0.8127.36
           install-chromedriver: true
 
-      - name: cargo test -p flui-native --test web_browser (headless Chrome)
+      - name: Write the headless Chrome capabilities
+        id: capabilities
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-          CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
         run: |
-          set -euo pipefail
-          capabilities="$RUNNER_TEMP/webdriver.json"
           jq -n --arg binary "$CHROME_PATH" '{"goog:chromeOptions": {binary: $binary,
             args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]}}' \
-            > "$capabilities"
-          WASM_BINDGEN_TEST_WEBDRIVER_JSON="$capabilities" \
-            cargo test -p flui-native --target wasm32-unknown-unknown --test web_browser --locked
+            > "$RUNNER_TEMP/webdriver.json"
 
-      # The system services' web providers (`flui-system`'s `web::tests`, in
-      # its lib test: they drive the providers' private seams) on the same
-      # headless Chrome: the pickers, the launcher and the badge, with no
-      # picker or window opened.
-      - name: cargo test -p flui-system --lib (headless Chrome)
+      # `.cargo/config.toml` names `wasm-bindgen-test-runner` as the wasm32
+      # runner, so `cargo test` runs the tests on node, or in the headless
+      # Chrome above for a crate whose tests are `run_in_browser`. A crate
+      # opts in with a wasm32 dev-dependency on wasm-bindgen-test, where its
+      # author already declares the intent: its lib test runs, and its
+      # `tests/wasm32.rs` when it has one. Everything before this step only
+      # compiles; swapping `web_time::Instant` for std's stays green there and
+      # panics here (issue #985). A target whose run executes no assertion
+      # fails: it opted in to nothing, and a healthy sibling would hide it in
+      # a total. flui-native's `web_browser` target runs in the same loop. It
+      # needs only the runner, Chrome and its capabilities, so a failed import
+      # step does not hide a failure here.
+      - name: cargo test for wasm32
+        if: >-
+          ${{ !cancelled() && steps.test_runner.outcome == 'success'
+          && steps.chrome.outcome == 'success' && steps.capabilities.outcome == 'success' }}
         env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          # the wasm lib-test build has dead code (its callers are the
+          # native-only test modules); the shipping build is linted above
+          CARGO_BUILD_WARNINGS: warn
           CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
         run: |
-          set -euo pipefail
-          capabilities="$RUNNER_TEMP/webdriver.json"
-          jq -n --arg binary "$CHROME_PATH" '{"goog:chromeOptions": {binary: $binary,
-            args: ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]}}' \
-            > "$capabilities"
-          WASM_BINDGEN_TEST_WEBDRIVER_JSON="$capabilities" \
-            cargo test -p flui-system --target wasm32-unknown-unknown --lib --features testing --locked
+          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$RUNNER_TEMP/webdriver.json"
+          set -o pipefail
+          # cargo's resolver, filtered to wasm32, keeps a dependency only when it
+          # is active there, so a package whose only edge to wasm-bindgen-test is
+          # a non-wasm32 table does not opt in (an edge another, wasm32-active
+          # kind keeps still lists its dev kind)
+          list=$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown \
+            | jq -r '
+              .workspace_members as $members
+              | [.packages[] | select(.name == "wasm-bindgen-test") | .id] as $testing
+              | [.resolve.nodes[]
+                  | select(.id as $id | $members | index($id))
+                  # the package a dependency resolves to, which a renamed
+                  # dependency keeps; its id is opaque, so joined, not parsed
+                  | select(any(.deps[]; .pkg as $dep
+                      | ($testing | index($dep)) and any(.dep_kinds[]; .kind == "dev")))
+                  | .id] as $opted
+              | .packages[]
+              | select(.id as $id | $opted | index($id))
+              | [.name, any(.targets[]; .name == "wasm32" and (.kind | index("test")))]
+              | @tsv')
+          # a loop over nothing passes, which looks exactly like success
+          [ -n "$list" ] || { echo "::error::no crate declares a wasm32 wasm-bindgen-test dev-dependency"; exit 1; }
+          # One run per test target, each counted on its own: a package's lib
+          # target may hold no wasm32 test when its `wasm32` target holds them,
+          # and every other target must pass at least one.
+          runs="$RUNNER_TEMP/wasm-runs.tsv"
+          {
+            while IFS=$'\t' read -r package integration; do
+              if [ "$integration" = true ]; then
+                printf '%s\t--lib\toptional\n' "$package"
+                printf '%s\t--test wasm32\trequired\n' "$package"
+              else
+                printf '%s\t--lib\trequired\n' "$package"
+              fi
+            done <<< "$list"
+            # flui-native's DOM producer needs a browser; no discovery
+            # selects this target, so it is named here
+            printf 'flui-native\t--test web_browser\trequired\n'
+          } > "$runs"
+          log="$RUNNER_TEMP/wasm-test.log"
+          status=0
+          while IFS=$'\t' read -r package target need; do
+            read -ra args <<< "$target"
+            echo "::group::$package $target"
+            # stdin is the list of runs: the runner must not read it
+            if ! cargo test -p "$package" --locked --target wasm32-unknown-unknown "${args[@]}" \
+                < /dev/null 2>&1 | tee "$log"; then
+              echo "::endgroup::"
+              echo "::error::$package $target failed on wasm32"
+              status=1
+              continue
+            fi
+            echo "::endgroup::"
+            passed=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' "$log" \
+              | awk '{ sum += $1 } END { print sum + 0 }')
+            echo "$package $target: $passed wasm32 assertions passed"
+            if [ "$passed" -eq 0 ] && [ "$need" = required ]; then
+              echo "::error::$package $target executed no wasm32 assertion"
+              status=1
+            fi
+          done < "$runs"
+          exit "$status"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # cross-typecheck — source-derived native package selection, including
-  # each selected package's tests, examples and benches. Clippy does not
-  # execute native targets, but C build scripts still need target headers.
-  # Linux uses MSVC cross tools and the bundled NDK. Both Apple targets use
-  # genuine Xcode SDKs, including os/log.h for optional macOS logging.
-  # Runtime and GPU validation remain local; a green leg proves compilation
-  # under the enabled features, not native runtime behavior.
+  # cross-typecheck — clippy over the whole workspace for each shipped native
+  # triple, with its tests, examples and benches: once with default features,
+  # as the `clippy` job runs on Linux, then with every feature, which reaches
+  # the `testing` code and the targets behind `required-features`. Clippy does
+  # not execute native targets, but C build scripts still need target headers.
+  # Linux uses MSVC cross tools (cargo-xwin) and the bundled NDK. Both Apple
+  # targets use genuine Xcode SDKs, including os/log.h for optional macOS
+  # logging. Runtime and GPU validation remain local; a green leg proves
+  # compilation under the enabled features, not native runtime behavior.
   # ─────────────────────────────────────────────────────────────────────────
   cross-typecheck:
     name: cross-typecheck (${{ matrix.target }})
@@ -1526,18 +1773,31 @@ jobs:
     if: needs.plan.outputs.lane == 'full'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # The cargo-xwin release, which fixes the default MSVC version and so
+      # names the SDK cache. Not `XWIN_VERSION`: cargo-xwin reads that as its
+      # own `--xwin-version`, the MSVC manifest's version.
+      CARGO_XWIN_VERSION: 0.23.1
     strategy:
       fail-fast: false
       matrix:
+        # `clippy` is the cargo subcommand: cargo-xwin supplies the MSVC SDK
+        # headers stacker's C shim includes, even without linking.
         include:
           - target: x86_64-pc-windows-msvc
             os: ubuntu-26.04
+            clippy: xwin clippy
           - target: aarch64-apple-darwin
             os: macos-26
+            clippy: clippy
           - target: aarch64-linux-android
             os: ubuntu-26.04
+            clippy: clippy
+          # The device triple, not `-sim`: the two differ in the slice, not
+          # in the API surface a lint sees.
           - target: aarch64-apple-ios
             os: macos-26
+            clippy: clippy
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1555,65 +1815,79 @@ jobs:
           packages: clang llvm
           commands: clang clang-cl llvm-ar llvm-lib
 
-      # The driver build the checks job saves; restored before the NDK step,
-      # whose CC_/AR_ variables would change the key. Without it each Linux
-      # leg built the driver from scratch (1.5-3 min).
-      - name: Rust cache (xtask)
-        if: runner.os == 'Linux'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: false
-
+      # The C compiler is the NDK's wrapper for the API floor
+      # platform-support.toml states, the level an APK declares as minSdk.
       - name: Configure bundled Android NDK
         if: matrix.target == 'aarch64-linux-android'
         run: |
+          api=$(sed -n '/^\[android\]/,/^\[/s/^api = \([0-9][0-9]*\)$/\1/p' platform-support.toml)
+          [ -n "$api" ] || { echo "::error::no [android] api in platform-support.toml"; exit 1; }
           tools="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          test -x "$tools/aarch64-linux-android21-clang"
+          test -x "$tools/aarch64-linux-android$api-clang"
           test -x "$tools/llvm-ar"
-          echo "CC_aarch64_linux_android=$tools/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$tools/aarch64-linux-android$api-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$tools/llvm-ar" >> "$GITHUB_ENV"
 
       # stacker's Windows C shim includes windows.h. cargo-xwin provisions
       # the MSVC SDK/CRT for clang-cl while retaining the shipped MSVC triple.
+      # XWIN_CACHE_DIR is where it keeps them, for every later step.
       - name: Install cargo-xwin
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-xwin@0.23.1
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
+
+      - name: Name the MSVC CRT and Windows SDK directory
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: echo "XWIN_CACHE_DIR=$RUNNER_TEMP/cargo-xwin" >> "$GITHUB_ENV"
 
       # cargo-xwin downloads the MSVC CRT and Windows SDK on first use, 7-13
       # minutes from Microsoft's servers, then marks the directory DONE. The
       # splatted result is 1.1 GB on disk, about 260 MB compressed. The key
-      # names the cargo-xwin release, which fixes the default MSVC version;
-      # the cache is saved from main only, after a complete download.
+      # names the cargo-xwin release; the cache is saved from main only, after
+      # a complete download.
       - name: Restore MSVC CRT and Windows SDK
         id: xwin-cache
         if: matrix.target == 'x86_64-pc-windows-msvc'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/cargo-xwin
-          key: cargo-xwin-0.23.1-${{ runner.os }}
+          path: ${{ env.XWIN_CACHE_DIR }}
+          key: cargo-xwin-${{ env.CARGO_XWIN_VERSION }}-${{ runner.os }}
 
-      - name: Lint source-derived native targets
-        run: cargo xtask cross-typecheck --target "$NATIVE_TARGET"
+      - name: cargo clippy for the target
+        run: |
+          read -ra clippy <<< "$CLIPPY"
+          cargo "${clippy[@]}" --workspace --all-targets --locked --target "$NATIVE_TARGET" -- -D warnings
         env:
+          CLIPPY: ${{ matrix.clippy }}
           NATIVE_TARGET: ${{ matrix.target }}
-          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
+
+      # cargo-xwin writes DONE into its cache once the download is complete; the
+      # save waits for that, not for the lint after it.
+      - name: Check the MSVC CRT and Windows SDK download finished
+        id: xwin-done
+        if: ${{ !cancelled() && matrix.target == 'x86_64-pc-windows-msvc' && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true' }}
+        run: |
+          if [ -n "$(find "$XWIN_CACHE_DIR" -name DONE -print -quit 2>/dev/null)" ]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Save MSVC CRT and Windows SDK
-        if: matrix.target == 'x86_64-pc-windows-msvc' && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.xwin-done.outputs.done == 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/cargo-xwin
+          path: ${{ env.XWIN_CACHE_DIR }}
           key: ${{ steps.xwin-cache.outputs.cache-primary-key }}
 
-      - name: Lint optional native features
-        run: cargo xtask cross-typecheck --target "$NATIVE_TARGET" --all-features
+      # Runs after a failed default-features run too, so one run shows both.
+      - name: cargo clippy for the target, every feature
+        if: ${{ !cancelled() }}
+        run: |
+          read -ra clippy <<< "$CLIPPY"
+          cargo "${clippy[@]}" --workspace --all-targets --all-features --locked --target "$NATIVE_TARGET" -- -D warnings
         env:
+          CLIPPY: ${{ matrix.clippy }}
           NATIVE_TARGET: ${{ matrix.target }}
-          XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — the one required check: red when a job it needs failed or was

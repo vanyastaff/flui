@@ -15,17 +15,17 @@
 //! resolved at render time**: `paint` publishes this node's own laid-out
 //! size onto the pushed `Layer::Follower` (mirroring how
 //! `RenderLeaderLayer` publishes its size), and `flui-engine`'s
-//! `layer_walk` resolves the actual pixel offset against the
-//! frame's scene, which indexes its leaders — see
-//! `flui_layer::resolve_follower_transform`, which takes the leader's full transform
+//! `layer_walk` resolves the actual pixel offset against the applied
+//! scene version, which indexes its leaders — see
+//! `SceneVersion::follower_transform`, which takes the leader's full transform
 //! (scale and rotation included) and, under [`LeaderClip::Hide`], hides the
 //! follower while the leader's anchor is clipped out.
 //!
 //! **Hit-testing now consults that same resolved position** (flui-rendering ARCHITECTURE.md, follower hit-testing):
 //! `PipelineOwner` retains a `RenderId`-keyed side table of
-//! composite-resolved follower transforms, populated post-paint by resolving
-//! each paint-phase-correlated follower with the identical
-//! `resolve_follower_transform` the GPU path uses. The hit-test walk
+//! composite-resolved follower transforms, refilled each time a paint is
+//! applied (`scene_applied`) by reading each paint-correlated follower off
+//! that version with the `follower_transform` the GPU path uses. The hit-test walk
 //! (`PipelineOwner::hit_test_subtree_impl`) reads that side table
 //! generically — pushing the resolved transform's inverse onto the
 //! `HitTestResult` transform stack and mapping the position handed into
@@ -35,7 +35,7 @@
 //! forward — the resolved-position shift is applied by the WALK, not the
 //! object — and a hidden follower (unlinked and not shown, or its leader clipped out)
 //! has its subtree skipped entirely by that same walk, mirroring
-//! `resolve_follower_transform -> None -> don't descend` on the render path.
+//! `follower_transform -> None -> don't descend` on the render path.
 //! See the follower hit-testing mapping decision in flui-rendering's ARCHITECTURE.md.
 //!
 //! # Rust-native shape
@@ -53,8 +53,8 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
+use flui_layer::{FollowerLayer, LayerLink, LeaderClip};
 use flui_painting::Alignment;
-use flui_rendering::layer::{FollowerLayer, LayerLink, LeaderClip};
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintContext},

@@ -7,7 +7,8 @@ use crate::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
 use crate::{
-    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics,
+    input::pointer::DeviceId,
 };
 
 /// What a request asked a [`FakeHaptics`] to play.
@@ -182,9 +183,5 @@ impl PlatformHaptics for FakeHaptics {
 
     fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
         self.state().capabilities
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

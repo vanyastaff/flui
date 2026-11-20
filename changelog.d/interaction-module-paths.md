@@ -4,7 +4,7 @@
   `pointer`, `text_input`, `gesture`, `drag`, `binding`, `haptics`, `testing`). The crate root
   no longer re-exports them, and `flui_interaction::prelude` is gone. Types that other crates own
   are named from those crates: geometry and `RenderId` from `flui_foundation`, pointer samples,
-  buttons and kinds from `flui_platform::pointer`. The `flui::interaction` facade is unchanged.
+  buttons and kinds from `flui_platform::input::pointer`. The `flui::interaction` facade is unchanged.
 
 ### Changed
 

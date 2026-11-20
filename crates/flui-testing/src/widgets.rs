@@ -372,7 +372,7 @@ pub fn lay_out_with_selection_ui_on(
     root: impl View,
     constraints: BoxConstraints,
     platform: flui_platform::TargetPlatform,
-    ui: flui_platform::text_store::SelectionUi,
+    ui: flui_platform::text::store::SelectionUi,
 ) -> LaidOut {
     mount_laid_out(root, constraints, None, platform, KitInput::Pull(ui))
 }
@@ -427,7 +427,7 @@ enum KitInput {
     Push,
     /// Pulled through a recording store host that answers this for who
     /// draws the selection UI.
-    Pull(flui_platform::text_store::SelectionUi),
+    Pull(flui_platform::text::store::SelectionUi),
 }
 
 fn mount_laid_out(
@@ -1133,7 +1133,7 @@ impl LaidOut {
     /// Advance `dt` and drive a frame, as [`Self::pump_for`] does, and report
     /// what it did: the build owner's report of the frame, the pipeline's
     /// counters across it and what its scene patch cost (see
-    /// [`crate::FrameReport`]). Counts, not timings, so `cargo xtask perf`
+    /// [`crate::FrameReport`]). Counts, not timings, so a perf scenario
     /// compares them exactly against a checked-in baseline.
     pub fn pump_report(&mut self, dt: Duration) -> crate::FrameReport {
         let pipeline_before = self
@@ -1219,15 +1219,15 @@ impl LaidOut {
     /// `AnimatedOpacity` builds). Both read the accepted normalized value
     /// used by painting. Panics if `id` is neither.
     pub fn opacity(&self, id: RenderId) -> f64 {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
-            if let Some(render) = node.downcast_render_object_mut::<RenderOpacity>() {
+            if let Some(render) = node.downcast_render_object::<RenderOpacity>() {
                 return render.opacity();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderAnimatedOpacity>() {
+            if let Some(render) = node.downcast_render_object::<RenderAnimatedOpacity>() {
                 return render.opacity();
             }
             panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
@@ -1243,12 +1243,12 @@ impl LaidOut {
     /// to decide whether to allocate a compositing layer. Panics if `id` is
     /// not a `RenderOpacity`.
     pub fn opacity_paint_alpha(&self, id: RenderId) -> Option<f64> {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
-            node.downcast_render_object_mut::<RenderOpacity>()
+            node.downcast_render_object::<RenderOpacity>()
                 .expect("render node should be a RenderOpacity");
             node.paint_effects()
                 .opacity
@@ -1261,13 +1261,13 @@ impl LaidOut {
     pub fn opacity_skip_paint(&self, id: RenderId) -> bool {
         use flui_rendering::traits::RenderBox;
 
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
             let render = node
-                .downcast_render_object_mut::<RenderOpacity>()
+                .downcast_render_object::<RenderOpacity>()
                 .expect("render node should be a RenderOpacity");
             render.skip_paint()
         })
@@ -1280,12 +1280,12 @@ impl LaidOut {
     /// `always_needs_compositing`, `Some(alpha)` for a genuine partial
     /// blend). Panics if `id` is not a `RenderSliverOpacity`.
     pub fn sliver_opacity_paint_alpha(&self, id: RenderId) -> Option<f64> {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
-            node.downcast_render_object_mut::<RenderSliverOpacity>()
+            node.downcast_render_object::<RenderSliverOpacity>()
                 .expect("render node should be a RenderSliverOpacity");
             node.paint_effects()
                 .opacity
@@ -1300,13 +1300,13 @@ impl LaidOut {
     pub fn sliver_opacity_skip_paint(&self, id: RenderId) -> bool {
         use flui_rendering::traits::RenderSliver;
 
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
             let render = node
-                .downcast_render_object_mut::<RenderSliverOpacity>()
+                .downcast_render_object::<RenderSliverOpacity>()
                 .expect("render node should be a RenderSliverOpacity");
             render.skip_paint()
         })
@@ -1321,34 +1321,33 @@ impl LaidOut {
     /// (`UnconstrainedBox`'s render object). Panics if `id` is none of the
     /// eight.
     pub fn clip_behavior(&self, id: RenderId) -> Clip {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
-            if let Some(render) = node.downcast_render_object_mut::<RenderClipRect>() {
+            if let Some(render) = node.downcast_render_object::<RenderClipRect>() {
                 return render.clip_behavior();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderClipRRect>() {
+            if let Some(render) = node.downcast_render_object::<RenderClipRRect>() {
                 return render.clip_behavior();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderClipOval>() {
+            if let Some(render) = node.downcast_render_object::<RenderClipOval>() {
                 return render.clip_behavior();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderClipPath>() {
+            if let Some(render) = node.downcast_render_object::<RenderClipPath>() {
                 return render.clip_behavior();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
+            if let Some(render) = node.downcast_render_object::<RenderFittedBox>() {
                 return render.clip_behavior();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalModel>() {
+            if let Some(render) = node.downcast_render_object::<RenderPhysicalModel>() {
                 return render.clip_behavior();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalShape>() {
+            if let Some(render) = node.downcast_render_object::<RenderPhysicalShape>() {
                 return render.clip_behavior();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>()
-            {
+            if let Some(render) = node.downcast_render_object::<RenderConstraintsTransformBox>() {
                 return render.clip_behavior();
             }
             panic!(
@@ -1365,16 +1364,15 @@ impl LaidOut {
     /// queryable flag; neither render object paints a debug overflow
     /// indicator — see each type's own module doc). Panics if `id` is neither.
     pub fn has_visual_overflow(&self, id: RenderId) -> bool {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
-            if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
+            if let Some(render) = node.downcast_render_object::<RenderFittedBox>() {
                 return render.has_visual_overflow();
             }
-            if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>()
-            {
+            if let Some(render) = node.downcast_render_object::<RenderConstraintsTransformBox>() {
                 return render.has_visual_overflow();
             }
             panic!("render node should be a RenderFittedBox or RenderConstraintsTransformBox");
@@ -1384,11 +1382,9 @@ impl LaidOut {
     /// The installed [`BorderRadius`] of a `RenderClipRRect` node. Panics if
     /// `id` is not a `RenderClipRRect`, or it carries no border radius.
     pub fn clip_rrect_border_radius(&self, id: RenderId) -> BorderRadius {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderClipRRect>())
+                .render_object::<RenderClipRRect>(id)
                 .expect("render node should be a RenderClipRRect")
                 .border_radius()
                 .expect("RenderClipRRect should carry a border radius")
@@ -1398,12 +1394,10 @@ impl LaidOut {
     /// The paint transform of a [`RenderContainer`] node, painted or not (a
     /// collapsed matrix pushes no layer). Panics if `id` is not a `RenderContainer`.
     pub fn container_transform(&self, id: RenderId) -> Option<Matrix4> {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderContainer>())
-                .map(|render| render.transform())
+                .render_object::<RenderContainer>(id)
+                .map(RenderContainer::transform)
                 .expect("render node should be a RenderContainer")
         })
     }
@@ -1432,12 +1426,10 @@ impl LaidOut {
     /// node — the same matrix `paint` pushes and `hit_test` inverts. Panics
     /// if `id` is not a `RenderFittedBox`.
     pub fn fitted_box_transform(&self, id: RenderId) -> Matrix4 {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
-                .map(|render| render.effective_transform())
+                .render_object::<RenderFittedBox>(id)
+                .map(RenderFittedBox::effective_transform)
                 .expect("render node should be a RenderFittedBox")
         })
     }
@@ -1446,11 +1438,9 @@ impl LaidOut {
     /// opposed to the empty placeholder it paints nothing for). Panics if
     /// `id` is not a `RenderImage`.
     pub fn image_has_image(&self, id: RenderId) -> bool {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+                .render_object::<RenderImage>(id)
                 .map(|render| render.image().is_some())
                 .expect("render node should be a RenderImage")
         })
@@ -1461,12 +1451,10 @@ impl LaidOut {
     /// reaches the render object it currently owns after a rebuild/reorder
     /// (not just at initial creation). Panics if `id` is not a `RenderImage`.
     pub fn image_width(&self, id: RenderId) -> Option<f64> {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
-                .map(|render| render.width())
+                .render_object::<RenderImage>(id)
+                .map(RenderImage::width)
                 .expect("render node should be a RenderImage")
         })
     }
@@ -1477,12 +1465,10 @@ impl LaidOut {
     /// `Padding` level). Probes that used to read a nested `RenderDecoratedBox`
     /// want this instead. Panics if `id` is not a `RenderContainer`.
     pub fn container_inner_size(&self, id: RenderId) -> Size {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderContainer>())
-                .map(|render| render.inner_size())
+                .render_object::<RenderContainer>(id)
+                .map(RenderContainer::inner_size)
                 .expect("render node should be a RenderContainer")
         })
     }
@@ -1495,11 +1481,9 @@ impl LaidOut {
     /// `RenderImage`.
     pub fn image_paint_rect(&self, id: RenderId) -> Option<Rect> {
         let box_size = self.size(id);
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             owner
-                .render_tree_mut()
-                .get_mut(id)
-                .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+                .render_object::<RenderImage>(id)
                 .map(|render| render.paint_rect_in(box_size))
                 .expect("render node should be a RenderImage")
         })
@@ -1517,13 +1501,13 @@ impl LaidOut {
     /// not a `RenderParagraph`, carries no text, or has no laid-out line —
     /// all of which indicate the paragraph was queried before layout ran.
     pub fn paragraph_first_line_left(&self, id: RenderId) -> f64 {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
             let paragraph = node
-                .downcast_render_object_mut::<RenderParagraph>()
+                .downcast_render_object::<RenderParagraph>()
                 .expect("render node should be a RenderParagraph");
             let text_len = paragraph
                 .painter()
@@ -1552,13 +1536,13 @@ impl LaidOut {
     ///
     /// Panics if `id` is not a laid-out `RenderParagraph`.
     pub fn text_baseline(&self, id: RenderId) -> f64 {
-        self.pipeline_owner.with_mut(|owner| {
+        self.pipeline_owner.with(|owner| {
             let node = owner
-                .render_tree_mut()
-                .get_mut(id)
+                .render_tree()
+                .get(id)
                 .expect("render node should exist");
             let paragraph = node
-                .downcast_render_object_mut::<RenderParagraph>()
+                .downcast_render_object::<RenderParagraph>()
                 .expect("render node should be a RenderParagraph");
             flui_rendering::traits::RenderBox::compute_distance_to_actual_baseline(
                 paragraph,
@@ -1651,7 +1635,7 @@ impl LaidOut {
     /// single-child *container chain* and asserting `first_child == last_child`
     /// at every step, which a flattened list cannot express. It is the scene the UI runtime last submitted to its sink, retained
     /// across frames that painted nothing.
-    pub fn layer_tree(&self) -> Option<&flui_rendering::layer::LayerTree> {
+    pub fn layer_tree(&self) -> Option<&flui_layer::LayerTree> {
         self.host.ui_runtime().sink().layer_tree()
     }
 
@@ -1724,7 +1708,7 @@ impl LaidOut {
         };
         let mut ops = Vec::new();
         for (_, node) in tree.iter() {
-            if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+            if let flui_layer::Layer::Picture(picture) = node.layer() {
                 ops.extend(picture.picture().iter().map(|command| command.to_buf()));
             }
         }
@@ -1736,9 +1720,17 @@ impl LaidOut {
         self.host.did_paint_last_frame()
     }
 
-    /// Number of harness frames that produced a fresh layer tree.
+    /// Number of harness frames the sink presented, a republished version
+    /// included.
     pub fn painted_frame_count(&self) -> u64 {
         self.host.ui_runtime().sink().submits()
+    }
+
+    /// The window's frame sink: the version the last presented frame showed
+    /// and the texture frames it took ([`crate::HeadlessSink::textures`]).
+    #[must_use]
+    pub fn sink(&self) -> &crate::HeadlessSink {
+        self.host.ui_runtime().sink()
     }
 
     /// Leave the next `frames` frames unshown for the reason `how` names; see
@@ -1884,8 +1876,8 @@ impl LaidOut {
         &self,
         position: Offset,
         kind: flui_interaction::events::PointerKind,
-    ) -> flui_rendering::hit_testing::HitTestResult {
-        use flui_rendering::hit_testing::HitTestResult;
+    ) -> flui_interaction::pointer::HitTestResult {
+        use flui_interaction::pointer::HitTestResult;
 
         self.host.ui_runtime().enter(|_| {
             let mut result = HitTestResult::new();
@@ -1941,7 +1933,7 @@ impl LaidOut {
 
     /// Dispatch a key event through the UI runtime's input path, as platform
     /// input arrives: the runtime sees it before focus does.
-    pub fn dispatch_key(&self, event: flui_platform::keyboard::KeyEvent) {
+    pub fn dispatch_key(&self, event: flui_platform::input::keyboard::KeyEvent) {
         self.host.dispatch_key(event);
     }
 

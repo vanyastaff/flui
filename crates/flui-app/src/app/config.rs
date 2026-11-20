@@ -114,25 +114,25 @@ pub struct AppConfig {
 
     /// What the window is created with on each operating system that has
     /// options of its own, each read only by that system's host (ADR-0254
-    /// §8); see [`OsWindowOptions`](flui_platform::os_options::OsWindowOptions).
-    pub os_options: flui_platform::os_options::OsWindowOptions,
+    /// §8); see [`OsWindowOptions`](flui_platform::window::os_options::OsWindowOptions).
+    pub os_options: flui_platform::window::os_options::OsWindowOptions,
 
     /// Whether to show the performance overlay — FPS, average frame time, and
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
     ///
     /// Scope, deliberately narrow: the overlay's three rows are shaped
     /// through the UI runtime's text context at scene assembly and the renderer
-    /// only rasterizes them; every row is drawn whatever the option mask
-    /// says, so `PerformanceOverlayOption` has no observable effect yet. The sampled
-    /// interval is between *composited* frames — an idle frame produces no layer
-    /// tree, so it is a repaint rate, not a wall-clock frame rate. The telemetry
+    /// only rasterizes them. The sampled
+    /// interval is between *composited* frames — an idle frame publishes no
+    /// scene, so it is a repaint rate, not a wall-clock frame rate. The telemetry
     /// row reports p99 present/input latency, deferred/dropped counts, and
     /// whether input attribution was truncated by the bounded per-frame buffer.
     ///
     /// The bootstrap runner forwards this
     /// to `UiRuntime::set_performance_overlay`, which is what actually starts
-    /// the rolling frame-time window; the frame path then appends a
-    /// `PerformanceOverlayLayer` as the root layer's last child. Off costs a
+    /// the rolling frame-time window; each painted frame then publishes the
+    /// readout as one chunk under a clip, at a scene node slotted after the
+    /// frame's own, so no boundary of the app repaints for it. Off costs a
     /// cheap `None` check per frame; snapshot collection, percentile reduction,
     /// and line formatting run only while the overlay is enabled.
     ///
@@ -346,7 +346,7 @@ impl Default for AppConfig {
             mode: WindowMode::Normal,
             resizable: true,
             frame: flui_platform::WindowFrame::System,
-            os_options: flui_platform::os_options::OsWindowOptions::default(),
+            os_options: flui_platform::window::os_options::OsWindowOptions::default(),
             show_performance_overlay: false,
             frame_latency: FrameLatency::Balanced,
             input_latency: flui_platform::InputLatency::Balanced,
@@ -585,7 +585,10 @@ impl AppConfig {
     /// Set what the window is created with on each operating system that has
     /// options of its own.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn os_options(mut self, os_options: flui_platform::os_options::OsWindowOptions) -> Self {
+    pub fn os_options(
+        mut self,
+        os_options: flui_platform::window::os_options::OsWindowOptions,
+    ) -> Self {
         self.os_options = os_options;
         self
     }
@@ -803,8 +806,8 @@ fn window_extent(width: u32, height: u32) -> flui_platform::WindowExtent {
 /// colour mode following the surface colour it asks for where the
 /// application set no Android options of its own: Android composes a window
 /// in a wide gamut or in HDR only when the window asks.
-fn os_options_for(config: &AppConfig) -> flui_platform::os_options::OsWindowOptions {
-    use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions};
+fn os_options_for(config: &AppConfig) -> flui_platform::window::os_options::OsWindowOptions {
+    use flui_platform::window::os_options::{AndroidColorMode, AndroidWindowOptions};
 
     let mut options = config.os_options.clone();
     let color_mode = match config.surface_color {
@@ -838,7 +841,9 @@ mod tests {
     /// in, and an application's own Android options are kept as they are.
     #[test]
     fn the_android_colour_mode_follows_the_requested_surface_colour() {
-        use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions, OsWindowOptions};
+        use flui_platform::window::os_options::{
+            AndroidColorMode, AndroidWindowOptions, OsWindowOptions,
+        };
 
         let mode = |config: &AppConfig| {
             config

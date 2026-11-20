@@ -16,6 +16,7 @@ use flui_interaction::gesture::{
     ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
     SmartZoomDetails,
 };
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
     gesture::{
@@ -29,9 +30,8 @@ use flui_interaction::{
     pointer::PointerDispatch,
 };
 use flui_platform::EventTime;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerSource};
-use flui_rendering::hit_testing::HitTestBehavior;
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerSource};
 use flui_view::prelude::*;
 
 use super::raw_gesture_detector::{
@@ -1110,7 +1110,9 @@ struct PressRecognizers {
     shape: PressShape,
     live: Rc<dyn PressLive>,
     ctx: RecognizerContext,
-    members: OnceCell<PressMembers>,
+    /// Boxed, so a group no contact reached holds one null pointer in place
+    /// of the members' set and handles.
+    members: OnceCell<Box<PressMembers>>,
 }
 
 struct PressMembers {
@@ -1242,7 +1244,7 @@ impl PressRecognizers {
     /// The members, built now if no contact was offered before.
     fn members(&self) -> &PressMembers {
         self.members
-            .get_or_init(|| PressMembers::build(self.shape, &self.live, &self.ctx))
+            .get_or_init(|| Box::new(PressMembers::build(self.shape, &self.live, &self.ctx)))
     }
 }
 

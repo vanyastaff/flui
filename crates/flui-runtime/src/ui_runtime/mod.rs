@@ -33,6 +33,8 @@ mod presentation_lifecycle;
 use presentation_lifecycle::HostLifecycle;
 pub use presentation_lifecycle::SettledCloses;
 
+pub use crate::occluded_frame::OwedFrameRequest;
+
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 #[cfg(test)]
@@ -56,7 +58,6 @@ use flui_interaction::pointer::InteractionLane;
 #[cfg(test)]
 use flui_platform::{PlatformInput, PlatformWindow};
 #[cfg(test)]
-use flui_rendering::binding::RendererBinding as _;
 #[cfg(test)]
 use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]

@@ -53,7 +53,7 @@ pub mod keys {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::keyboard::{Code, Key, NamedKey};
+    use flui_platform::input::keyboard::{Code, Key, NamedKey};
 
     /// Apple's `kVK_*` virtual keycodes, from Carbon `HIToolbox/Events.h`.
     ///
@@ -560,7 +560,7 @@ pub(crate) mod wheel {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::pointer::{ScrollDelta, ScrollPrecision, ScrollUnit};
+    use flui_platform::input::pointer::{ScrollDelta, ScrollPrecision, ScrollUnit};
 
     use crate::input::scroll::{WheelAmount, wheel_step};
 
@@ -684,7 +684,7 @@ pub(crate) mod resting {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::pointer::TouchpadHoldPhase;
+    use flui_platform::input::pointer::TouchpadHoldPhase;
 
     /// A scroll event's finger phase, as far as a hold reads it.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -741,7 +741,7 @@ pub(crate) mod resting {
     #[cfg(test)]
     mod tests {
         use super::{FingerPhase, HoldStep, RestingFingers};
-        use flui_platform::pointer::TouchpadHoldPhase;
+        use flui_platform::input::pointer::TouchpadHoldPhase;
 
         const fn step(hold: Option<TouchpadHoldPhase>, consumed: bool) -> HoldStep {
             HoldStep { hold, consumed }
@@ -802,7 +802,9 @@ pub(crate) mod title_bar {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::DevicePoint;
-    use flui_platform::input_regions::{ChromeHit, DeviceInputRegion, InputRegionKind, chrome_hit};
+    use flui_platform::input::regions::{
+        ChromeHit, DeviceInputRegion, InputRegionKind, chrome_hit,
+    };
 
     /// What a left press on the window does.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1015,7 +1017,7 @@ pub(crate) mod title_bar {
     #[cfg(test)]
     mod tests {
         use flui_foundation::geometry::{DevicePoint, DeviceRect};
-        use flui_platform::input_regions::{CaptionButton, DeviceInputRegion, InputRegionKind};
+        use flui_platform::input::regions::{CaptionButton, DeviceInputRegion, InputRegionKind};
 
         use super::{
             DoubleClick, FirstClickTicket, FirstMouse, Press, PressReading, PressStamp,
@@ -1235,8 +1237,8 @@ pub(crate) mod indirect {
     }
 
     /// The button an indirect press is, from its event's `buttonMask`.
-    pub(crate) fn button(mask: isize) -> flui_platform::pointer::PointerButton {
-        use flui_platform::pointer::PointerButton;
+    pub(crate) fn button(mask: isize) -> flui_platform::input::pointer::PointerButton {
+        use flui_platform::input::pointer::PointerButton;
         // UIEventButtonMask: primary 1 << 0, secondary 1 << 1.
         if mask & 0b10 != 0 && mask & 0b01 == 0 {
             PointerButton::SECONDARY
@@ -1249,7 +1251,7 @@ pub(crate) mod indirect {
     mod tests {
         use super::{IndirectGestures, button, phase};
         use crate::input::assembly::GesturePhase::{Began, Cancelled, Changed, Ended};
-        use flui_platform::pointer::PointerButton;
+        use flui_platform::input::pointer::PointerButton;
 
         #[test]
         fn cumulative_recognizer_values_become_changes() {
@@ -1282,7 +1284,7 @@ pub(crate) mod indirect {
 
         #[test]
         fn a_wheel_notch_reads_as_notched_points_and_a_trackpad_as_precise() {
-            use flui_platform::pointer::{ScrollPrecision, ScrollUnit};
+            use flui_platform::input::pointer::{ScrollPrecision, ScrollUnit};
             let (notch, precision) = crate::input::apple::wheel::notched_points(0.0, 12.0);
             assert_eq!(precision, ScrollPrecision::Notched);
             assert_eq!(notch.unit(), ScrollUnit::Pixels);
@@ -1359,13 +1361,15 @@ pub(crate) mod samples {
             ReadingTime, decode,
         };
         use flui_platform::EventTime;
-        use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, PointerSample};
+        use flui_platform::input::pointer::{
+            PointerButton, PointerEvent, PointerKind, PointerSample,
+        };
 
         fn pencil(action: ReadingAction, ms: u64, x: f64) -> NativeReading {
             NativeReading::new(
                 NativeContact(0),
                 PointerKind::Pen {
-                    tool: flui_platform::pointer::PenTool::Tip,
+                    tool: flui_platform::input::pointer::PenTool::Tip,
                 },
                 action,
                 ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
@@ -1446,7 +1450,7 @@ pub(crate) mod macos {
 
     use std::cell::{Cell, RefCell};
 
-    use flui_platform::input_regions::InputRegion;
+    use flui_platform::input::regions::InputRegion;
     use objc2_app_kit::{NSEvent, NSEventType};
 
     use crate::input::apple::title_bar::{self, DoubleClick, Press};
@@ -1593,7 +1597,7 @@ pub(crate) mod macos {
     /// forward; anything but a press unchanged.
     fn marked_first_click(input: flui_platform::PlatformInput) -> flui_platform::PlatformInput {
         use flui_platform::PlatformInput;
-        use flui_platform::pointer::PointerEvent;
+        use flui_platform::input::pointer::PointerEvent;
         match input {
             PlatformInput::Pointer(PointerEvent::Down(press)) => {
                 PlatformInput::Pointer(PointerEvent::Down(press.with_first_click()))
@@ -1629,8 +1633,10 @@ pub(crate) mod macos {
         use std::time::Duration;
 
         use flui_platform::EventTime;
-        use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
-        use flui_platform::pointer::{
+        use flui_platform::input::keyboard::{
+            Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+        };
+        use flui_platform::input::pointer::{
             MotionAcceleration, MotionDelta, PanZoomEvent, PointerButton, PointerButtons,
             PointerEvent, PointerId, PointerKind, PointerPosition, PointerRole, PointerSource,
             ScrollEvent, ScrollInversion, ScrollPhase, SmartZoomEvent,
@@ -2208,7 +2214,7 @@ pub(crate) mod macos {
             #[test]
             fn native_pinch_and_rotation_share_one_cumulative_gesture() {
                 use GestureComponent::{Rotation, Scale, Session};
-                use flui_platform::pointer::PanZoomPhase;
+                use flui_platform::input::pointer::PanZoomPhase;
                 let mut state = MacInputState::default();
                 let at = (10.25, 20.5);
                 let time = ReadingTime::coarse(NativeTime::UptimeSeconds(1.0));
@@ -2308,7 +2314,7 @@ pub(crate) mod ios {
     use std::time::Duration;
 
     use flui_platform::EventTime;
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         MotionAcceleration, MotionDelta, PenOrientation, PenTool, PointerButton, PointerEvent,
         PointerId, PointerKind, PointerPosition, PointerRole, PointerSource, ScrollEvent,
     };
@@ -2821,10 +2827,10 @@ pub(crate) mod ios {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use flui_platform::pointer::{PointerEvent, Pressure};
+        use flui_platform::input::pointer::{PointerEvent, Pressure};
 
         /// The Down a Pencil-less touch with `sensors` assembles into.
-        fn down(sensors: RawSensors) -> flui_platform::pointer::PointerSample {
+        fn down(sensors: RawSensors) -> flui_platform::input::pointer::PointerSample {
             let mut contacts = ContactRegistry::new(NativeClock::epoch_only());
             let reading = NativeReading::new(
                 NativeContact(9),

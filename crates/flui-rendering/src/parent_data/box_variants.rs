@@ -2,79 +2,10 @@
 
 use std::hash::{Hash, Hasher};
 
-// Re-export RenderId for convenience
-use flui_foundation::RenderId;
 use flui_foundation::TextDirection;
-use flui_foundation::geometry::{Matrix4, Offset, canonical_bits_f64};
+use flui_foundation::geometry::{Offset, canonical_bits_f64};
 
-use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
-
-// ============================================================================
-// CONTAINER BOX PARENT DATA (Base for containers)
-// ============================================================================
-
-/// Base parent data for box containers with linked list support.
-///
-/// Combines `BoxParentData` (offset) with `ContainerParentDataMixin`
-/// (sibling pointers) for efficient container operations.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContainerBoxParentData {
-    /// Offset from parent's top-left corner.
-    pub offset: Offset,
-
-    /// Container mixin for sibling pointers.
-    pub container: ContainerParentDataMixin<RenderId>,
-}
-
-impl ContainerBoxParentData {
-    /// Create with specific offset.
-    pub const fn new(offset: Offset) -> Self {
-        Self {
-            offset,
-            container: ContainerParentDataMixin::new(),
-        }
-    }
-
-    /// Create at origin.
-    pub const fn zero() -> Self {
-        Self::new(Offset::ZERO)
-    }
-
-    /// Builder: set offset.
-    pub const fn with_offset(mut self, offset: Offset) -> Self {
-        self.offset = offset;
-        self
-    }
-
-    /// Check if at origin.
-    #[inline]
-    pub fn is_zero(&self) -> bool {
-        self.offset == Offset::ZERO
-    }
-
-    /// Reset to origin.
-    pub fn reset(&mut self) {
-        self.offset = Offset::ZERO;
-    }
-}
-
-impl Default for ContainerBoxParentData {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl ParentData for ContainerBoxParentData {}
-
-impl Hash for ContainerBoxParentData {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        canonical_bits_f64(self.offset.dx).hash(state);
-        canonical_bits_f64(self.offset.dy).hash(state);
-        self.container.hash(state);
-    }
-}
-
-impl Eq for ContainerBoxParentData {}
+use super::base::ParentData;
 
 // ============================================================================
 // FLEX PARENT DATA
@@ -87,9 +18,6 @@ impl Eq for ContainerBoxParentData {}
 pub struct FlexParentData {
     /// Offset from parent's top-left corner.
     pub offset: Offset,
-
-    /// Container mixin for sibling pointers.
-    pub container: ContainerParentDataMixin<RenderId>,
 
     /// Flex factor (how much space to take relative to siblings).
     ///
@@ -118,12 +46,7 @@ pub enum FlexFit {
 impl FlexParentData {
     /// Create with offset and flex settings.
     pub const fn new(offset: Offset, flex: Option<i32>, fit: FlexFit) -> Self {
-        Self {
-            offset,
-            container: ContainerParentDataMixin::new(),
-            flex,
-            fit,
-        }
+        Self { offset, flex, fit }
     }
 
     /// Create inflexible (no flex factor).
@@ -173,7 +96,6 @@ impl Hash for FlexParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         canonical_bits_f64(self.offset.dx).hash(state);
         canonical_bits_f64(self.offset.dy).hash(state);
-        self.container.hash(state);
         self.flex.hash(state);
         self.fit.hash(state);
     }
@@ -259,9 +181,6 @@ pub struct StackParentData {
     /// Offset from parent (computed during layout).
     pub offset: Offset,
 
-    /// Container mixin for sibling pointers.
-    pub container: ContainerParentDataMixin<RenderId>,
-
     /// Distance from parent's top edge.
     pub top: Option<f64>,
 
@@ -283,7 +202,6 @@ impl StackParentData {
     pub const fn new() -> Self {
         Self {
             offset: Offset::ZERO,
-            container: ContainerParentDataMixin::new(),
             top: None,
             bottom: None,
             horizontal: HorizontalInsets::NONE,
@@ -377,7 +295,6 @@ impl Hash for StackParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         canonical_bits_f64(self.offset.dx).hash(state);
         canonical_bits_f64(self.offset.dy).hash(state);
-        self.container.hash(state);
 
         // Hash Option<f64> values
         let hash_opt_f32 = |value: Option<f64>, state: &mut H| match value {
@@ -405,134 +322,6 @@ impl Hash for StackParentData {
 impl Eq for StackParentData {}
 
 // ============================================================================
-// WRAP PARENT DATA
-// ============================================================================
-
-/// Parent data for wrap layouts (horizontal and vertical wrapping).
-///
-/// Same structure as `ContainerBoxParentData` but used specifically for Wrap.
-pub type WrapParentData = ContainerBoxParentData;
-
-// ============================================================================
-// FLOW PARENT DATA
-// ============================================================================
-
-/// Parent data for custom flow layouts with transforms.
-///
-/// Stores optional transform matrix applied during painting.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FlowParentData {
-    /// Offset from parent.
-    pub offset: Offset,
-
-    /// Container mixin for sibling pointers.
-    pub container: ContainerParentDataMixin<RenderId>,
-
-    /// Optional transform applied to child during painting.
-    pub transform: Option<Matrix4>,
-}
-
-impl FlowParentData {
-    /// Create with no transform.
-    pub const fn new(offset: Offset) -> Self {
-        Self {
-            offset,
-            container: ContainerParentDataMixin::new(),
-            transform: None,
-        }
-    }
-
-    /// Create at origin with no transform.
-    pub const fn zero() -> Self {
-        Self::new(Offset::ZERO)
-    }
-
-    /// Builder: set transform.
-    pub fn with_transform(mut self, transform: Matrix4) -> Self {
-        self.transform = Some(transform);
-        self
-    }
-
-    /// Check if transform is set.
-    #[inline]
-    pub const fn has_transform(&self) -> bool {
-        self.transform.is_some()
-    }
-}
-
-impl Default for FlowParentData {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl ParentData for FlowParentData {}
-
-// No Hash/Eq for FlowParentData due to Matrix4
-
-// ============================================================================
-// LIST BODY PARENT DATA
-// ============================================================================
-
-/// Parent data for list body layouts.
-///
-/// Same structure as `ContainerBoxParentData`, used for ListBody widget.
-pub type ListBodyParentData = ContainerBoxParentData;
-
-// ============================================================================
-// LIST WHEEL PARENT DATA
-// ============================================================================
-
-/// Parent data for list wheel scroll view (3D carousel effect).
-///
-/// Stores child's index in the list.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ListWheelParentData {
-    /// Offset from parent.
-    pub offset: Offset,
-
-    /// Container mixin for sibling pointers.
-    pub container: ContainerParentDataMixin<RenderId>,
-
-    /// Index of this child in the list.
-    pub index: usize,
-}
-
-impl ListWheelParentData {
-    /// Create with specific index.
-    pub const fn new(index: usize) -> Self {
-        Self {
-            offset: Offset::ZERO,
-            container: ContainerParentDataMixin::new(),
-            index,
-        }
-    }
-
-    /// Builder: set index.
-    pub const fn with_index(mut self, index: usize) -> Self {
-        self.index = index;
-        self
-    }
-}
-
-impl Default for ListWheelParentData {
-    fn default() -> Self {
-        Self::new(0)
-    }
-}
-
-impl ParentData for ListWheelParentData {}
-
-impl Hash for ListWheelParentData {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        canonical_bits_f64(self.offset.dx).hash(state);
-        canonical_bits_f64(self.offset.dy).hash(state);
-        self.container.hash(state);
-        self.index.hash(state);
-    }
-}
-
-// ============================================================================
 // MULTI CHILD LAYOUT PARENT DATA
 // ============================================================================
 
@@ -544,9 +333,6 @@ pub struct MultiChildLayoutParentData {
     /// Offset from parent.
     pub offset: Offset,
 
-    /// Container mixin for sibling pointers.
-    pub container: ContainerParentDataMixin<RenderId>,
-
     /// Optional ID for this child (for custom layout algorithms).
     pub id: Option<String>,
 }
@@ -554,18 +340,13 @@ pub struct MultiChildLayoutParentData {
 impl MultiChildLayoutParentData {
     /// Create with optional ID.
     pub const fn new(offset: Offset, id: Option<String>) -> Self {
-        Self {
-            offset,
-            container: ContainerParentDataMixin::new(),
-            id,
-        }
+        Self { offset, id }
     }
 
     /// Create at origin with no ID.
     pub const fn zero() -> Self {
         Self {
             offset: Offset::ZERO,
-            container: ContainerParentDataMixin::new(),
             id: None,
         }
     }
@@ -574,12 +355,6 @@ impl MultiChildLayoutParentData {
     pub fn with_id(mut self, id: String) -> Self {
         self.id = Some(id);
         self
-    }
-
-    /// Check if ID is set.
-    #[inline]
-    pub fn has_id(&self) -> bool {
-        self.id.is_some()
     }
 }
 
@@ -595,7 +370,6 @@ impl Hash for MultiChildLayoutParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         canonical_bits_f64(self.offset.dx).hash(state);
         canonical_bits_f64(self.offset.dy).hash(state);
-        self.container.hash(state);
         self.id.hash(state);
     }
 }

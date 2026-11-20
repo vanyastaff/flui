@@ -93,22 +93,23 @@ pub(crate) fn stamp_sliver_slot(
     slot: flui_rendering::parent_data::SliverSlot,
 ) {
     use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
-    let Some(node) = owner.render_tree_mut().get_mut(render_id) else {
-        return;
-    };
-    // Both halves, always together. Writing only the logical index on the
-    // update path would leave a stale semantic position beside a fresh logical
-    // one, which is the exact drift `SliverSlot` exists to make impossible.
-    if let Some(existing) = node
-        .parent_data_mut()
-        .and_then(|pd| pd.downcast_mut::<SliverMultiBoxAdaptorParentData>())
-    {
-        existing.index = slot.logical;
-        existing.semantic_index = slot.semantic;
-        return;
-    }
-    let fresh = SliverMultiBoxAdaptorParentData::with_semantic_index(slot.logical, slot.semantic);
-    node.set_parent_data(Box::new(fresh));
+    // The sliver reads the stamp at its next layout; the stamp itself
+    // reports no impact, so it marks nothing.
+    let _ = owner.update_parent_data(render_id, |parent_data| {
+        // Both halves, always together. Writing only the logical index on the
+        // update path would leave a stale semantic position beside a fresh
+        // logical one, which is the exact drift `SliverSlot` exists to make
+        // impossible.
+        if let Some(existing) = parent_data.downcast_mut::<SliverMultiBoxAdaptorParentData>() {
+            existing.index = slot.logical;
+            existing.semantic_index = slot.semantic;
+        } else {
+            parent_data.set(Box::new(
+                SliverMultiBoxAdaptorParentData::with_semantic_index(slot.logical, slot.semantic),
+            ));
+        }
+        flui_rendering::RenderUpdateImpact::NONE
+    });
 }
 
 /// Run a user `build()` closure under [`std::panic::catch_unwind`] and,

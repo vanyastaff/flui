@@ -9,7 +9,9 @@ use std::rc::Rc;
 use flui_app::app::{AppConfig, Application, ExitPolicy, WindowPolicy};
 use flui_app::testing::HeadlessRun;
 use flui_interaction::focus::FocusNode;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
+use flui_platform::input::keyboard::{
+    Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+};
 use flui_platform::{EventTime, PlatformInput};
 use flui_view::ViewExt as _;
 use flui_widgets::{Column, Focus, SizedBox};

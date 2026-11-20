@@ -87,7 +87,6 @@ pub struct SemanticsAttributes {
     traversal: Traversal,                 // sort key, text direction
     custom_actions: SmallVec<[CustomSemanticsAction; 2]>,
     tags: SmallVec<[SemanticsTag; 2]>,
-    platform_view: Option<PlatformViewId>,
 }
 ```
 

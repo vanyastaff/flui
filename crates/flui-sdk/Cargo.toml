@@ -34,13 +34,15 @@ flui-view = { workspace = true }
 flui-widgets = { workspace = true }
 flui-interaction = { workspace = true }
 flui-rendering = { workspace = true }
+flui-semantics = { workspace = true }
 flui-painting = { workspace = true }
 flui-objects = { workspace = true }
 # `hooks::FrameSnapshot`, which `flui-devtools`' timeline records. Already in
 # this crate's closure through `flui-view`, so reach does not change.
 flui-scheduler = { workspace = true }
-# `hooks::Scene` and `hooks::LayerTree`, the plugin ABI of flui-hot-reload's
-# dlopen path (ADR-0311 §6). Already in this crate's closure through
+# `hooks::Scene`, the plugin ABI of flui-hot-reload's dlopen path, and
+# `hooks::LayerTree` a scene plugin builds it from
+# (ADR-0311 §6). Already in this crate's closure through
 # `flui-rendering`, so reach does not change.
 flui-layer = { workspace = true }
 

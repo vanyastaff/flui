@@ -120,8 +120,6 @@ rustc-hash.workspace = true
 thiserror.workspace = true
 # UiRuntime owner inbox (bounded typed mailbox)
 crossbeam-channel.workspace = true
-anyhow.workspace = true
-pollster = { workspace = true }
 web-time = { workspace = true }
 # The reply channel from the IO pool back to a storage request. Already in
 # the tree through `tokio-util`; `sync` alone builds on wasm32 too.
@@ -138,6 +136,13 @@ tokio-util = { workspace = true }
 # The storage host runs the store's blocking calls on the IO runtime's
 # blocking threads (`Handle::spawn_blocking`), never on its workers.
 tokio = { workspace = true, features = ["rt"] }
+# The GPU bootstrap and probe wait on wgpu's futures on the owner thread.
+pollster = { workspace = true }
+
+# The single-window hosts' installers report their failure as one error
+# chain; the desktop installation returns typed errors.
+[target.'cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))'.dependencies]
+anyhow = { workspace = true }
 
 # The driver agent's endpoint (ADR-0239): a named pipe or a Unix socket.
 # `interprocess` builds for Windows and Unix only; the web transport is
@@ -177,6 +182,8 @@ flui-engine = { workspace = true, features = ["vulkan"] }
 flui-testing = { workspace = true }
 # `CountingWaker`, the waker whose wakes a served-page test counts.
 flui-foundation = { workspace = true, features = ["testing"] }
+# The session controller's installer type, which the desktop tests build.
+anyhow = { workspace = true }
 # The `testing` kit, for this crate's integration tests; `http`, so the
 # built-in HTTP provider is tested with the crate; and the multi-window
 # entry points.

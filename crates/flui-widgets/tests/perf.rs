@@ -3,19 +3,18 @@
 //! Each scenario mounts the same small app — a fixed-height label over a lazy
 //! 10 000-row list — applies one change, pumps, and asserts bounds on the
 //! frame's [`FrameReport`]. The bounds are the budget and hold on every host;
-//! the exact values are what `cargo xtask perf` compares against the checked-in
-//! baseline (one file per scenario in `crates/flui-widgets/perf/baseline/`),
-//! and it collects them
-//! through `FLUI_PERF_OUT`: when that variable names a directory, each scenario
-//! writes `<dir>/<scenario>.toml` **before** asserting, so a broken budget still
-//! reports its numbers.
+//! the exact values are held to the checked-in baseline (one file per scenario
+//! in `crates/flui-widgets/perf/baseline/`) when `FLUI_PERF_BASELINE` is
+//! `check`, and rewritten from the run when it is `bless` ([`baseline`]). Each
+//! scenario holds its counts **before** asserting its budget, so a broken
+//! budget under `check` still reports every counter.
 //!
 //! Every record also carries what the scenario's measured frames asked of the
 //! heap on the test thread, counted by this target's `#[global_allocator]`:
 //! `allocations` (a `realloc` included), `reallocations` (the buffers among
 //! them that outgrew their capacity) and `allocated_bytes`. Like the frame
 //! counters they are a function of the tree and the change, not of the host;
-//! they only have to stay at or under the baseline, which `--bless` ratchets.
+//! they only have to stay at or under the baseline, which a bless ratchets.
 //! Nothing else may move them, neither a seed drawn per run nor what an
 //! earlier test left in the process. `measured_frames_ask_the_heap_the_same_on_every_run`
 //! checks that over the list scrolls, the frames that build and drop the most;
@@ -23,9 +22,9 @@
 //!
 //! A `perf_scaling_` scenario runs the same change on a small and a large tree
 //! and asserts that the two cost the same: equal allocations here, and equal
-//! instruction counts within a tolerance under `cargo xtask perf --instructions`,
-//! which runs each size alone under callgrind (`FLUI_PERF_SIZE`) and counts
-//! only what runs inside [`perf_measured`]. A frame whose cost grows with nodes
+//! instruction counts within a tolerance in CI's `perf-gates` job, which runs
+//! each size alone under callgrind (`FLUI_PERF_SIZE`) and counts only what
+//! runs inside [`perf_measured`]. A frame whose cost grows with nodes
 //! it does not touch fails there, though no counter of its work moves.
 //!
 //! The plateau tests at the end hold the heap level instead of a frame's cost: an
@@ -40,9 +39,14 @@
 //! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
 //! widening every change's CI scope.
 
-use std::fmt::Write as _;
+// A scenario's `baseline::Held` writes a bless when it drops; `let _ =` would
+// drop it before the scenario's budget assertions run.
+#![deny(let_underscore_drop)]
+
 use std::time::Duration;
 
+use flui_layer::TextureRegistration;
+use flui_painting::paint::{Image as PixelImage, TextureId};
 use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
@@ -54,8 +58,11 @@ use flui_testing::{FrameReport, HeadlessHost, HeadlessWindow};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, RawButton, RepaintBoundary, SingleChildScrollView, SizedBox,
-    SliverList, Text, Viewport,
+    SliverList, Text, Texture, Viewport,
 };
+
+#[path = "perf/baseline.rs"]
+mod baseline;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -72,9 +79,10 @@ fn heap_counts(heap: HeapCounts) -> [(&'static str, u64); 3] {
 /// Runs a scenario's measured frames and returns their result with what
 /// they asked of the heap.
 ///
-/// The one window `cargo xtask perf --instructions` counts: it collects
+/// The one window `perf-gates` counts under callgrind: it collects
 /// instructions only while this function runs (callgrind's `--toggle-collect`
-/// on its name), so it must stay out of line and keep its name.
+/// on its name, in `.github/workflows/ci.yml`), so it must stay out of line
+/// and keep its name.
 #[inline(never)]
 fn perf_measured<R>(frames: impl FnOnce() -> R) -> (R, HeapCounts) {
     let before = HeapCounts::now();
@@ -206,27 +214,14 @@ fn mount() -> Mounted {
     Mounted { laid, writer }
 }
 
-/// Writes `report` and what the measured frames asked of the heap for `xtask perf`
-/// when `FLUI_PERF_OUT` is set. Called before a scenario asserts, so a failing
-/// budget still reports its numbers.
-fn record(scenario: &str, report: &FrameReport, heap: HeapCounts) {
+/// Holds `report` and what the measured frames asked of the heap to the
+/// scenario's baseline file ([`baseline::hold`]). Called before a scenario
+/// asserts, so a failing budget still reports its numbers; the scenario keeps
+/// the returned hold to its end, so a bless waits for its assertions.
+fn hold_report(scenario: &str, report: &FrameReport, heap: HeapCounts) -> baseline::Held {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
     counts.extend(heap_counts(heap));
-    record_counts(scenario, &counts);
-}
-
-/// Writes `counts` as `<FLUI_PERF_OUT>/<scenario>.toml` when that variable is set.
-fn record_counts(scenario: &str, counts: &[(&str, u64)]) {
-    let Some(dir) = std::env::var_os("FLUI_PERF_OUT") else {
-        return;
-    };
-    let dir = std::path::PathBuf::from(dir);
-    std::fs::create_dir_all(&dir).expect("create FLUI_PERF_OUT");
-    let mut body = format!("[{scenario}]\n");
-    for (name, value) in counts {
-        writeln!(body, "{name} = {value}").expect("writing to a String cannot fail");
-    }
-    std::fs::write(dir.join(format!("{scenario}.toml")), body).expect("write perf record");
+    baseline::hold(scenario, &counts)
 }
 
 fn counter(report: &FrameReport, name: &str) -> u64 {
@@ -250,7 +245,7 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     app.laid.perform_reassemble();
     app.laid.reassemble_render_tree();
     let (report, allocations) = perf_measured(|| app.laid.pump_report(FRAME));
-    record("full_reassemble", &report, allocations);
+    let _baseline = hold_report("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
         if matches!(
@@ -282,7 +277,7 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     // Two frames: a lazy band that first appears is built after that frame's
     // paint and lands on the next (the ListView first-frame divergence).
     let (report, allocations) = perf_measured(|| app.pump_many(2));
-    record("list_10k_scroll_one_screen", &report, allocations);
+    let _baseline = hold_report("list_10k_scroll_one_screen", &report, allocations);
 
     assert!(
         band < 400,
@@ -361,7 +356,7 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     }
     let (first, first_built) = scroll_to(WARM_SCROLLS + 1);
     let (next, next_built) = scroll_to(WARM_SCROLLS + 2);
-    record_counts("list_10k_scroll_warm", &heap_counts(first));
+    let _baseline = baseline::hold("list_10k_scroll_warm", &heap_counts(first));
 
     assert!(
         first_built >= visible_rows && next_built >= visible_rows,
@@ -464,7 +459,7 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         controller.set_value(0.5).expect("no build is running");
         laid.pump_report(FRAME)
     });
-    record("slide_transition_tick", &report, allocations);
+    let _baseline = hold_report("slide_transition_tick", &report, allocations);
     assert_eq!(
         allocations,
         HeapCounts::default(),
@@ -551,7 +546,7 @@ fn label_change_heap(buttons: usize) -> HeapCounts {
 
 /// A label change costs the same over 500 rows as over 5 000: equal heap
 /// counts here, and equal instructions within a tolerance under
-/// `cargo xtask perf --instructions`. A frame that clears a table the mount
+/// `perf-gates`' callgrind step. A frame that clears a table the mount
 /// grew, or walks the tree to collect something only a few nodes report,
 /// fails the second while every counter of its work stays put.
 #[test]
@@ -562,10 +557,18 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
         if only.as_deref().is_some_and(|selected| selected != name) {
             continue;
         }
-        let heap = label_change_heap(buttons);
-        record_counts(&format!("label_change_{name}"), &heap_counts(heap));
-        measured.push((buttons, heap));
+        measured.push((name, buttons, label_change_heap(buttons)));
     }
+    // Both sizes are measured before either is held; a check stops at the
+    // first size whose counts fail.
+    let _baseline: Vec<baseline::Held> = measured
+        .iter()
+        .map(|(name, _, heap)| baseline::hold(&format!("label_change_{name}"), &heap_counts(*heap)))
+        .collect();
+    let measured: Vec<(usize, HeapCounts)> = measured
+        .into_iter()
+        .map(|(_, buttons, heap)| (buttons, heap))
+        .collect();
     assert!(
         !measured.is_empty(),
         "FLUI_PERF_SIZE names no size of {SCALING_SIZES:?}"
@@ -595,7 +598,7 @@ fn perf_raw_button_over_text() {
         ("text_reallocations", cost.bare.reallocations),
         ("text_bytes", cost.bare.live_bytes),
     ]);
-    record_counts("raw_button_over_text", &counts);
+    let _baseline = baseline::hold("raw_button_over_text", &counts);
 
     // One element for the button and one for its behaviours; one render
     // object. The allocations and bytes are held by the baseline, which
@@ -709,7 +712,7 @@ fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
 fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
     let (small, small_heap) = caret_blinks(1_000);
     let (large, large_heap) = caret_blinks(10_000);
-    record("caret_blink_in_10k_list", &large, large_heap);
+    let _baseline = hold_report("caret_blink_in_10k_list", &large, large_heap);
 
     for name in [
         "nodes_painted",
@@ -770,7 +773,7 @@ fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
             let _ = host.pump(FRAME);
         }
     });
-    record_counts("idle_frame_retained_scene", &heap_counts(allocations));
+    let _baseline = baseline::hold("idle_frame_retained_scene", &heap_counts(allocations));
     assert_eq!(
         allocations,
         HeapCounts::default(),
@@ -821,7 +824,7 @@ fn perf_a_not_shown_retry_republishes_the_held_version() {
     let shown = laid.painted_frame_count();
 
     let (retry, heap) = perf_measured(|| laid.pump_report(FRAME));
-    record("not_shown_retry", &retry, heap);
+    let _baseline = hold_report("not_shown_retry", &retry, heap);
     assert_eq!(
         laid.painted_frame_count(),
         shown + 1,
@@ -838,6 +841,266 @@ fn perf_a_not_shown_retry_republishes_the_held_version() {
     }
 }
 
+/// The registrations of [`Videos`]' two textures, which the test feeds.
+type Feeds = std::rc::Rc<std::cell::RefCell<Vec<TextureRegistration>>>;
+
+/// Two 40×40 external textures, registered when the state is created.
+#[derive(Clone, StatefulView)]
+struct Videos {
+    feeds: Feeds,
+}
+
+struct VideosState {
+    ids: [TextureId; 2],
+}
+
+impl StatefulView for Videos {
+    type State = VideosState;
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let registry = ctx
+            .texture_registry()
+            .expect("a window offers external textures");
+        let mut feeds = self.feeds.borrow_mut();
+        let ids = [(); 2].map(|()| {
+            let registration = registry.register().expect("a texture id");
+            let id = registration.id();
+            feeds.push(registration);
+            id
+        });
+        VideosState { ids }
+    }
+}
+
+impl ViewState<Videos> for VideosState {
+    fn build(&self, _view: &Videos, _ctx: &dyn BuildContext) -> impl IntoView {
+        Column::new(
+            self.ids
+                .iter()
+                .map(|id| SizedBox::new(40.0, 40.0).child(Texture::new(*id)).boxed())
+                .collect::<Vec<BoxedView>>(),
+        )
+    }
+}
+
+/// A label over two textures.
+#[derive(Clone, StatelessView)]
+struct VideoApp {
+    label: SharedSignal<String>,
+    feeds: Feeds,
+}
+
+impl StatelessView for VideoApp {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Column::new(vec![
+            SizedBox::height(LABEL_HEIGHT)
+                .child(Label {
+                    text: self.label.clone(),
+                })
+                .boxed(),
+            Videos {
+                feeds: self.feeds.clone(),
+            }
+            .boxed(),
+        ])
+    }
+}
+
+/// [`VideoApp`] mounted and settled, with its label and its textures' feeds.
+fn mount_videos() -> (LaidOut, SharedSignal<String>, Feeds) {
+    let label = SharedSignal::new(String::from("label"));
+    let feeds = Feeds::default();
+    let mut laid = lay_out(
+        VideoApp {
+            label: label.clone(),
+            feeds: feeds.clone(),
+        },
+        tight(WIDTH, HEIGHT),
+    );
+    for _ in 0..3 {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(feeds.borrow().len(), 2, "both textures registered");
+    (laid, label, feeds)
+}
+
+/// Feeds texture `index` of `feeds` a one-pixel frame of `shade`.
+fn feed(feeds: &Feeds, index: usize, shade: u8) {
+    feeds.borrow()[index].submit_frame(PixelImage::from_rgba8(
+        1,
+        1,
+        vec![shade, shade, shade, 255],
+    ));
+}
+
+/// The texture frames the sink took with the frame it presented last, as
+/// `(texture index, shade)` in the order the textures were registered.
+fn frames_taken(laid: &LaidOut, feeds: &Feeds) -> Vec<(usize, u8)> {
+    let feeds = feeds.borrow();
+    let mut frames: Vec<(usize, u8)> = laid
+        .sink()
+        .textures()
+        .frames
+        .iter()
+        .map(|(id, image)| {
+            let index = feeds
+                .iter()
+                .position(|registration| registration.id() == *id)
+                .expect("a frame of a registered texture");
+            (index, image.data()[0])
+        })
+        .collect();
+    frames.sort_unstable();
+    frames
+}
+
+fn shown_version(laid: &LaidOut) -> flui_layer::SceneVersionId {
+    laid.sink().version().expect("a version was presented").id()
+}
+
+/// A texture frame with nothing changed in the tree publishes the version the
+/// scene holds, with that frame for the raster host and no scene damage
+/// (ADR-0304 §8): it builds, lays out and paints nothing, applies no patch,
+/// and the sink takes the frame with it into the buffer it keeps, so a
+/// video's steady frames ask nothing of the heap. The raster host's half,
+/// which damages the texture's users alone, is `flui-app`'s
+/// `a_texture_frame_reaches_the_slot_as_its_users_damage`.
+#[test]
+fn perf_a_texture_frame_republishes_the_held_version() {
+    let (mut laid, _label, feeds) = mount_videos();
+    // The first frame grows the sink's buffer to its working size.
+    feed(&feeds, 0, 8);
+    laid.pump_for(FRAME);
+    let shown = shown_version(&laid);
+    let submits = laid.painted_frame_count();
+
+    feed(&feeds, 0, 9);
+    let (report, heap) = perf_measured(|| laid.pump_report(FRAME));
+    let _baseline = hold_report("texture_frame", &report, heap);
+    assert_eq!(
+        heap,
+        HeapCounts::default(),
+        "a steady texture frame allocates nothing"
+    );
+    for name in [
+        "builds_run",
+        "elements_rebuilt",
+        "nodes_laid_out",
+        "nodes_painted",
+        "layers_produced",
+        "scene_ops",
+        "damage_rects",
+        "damage_full",
+    ] {
+        assert_eq!(counter(&report, name), 0, "{name}: {report:#?}");
+    }
+    assert_eq!(
+        laid.painted_frame_count(),
+        submits + 1,
+        "the texture frame is published"
+    );
+    assert_eq!(shown_version(&laid), shown, "as the version already held");
+    assert_eq!(frames_taken(&laid, &feeds), [(0, 9)]);
+
+    laid.pump_for(FRAME);
+    assert_eq!(
+        laid.painted_frame_count(),
+        submits + 1,
+        "a frame with no texture frame waiting publishes nothing"
+    );
+}
+
+/// Frames requested with nothing changed after a texture frame went out
+/// publish nothing and ask nothing of the heap: the registry has no frame
+/// waiting, so the held version is not sent again (ADR-0304 §8).
+#[test]
+fn an_idle_frame_after_a_texture_frame_publishes_nothing() {
+    let feeds = Feeds::default();
+    let app = VideoApp {
+        label: SharedSignal::new(String::from("label")),
+        feeds: feeds.clone(),
+    };
+    let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
+    host.attach(&app).expect("a fresh host takes a root");
+    for _ in 0..3 {
+        let _ = host.pump(FRAME);
+    }
+    feed(&feeds, 1, 4);
+    let _ = host.pump(FRAME);
+    assert_eq!(host.sink().textures().frames.len(), 1, "the frame went out");
+    let submits = host.sink().submits();
+    let ((), allocations) = perf_measured(|| {
+        for _ in 0..10 {
+            host.request_frame();
+            let _ = host.pump(FRAME);
+        }
+    });
+    assert_eq!(
+        host.sink().submits(),
+        submits,
+        "an idle frame submits nothing"
+    );
+    assert_eq!(
+        allocations,
+        HeapCounts::default(),
+        "an idle frame allocates nothing"
+    );
+}
+
+/// Several texture frames fed between two frames go out in one publication,
+/// which carries the newest frame of each texture and builds nothing.
+#[test]
+fn texture_frames_between_two_frames_go_out_in_one_publication() {
+    let (mut laid, _label, feeds) = mount_videos();
+    let shown = shown_version(&laid);
+    let submits = laid.painted_frame_count();
+
+    feed(&feeds, 0, 1);
+    feed(&feeds, 0, 2);
+    feed(&feeds, 1, 3);
+    let report = laid.pump_report(FRAME);
+    assert_eq!(counter(&report, "builds_run"), 0, "{report:#?}");
+    assert_eq!(counter(&report, "nodes_painted"), 0, "{report:#?}");
+    assert_eq!(laid.painted_frame_count(), submits + 1, "one publication");
+    assert_eq!(shown_version(&laid), shown);
+    assert_eq!(
+        frames_taken(&laid, &feeds),
+        [(0, 2), (1, 3)],
+        "the newest frame of each texture"
+    );
+    laid.pump_for(FRAME);
+    assert_eq!(laid.painted_frame_count(), submits + 1, "and no other");
+}
+
+/// A texture frame fed while the tree has a change to draw goes out with that
+/// change's frame, which paints what the change alone paints: no second
+/// publication, and no repaint of the texture.
+#[test]
+fn a_texture_frame_rides_the_frame_of_a_tree_change() {
+    let (mut laid, label, feeds) = mount_videos();
+    label.set(String::from("first"));
+    let alone = laid.pump_report(FRAME);
+    assert!(
+        counter(&alone, "nodes_painted") > 0,
+        "the label repaints: {alone:#?}"
+    );
+    let submits = laid.painted_frame_count();
+    let before = shown_version(&laid);
+
+    label.set(String::from("other"));
+    feed(&feeds, 1, 7);
+    let report = laid.pump_report(FRAME);
+    assert_eq!(laid.painted_frame_count(), submits + 1, "one publication");
+    assert_ne!(shown_version(&laid), before, "of the label's new version");
+    assert_eq!(frames_taken(&laid, &feeds), [(1, 7)]);
+    assert_eq!(
+        counter(&report, "nodes_painted"),
+        counter(&alone, "nodes_painted"),
+        "the texture does not repaint: {report:#?}"
+    );
+    laid.pump_for(FRAME);
+    assert_eq!(laid.painted_frame_count(), submits + 1, "and no other");
+}
+
 /// What a `Semantics` with one action adds to the `Text` it holds in a
 /// window that collects no semantics: its element and render object, and no
 /// action route (ADR-0322 §8).
@@ -849,7 +1112,7 @@ fn perf_semantics_action_over_text() {
             .child(Text::new(format!("Row {row}")))
             .boxed()
     });
-    record_counts("semantics_action_over_text", &cost.counts());
+    let _baseline = baseline::hold("semantics_action_over_text", &cost.counts());
 }
 
 /// A press counter, driven the way an application's test drives it.

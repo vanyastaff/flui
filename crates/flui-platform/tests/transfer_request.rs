@@ -1,6 +1,6 @@
 //! Public transport delivery, cancellation and executor recovery contracts.
 use flui_foundation::testing::CountingWaker;
-use flui_platform::data_transfer::{
+use flui_platform::transfer::data::{
     TransferCompleter, TransferError, TransferPayload, TransferRequest,
 };
 use std::future::Future;

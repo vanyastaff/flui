@@ -58,7 +58,9 @@ committed that loop's result were inconsistent with each other and with Flutter
    a child sees is the viewport's bounds shrunk by the previous sliver's overlap (Flutter's
    `describeApproximatePaintClip`); the semantics clip is the bounds extended by the cache extent
    along the axis. The assembler drops a node whose rect falls outside the semantics clip and
-   marks hidden one fully outside the paint clip, in both its full walk and its graft.
+   marks hidden a node it forms fully outside the paint clip, in both its full walk and its
+   graft; content past the paint clip that merges into an ancestor leaves the ancestor's own
+   rect to decide.
 5. **Shrink-wrap keeps Flutter's infinite window.** The issue asked that an unbounded main axis
    never reach the grid arithmetic; Flutter passes the infinite window and the lazy objects bound a
    sentinel count (ADR-0053). Laying out with a bounded window and growing would reintroduce the
@@ -178,10 +180,12 @@ defaulting to `None` and both answering in the node's own coordinates. The seman
 them down the tree in root coordinates and applies Flutter's `_SemanticsGeometry` rules: a node's
 rect is narrowed to what the semantics clip leaves of it, a node the semantics clip leaves nothing
 of contributes no node (its children are still walked, since an overflowing child can extend back
-into the clip its parent fell outside of), and a node outside the paint clip keeps its semantics
-rect and gains the hidden flag — off-screen but reachable, which is what a "scroll to" action
-needs. Paint clips intersect down the chain; a semantics clip REPLACES the inherited one, so a
-scrollable inside a scrollable re-grants its own cache area to its own children.
+into the clip its parent fell outside of), and a node that forms outside the paint clip keeps its
+semantics rect and gains the hidden flag — off-screen but reachable, which is what a "scroll to"
+action needs. The flag belongs to that node: content merged into an ancestor does not carry it
+there, so a node in view stays visible whatever it merges. Paint clips intersect down the chain; a
+semantics clip REPLACES the inherited one, so a scrollable inside a scrollable re-grants its own
+cache area to its own children.
 
 Both viewports implement both hooks. The semantics clip is the bounds grown by the resolved cache
 extent along the scroll axis; the paint clip is the bounds, with the leading edge pushed in by the

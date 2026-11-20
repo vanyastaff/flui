@@ -12,7 +12,7 @@ use flui_interaction::{
 };
 use flui_platform::{
     EventTime,
-    pointer::{
+    input::pointer::{
         ButtonChange, CancelReason, DeviceId, PenTool, PointerButton, PointerButtons,
         PointerCancel, PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition,
         PointerPress, PointerRelease, PointerRole, PointerSample, PointerSource, Pressure,
@@ -308,7 +308,7 @@ fn metadata_boundary_reentry_does_not_restore_a_stale_newer_packet() {
         let superseded = PointerEvent::Cancel(PointerCancel::new(
             changed,
             flui_platform::EventTime::from_nanos(30),
-            flui_platform::pointer::CancelReason::Superseded,
+            flui_platform::input::pointer::CancelReason::Superseded,
         ));
         assert_eq!(
             seen.borrow().as_slice(),

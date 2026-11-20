@@ -445,6 +445,152 @@ pub(crate) fn a_provider_with_many_dependents_keeps_exactly_the_mounted_ones() {
     );
 }
 
+/// A dependent that reads `ThemeProvider` `reads` times in each build and
+/// logs its tag when its dependencies change.
+#[derive(Clone)]
+struct TaggedDependent {
+    tag: usize,
+    reads: usize,
+    log: Rc<RefCell<Vec<usize>>>,
+}
+
+struct TaggedDependentState(Rc<RefCell<Vec<usize>>>, usize);
+
+impl View for TaggedDependent {
+    fn create_element(self: Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl flui_view::StatefulView for TaggedDependent {
+    type State = TaggedDependentState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        TaggedDependentState(Rc::clone(&self.log), self.tag)
+    }
+}
+
+impl flui_view::ViewState<TaggedDependent> for TaggedDependentState {
+    fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {
+        self.0.borrow_mut().push(self.1);
+    }
+    fn build(&self, view: &TaggedDependent, ctx: &dyn BuildContext) -> impl IntoView {
+        for _ in 0..view.reads {
+            let _ = ctx.depend_on::<ThemeProvider, ()>(|_| ());
+        }
+        LeafView
+    }
+}
+
+/// A provider whose dependents outgrew its scan keeps finding them after a
+/// compaction: dependents registered once the live count fell back to the
+/// scanned size, while the index is still kept, are found and notified once
+/// each, in registration order, and a second read in one build or a later
+/// rebuild adds no second entry.
+pub(crate) fn a_provider_with_many_dependents_finds_ones_added_after_compaction() {
+    let (tree, owner) = create_tree_and_owner();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let provider_id = tree.borrow_mut().mount_root(
+        &ThemeProvider {
+            theme: MyTheme { color: 1 },
+            child: DummyChild,
+        },
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
+    let mount = |tag: usize| {
+        let child = tree.borrow_mut().insert(
+            &TaggedDependent {
+                tag,
+                // One dependent reads the provider twice in each build.
+                reads: if tag == 5 { 2 } else { 1 },
+                log: Rc::clone(&log),
+            },
+            provider_id,
+            tag,
+            &mut owner.borrow_mut().element_owner_mut(),
+        );
+        owner
+            .borrow_mut()
+            .schedule_build_for(child, 1, flui_view::RebuildReason::InitialMount);
+        owner.borrow_mut().build_scope(&mut tree.borrow_mut());
+        child
+    };
+    let dependents_of_provider = || {
+        tree.borrow()
+            .get(provider_id)
+            .expect("provider exists")
+            .element()
+            .as_inherited()
+            .expect("the provider is inherited")
+            .dependent_count()
+    };
+    let mut children: Vec<_> = (0..20).map(mount).collect();
+    assert_eq!(dependents_of_provider(), 20);
+
+    // Past the point where the holes outnumber the live entries, which
+    // compacts the list; eight stay, as many as a provider scans, while the
+    // index it built for twenty is still kept.
+    let removed: Vec<usize> = vec![0, 19, 7, 8, 9, 10, 11, 12, 13, 1, 2, 3];
+    for &slot in &removed {
+        tree.borrow_mut()
+            .remove(children[slot], &mut owner.borrow_mut().element_owner_mut());
+    }
+    assert_eq!(dependents_of_provider(), 8);
+    children.extend((20..25).map(mount));
+    assert_eq!(dependents_of_provider(), 13);
+
+    // A survivor reads again from a rebuild and from a detached context.
+    let survivor = children[4];
+    owner
+        .borrow_mut()
+        .schedule_build_for(survivor, 1, flui_view::RebuildReason::StateChange);
+    owner.borrow_mut().build_scope(&mut tree.borrow_mut());
+    {
+        let ctx = ElementBuildContext::for_element(survivor, tree.clone(), owner.clone())
+            .expect("the survivor is live");
+        let _ = ctx.depend_on::<ThemeProvider, ()>(|_| ());
+    }
+    assert_eq!(
+        dependents_of_provider(),
+        13,
+        "a re-read adds no second entry"
+    );
+    {
+        let tree_guard = tree.borrow();
+        let provider = tree_guard
+            .get(provider_id)
+            .expect("provider exists")
+            .element()
+            .downcast_ref::<InheritedElement<ThemeProvider>>()
+            .expect("provider is InheritedElement<ThemeProvider>");
+        for (slot, child) in children.iter().enumerate() {
+            assert_eq!(
+                provider.dependent(*child).is_some(),
+                !removed.contains(&slot),
+                "dependent in slot {slot}"
+            );
+        }
+    }
+
+    log.borrow_mut().clear();
+    tree.borrow_mut().update(
+        provider_id,
+        &ThemeProvider {
+            theme: MyTheme { color: 2 },
+            child: DummyChild,
+        },
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
+    assert_eq!(owner.borrow().dirty_count(), 13);
+    owner.borrow_mut().build_scope(&mut tree.borrow_mut());
+    let expected: Vec<usize> = (0..25).filter(|slot| !removed.contains(slot)).collect();
+    assert_eq!(
+        *log.borrow(),
+        expected,
+        "every live dependent is notified once, in registration order"
+    );
+    assert_eq!(dependents_of_provider(), 13);
+}
+
 // ============================================================================
 // get_inherited returns the value WITHOUT recording a
 // dependent.
@@ -630,7 +776,7 @@ mod did_change_dependencies_on_inherited_update {
         // parent instead of orphaning under a render-less owner-carrying
         // root.
         let render_root_element = tree.mount_root_with_pipeline_owner(
-            &flui_view::RootRenderView::new(provider_v1.clone(), 800.0, 600.0),
+            &flui_view::RootRenderView::new(provider_v1.clone()),
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(
                     flui_rendering::TextContextHandle::standalone(),

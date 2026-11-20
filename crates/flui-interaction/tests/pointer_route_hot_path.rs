@@ -11,10 +11,10 @@ use flui_foundation::geometry::Offset;
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerEventExt, PointerKind, make_move_event};
 use flui_interaction::pointer::{HitTestEntry, InteractionLane, PointerTarget, RenderId};
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
 };
-use flui_platform::{EventTime, keyboard::Modifiers};
+use flui_platform::{EventTime, input::keyboard::Modifiers};
 
 thread_local! {
     /// The allocations made on this thread. The count is per thread because
@@ -190,10 +190,12 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
 /// copying it, and keep a bounded tail however many arrive before the frame.
 fn binding_frame_coalescing_moves_bounded_history() {
     use flui_interaction::{binding::GestureBinding, ids::InputSurface, pointer::HitTestResult};
-    use flui_platform::pointer::{PointerButton, PointerButtons, PointerPress, PointerSource};
+    use flui_platform::input::pointer::{
+        PointerButton, PointerButtons, PointerPress, PointerSource,
+    };
     let binding = GestureBinding::new();
     let pointer = PointerSource::new(
-        flui_platform::pointer::PointerId::new(core::num::NonZeroU64::MIN),
+        flui_platform::input::pointer::PointerId::new(core::num::NonZeroU64::MIN),
         PointerKind::Touch,
     );
     let buttons = PointerButtons::only(PointerButton::PRIMARY);
@@ -307,11 +309,11 @@ fn empty_hit_test_result_allocates_nothing() {
 }
 
 fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
-    use flui_platform::pointer::{
+    use flui_platform::input::pointer::{
         PointerButton, PointerButtons, PointerPress, PointerRelease, PointerSource,
     };
     let pointer = PointerSource::new(
-        flui_platform::pointer::PointerId::new(core::num::NonZeroU64::MIN),
+        flui_platform::input::pointer::PointerId::new(core::num::NonZeroU64::MIN),
         PointerKind::Mouse,
     )
     .with_device(DeviceId::try_from(7_u64).expect("source device"))
@@ -416,7 +418,7 @@ fn resampler_raised_timestamp_keeps_checked_history_policy() {
 
 fn saturated_resampler_admission_reuses_bounded_history_storage() {
     use flui_interaction::pointer::PointerEventResampler;
-    use flui_platform::pointer::{PointerButton, PointerButtons, PointerRelease};
+    use flui_platform::input::pointer::{PointerButton, PointerButtons, PointerRelease};
     use web_time::{Duration, Instant};
     let [down, PointerEvent::Move(base_move), _] = resampler_packets(0) else {
         panic!("measured Move fixture")

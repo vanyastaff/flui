@@ -8,7 +8,6 @@
 //! [`ActivityArc`].
 
 use flui_sdk::foundation::Subscription;
-use std::any::Any;
 use std::f64::consts::TAU;
 use std::rc::Rc;
 use std::time::Duration;
@@ -496,10 +495,6 @@ impl CustomPainter for LinearWavePainter {
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         self.sample.repaint()
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 /// Paints a circular wavy indicator: for a determinate one the flat track with its gaps and a
@@ -574,9 +569,5 @@ impl CustomPainter for CircularWavePainter {
 
     fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         self.sample.repaint()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

@@ -111,9 +111,9 @@ fn waypoint_rect_at(points: [Rect; 4], progress: f64) -> Rect {
 
 fn painted_hero_bounds(laid: &LaidOut, color: Color) -> Vec<Rect> {
     use flui_foundation::geometry::Matrix4;
+    use flui_layer::Layer;
     use flui_painting::DrawOp;
     use flui_painting::paint::Clip;
-    use flui_rendering::layer::Layer;
     let tree = laid.layer_tree().expect("mounted scene");
     let mut painted = Vec::new();
     for (id, node) in tree.iter() {
@@ -130,7 +130,7 @@ fn painted_hero_bounds(laid: &LaidOut, color: Color) -> Vec<Rect> {
             let mut visible = Some(command.transform.transform_rect(rect));
             let mut parent = tree.parent(id);
             while let Some(id) = parent {
-                let layer = tree.get_layer(id).expect("live scene ancestor");
+                let layer = tree.layer(id).expect("live scene ancestor");
                 let transform = match layer {
                     Layer::Offset(offset) => Some(Matrix4::translation(
                         offset.offset().dx,

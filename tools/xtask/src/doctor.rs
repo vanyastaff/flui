@@ -13,12 +13,98 @@ use std::io::Write as _;
 use std::process::{Command, ExitCode, Stdio};
 
 use crate::fonts::find_python;
-use crate::util::repo_root;
-use crate::wasm::repo_locked_version;
+use anyhow::Context as _;
+
+use crate::util::{read, repo_root};
 
 /// The lychee CI's `checks` job installs (its `LYCHEE_VERSION`), which the
 /// install hint names.
 const LYCHEE_VERSION: &str = "0.24.2";
+
+/// Every version of the `[[package]]`s named `name` in a Cargo.lock, sorted
+/// and without repeats. The wasm-bindgen CLI must match the locked
+/// `wasm-bindgen` exactly, or `wasm-bindgen-test-runner` refuses to start, so
+/// a lock with two of them has no version to install: CI's `wasm-check` job
+/// fails on it, and doctor's row does too.
+fn locked_package_versions(lock: &str, name: &str) -> anyhow::Result<Vec<String>> {
+    let parsed: toml::Table = lock.parse().context("parsing Cargo.lock")?;
+    let packages = parsed
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .context("Cargo.lock has no [[package]] array")?;
+    let mut versions: Vec<String> = packages
+        .iter()
+        .filter(|pkg| pkg.get("name").and_then(toml::Value::as_str) == Some(name))
+        .filter_map(|pkg| pkg.get("version")?.as_str())
+        .map(str::to_owned)
+        .collect();
+    versions.sort();
+    versions.dedup();
+    Ok(versions)
+}
+
+/// The `wasm-bindgen` versions this repository's Cargo.lock pins, or why it
+/// could not be read.
+fn locked_wasm_bindgen() -> anyhow::Result<Vec<String>> {
+    read("Cargo.lock").and_then(|lock| locked_package_versions(&lock, "wasm-bindgen"))
+}
+
+/// A doctor row's verdict: whether the tool is usable, what the row says, and
+/// how to install it when it is not.
+#[derive(Debug, PartialEq, Eq)]
+struct Verdict {
+    ok: bool,
+    detail: String,
+    install: String,
+}
+
+/// The wasm-bindgen CLI's row, from the versions Cargo.lock pins and the one
+/// installed: usable only when the lock pins exactly one and it is installed.
+/// A lock that cannot be read is its own failure, not a lock with no
+/// wasm-bindgen.
+fn wasm_bindgen_row(locked: &anyhow::Result<Vec<String>>, have: Option<&str>) -> Verdict {
+    let locked = match locked {
+        Ok(versions) => versions.as_slice(),
+        Err(error) => {
+            return Verdict {
+                ok: false,
+                detail: format!("{error:#}"),
+                install: "repair Cargo.lock: cargo refuses it too".to_owned(),
+            };
+        }
+    };
+    match (locked, have) {
+        ([want], Some(have)) if want == have => Verdict {
+            ok: true,
+            detail: format!("{have} (= Cargo.lock)"),
+            install: String::new(),
+        },
+        ([want], have) => Verdict {
+            ok: false,
+            detail: format!(
+                "have {}, Cargo.lock pins {want} (the runner refuses a mismatch)",
+                have.unwrap_or("none")
+            ),
+            install: format!("cargo install --locked wasm-bindgen-cli --version {want}"),
+        },
+        ([], _) => Verdict {
+            ok: false,
+            detail: "Cargo.lock has no wasm-bindgen package to pin the CLI to".to_owned(),
+            install: "cargo install --locked wasm-bindgen-cli --version <Cargo.lock's wasm-bindgen>"
+                .to_owned(),
+        },
+        (several, _) => Verdict {
+            ok: false,
+            detail: format!(
+                "Cargo.lock pins {} wasm-bindgen versions ({}); the runner matches one",
+                several.len(),
+                several.join(", ")
+            ),
+            install: "leave one wasm-bindgen in Cargo.lock (`cargo tree -i wasm-bindgen` shows who needs each)"
+                .to_owned(),
+        },
+    }
+}
 
 /// Which set of tools is required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -78,13 +164,21 @@ struct Doctor {
 }
 
 impl Doctor {
-    fn check_android_ndk(&mut self, compiler: &OsStr, archiver: &OsStr) {
+    /// `None` for a tool no variable names, which fails its row.
+    fn check_android_ndk(&mut self, compiler: Option<&OsStr>, archiver: Option<&OsStr>) {
         // The floor in platform-support.toml (ADR-0244); an unreadable file fails the row.
         let api = crate::platform_floor::android_api();
-        let compiler_ok = api
-            .as_ref()
-            .is_ok_and(|api| android_compiler_available(compiler, *api));
-        let archiver_ok = android_archiver_available(archiver);
+        let compiler_ok = compiler.is_some_and(|compiler| {
+            api.as_ref()
+                .is_ok_and(|api| android_compiler_available(compiler, *api))
+        });
+        let archiver_ok = archiver.is_some_and(android_archiver_available);
+        let detail = |tool: Option<&OsStr>, variable: &str| {
+            tool.map_or_else(
+                || format!("{variable} not set"),
+                |tool| tool.to_string_lossy().into_owned(),
+            )
+        };
         let hint = match &api {
             Ok(api) => format!(
                 "install the Android NDK; set CC_aarch64_linux_android to its API-{api} clang wrapper and AR_aarch64_linux_android to its llvm-ar"
@@ -95,14 +189,14 @@ impl Doctor {
             Scope::Full,
             "Android NDK compiler",
             compiler_ok,
-            &compiler.to_string_lossy(),
+            &detail(compiler, "CC_aarch64_linux_android"),
             &hint,
         );
         self.row(
             Scope::Full,
             "Android NDK archiver",
             archiver_ok,
-            &archiver.to_string_lossy(),
+            &detail(archiver, "AR_aarch64_linux_android"),
             &hint,
         );
     }
@@ -264,17 +358,26 @@ pub(crate) fn android_archiver_available(archiver: &OsStr) -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-/// Select the same target overrides that cc-rs consumes.
-pub(crate) fn android_tool(prefix: &str, fallback: &str) -> std::ffi::OsString {
+/// The Android compiler or archiver (`prefix` `CC` or `AR`) a cross build takes from the
+/// environment, read from the variables cc-rs reads, in its order. `None` when none is set: cc-rs
+/// then guesses a wrapper name, which doctor does not probe.
+pub(crate) fn android_tool(prefix: &str) -> Option<std::ffi::OsString> {
+    android_tool_in(prefix, |name| std::env::var_os(name))
+}
+
+/// [`android_tool`] over the variables `lookup` reads.
+fn android_tool_in(
+    prefix: &str,
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
     [
         format!("{prefix}_aarch64-linux-android"),
         format!("{prefix}_aarch64_linux_android"),
         format!("TARGET_{prefix}"),
         prefix.to_owned(),
     ]
-    .into_iter()
-    .find_map(std::env::var_os)
-    .unwrap_or_else(|| fallback.into())
+    .iter()
+    .find_map(|name| lookup(name))
 }
 
 fn first_line(bytes: &[u8]) -> String {
@@ -390,7 +493,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     );
 
     // The heavier jobs.
-    doctor.check_android_ndk(&android_tool("CC", "clang"), &android_tool("AR", "llvm-ar"));
+    doctor.check_android_ndk(android_tool("CC").as_deref(), android_tool("AR").as_deref());
     if os != "windows" {
         doctor.check_cargo_sub(Scope::Full, "xwin", "cargo install --locked cargo-xwin --version 0.23.1 (also needs clang/LLVM and MSVC SDK/CRT provisioning)");
     }
@@ -413,37 +516,16 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     for (sub, krate) in HEAVY_CARGO_SUBS {
         doctor.check_cargo_sub(Scope::Full, sub, &format!("cargo install --locked {krate}"));
     }
-    let want = repo_locked_version("wasm-bindgen").ok().flatten();
     let have = succeeded_first_line("wasm-bindgen", &["--version"])
         .and_then(|line| line.split(' ').nth(1).map(str::to_owned));
-    match (&want, &have) {
-        (Some(want), Some(have)) if want == have => {
-            doctor.row(
-                Scope::Full,
-                "wasm-bindgen-cli",
-                true,
-                &format!("{have} (= Cargo.lock)"),
-                "",
-            );
-        }
-        (Some(want), have) => doctor.row(
-            Scope::Full,
-            "wasm-bindgen-cli",
-            false,
-            &format!(
-                "have {}, Cargo.lock pins {want} (the runner refuses a mismatch)",
-                have.as_deref().unwrap_or("none")
-            ),
-            &format!("cargo install --locked wasm-bindgen-cli --version {want}"),
-        ),
-        (None, _) => doctor.row(
-            Scope::Full,
-            "wasm-bindgen-cli",
-            false,
-            "Cargo.lock has no wasm-bindgen package to pin the CLI to",
-            "cargo install --locked wasm-bindgen-cli --version <Cargo.lock's wasm-bindgen>",
-        ),
-    }
+    let row = wasm_bindgen_row(&locked_wasm_bindgen(), have.as_deref());
+    doctor.row(
+        Scope::Full,
+        "wasm-bindgen-cli",
+        row.ok,
+        &row.detail,
+        &row.install,
+    );
     let actionlint = doctor.brew_or(
         "actionlint",
         "go install github.com/rhysd/actionlint/cmd/actionlint@latest",
@@ -546,10 +628,47 @@ mod tests {
 
     fn a_version_only_compiler_does_not_supply_android_headers() {
         let mut full = doctor(Mode::Full);
-        full.check_android_ndk(OsStr::new("cargo"), OsStr::new("cargo"));
+        full.check_android_ndk(Some(OsStr::new("cargo")), Some(OsStr::new("cargo")));
         assert!(
             full.summary()
                 .contains("1 missing for the full local checks")
+        );
+        // No variable names a tool: cc-rs would guess one, so neither row passes.
+        let mut unset = doctor(Mode::Full);
+        unset.check_android_ndk(None, None);
+        assert!(
+            unset
+                .summary()
+                .contains("2 missing for the full local checks")
+        );
+    }
+
+    /// The tool is read from the variables cc-rs reads, the target-specific one first, and no
+    /// fallback stands in when none is set.
+    fn the_android_tool_is_the_first_variable_cc_rs_reads() {
+        let set = |names: &'static [&'static str]| {
+            move |name: &str| names.contains(&name).then(|| name.into())
+        };
+        assert_eq!(android_tool_in("CC", set(&[])), None);
+        assert_eq!(
+            android_tool_in("AR", set(&["AR", "TARGET_AR"])),
+            Some("TARGET_AR".into())
+        );
+        assert_eq!(
+            android_tool_in(
+                "CC",
+                set(&[
+                    "CC",
+                    "TARGET_CC",
+                    "CC_aarch64_linux_android",
+                    "CC_aarch64-linux-android"
+                ])
+            ),
+            Some("CC_aarch64-linux-android".into())
+        );
+        assert_eq!(
+            android_tool_in("CC", set(&["CC", "CC_aarch64_linux_android"])),
+            Some("CC_aarch64_linux_android".into())
         );
     }
 
@@ -562,6 +681,117 @@ mod tests {
                 .any(|line| line.trim() == format!("LYCHEE_VERSION: {LYCHEE_VERSION}")),
             "ci.yml's LYCHEE_VERSION is not {LYCHEE_VERSION}"
         );
+    }
+
+    /// Every locked version of the named package, and only of that one: a
+    /// lock with two `wasm-bindgen`s yields both, which doctor reports as a
+    /// failed row as CI's `wasm-check` fails the job.
+    fn the_locked_versions_are_the_named_packages() {
+        let package = |name: &str, version: &str| {
+            format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n\n")
+        };
+        let one = format!(
+            "version = 4\n\n{}{}",
+            package("wasm-bindgen-macro", "9.9.9"),
+            package("wasm-bindgen", "0.2.1")
+        );
+        assert_eq!(
+            locked_package_versions(&one, "wasm-bindgen").expect("parses"),
+            ["0.2.1"]
+        );
+        assert_eq!(
+            locked_package_versions(&one, "absent").expect("parses"),
+            Vec::<String>::new()
+        );
+        let two = format!(
+            "{one}{}{}",
+            package("wasm-bindgen", "0.1.9"),
+            package("wasm-bindgen", "0.2.1")
+        );
+        assert_eq!(
+            locked_package_versions(&two, "wasm-bindgen").expect("parses"),
+            ["0.1.9", "0.2.1"]
+        );
+        let malformed = locked_package_versions("[[package]\n", "wasm-bindgen")
+            .expect_err("a lock that is not TOML");
+        assert_eq!(malformed.to_string(), "parsing Cargo.lock");
+        let empty = locked_package_versions("version = 4\n", "wasm-bindgen")
+            .expect_err("a lock with no packages");
+        assert_eq!(empty.to_string(), "Cargo.lock has no [[package]] array");
+    }
+
+    /// This repository's lock pins one wasm-bindgen, the version CI's
+    /// `wasm-check` installs the CLI at.
+    fn this_lock_pins_one_wasm_bindgen() {
+        let locked = locked_wasm_bindgen().expect("Cargo.lock reads");
+        let [version] = locked.as_slice() else {
+            panic!(
+                "Cargo.lock pins {} wasm-bindgen versions: {locked:?}",
+                locked.len()
+            );
+        };
+        let lock = read("Cargo.lock").expect("Cargo.lock reads");
+        assert!(
+            lock.contains(&format!(
+                "name = \"wasm-bindgen\"\nversion = \"{version}\"\n"
+            )),
+            "{version} is not the wasm-bindgen entry of Cargo.lock"
+        );
+    }
+
+    /// The row is usable only for one locked version equal to the installed
+    /// one, and each other case names what to do.
+    fn the_wasm_bindgen_row_needs_one_locked_version_installed() {
+        let one = Ok(vec!["0.2.1".to_owned()]);
+        assert_eq!(
+            wasm_bindgen_row(&one, Some("0.2.1")),
+            Verdict {
+                ok: true,
+                detail: "0.2.1 (= Cargo.lock)".to_owned(),
+                install: String::new(),
+            }
+        );
+        for have in [Some("0.2.0"), None] {
+            let row = wasm_bindgen_row(&one, have);
+            assert!(!row.ok, "{have:?}");
+            assert_eq!(
+                row.install,
+                "cargo install --locked wasm-bindgen-cli --version 0.2.1"
+            );
+            assert!(row.detail.contains(have.unwrap_or("none")), "{row:?}");
+        }
+        let none = wasm_bindgen_row(&Ok(Vec::new()), Some("0.2.1"));
+        assert!(!none.ok);
+        assert!(none.detail.contains("no wasm-bindgen"), "{none:?}");
+        assert!(
+            none.install
+                .starts_with("cargo install --locked wasm-bindgen-cli"),
+            "{none:?}"
+        );
+        let unreadable = wasm_bindgen_row(
+            &locked_package_versions("[[package]\n", "wasm-bindgen"),
+            Some("0.2.1"),
+        );
+        assert!(!unreadable.ok);
+        assert!(
+            unreadable.detail.starts_with("parsing Cargo.lock"),
+            "an unreadable lock names why: {unreadable:?}"
+        );
+        assert!(
+            unreadable.install.starts_with("repair Cargo.lock"),
+            "{unreadable:?}"
+        );
+        let two = wasm_bindgen_row(
+            &Ok(vec!["0.1.9".to_owned(), "0.2.1".to_owned()]),
+            Some("0.2.1"),
+        );
+        assert!(!two.ok, "a lock with two versions has none to install");
+        assert!(
+            two.detail
+                .contains("pins 2 wasm-bindgen versions (0.1.9, 0.2.1)"),
+            "{two:?}"
+        );
+        assert!(two.install.starts_with("leave one wasm-bindgen"), "{two:?}");
     }
 
     fn only_apple_hosts_require_the_ios_target() {
@@ -590,12 +820,28 @@ mod tests {
                     the_lychee_hint_names_the_version_ci_installs as fn(),
                 ),
                 (
+                    "the_locked_versions_are_the_named_packages",
+                    the_locked_versions_are_the_named_packages as fn(),
+                ),
+                (
+                    "this_lock_pins_one_wasm_bindgen",
+                    this_lock_pins_one_wasm_bindgen as fn(),
+                ),
+                (
+                    "the_wasm_bindgen_row_needs_one_locked_version_installed",
+                    the_wasm_bindgen_row_needs_one_locked_version_installed as fn(),
+                ),
+                (
                     "only_apple_hosts_require_the_ios_target",
                     only_apple_hosts_require_the_ios_target as fn(),
                 ),
                 (
                     "a_version_only_compiler_does_not_supply_android_headers",
                     a_version_only_compiler_does_not_supply_android_headers as fn(),
+                ),
+                (
+                    "the_android_tool_is_the_first_variable_cc_rs_reads",
+                    the_android_tool_is_the_first_variable_cc_rs_reads as fn(),
                 ),
                 (
                     "a_failing_binary_probe_is_not_an_available_tool",

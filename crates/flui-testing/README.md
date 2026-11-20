@@ -49,7 +49,7 @@ Implemented:
   runtime and returns a `FrameReport`: the build owner's report, the pipeline's
   phase counters and the scene patch's cost, differenced across the frame. The
   counted perf scenarios built on it live in `flui-widgets`' `perf` test target
-  (see `cargo xtask perf`).
+  (held to their baseline by `FLUI_PERF_BASELINE`; see docs/testing.md).
 
 This crate is the workspace's **test-support** package, not just one driver.
 Fake platform capabilities and golden-image helpers belong here as they land,

@@ -45,7 +45,7 @@
 
 ## Числовые ворота программы
 
-Замер ведётся гейтами `main`: счётчики кадра `cargo xtask perf --check`
+Замер ведётся гейтами `main`: счётчики кадра задания `perf-gates` (`FLUI_PERF_BASELINE=check`)
 (`crates/flui-widgets/tests/perf.rs`, `crates/flui-widgets/perf/baseline/`), счётчик аллокаций
 на кадр и равенство числа инструкций на двух размерах дерева. Время по часам воротами программы
 не служит. Одно исключение: условие слияния RS4 вместе с RS8 (задача RS4 в [tasks.md](tasks.md)),
@@ -56,7 +56,7 @@ update и repaint `paint/rotated_box_turn_change/inline` по criterion не х�
 |---|---|---|
 | G1 | `caret_blink_in_10k_list`: мигание каретки в списке из 1 000 и из 10 000 элементов | `nodes_painted`, `scene_ops`, `chunks_recorded`, `scene_nodes_visited` равны на двух размерах; инструкции в пределах 5 % |
 | G2 | `two_distant_changes`: два изменения в противоположных углах | `damage_rects = 2`, `region_passes ≤ 2`; readback-строка `region_frames_match_a_full_frame` |
-| G3 | `idle_frame_retained_scene`: кадр без изменений сцены, но с запрошенным кадром | `scene_ops = 0`, `chunks_recorded = 0`, аллокаций в `flui-layer` 0 |
+| G3 | `idle_frame_retained_scene`: кадр без изменений сцены, но с запрошенным кадром, ничего не публикует; `texture_frame`: кадр, в котором ждут одни обновления текстур, публикует удержанную версию с ними и без damage сцены (ADR-0304 §8) | `scene_ops = 0`, `chunks_recorded = 0`, аллокаций в `flui-layer` 0; без кадров текстур — ноль отправок; с ними — одна отправка, `builds_run = 0`, `nodes_painted = 0` |
 | G4 | `scroll_one_row_under_fixed_clip`: прокрутка на целое число пикселей | `chunks_recorded` равно числу вошедших строк, `recording_cache_hits` равно числу оставшихся |
 | G5 | `two_windows_one_context`: два offscreen-слота | 1 instance, 1 device, 1 атлас, 0 повторных сборок пайплайна |
 | G6 | `not_shown_retry`: повтор после `PresentDisposition::NotShown` | `nodes_painted = 0`, `chunks_recorded = 0` |

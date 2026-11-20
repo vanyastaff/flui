@@ -2,7 +2,7 @@
 //! content token, placement and own region, and a comparison against the
 //! previous frame's records.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::{LayerId, RenderId};
@@ -13,7 +13,7 @@ use super::DamageMode;
 use super::closure::{Closure, Closures, close_over, filter_closure, is_projective};
 use crate::{
     ContentToken, DamageRect, DamageRegion, FullReason, Layer, LayerTree, Region, ResyncReason,
-    Scene, resolve_follower_transform,
+    resolve_follower_transform,
 };
 
 /// Produces a frame's [`DamageRegion`] by comparing its repaint-boundary
@@ -91,10 +91,10 @@ impl LayerDiffer {
             .map_or(0, |frame| frame.boundaries.len())
     }
 
-    /// The damage of `scene` (a version compared as its flattened tree) against
-    /// the scene this differ saw last, on a
+    /// The damage of `tree` (a version compares as its flattened tree) against
+    /// the tree this differ saw last, on a
     /// surface of `surface` physical pixels `(width, height)`.
-    pub fn diff(&mut self, scene: &Scene, surface: (u32, u32)) -> DamageRegion {
+    pub fn diff(&mut self, tree: &LayerTree, surface: (u32, u32)) -> DamageRegion {
         let DamageMode::On { full_above } = self.mode else {
             self.previous = None;
             return DamageRegion::Full(FullReason::DamageOff);
@@ -103,10 +103,7 @@ impl LayerDiffer {
             self.previous = None;
             return DamageRegion::Full(FullReason::SurfaceChanged);
         }
-        let current = match scene.content() {
-            crate::SceneContent::Tree(tree) => Frame::capture(tree, surface),
-            crate::SceneContent::Version(version) => Frame::capture(&version.flatten(), surface),
-        };
+        let current = Frame::capture(tree, surface);
         let region = match (&self.previous, &current) {
             (Some(previous), Some(current)) => compare(previous, current, full_above),
             (None, _) => DamageRegion::Full(FullReason::FirstFrame),
@@ -126,7 +123,7 @@ struct Frame {
     /// Every effect layer on some stamped layer's ancestor chain, cloned once
     /// per frame; [`Record::effects`] indexes into it.
     effects: Vec<Layer>,
-    boundaries: HashMap<RenderId, Record>,
+    boundaries: FxHashMap<RenderId, Record>,
     /// Content no token vouches for, in surface pixels.
     volatile: Option<Rect<f64>>,
     /// What each filter of the frame reads and writes ([`read_closure`](super::closure::read_closure)).
@@ -199,7 +196,7 @@ impl Frame {
             surface,
             root,
             effects: Vec::new(),
-            boundaries: HashMap::new(),
+            boundaries: FxHashMap::default(),
             volatile: None,
             closures: Closures::new(),
         };
@@ -324,22 +321,6 @@ impl Frame {
                         frame.volatile = Some(join(frame.volatile, rect));
                     }
                     picture.picture().damage_extent()
-                }
-                Layer::Canvas(canvas) => {
-                    ctx.volatile = true;
-                    canvas.display_list().damage_extent()
-                }
-                Layer::Texture(texture) => {
-                    ctx.volatile = true;
-                    Some(DamageExtent::rect(texture.bounds()))
-                }
-                Layer::PlatformView(view) => {
-                    ctx.volatile = true;
-                    Some(DamageExtent::rect(view.bounds()))
-                }
-                Layer::PerformanceOverlay(overlay) => {
-                    ctx.volatile = true;
-                    Some(DamageExtent::rect(overlay.bounds()))
                 }
                 // The masked result composites over the mask's whole bounds
                 // with the mask's blend mode: under a destination-replacing

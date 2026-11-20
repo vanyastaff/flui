@@ -1,114 +1,39 @@
-//! Protocol-specific render state storage.
+//! The per-node state a render object's protocol keeps beside it.
 //!
-//! This module provides lock-free state storage for render objects:
-//! - Atomic flags for lock-free dirty tracking
-//! - Mutable geometry and constraints (`Option<T>`, mutated each layout
-//!   pass via `&mut self` accessors)
-//! - Atomic offset updates for paint positioning
-//! - Boundary accessors (relayout/repaint) for pipeline-owner registration
+//! - Dirty and boundary flags, in a [`RenderFlagsCell`] changed through `&self`.
+//! - The constraints and geometry of the last layout, in the protocol's
+//!   [`LayoutRecord`](crate::protocol::Protocol::LayoutRecord), overwritten
+//!   by each layout through `&mut self`.
+//! - The offset the parent assigned, and the layout generations that tell
+//!   paint, hit testing and semantics whether the parent still places it.
 //!
-//! Geometry and constraints previously used `OnceCell` for write-once
-//! semantics; the resulting panic-on-second-set crashed any re-layout.
-//! They are stored as `Option<T>` so re-layout overwrites unconditionally,
-//! as a straight assignment. `set_constraints`/`set_geometry`/`set_size`/
-//! `set_sliver_geometry` take `&mut self`; production callers
-//! (`RenderEntry::layout` and the RenderBox/RenderSliver helpers) already
-//! hold a mut state borrow.
+//! Everything changed through `&self` is a `Cell`: the render tree is
+//! `!Send + !Sync` and one thread runs every pipeline pass (ADR-0323 §1).
 //!
-//! Production dirty marking does **not** live here. Authoritative render-object
-//! setters return `RenderUpdateImpact`; `flui-view` forwards that value to
+//! Dirty marking does not live here. Render-object setters return
+//! `RenderUpdateImpact`; `flui-view` forwards it to
 //! [`PipelineOwner::apply_render_update_impact`](crate::pipeline::PipelineOwner::apply_render_update_impact),
-//! whose layout branch performs the `mark_needs_layout` walk.
-//! The boundary-aware propagation methods that previously hung off
-//! `RenderState<P>` were removed as unreachable code; the
-//! `RenderDirtyPropagation` trait that was kept around as a "cost-cheap
-//! option" was deleted because its `ElementId` typing did not match the
-//! crate's `RenderId` key.
-//!
-//! # Design Philosophy
-//!
-//! - **Lock-free when possible**: Atomic operations for hot paths (flags + offset)
-//! - **Cache-friendly**: Optimized memory layout for performance
-//! - **Zero-cost abstractions**: No overhead for unused features
-//!
-//! # Architecture
-//!
-//! ```text
-//! RenderState<P>
-//!  ├── flags: AtomicRenderFlags (lock-free, &self mutation)
-//!  ├── geometry: Option<ProtocolGeometry<P>> (&mut self set/clear)
-//!  ├── constraints: Option<ProtocolConstraints<P>> (&mut self set/clear)
-//!  └── offset: OffsetCell (lock-free atomic updates)
-//! ```
-//!
-//! # Performance Notes
-//!
-//! ## Lock-Free Dirty Flags
-//!
-//! Dirty flags use atomic operations for zero-contention access:
-//! - Read: Single atomic load (≈1ns)
-//! - Write: Single atomic fetch_or/fetch_and (≈1-5ns)
-//! - No blocking, no context switches
-//!
-//! ## Mutable Geometry/Constraints
-//!
-//! Plain `Option<T>` fields mutated via `&mut self`:
-//! - Set: Direct field assignment (≈1ns)
-//! - Read: Direct field load (zero-cost via `Copy` types)
-//! - Re-layout: Idempotent overwrite — no clear-before-set required
-//!
-//! Thread-safety on these fields is enforced by Rust's borrow checker:
-//! pipeline layout is single-threaded by contract (the contract a render
-//! pass holds `&mut RenderEntry<P>` exclusively for its node, so the inner
-//! `&mut RenderState<P>` access is statically race-free).
-//!
-//! # Examples
-//!
-//! ## Basic Usage
-//!
-//! ```rust,ignore
-//! use flui_rendering::core::{BoxRenderState, RenderFlags};
-//!
-//! let mut state = BoxRenderState::new();
-//!
-//! // Lock-free flag checks (hot path)
-//! if state.needs_layout() {
-//!     // ... perform layout ...
-//!     state.clear_needs_layout();
-//! }
-//!
-//! // Write geometry idempotently after layout
-//! state.set_geometry(computed_size);
-//!
-//! // Read geometry many times during paint (Copy, zero-cost)
-//! let size = state.geometry();
-//! ```
+//! whose layout branch walks `mark_needs_layout`.
 
+use std::cell::Cell;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-// NOTE: `OnceCell` was previously imported here for `geometry`/`constraints`
-// write-once semantics; both fields moved to `Option<T>` so the import is
-// no longer needed.
+use flui_foundation::RenderId;
 
-use crate::protocol::{
-    BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol,
-};
-use crate::storage::flags::{AtomicRenderFlags, RenderFlags};
+use crate::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use crate::storage::flags::{RenderFlags, RenderFlagsCell};
 
 mod constraints;
 mod flag_accessors;
 mod geometry;
 mod layout_cache;
+mod layout_record;
 mod offset;
 
 pub use layout_cache::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
+pub use layout_record::{BoxLayoutRecord, LayoutRecord, SliverLayoutRecord};
 
 use offset::OffsetCell;
-
-// ============================================================================
-// TYPE ALIASES
-// ============================================================================
 
 /// Render state for Box protocol (uses Size and BoxConstraints).
 pub type BoxRenderState = RenderState<BoxProtocol>;
@@ -117,75 +42,29 @@ pub type BoxRenderState = RenderState<BoxProtocol>;
 /// SliverConstraints).
 pub type SliverRenderState = RenderState<SliverProtocol>;
 
-// ============================================================================
-// RENDER STATE
-// ============================================================================
-
-/// Protocol-specific render state storage.
+/// The state the pipeline keeps for one render object of protocol `P`.
 ///
-/// This struct provides efficient storage for render object state with:
-/// - Lock-free dirty flags using atomic operations
-/// - Boundary accessors (relayout/repaint) for pipeline-owner registration
-/// - Mutable geometry and constraints using `Option` (set/cleared via `&mut self`)
-/// - Atomic offset updates for paint positioning
-///
-/// Boundary-aware dirty propagation is **not** performed here. Production
-/// dirty marking goes through `PipelineOwner::add_node_needing_layout /
-/// mark_needs_paint` invoked from `flui-view` and `flui-hot-reload`.
-///
-/// # Memory Layout
-///
-/// ```text
-/// [AtomicRenderFlags: 4 bytes]        - Hot path, always accessible
-/// [Option<Geometry>: 0-N bytes]        - Set/cleared each layout pass
-/// [Option<Constraints>: 0-N bytes]     - Set/cleared each layout pass
-/// [OffsetCell: 8 bytes]             - Lock-free f64 pair
-/// ```
-///
-/// Total: ≈44-60 bytes depending on protocol geometry size
-///
-/// # Thread Safety
-///
-/// Atomic flag operations are thread-safe. Geometry and constraints are
-/// accessed only through `&mut RenderState` during layout — no lock needed.
-///
-/// # Performance Characteristics
-///
-/// - Flag checks: O(1), ≈1ns, lock-free
-/// - Flag updates: O(1), ≈1-5ns, lock-free
-/// - Geometry reads: O(1), ≈1ns after first set
-/// - Geometry writes: O(1), ≈10ns first time, then cached
-/// - Offset reads: O(1), ≈1ns, lock-free
-/// - Offset writes: O(1), ≈5ns, lock-free
+/// Every node occupies a render-slab slot as large as the larger of the
+/// two protocols' entries, so this struct is sized for the box protocol:
+/// the box record (`Size`, `BoxConstraints`) is inline and the sliver
+/// record is one pointer to a record allocated on the sliver's first
+/// layout. `size_of::<RenderNode>()` is pinned by
+/// `render_node_slot_stays_within_its_budget`.
 #[derive(Debug)]
 pub struct RenderState<P: Protocol> {
-    /// Atomic flags for lock-free dirty state checks.
-    ///
-    /// Hot path operations (needs_layout, needs_paint) go here.
-    /// Uses single atomic operations for best performance.
-    flags: AtomicRenderFlags,
+    /// Dirty and boundary flags.
+    flags: RenderFlagsCell,
 
-    /// Cached layout result (protocol-specific geometry).
-    ///
-    /// For BoxProtocol: Size
-    /// For SliverProtocol: SliverGeometry
-    ///
-    /// Mutated each layout pass via [`set_geometry`](Self::set_geometry).
-    /// Stored as `Option` rather than `OnceCell` — re-layout must be
-    /// idempotent (a second-write panic would crash frame 2's re-layout).
-    geometry: Option<ProtocolGeometry<P>>,
+    /// The constraints of the last layout and the geometry it produced
+    /// (`Size` and `BoxConstraints` for a box, `SliverGeometry` and
+    /// `SliverConstraints` for a sliver), each overwritten by the next
+    /// layout. The constraints are what the relayout-boundary short-circuit
+    /// compares against. The protocol chooses where the record lives: a box
+    /// keeps it inline, a sliver behind one allocation made on first write,
+    /// so the slab slot every node occupies is sized by the box record.
+    layout: P::LayoutRecord,
 
-    /// Last constraints used for layout.
-    ///
-    /// For BoxProtocol: BoxConstraints
-    /// For SliverProtocol: SliverConstraints
-    ///
-    /// Used for cache validation and the relayout-boundary short-circuit.
-    /// Stored as `Option` rather than `OnceCell` for the same idempotent
-    /// re-layout reason as `geometry`; see field doc above for rationale.
-    constraints: Option<ProtocolConstraints<P>>,
-
-    /// Offset relative to parent (atomic for lock-free updates).
+    /// Offset relative to parent.
     ///
     /// Set by parent during layout, read during paint and hit testing.
     offset: OffsetCell,
@@ -204,7 +83,7 @@ pub struct RenderState<P: Protocol> {
     /// see that field for why "no evidence" has to mean "placed". The first
     /// real layout advances this to 2 and stamps the children it laid out,
     /// which is the first moment the two can differ.
-    layout_generation: AtomicU64,
+    layout_generation: Cell<u64>,
 
     /// The parent's [`layout_generation`](Self::layout_generation) at the last
     /// pass that laid this node out as one of its children.
@@ -231,11 +110,10 @@ pub struct RenderState<P: Protocol> {
     /// screen to announce; the alternative is an assistive technology reading
     /// a row at coordinates nothing occupies. See `ARCHITECTURE.md`'s
     /// `## Mapping decisions` entry for the reasoning.
-    placed_generation: AtomicU64,
+    placed_generation: Cell<u64>,
 
-    /// The [`RenderId`](flui_foundation::RenderId) of the parent that issued
-    /// [`placed_generation`](Self::placed_generation), as a raw `u64`; `0`
-    /// when nothing has stamped this node.
+    /// The parent that issued [`placed_generation`](Self::placed_generation);
+    /// `None` when nothing has stamped this node.
     ///
     /// Without it the comparison is a bare number against a per-parent
     /// counter, and numbers collide across parents. A `GlobalKey` relocation
@@ -243,7 +121,7 @@ pub struct RenderState<P: Protocol> {
     /// parent A, reparented onto a B that has never laid out, passes B's first
     /// real layout — which also reaches `2` — even though B laid out nothing.
     /// It would then paint and hit-test at A's offset.
-    placed_by: AtomicU64,
+    placed_by: Cell<Option<RenderId>>,
 
     /// Per-node layout calculation cache:
     /// memoized intrinsic dimensions / dry layout / dry baselines.
@@ -293,13 +171,12 @@ impl<P: Protocol> RenderState<P> {
     /// ```
     pub fn new() -> Self {
         Self {
-            flags: AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT),
-            geometry: None,
-            constraints: None,
+            flags: RenderFlagsCell::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT),
+            layout: P::LayoutRecord::default(),
             offset: OffsetCell::new(flui_foundation::geometry::Offset::ZERO),
-            layout_generation: AtomicU64::new(1),
-            placed_generation: AtomicU64::new(1),
-            placed_by: AtomicU64::new(0),
+            layout_generation: Cell::new(1),
+            placed_generation: Cell::new(1),
+            placed_by: Cell::new(None),
             layout_cache: P::LayoutCache::default(),
             parent_data: None,
             _phantom: PhantomData,
@@ -320,13 +197,12 @@ impl<P: Protocol> RenderState<P> {
     /// ```
     pub fn with_flags(flags: RenderFlags) -> Self {
         Self {
-            flags: AtomicRenderFlags::new(flags),
-            geometry: None,
-            constraints: None,
+            flags: RenderFlagsCell::new(flags),
+            layout: P::LayoutRecord::default(),
             offset: OffsetCell::new(flui_foundation::geometry::Offset::ZERO),
-            layout_generation: AtomicU64::new(1),
-            placed_generation: AtomicU64::new(1),
-            placed_by: AtomicU64::new(0),
+            layout_generation: Cell::new(1),
+            placed_generation: Cell::new(1),
+            placed_by: Cell::new(None),
             layout_cache: P::LayoutCache::default(),
             parent_data: None,
             _phantom: PhantomData,
@@ -375,26 +251,6 @@ impl<P: Protocol> RenderState<P> {
         parent_data.detach();
         true
     }
-
-    /// Returns a downcasted reference to the parent data, if the type matches.
-    ///
-    /// This is the typed read path — the parent calls this with its
-    /// concrete `ParentData` type to recover the typed data without
-    /// `dyn` dispatch on subsequent reads.
-    #[inline]
-    pub fn parent_data_as<T: crate::parent_data::ParentData>(&self) -> Option<&T> {
-        self.parent_data
-            .as_ref()
-            .and_then(|d| d.downcast_ref::<T>())
-    }
-
-    /// Returns a downcasted mutable reference to the parent data, if the type matches.
-    #[inline]
-    pub fn parent_data_as_mut<T: crate::parent_data::ParentData>(&mut self) -> Option<&mut T> {
-        self.parent_data
-            .as_mut()
-            .and_then(|d| d.downcast_mut::<T>())
-    }
 }
 
 // ============================================================================
@@ -433,18 +289,17 @@ impl<P: Protocol> Default for RenderState<P> {
 
 impl<P: Protocol> Clone for RenderState<P>
 where
-    ProtocolGeometry<P>: Clone,
-    ProtocolConstraints<P>: Clone,
+    P::Geometry: Clone,
+    P::Constraints: Clone,
 {
     fn clone(&self) -> Self {
         Self {
-            flags: AtomicRenderFlags::new(self.flags.load()),
-            geometry: self.geometry.clone(),
-            constraints: self.constraints.clone(),
+            flags: RenderFlagsCell::new(self.flags.load()),
+            layout: self.layout.clone(),
             offset: OffsetCell::new(self.offset.load()),
-            layout_generation: AtomicU64::new(self.layout_generation.load(Ordering::Relaxed)),
-            placed_generation: AtomicU64::new(self.placed_generation.load(Ordering::Relaxed)),
-            placed_by: AtomicU64::new(self.placed_by.load(Ordering::Relaxed)),
+            layout_generation: Cell::new(self.layout_generation.get()),
+            placed_generation: Cell::new(self.placed_generation.get()),
+            placed_by: Cell::new(self.placed_by.get()),
             // Memoized results are node-local; a cloned state starts cold.
             layout_cache: P::LayoutCache::default(),
             parent_data: self.parent_data.clone(),

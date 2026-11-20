@@ -18,8 +18,8 @@ use crate::{
 };
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::DeviceId;
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::DeviceId;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},

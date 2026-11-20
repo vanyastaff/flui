@@ -223,7 +223,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `a_moved_boundary_damages_old_and_new`, `removed_and_added_boundaries`,
   `an_ancestor_opacity_change_damages_nested_boundaries`, `clip_bounds_the_region`,
   `unbounded_picture_takes_the_clip`, `unstamped_root_is_full`, `root_id_change_is_full`,
-  `size_change_is_full`, `textures_and_overlays_are_damaged_every_frame`,
+  `size_change_is_full`,
   `a_pictures_texture_draw_is_damaged_every_frame`,
   `a_paint_order_swap_of_overlapping_siblings_damages_their_overlap`,
   `a_shader_mask_damages_its_whole_bounds`,

@@ -14,9 +14,6 @@ default-run = "xtask"
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
-# `cargo xtask cross-typecheck` reads each crate's module tree with syn to find the files a
-# target gates (`span-locations` gives a test-only item its lines).
-proc-macro2 = { workspace = true, features = ["span-locations"] }
 # `cargo xtask changelog`: Markdown read as events, not lines.
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
@@ -30,7 +27,6 @@ syn = { workspace = true, features = ["full", "parsing", "visit"] }
 tempfile = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
-wasmparser = { workspace = true }
 
 # `test-desktop`: the desktop a Windows test runs on, and the process started there.
 [target.'cfg(windows)'.dependencies]

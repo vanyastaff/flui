@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use flui_painting::paint::ImageDecodeError;
+use flui_platform::assets::AssetLoadError;
 use flui_platform::executor::SpawnError;
 use flui_platform::http::{HttpError, StatusCode};
 
@@ -55,12 +56,12 @@ impl std::error::Error for ImageLoadError {}
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum ImageLoadErrorKind {
-    /// No file exists at the asset's path.
-    #[error("no file exists at this path")]
+    /// The bundle holds no asset under the key.
+    #[error("the bundle holds no asset under this key")]
     NotFound,
-    /// The asset's path names something other than a regular file (a
+    /// The asset's key names something other than a regular file (a
     /// directory, a FIFO, a device), which is never opened.
-    #[error("the path is not a regular file")]
+    #[error("the asset is not a regular file")]
     NotAFile,
     /// The encoded image is larger than a load reads, and was not read
     /// whole.
@@ -70,8 +71,8 @@ pub enum ImageLoadErrorKind {
         /// ([`MAX_ENCODED_IMAGE_BYTES`](flui_painting::paint::MAX_ENCODED_IMAGE_BYTES)).
         limit: u64,
     },
-    /// Reading the file failed.
-    #[error("reading the file failed: {0}")]
+    /// Reading the asset failed.
+    #[error("reading the asset failed: {0}")]
     Io(Arc<std::io::Error>),
     /// The bytes did not decode into an image.
     #[error("{0}")]
@@ -103,11 +104,16 @@ pub enum ImageLoadErrorKind {
 }
 
 impl ImageLoadErrorKind {
-    /// The kind a failed file operation answers.
-    pub(crate) fn from_io(error: std::io::Error) -> Self {
-        match error.kind() {
-            std::io::ErrorKind::NotFound => Self::NotFound,
-            _ => Self::Io(Arc::new(error)),
+    /// The kind a failed read of an asset answers.
+    pub(crate) fn from_asset(error: AssetLoadError) -> Self {
+        match error {
+            AssetLoadError::NotFound { .. } => Self::NotFound,
+            AssetLoadError::NotAFile { .. } => Self::NotAFile,
+            AssetLoadError::TooLarge { limit, .. } => Self::TooLarge { limit },
+            AssetLoadError::Io { source, .. } => Self::Io(Arc::new(source)),
+            // `NotUtf8` answers only `load_string`; a failure a later reader
+            // adds is its platform's.
+            other => Self::Io(Arc::new(std::io::Error::other(other))),
         }
     }
 

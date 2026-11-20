@@ -36,7 +36,7 @@ use flui_interaction::{
     ids::PointerId,
 };
 use flui_platform::TargetPlatform;
-use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::input::capabilities::PointerKindSet;
 use flui_view::environment::{GestureArenaScope, GesturePolicy, PlatformConvention};
 use flui_view::prelude::*;
 use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_inherited_view};
@@ -67,7 +67,7 @@ use flui_objects::{CrossAxisAlignment, MainAxisSize, StackFit};
 use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::parent_data::FlexFit;
-use flui_rendering::semantics::SemanticsAnchor;
+use flui_semantics::SemanticsAnchor;
 
 // ============================================================================
 // Commands
@@ -1306,7 +1306,7 @@ impl GestureAlternatives {
         // A control is drawn at least as large as the minimum target of the
         // coarsest pointer, so no edge or neighbour can clip its hit area.
         let min_target = GestureArenaScope::settings_or_default_of(ctx)
-            .min_target_for(flui_platform::pointer::PointerKind::Touch);
+            .min_target_for(flui_platform::input::pointer::PointerKind::Touch);
         let mut semantics = Semantics::new().container(true);
         let mut shortcuts_bindings = Vec::new();
         for command in self.commands() {

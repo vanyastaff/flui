@@ -1,265 +1,23 @@
-//! Running a task's commands.
+//! Running a task's steps: this crate's own commands, in this process.
 //!
-//! A command line is data ([`Cmd`]): a plan is a list of them ([`Step`]), so it
-//! can be printed (`--dry-run`), compared with the CI job it mirrors in a unit
-//! test, or run. [`Runner`] prints each command before it runs it and stops at
-//! the first failure. Every command runs from the repository
-//! root with this process's environment, so `CARGO_TARGET_DIR`,
-//! `CARGO_BUILD_JOBS`, `CARGO_MAKEFLAGS` and the rest reach the nested cargo
-//! unchanged.
+//! [`Runner`] prints each step as the command line it stands for before it
+//! runs it, and with `dry_run` only prints it.
 
-use std::ffi::{OsStr, OsString};
-use std::fmt;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitCode};
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::{Context, bail};
 
 use crate::util::repo_root;
 
-/// The OS a task runs on: some steps exist on one host only (`xvfb-run` is
-/// Linux's, the iOS SDK behind `xcrun` is macOS').
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Host {
-    Linux,
-    Windows,
-    MacOs,
-    Other,
-}
-
-impl Host {
-    /// The host this process runs on.
-    pub(super) fn current() -> Self {
-        match std::env::consts::OS {
-            "linux" => Self::Linux,
-            "windows" => Self::Windows,
-            "macos" => Self::MacOs,
-            _ => Self::Other,
-        }
-    }
-}
-
-/// One command line: a program, its arguments and the variables it adds to
-/// the inherited environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Cmd {
-    program: String,
-    args: Vec<String>,
-    env: Vec<(String, String)>,
-}
-
-impl Cmd {
-    /// `program` with no arguments.
-    pub(super) fn new(program: impl Into<String>) -> Self {
-        Self {
-            program: program.into(),
-            args: Vec::new(),
-            env: Vec::new(),
-        }
-    }
-
-    /// `cargo <args>`. Resolved on `PATH`, not through `$CARGO`: `+nightly`
-    /// only means something to the rustup proxy.
-    pub(super) fn cargo<S: AsRef<str>>(args: impl IntoIterator<Item = S>) -> Self {
-        Self::new("cargo").args(args)
-    }
-
-    /// Appends arguments.
-    pub(super) fn args<S: AsRef<str>>(mut self, args: impl IntoIterator<Item = S>) -> Self {
-        self.args
-            .extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
-        self
-    }
-
-    /// Sets `key=value` for this command only.
-    pub(super) fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.push((key.into(), value.into()));
-        self
-    }
-
-    fn command(&self) -> Command {
-        let mut command = Command::new(&self.program);
-        command
-            .args(&self.args)
-            .envs(self.env.iter().map(|(key, value)| (key, value)))
-            .current_dir(repo_root());
-        command
-    }
-
-    /// Runs it with inherited stdio; a non-zero exit is an error naming it.
-    pub(super) fn status(&self) -> anyhow::Result<()> {
-        let status = self
-            .command()
-            .status()
-            .with_context(|| format!("running `{self}`"))?;
-        if !status.success() {
-            bail!("`{self}` failed ({status})");
-        }
-        Ok(())
-    }
-
-    /// Runs it with stdout and stderr merged into one stream, echoed as it
-    /// arrives and also returned, with whether it succeeded: for a caller that
-    /// reads the output and must still show all of it when the command fails.
-    pub(super) fn merged(&self) -> anyhow::Result<(bool, String)> {
-        let spawn = || -> std::io::Result<_> {
-            let (reader, writer) = std::io::pipe()?;
-            // The `Command` owns both write ends; it is dropped at the end of
-            // this closure, so the pipe reaches EOF once the child tree exits.
-            let child = self
-                .command()
-                .stdout(writer.try_clone()?)
-                .stderr(writer)
-                .spawn()?;
-            Ok((reader, child))
-        };
-        let (mut reader, mut child) = spawn().with_context(|| format!("running `{self}`"))?;
-        let mut owned_child = ChildCleanup(&mut child);
-        let mut out = std::io::stdout().lock();
-        capture_merged(&mut reader, &mut owned_child, &mut out)
-            .with_context(|| format!("capturing the output of `{self}`"))
-    }
-}
-
-/// `Child` does not stop or reap its process on drop. Keep ownership through
-/// output errors and unwinding; this guards the direct child, not descendants.
-struct ChildCleanup<'a>(&'a mut Child);
-
-impl Drop for ChildCleanup<'_> {
-    fn drop(&mut self) {
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            if self.0.kill().is_ok() {
-                let _ = self.0.wait();
-            } else {
-                // Killing may be refused (for example after a Unix credential
-                // change). Do not block the original failure waiting for a
-                // still-live child; reap only if it has already exited.
-                let _ = self.0.try_wait();
-            }
-        }
-    }
-}
-
-fn capture_merged(
-    reader: &mut impl Read,
-    child: &mut ChildCleanup<'_>,
-    out: &mut impl Write,
-) -> std::io::Result<(bool, String)> {
-    let mut captured = Vec::new();
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        out.write_all(&chunk[..read])?;
-        captured.extend_from_slice(&chunk[..read]);
-    }
-    out.flush()?;
-    let status = child.0.wait()?;
-    Ok((status.success(), String::from_utf8_lossy_owned(captured)))
-}
-
-/// `value` as a POSIX shell word, for display: bare when it needs no quoting,
-/// single-quoted otherwise.
-fn shell_word(value: &str) -> String {
-    let bare = |c: char| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c);
-    if !value.is_empty() && value.chars().all(bare) {
-        value.to_owned()
-    } else {
-        format!("'{}'", value.replace('\'', r#"'"'"'"#))
-    }
-}
-
-impl fmt::Display for Cmd {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (key, value) in &self.env {
-            write!(f, "{key}={} ", shell_word(value))?;
-        }
-        f.write_str(&shell_word(&self.program))?;
-        for arg in &self.args {
-            write!(f, " {}", shell_word(arg))?;
-        }
-        Ok(())
-    }
-}
-
-/// One step of a plan: a command, or a line saying why one does not run here.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Step {
-    Run(Cmd),
-    Note(String),
-}
-
-impl From<Cmd> for Step {
-    fn from(cmd: Cmd) -> Self {
-        Self::Run(cmd)
-    }
-}
-
-impl fmt::Display for Step {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Run(cmd) => write!(f, "$ {cmd}"),
-            Self::Note(note) => f.write_str(note),
-        }
-    }
-}
-
-/// Runs a task's steps in order (`steps` stops at the first failure, `every`
-/// runs them all); with `dry_run` it only prints them.
+/// Runs a task's steps; with `dry_run` it only prints them.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Runner {
     pub(super) dry_run: bool,
 }
 
 impl Runner {
-    /// Prints `cmd`, then runs it.
-    pub(super) fn run(self, cmd: &Cmd) -> anyhow::Result<()> {
-        println!("$ {cmd}");
-        if self.dry_run {
-            return Ok(());
-        }
-        cmd.status()
-    }
-
-    /// Runs every step in order.
-    pub(super) fn steps(self, steps: &[Step]) -> anyhow::Result<()> {
-        for step in steps {
-            match step {
-                Step::Run(cmd) => self.run(cmd)?,
-                Step::Note(note) => println!("{note}"),
-            }
-        }
-        Ok(())
-    }
-
-    /// Runs every step even after one fails; an error naming each failed
-    /// command if any did.
-    pub(super) fn every(self, steps: &[Step]) -> anyhow::Result<()> {
-        let mut failed = Vec::new();
-        for step in steps {
-            match step {
-                Step::Run(cmd) => {
-                    if let Err(error) = self.run(cmd) {
-                        eprintln!("{error:#}");
-                        failed.push(cmd.to_string());
-                    }
-                }
-                Step::Note(note) => println!("{note}"),
-            }
-        }
-        if failed.is_empty() {
-            return Ok(());
-        }
-        anyhow::bail!(
-            "{} step(s) failed:\n  {}",
-            failed.len(),
-            failed.join("\n  ")
-        )
-    }
-
     /// Runs one of this crate's own commands in this process, printed as the
     /// command line it stands for; a non-zero exit code is an error.
     pub(super) fn in_process(
@@ -289,217 +47,43 @@ pub(super) fn parsed<T: clap::Args + clap::FromArgMatches>(
 }
 
 /// The workspace's target directory as cargo resolves it: `CARGO_TARGET_DIR`
-/// (relative to the repository root, where every task's cargo runs),
-/// `build.target-dir`, or `target/`. Built artifacts are looked up here, never
-/// under a hardcoded `target/`.
+/// (relative to the repository root), `build.target-dir`, or `target/`.
 pub(super) fn target_dir() -> anyhow::Result<PathBuf> {
-    target_dir_with(&repo_root(), None)
-}
-
-/// [`target_dir`] for the workspace at `root`, with `CARGO_TARGET_DIR`
-/// overridden when `target_dir` is given.
-fn target_dir_with(root: &Path, target_dir: Option<&OsStr>) -> anyhow::Result<PathBuf> {
-    let mut command = cargo_metadata::MetadataCommand::new();
-    command.current_dir(root).no_deps();
-    if let Some(dir) = target_dir {
-        command.env("CARGO_TARGET_DIR", dir);
-    }
-    let metadata = command.exec().context("running `cargo metadata`")?;
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(repo_root())
+        .no_deps()
+        .exec()
+        .context("running `cargo metadata`")?;
     Ok(metadata.target_directory.into_std_path_buf())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::process::Stdio;
-
     use super::*;
 
-    #[derive(Clone, Copy)]
-    enum CaptureFailure {
-        Read,
-        Write,
-        Flush,
-        Panic,
-    }
-
-    struct FailingStream(CaptureFailure);
-
-    impl Read for FailingStream {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("capture read refused"))
-        }
-    }
-
-    impl Write for FailingStream {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            match self.0 {
-                CaptureFailure::Write => Err(std::io::Error::other("capture write refused")),
-                CaptureFailure::Panic => panic!("capture sink panicked"),
-                CaptureFailure::Read | CaptureFailure::Flush => Ok(bytes.len()),
-            }
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Err(std::io::Error::other("capture flush refused"))
-        }
-    }
-
-    fn capture_failure_reaps_the_owned_child(failure: CaptureFailure) {
-        let mut child = Command::new(std::env::current_exe().expect("test executable"))
-            .args(["--exact", "tasks::exec::tests::exec_failure_contract"])
-            .env("FLUI_XTASK_CAPTURE_CHILD", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn the direct child");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut owned = ChildCleanup(&mut child);
-            let mut sink = FailingStream(failure);
-            if matches!(failure, CaptureFailure::Read) {
-                capture_merged(&mut FailingStream(failure), &mut owned, &mut sink)
-            } else {
-                capture_merged(&mut std::io::Cursor::new(b"output"), &mut owned, &mut sink)
-            }
-        }));
-        let reaped = child
-            .try_wait()
-            .expect("inspect the direct child")
-            .is_some();
-        // Reap even with the broken implementation so a failed oracle cannot
-        // leave its parked fixture running after the test.
-        if !reaped {
-            child.kill().expect("kill an orphaned fixture");
-            child.wait().expect("reap an orphaned fixture");
-        }
-        assert!(reaped, "capture failure left the direct child running");
-        match failure {
-            CaptureFailure::Panic => assert!(result.is_err()),
-            CaptureFailure::Read | CaptureFailure::Write | CaptureFailure::Flush => {
-                let error = result
-                    .expect("ordinary IO refusal")
-                    .expect_err("refused capture");
-                let expected = match failure {
-                    CaptureFailure::Read => "capture read refused",
-                    CaptureFailure::Write => "capture write refused",
-                    CaptureFailure::Flush => "capture flush refused",
-                    CaptureFailure::Panic => unreachable!(),
-                };
-                assert_eq!(error.to_string(), expected);
-            }
-        }
-        Cmd::cargo(["--version"])
-            .status()
-            .expect("next command progresses");
-    }
-
-    fn output_read_failure_reaps_the_child() {
-        capture_failure_reaps_the_owned_child(CaptureFailure::Read);
-    }
-
-    fn output_write_failure_reaps_the_child() {
-        capture_failure_reaps_the_owned_child(CaptureFailure::Write);
-    }
-
-    fn output_flush_failure_reaps_the_child() {
-        capture_failure_reaps_the_owned_child(CaptureFailure::Flush);
-    }
-
-    fn output_sink_panic_reaps_the_child() {
-        capture_failure_reaps_the_owned_child(CaptureFailure::Panic);
-    }
-
-    fn a_failing_command_is_an_error_naming_it() {
-        let error = Cmd::cargo(["--no-such-flag-xtask"])
-            .status()
-            .expect_err("cargo rejects the flag");
-        assert!(
-            error
-                .to_string()
-                .starts_with("`cargo --no-such-flag-xtask` failed"),
-            "{error}"
-        );
-        let missing = Cmd::new("flui-xtask-no-such-program").status();
-        assert!(missing.is_err());
-    }
-
-    /// A failing step fails the task: `steps` stops there with an error naming
-    /// it (a second failure after it would have replaced that error), and
-    /// `every` runs the rest but still fails, naming each failed step. A task
-    /// returns this error from its `run`, which `main` turns into exit 1.
-    fn a_failing_step_fails_the_task() {
+    /// A step whose command exits non-zero is an error naming its command
+    /// line, an error the command returns is passed on as it is (the caller
+    /// prints the command beside it), and a dry run runs nothing.
+    #[test]
+    fn a_failing_exit_is_an_error_naming_the_step_and_a_dry_run_runs_nothing() {
         let runner = Runner { dry_run: false };
-        let failing = Cmd::cargo(["--no-such-flag-xtask"]);
-        let missing = Cmd::new("flui-xtask-no-such-program");
-        let error = runner
-            .steps(&[
-                Step::Note("before".to_owned()),
-                failing.clone().into(),
-                missing.clone().into(),
-            ])
-            .expect_err("a failing step fails the plan");
+        let failed = runner
+            .in_process("toolchain", || Ok(ExitCode::FAILURE))
+            .expect_err("a failing exit code is an error");
+        assert_eq!(failed.to_string(), "`cargo xtask toolchain` failed");
+        let errored = runner
+            .in_process("toolchain", || bail!("no rust-toolchain.toml"))
+            .expect_err("an error is passed on");
+        assert_eq!(errored.to_string(), "no rust-toolchain.toml");
         assert!(
-            error
-                .to_string()
-                .starts_with("`cargo --no-such-flag-xtask` failed"),
-            "{error}"
-        );
-
-        let error = runner
-            .every(&[
-                failing.into(),
-                Cmd::cargo(["--version"]).into(),
-                missing.into(),
-            ])
-            .expect_err("`every` still fails when a step did");
-        let message = error.to_string();
-        assert!(message.starts_with("2 step(s) failed"), "{message}");
-        assert!(message.contains("cargo --no-such-flag-xtask"), "{message}");
-        assert!(message.contains("flui-xtask-no-such-program"), "{message}");
-
-        // a dry run executes nothing, so nothing fails
-        assert!(
-            Runner { dry_run: true }
-                .steps(&[Cmd::cargo(["--no-such-flag-xtask"]).into()])
+            runner
+                .in_process("toolchain", || Ok(ExitCode::SUCCESS))
                 .is_ok()
         );
-    }
-
-    #[test]
-    fn exec_failure_contract() {
-        if std::env::var_os("FLUI_XTASK_CAPTURE_CHILD").is_some() {
-            loop {
-                std::thread::park();
-            }
-        }
-        crate::table_test::run_table(
-            "exec_failure_contract",
-            &[
-                (
-                    "output_read_failure_reaps_the_child",
-                    output_read_failure_reaps_the_child as fn(),
-                ),
-                (
-                    "output_write_failure_reaps_the_child",
-                    output_write_failure_reaps_the_child as fn(),
-                ),
-                (
-                    "output_flush_failure_reaps_the_child",
-                    output_flush_failure_reaps_the_child as fn(),
-                ),
-                (
-                    "output_sink_panic_reaps_the_child",
-                    output_sink_panic_reaps_the_child as fn(),
-                ),
-                (
-                    "a_failing_command_is_an_error_naming_it",
-                    a_failing_command_is_an_error_naming_it as fn(),
-                ),
-                (
-                    "a_failing_step_fails_the_task",
-                    a_failing_step_fails_the_task as fn(),
-                ),
-            ],
+        let dry = Runner { dry_run: true };
+        assert!(
+            dry.in_process("toolchain", || panic!("a dry run runs nothing"))
+                .is_ok()
         );
     }
 }

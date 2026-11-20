@@ -4,12 +4,15 @@ use std::rc::Rc;
 
 use crate::widget_state::WidgetStatesController;
 use flui_foundation::geometry::Offset;
-use flui_objects::RenderMouseRegion;
-use flui_platform::pointer::PointerSource;
-use flui_rendering::hit_testing::{
-    Cursor, CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
-    MouseHoverCallback, MouseRegionCallbacks,
+use flui_interaction::{
+    events::Cursor,
+    pointer::{
+        CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
+        MouseRegionCallbacks,
+    },
 };
+use flui_objects::RenderMouseRegion;
+use flui_platform::input::pointer::PointerSource;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     Child, EventContext, EventOutcome, IntoView, RenderView, WriterSource, impl_render_view,

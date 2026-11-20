@@ -20,16 +20,16 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::BoxLayoutContext,
     parent_data::BoxParentData,
-    semantics::{
-        AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole,
-        States,
-    },
-    testing::{FrameRun, Probe, RenderTester, SceneHost, box_node},
+    testing::{FrameRun, Probe, RenderTester, SceneHost, box_node, edit_render_object},
     traits::RenderBox,
+};
+use flui_semantics::{
+    AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole,
+    States,
 };
 
 pub(crate) fn nonfinite_reading_order_is_refused_before_publication() {
-    use flui_rendering::semantics::SemanticsSortKey;
+    use flui_semantics::SemanticsSortKey;
     for order in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let mut config = SemanticsConfiguration::new();
         config.set_label("invalid ordering");
@@ -105,11 +105,10 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     );
 }
 
-/// A semantics lifecycle hook, the wake after it, or the owner's teardown
+/// The wake after enabling semantics, or the owner's teardown on disabling,
 /// panics: the transition is already committed, so the root's first assembly
-/// is queued and announced, the disposed event still goes out, and the first
-/// panic reaches the caller.
-pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
+/// is queued and announced, and the panic reaches the caller.
+pub(crate) fn a_failing_semantics_transition_keeps_it() {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -201,20 +200,22 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
         let mut scene = SceneHost::new();
         let (mut owner, published) = painted(&Arc::new(AtomicBool::new(false)), &mut scene);
         let wakes = counter(&mut owner, wake_panics.then_some("wake failed"));
-        owner.set_on_semantics_owner_created(|| std::panic::panic_any("created hook failed"));
-        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let enabled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             owner.set_semantics_enabled(true);
-        }))
-        .expect_err("the hook's panic reaches the caller");
-        assert_eq!(
-            flui_foundation::panic::payload_text(payload.as_ref()),
-            Some("created hook failed"),
-            "the first panic is the one that goes on"
-        );
+        }));
+        match (enabled, wake_panics) {
+            (Ok(()), false) => {}
+            (Err(payload), true) => assert_eq!(
+                flui_foundation::panic::payload_text(payload.as_ref()),
+                Some("wake failed"),
+                "the wake's panic reaches the caller"
+            ),
+            _ => panic!("the wake's panic reaches the caller exactly when the wake panics"),
+        }
         assert!(owner.semantics_enabled(), "semantics stays enabled");
         assert!(
             owner.has_dirty_nodes(),
-            "the root's first assembly is queued before the hook runs"
+            "the root's first assembly is queued before the wake runs"
         );
         assert_eq!(
             wakes.load(Ordering::SeqCst),
@@ -241,11 +242,6 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
     owner.set_semantics_enabled(true);
     let (mut owner, frame) = scene.run_frame(owner);
     frame.expect("the frame assembles semantics");
-    let disposed = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&disposed);
-    owner.set_on_semantics_owner_disposed(move || {
-        counted.fetch_add(1, Ordering::SeqCst);
-    });
     teardown.store(true, Ordering::SeqCst);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner.set_semantics_enabled(false);
@@ -256,11 +252,6 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
         Some("teardown failed")
     );
     assert!(!owner.semantics_enabled(), "semantics stays disabled");
-    assert_eq!(
-        disposed.load(Ordering::SeqCst),
-        1,
-        "the disposed event goes out after a teardown that panicked"
-    );
 }
 
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
@@ -979,11 +970,16 @@ pub(crate) fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
     assert!(inserted.node(alpha_accessibility_id).is_some());
     assert!(inserted.node(beta_accessibility_id).is_some());
 
-    {
-        let tree = run.owner_mut().render_tree_mut();
-        tree.drop_child(root, alpha);
-        tree.adopt_child(root, alpha);
-    }
+    let alpha_last: Vec<RenderId> = run
+        .owner()
+        .render_tree()
+        .children(root)
+        .iter()
+        .copied()
+        .filter(|&child| child != alpha)
+        .chain([alpha])
+        .collect();
+    assert!(run.owner_mut().set_render_children(root, &alpha_last));
     run.owner_mut().mark_needs_layout(root);
     run.owner_mut().mark_needs_semantics(root);
     run.pump();
@@ -1055,7 +1051,7 @@ pub(crate) fn a_semantics_clip_drops_a_child_that_falls_entirely_outside_it() {
 pub(crate) fn a_table_shape_the_role_drops_bounds_no_cell() {
     use std::num::NonZeroUsize;
 
-    use flui_rendering::semantics::{CellPosition, SetSize, TableShape};
+    use flui_semantics::{CellPosition, SetSize, TableShape};
 
     let mut list = SemanticsConfiguration::new();
     list.set_role(SemanticsRole::List);
@@ -1110,7 +1106,7 @@ pub(crate) fn a_table_shape_the_role_drops_bounds_no_cell() {
 /// eight leaves on a mounted tree re-assembles under eight group anchors and
 /// must name that same host.
 pub(crate) fn re_assembling_marked_subtrees_refuses_like_the_whole_tree() {
-    use flui_rendering::semantics::SemanticsSortKey;
+    use flui_semantics::SemanticsSortKey;
     const GROUPS: usize = 8;
     fn invalid() -> SemanticsConfiguration {
         let mut config = SemanticsConfiguration::new();
@@ -1154,17 +1150,9 @@ pub(crate) fn re_assembling_marked_subtrees_refuses_like_the_whole_tree() {
     };
     assert_eq!(leaves.len(), GROUPS);
     for &leaf in &leaves {
-        run.owner_mut()
-            .render_tree_mut()
-            .get_mut(leaf)
-            .expect("leaf node")
-            .as_box_mut()
-            .expect("leaf is a box")
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<SemanticsLeaf>()
-            .expect("leaf is a SemanticsLeaf")
-            .configuration = Some(invalid());
+        edit_render_object::<SemanticsLeaf, _, _>(run.owner_mut(), leaf, |leaf| {
+            leaf.configuration = Some(invalid());
+        });
         run.owner_mut().mark_needs_semantics(leaf);
     }
     let marked = run
@@ -1210,17 +1198,8 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
         config
     }
 
-    fn leaf_mut(run: &mut FrameRun, id: RenderId) -> &mut SemanticsLeaf {
-        run.owner_mut()
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("leaf node")
-            .as_box_mut()
-            .expect("leaf is a box")
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<SemanticsLeaf>()
-            .expect("leaf is a SemanticsLeaf")
+    fn edit_leaf(run: &mut FrameRun, id: RenderId, edit: impl FnOnce(&mut SemanticsLeaf)) {
+        edit_render_object::<SemanticsLeaf, _, _>(run.owner_mut(), id, edit);
     }
 
     fn clips_children(run: &FrameRun, id: RenderId) -> bool {
@@ -1303,7 +1282,9 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
 
     // The graft anchored at alpha destroys its old handler, which panics.
     armed.set(true);
-    leaf_mut(&mut run, alpha).configuration = Some(pressable(&Rc::new(Cell::new(false))));
+    edit_leaf(&mut run, alpha, |leaf| {
+        leaf.configuration = Some(pressable(&Rc::new(Cell::new(false))));
+    });
     run.owner_mut().mark_needs_semantics(alpha);
     #[expect(
         clippy::disallowed_methods,
@@ -1321,8 +1302,7 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
 
     // Gamma stops contributing, so kappa and beta are contained. The graft
     // is anchored at kappa, gamma's published parent, below the holder.
-    let gamma_leaf = leaf_mut(&mut run, gamma);
-    gamma_leaf.label = None;
+    edit_leaf(&mut run, gamma, |leaf| leaf.label = None);
     run.owner_mut().mark_needs_semantics(gamma);
     run.pump();
     assert!(

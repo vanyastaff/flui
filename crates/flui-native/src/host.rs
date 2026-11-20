@@ -76,12 +76,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Size};
-use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
+use flui_platform::transfer::data::{DragTransport, NullDragTransport};
 use flui_platform::{
     AppDataDir, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformSystemChrome,
     SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
-    WindowHandler, WindowOptions, haptics::PlatformHaptics, pointer::DeviceId,
+    WindowHandler, WindowOptions, haptics::PlatformHaptics, input::pointer::DeviceId,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -752,10 +752,6 @@ impl PlatformHaptics for Absent<position::Haptics> {
     fn capabilities(&self, _: Option<DeviceId>) -> HapticCapabilities {
         HapticCapabilities::NONE
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Every window hands out an actuator that plays nothing, for want of the
@@ -789,10 +785,6 @@ impl<O> Lifecycle<O> for Absent<position::Lifecycle> {
 
 impl PlatformSystemChrome for Absent<position::Chrome> {
     fn set_overlay_style(&self, _: SystemUiOverlayStyle) {}
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Every window styles system bars that are not there.

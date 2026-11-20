@@ -47,13 +47,13 @@ use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario, ScenarioDriver};
-use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
-use flui_platform::drag::{
+use flui_platform::input::regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text::store::TextStoreHost;
+use flui_platform::text::store::{SelectionUi, TextStoreStatus};
+use flui_platform::transfer::data::{RepresentationDescriptor, TransferActions};
+use flui_platform::transfer::drag::{
     DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
 };
-use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
-use flui_platform::text_store::TextStoreHost;
-use flui_platform::text_store::{SelectionUi, TextStoreStatus};
 use flui_platform::{
     Cursor, CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
@@ -88,11 +88,13 @@ use crate::text_store_host::RecordingTextStoreHost;
 
 mod registrations;
 mod sink;
+mod text_sizing;
 mod turn;
 
 pub(crate) use registrations::AppRegistrations;
 use registrations::{Registry, compose_registry};
 pub use sink::{HeadlessSink, UnshownFrame};
+pub use text_sizing::ScriptedTextSizing;
 
 /// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1 (a
 /// window [opened](HeadlessHost::open_window) beside it takes the next
@@ -217,6 +219,11 @@ struct KitChrome {
     close_requests: usize,
     /// Whether the state changed since the host last told the UI runtime.
     unobserved: bool,
+    /// The instant the window was asked for a frame at and the host has not
+    /// served ([`PlatformWindow::request_frame_at`]).
+    timed_frame: Option<flui_platform::EventTime>,
+    /// Every timed frame request the window took, oldest first.
+    timed_frame_requests: Vec<Option<flui_platform::EventTime>>,
 }
 
 impl HeadlessWindow {
@@ -295,6 +302,28 @@ impl HeadlessWindow {
     #[must_use]
     pub fn close_requests(&self) -> usize {
         self.chrome.lock().close_requests
+    }
+
+    /// Every timed frame request the window took
+    /// ([`PlatformWindow::request_frame_at`]), oldest first: an instant on
+    /// the host's event timeline, or `None` for a withdrawal. The frame a
+    /// covered window owes its surface is asked for this way (ADR-0389).
+    #[must_use]
+    pub fn timed_frame_requests(&self) -> Vec<Option<flui_platform::EventTime>> {
+        self.chrome.lock().timed_frame_requests.clone()
+    }
+
+    /// The instant of the window's timed frame request the host has not
+    /// served yet.
+    fn pending_timed_frame(&self) -> Option<flui_platform::EventTime> {
+        self.chrome.lock().timed_frame
+    }
+
+    /// Serve the window's timed frame request if its instant is not later
+    /// than `now`: it is asked once. Whether it was served.
+    fn serve_timed_frame(&self, now: flui_platform::EventTime) -> bool {
+        let mut chrome = self.chrome.lock();
+        chrome.timed_frame.take_if(|at| *at <= now).is_some()
     }
 
     /// Whether the host closed the window.
@@ -626,6 +655,16 @@ impl PlatformWindow for HeadlessWindow {
     fn reveal_after_first_frame(&self) {}
 
     fn request_redraw(&self) {}
+
+    /// Served by the host for this window: its loop waits no later than `at`
+    /// ([`HeadlessHost::time_to_next_frame`]), and the first pump at or after
+    /// it serves the request, once. Recorded for the test
+    /// ([`HeadlessWindow::timed_frame_requests`]).
+    fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
+        let mut chrome = self.chrome.lock();
+        chrome.timed_frame = at;
+        chrome.timed_frame_requests.push(at);
+    }
 
     /// Nothing to ask: the host runs a frame when its test pumps one.
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
@@ -1202,6 +1241,10 @@ pub struct HeadlessHost {
     /// a phone's background hold whose writes ended, or the last block a
     /// query's request held.
     session_end_releases: Rc<std::cell::Cell<usize>>,
+    /// The scripted text-sizing provider a test installed
+    /// ([`Self::script_text_sizing`]), which takes the runtime's frontiers
+    /// after each pump.
+    text_sizing: Option<Rc<std::cell::RefCell<text_sizing::ScriptedTextSizingState>>>,
 }
 
 impl std::fmt::Debug for HeadlessHost {
@@ -1499,6 +1542,7 @@ impl HeadlessHost {
             session_end: Rc::default(),
             background_hold: false,
             session_end_releases: Rc::default(),
+            text_sizing: None,
         }
     }
 
@@ -1666,6 +1710,10 @@ impl HeadlessHost {
                 self.observe(presentation, flui_runtime::owner::WindowObservation::State);
             }
         }
+        // Each open presentation's texture frames ride the frames its scene
+        // publishes, as each window's ride its raster host. Refreshed in place
+        // by position, so an idle pump asks nothing of the heap.
+        self.track_textures();
         // The frame is delivered as `HostInput::Frame` would be: every
         // window's vsync is the clock's reading, on the event timeline, so a
         // recording sees the frame where its deadlines fire.
@@ -1674,8 +1722,15 @@ impl HeadlessHost {
         if let Some(presented) = self.presented.take() {
             request = request.presented(presented);
         }
+        // As a window system does, a window that cannot be seen is asked for no
+        // frame, unless its timed frame request came due: this frame serves that
+        // request, once, and only that frame of its own window serves the frame
+        // a covered window owes its surface (ADR-0389).
         for window in &self.open {
-            self.ui_runtime().note_frame_request(window.id, request);
+            let served = window.window.serve_timed_frame(vsync);
+            if served || window.window.state().is_seen() {
+                self.ui_runtime().note_frame_request(window.id, request);
+            }
         }
         let mut frame_clock = self.clock.clone();
         let Self {
@@ -1701,12 +1756,22 @@ impl HeadlessHost {
                 FrameOutcome::default()
             }
         }));
+        // A frame whose lineage the pump renewed (a hot reload) takes its
+        // presentation's texture updates now, from the registry its new
+        // lineage names.
+        self.track_textures();
+        self.sink.claim_textures();
         let first_failure = {
             let mut failures = self.failures.lock();
             let first = failures.first().cloned();
             failures.clear();
             first
         };
+        // As a runner's owner delivery does at the end of each work item: the
+        // text-sizing frontiers the frame asked for go to the provider, then
+        // each covered window is asked for the frame it owes.
+        self.serve_text_sizing();
+        self.ask_owed_frames();
         // Taken on every outcome: a failed frame's findings are its own, and
         // the failure that is raised already fails the test.
         let semantics_findings = self.take_semantics_findings();
@@ -1744,7 +1809,7 @@ impl HeadlessHost {
         &self,
     ) -> Vec<(
         flui_foundation::PresentationId,
-        Vec<flui_rendering::semantics::SemanticsDiagnostic>,
+        Vec<flui_semantics::SemanticsDiagnostic>,
     )> {
         let Some(ui_runtime) = self.try_ui_runtime() else {
             return Vec::new();
@@ -2254,14 +2319,11 @@ impl HeadlessHost {
         V: flui_view::View + Clone + 'static,
     {
         // Every window's root is the same: the catalog's keyboard bindings,
-        // then this window's own `MediaQuery` and its size.
-        let size = self.open_window_of(window).window.size;
-        self.ui_runtime().attach_root_widget_with_size_to(
-            window.0,
-            &flui_widgets::app_root(view.clone()),
-            size.width(),
-            size.height(),
-        )
+        // then this window's own `MediaQuery`. A closed window panics here, with the host's own
+        // message, before the runtime is asked for a presentation it may already have retired.
+        let _open = self.open_window_of(window);
+        self.ui_runtime()
+            .attach_root_widget_to(window.0, &flui_widgets::app_root(view.clone()))
     }
 
     /// Hand `intent` to `window`'s URL owner, the outermost `Router` of its
@@ -2548,6 +2610,7 @@ impl HeadlessHost {
         if let Some(runtime) = self.try_ui_runtime() {
             runtime.deliver_host_notice(&flui_platform::HostNotice::from(notice));
         }
+        self.ask_owed_frames();
     }
 
     /// Report `insets` as what covers `window`, as a host reports a change of
@@ -2848,9 +2911,16 @@ impl HeadlessHost {
     /// How long a host's loop waits before its next frame: none while a frame
     /// is asked for or work is pending, unless a dropped frame waits for its
     /// retry; otherwise until the earliest deadline the UI runtime armed, such
-    /// as a gesture's or a dropped frame's retry, or the next change the
-    /// host's scenario scheduled. `None` when the loop would
+    /// as a gesture's or a dropped frame's retry, the instant a window asked
+    /// for a frame at (the frame a covered window owes its surface), or the
+    /// next change the host's scenario scheduled. `None` when the loop would
     /// wait for input alone.
+    ///
+    /// Not a pure read: it first asks each covered window for the frame it
+    /// owes, as a runner's owner delivery does after the work item that left
+    /// it owed, which runs the windows' `request_frame_at` and records the
+    /// request ([`HeadlessWindow::timed_frame_requests`]). Asking again with
+    /// nothing changed asks nothing.
     #[must_use]
     pub fn time_to_next_frame(&self) -> Option<Duration> {
         let Some(runtime) = &self.ui_runtime else {
@@ -2861,16 +2931,23 @@ impl HeadlessHost {
             }
             return self.scenario_wait();
         };
+        // What changed since the last turn (a signal written between pumps)
+        // may leave a covered window owing a frame: its window is asked first,
+        // as a runner's owner delivery asks at the end of the work item that
+        // changed it, and the wait below counts the request.
+        self.ask_owed_frames();
         let now = flui_foundation::MonotonicClock::now(&self.clock);
         // A dropped frame waiting for its retry runs nothing sooner, though a
         // gesture deadline before it still wakes the loop.
         let retrying = runtime
             .failure_retry_deadline()
             .is_some_and(|retry| retry > now);
-        // A runtime whose frames do not run (no window seen, none owing a
-        // frame) has no frame to run now: its pump is a background turn, which
-        // its deadlines, background work and observations still ask for.
-        let frame_owed = runtime.runs_frames()
+        // A runtime whose frames are off (no window seen) has no frame to run
+        // now: its pump is a background turn, which its deadlines, background
+        // work and observations still ask for. The frame a covered window owes
+        // is served only through its window's timed request, as on a native
+        // host, never as work pending here.
+        let frame_owed = runtime.scheduler().frames_enabled()
             && (runtime.needs_redraw()
                 || runtime.scheduler().is_frame_scheduled()
                 || runtime.has_pending_work());
@@ -2885,12 +2962,12 @@ impl HeadlessHost {
         let runtime_wait = runtime
             .next_wake()
             .map(|wake| wake.saturating_duration_since(now));
-        // A change the scenario has scheduled is a deadline like any other.
-        let scenario_wait = self.scenario_wait();
-        match (runtime_wait, scenario_wait) {
-            (Some(runtime), Some(scenario)) => Some(runtime.min(scenario)),
-            (wait, None) | (None, wait) => wait,
-        }
+        // A change the scenario has scheduled is a deadline like any other, and
+        // so is a window's timed frame request, which the host serves.
+        [runtime_wait, self.scenario_wait(), self.timed_frame_wait()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// How long until the scenario's next scheduled change, if one is.
@@ -2980,9 +3057,11 @@ impl HeadlessHost {
 
     /// Pump frames of `frame` until nothing is left to do — no redraw or
     /// frame asked for (a running animation asks for each next one), no
-    /// pending work, no armed deadline, no change the scenario scheduled — at
-    /// most `max_frames` of
-    /// them. Returns how many frames it took.
+    /// pending work, no armed deadline, no unserved timed frame request of a
+    /// window, no change the scenario scheduled — at most `max_frames` of
+    /// them. Returns how many frames it took. Before each check it asks each
+    /// covered window for the frame it owes, as
+    /// [`time_to_next_frame`](Self::time_to_next_frame) does.
     ///
     /// # Errors
     ///
@@ -2994,16 +3073,21 @@ impl HeadlessHost {
         max_frames: usize,
     ) -> Result<usize, NotSettled> {
         for frames in 0..=max_frames {
+            // A covered window owing a frame is asked before the host decides
+            // it has nothing to do, as `time_to_next_frame` asks.
+            self.ask_owed_frames();
             // A retired host owes only its background work and the scenario.
-            // A runtime whose frames do not run owes no frame, only its deadlines.
+            // A runtime whose frames are off owes no frame, only its deadlines
+            // and the timed requests of its windows.
             let runtime_idle = self.ui_runtime.as_ref().is_none_or(|runtime| {
-                (!runtime.runs_frames()
+                (!runtime.scheduler().frames_enabled()
                     || (!runtime.needs_redraw()
                         && !runtime.scheduler().is_frame_scheduled()
                         && !runtime.has_pending_work()))
                     && runtime.next_wake().is_none()
             });
             if runtime_idle
+                && self.timed_frame_wait().is_none()
                 && self.pending_background() == 0
                 && !self.observations_pending()
                 && !self.turn_owed()
@@ -3042,6 +3126,81 @@ impl HeadlessHost {
         self.ui_runtime().enter(|ui_runtime| {
             ui_runtime.apply_window_observation(address, observation, &|_| {});
         });
+        self.ask_owed_frames();
+    }
+
+    /// Install a scripted text-sizing provider on `window`: a captured source
+    /// whose frontiers the host takes after each pump, as a runner hands them
+    /// to the platform's text measurement, answered at once with each
+    /// request's authored size until the test [holds](ScriptedTextSizing::hold)
+    /// it. While held, the window's text preparation waits as it does for a
+    /// measurement service that has not answered, until
+    /// [`answer_text_sizing`](Self::answer_text_sizing).
+    ///
+    /// # Panics
+    ///
+    /// When the host is retired, already has a provider, or `window` is not
+    /// open.
+    pub fn script_text_sizing(&mut self, window: HeadlessWindowId) -> ScriptedTextSizing {
+        assert!(
+            self.text_sizing.is_none(),
+            "a headless host takes one scripted text-sizing provider"
+        );
+        let (_policy, writer) = flui_painting::TextSizing::captured();
+        let source = writer.source();
+        assert!(
+            self.ui_runtime()
+                .install_captured_text_sizing_for(window.0, source),
+            "the text-sizing provider is installed on an open window"
+        );
+        let (state, handle) = text_sizing::ScriptedTextSizingState::handle(writer);
+        self.text_sizing = Some(state);
+        handle
+    }
+
+    /// Answer every frontier the scripted text-sizing provider holds, as a
+    /// measurement service's answer arriving, then ask each covered window for
+    /// the frame it owes, as a runner's owner delivery does after the work
+    /// item that settled them. How many frontiers the runtime accepted; none
+    /// without a provider or a runtime.
+    pub fn answer_text_sizing(&mut self) -> usize {
+        let (Some(provider), Some(runtime)) = (&self.text_sizing, self.try_ui_runtime()) else {
+            return 0;
+        };
+        let accepted = text_sizing::answer_held(provider, runtime);
+        self.ask_owed_frames();
+        accepted
+    }
+
+    /// Hand the frontiers the runtime asked for to the scripted text-sizing
+    /// provider, if a test installed one.
+    fn serve_text_sizing(&self) {
+        if let (Some(provider), Some(runtime)) = (&self.text_sizing, self.try_ui_runtime()) {
+            text_sizing::serve(provider, runtime);
+        }
+    }
+
+    /// Ask each window for the frame its presentation owes its surface, or
+    /// withdraw the instant asked before, as a runner's owner delivery does
+    /// after each work item (ADR-0389). A retired host asks nothing.
+    fn ask_owed_frames(&self) {
+        let Some(runtime) = self.try_ui_runtime() else {
+            return;
+        };
+        for request in runtime.owed_frame_requests() {
+            request.deliver();
+        }
+    }
+
+    /// How long until the earliest timed frame request of an open window the
+    /// host has not served, if any.
+    fn timed_frame_wait(&self) -> Option<Duration> {
+        let now = self.event_now();
+        self.open
+            .iter()
+            .filter_map(|open| open.window.pending_timed_frame())
+            .min()
+            .map(|at| at.saturating_duration_since(now))
     }
 
     /// Size the sink to the primary window's device size.
@@ -3143,6 +3302,26 @@ impl HeadlessHost {
         first.contain(move || drop(runtime));
         first.resume();
         true
+    }
+
+    /// Points the sink at each open presentation's texture registry, under
+    /// its scene's current lineage.
+    fn track_textures(&mut self) {
+        let Self {
+            ui_runtime: Some(ui_runtime),
+            sink,
+            open,
+            ..
+        } = self
+        else {
+            return;
+        };
+        let ui_runtime = &*ui_runtime;
+        sink.track_textures(open.iter().filter_map(|window| {
+            let registry = ui_runtime.texture_registry(window.id)?;
+            let totals = ui_runtime.presentation_scene_totals_for_test(window.id)?;
+            Some((totals.version.lineage(), registry))
+        }));
     }
 
     /// The presentations of the open windows, in opening order.
@@ -3409,6 +3588,55 @@ mod tests {
             "the raising pump did not move the clock"
         );
         let _outcome = ui_runtime.pump(Duration::ZERO);
+    }
+
+    /// A hot reload renews the window's scene lineage within the pump whose
+    /// frame then publishes it: the frame still takes the window's texture
+    /// frames, from the registry its new lineage names.
+    ///
+    /// Fails against a sink that looks its registry up only by the lineages
+    /// read before the pump: the frame publishes without its texture frame.
+    #[test]
+    fn a_frame_in_a_lineage_a_reload_renewed_takes_its_texture_frames() {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+        let registry = host
+            .ui_runtime()
+            .texture_registry(host.ui_runtime().presentation_id())
+            .expect("the window's registry");
+        let texture = registry.register().expect("a texture id");
+        host.attach(&flui_widgets::Texture::new(texture.id()))
+            .expect("root");
+        let _ = host.pump(Duration::ZERO);
+        let _ = host.pump(Duration::ZERO);
+        let lineage = host.sink().version().expect("a version").id().lineage();
+
+        texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+            1,
+            1,
+            vec![7, 7, 7, 255],
+        ));
+        host.ui_runtime()
+            .command_sender()
+            .request_hot_reload(flui_runtime::reload::ReloadTier::Reassemble)
+            .expect("the inbox takes the reload");
+        let _ = host.pump(Duration::ZERO);
+        assert_ne!(
+            host.sink().version().expect("a version").id().lineage(),
+            lineage,
+            "the reload renewed the lineage in this pump"
+        );
+        let taken: Vec<_> = host
+            .sink()
+            .textures()
+            .frames
+            .iter()
+            .map(|(id, image)| (*id, image.data()[0]))
+            .collect();
+        assert_eq!(
+            taken,
+            [(texture.id(), 7)],
+            "the frame rides the renewed lineage"
+        );
     }
 
     /// The kept tree holds what an adapter holds: a node an incremental

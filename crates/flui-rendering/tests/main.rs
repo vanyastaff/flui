@@ -113,3 +113,6 @@ pub(crate) fn run_table(cases: &[(&str, fn())]) {
 
 #[path = "leaf_payload.rs"]
 mod leaf_payload;
+
+#[path = "layout_record.rs"]
+mod layout_record;

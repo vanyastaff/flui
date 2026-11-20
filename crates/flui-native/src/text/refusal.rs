@@ -6,7 +6,7 @@
 //! through [`commit_in_place`], so a refusal is reported once and with one
 //! message whichever host met it.
 
-use flui_platform::text_store::{TextStore, TextStoreError, commit_composition_in_place};
+use flui_platform::text::store::{TextStore, TextStoreError, commit_composition_in_place};
 
 /// The target of the log line [`report`] writes, which a test counts.
 pub(crate) const LOG_TARGET: &str = "flui_native::text_store";
@@ -45,10 +45,11 @@ pub(crate) mod read_only {
     use std::rc::Rc;
 
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         CommitGate, Composition, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect,
         Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
-        TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+        TextStoreRead, TextStoreStatus,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     /// See the module.
@@ -66,7 +67,7 @@ pub(crate) mod read_only {
         fn press_target_at(
             &self,
             _: Point<f64>,
-        ) -> Result<flui_platform::text_store::PressTarget, TextStoreError> {
+        ) -> Result<flui_platform::text::store::PressTarget, TextStoreError> {
             Err(TextStoreError::NoLayout)
         }
 
@@ -159,7 +160,7 @@ pub(crate) mod read_only {
 
 #[cfg(test)]
 mod tests {
-    use flui_platform::text_store::TextStore as _;
+    use flui_platform::text::store::TextStore as _;
 
     use super::read_only::ReadOnlyField;
     use super::{commit_in_place, reports_in};

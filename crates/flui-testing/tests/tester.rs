@@ -370,7 +370,7 @@ fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
 /// key, and `^` for each of Control and Shift held.
 fn key_log() -> (Tester, Rc<std::cell::RefCell<Vec<String>>>) {
     use flui_interaction::focus::KeyEventResult;
-    use flui_platform::keyboard::{Key, KeyPress, KeyState, Modifiers};
+    use flui_platform::input::keyboard::{Key, KeyPress, KeyState, Modifiers};
 
     let log = Rc::new(std::cell::RefCell::new(Vec::new()));
     let heard = Rc::clone(&log);
@@ -1744,9 +1744,6 @@ impl flui_widgets::CustomPainter for SwatchPainter {
     fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
         true
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// `child` inside a group `find::id(identifier)` locates.
@@ -2038,9 +2035,6 @@ impl flui_widgets::CustomPainter for OverhangPainter {
     fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
         true
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// `draw_commands` reads one element's drawing: of two painted siblings,
@@ -2170,9 +2164,6 @@ impl flui_widgets::CustomPainter for RegionPainter {
             ),
             config,
         )]
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

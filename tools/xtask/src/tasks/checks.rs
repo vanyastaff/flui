@@ -80,15 +80,13 @@ mod tests {
     use clap::{CommandFactory as _, Parser as _};
 
     use super::*;
-    use crate::perf;
 
     /// Every gate's self-test: the gate run over its planted violations,
     /// failing unless exactly the planted findings come back (ADR-0078 §4).
-    const SELF_TESTS: [(&str, InProcess); 3] = [
+    const SELF_TESTS: [(&str, InProcess); 2] = [
         ("key-vocabulary", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
-        ("perf", |args| perf::perf(&parsed(args)?)),
         ("changelog", |args| changelog::changelog(&parsed(args)?)),
     ];
 

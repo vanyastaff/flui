@@ -33,9 +33,10 @@
 //! no expanding circle: the state layer shows `Pressed` from the contact's
 //! down to its up, and through the tap's pressed window after.
 //!
-//! An idle well attaches no painter and records nothing; a state change or a
-//! press rebuilds it with one, and the last run coming to rest rebuilds it
-//! without.
+//! An idle well attaches no painter and records nothing. A state change or a
+//! press that makes it visible rebuilds it with one; while the painter is
+//! attached, state changes repaint through it with no build, and the last run
+//! coming to rest rebuilds the well without it.
 //!
 //! [`RippleScope`] provides the ambient [`RippleConfiguration`]; a scope with
 //! no configuration turns the whole indication off.
@@ -523,6 +524,15 @@ impl Indication {
                 .map_or(true, |waves| waves.iter().any(|wave| !wave.finished()))
     }
 
+    /// When something has become visible on a well whose last build attached
+    /// no painter, rebuild so the painter attaches. A well that has it
+    /// repaints through its listenable and does not rebuild.
+    pub(crate) fn attach_when_active(&self) {
+        if !self.painted.get() && self.is_active() {
+            self.schedule_rebuild();
+        }
+    }
+
     /// Once the last run is at rest, rebuild so the painter detaches.
     fn detach_when_idle(&self) {
         if self.painted.get() && !self.is_active() {
@@ -847,7 +857,7 @@ impl CustomPainter for IndicationPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             !Rc::ptr_eq(&old.indication, &self.indication) || old.shape != self.shape
         })
     }
@@ -859,9 +869,5 @@ impl CustomPainter for IndicationPainter {
     /// The feedback is decoration: hits belong to the child and the well.
     fn hit_test(&self, _position: flui_sdk::geometry::Offset) -> Option<bool> {
         Some(false)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

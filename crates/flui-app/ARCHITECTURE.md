@@ -379,8 +379,8 @@ the dispatch layer moves there too.
   contexts present to the canvas, and the slot attached on the new one starts
   healthy and draws in full; its texture images come from the slot it
   replaces. A build that fails is asked again at the next animation frame and
-  never given up (`docs/gaps.md`). wasm-only: CI's `wasm-check` and `wasm-test`
-  compile it; nothing on this host runs it.
+  never given up (`docs/gaps.md`). wasm-only: CI's `wasm-check` job
+  compiles it; nothing on this host runs it.
 - **A window reaches a UI runtime with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the
   window in a `PresentationWindow`.
@@ -606,7 +606,7 @@ run with nothing borrowed.
   display it chose; a configured `AppConfig::position` is whole logical
   pixels of the primary display (the first where none is marked), which
   `AppConfig::window_options` turns into a position against the owner's
-  display snapshot at every open site (the main window, `run_direct`, a
+  display snapshot at every open site (the main window, a
   secondary window, Android and the web); it is the one way to build a
   window's options from the configuration. A window state with no position
   stores nothing, and one whose position names a display the snapshot lacks

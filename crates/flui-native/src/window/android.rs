@@ -16,7 +16,7 @@ use std::sync::{
 use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
-use flui_platform::input_regions::{InputRegion, InputRegionKind};
+use flui_platform::input::regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmittedCommand, ApplyError, Brightness, FrameRateHint, Unsupported, UnsupportedReason,
     WindowCapabilities, WindowGeometry, WindowOptions, WindowState,
@@ -494,7 +494,7 @@ impl ActivityWindow for AndroidWindow {
 fn input_capabilities(
     api: AndroidApi,
     java_view: bool,
-) -> flui_platform::input_capabilities::InputCapabilities {
+) -> flui_platform::input::capabilities::InputCapabilities {
     crate::input::availability::android(AndroidInputApis {
         gesture_exclusion: api.since::<GestureExclusion>().is_some(),
         touchpad_gestures: api.since::<TouchpadGestures>().is_some(),
@@ -665,7 +665,7 @@ impl crate::host_window::HostWindow for AndroidWindow {
     fn text_store_host(
         &self,
         _owner: crate::host_window::OwnerThreadToken,
-    ) -> Option<Rc<dyn flui_platform::text_store::TextStoreHost>> {
+    ) -> Option<Rc<dyn flui_platform::text::store::TextStoreHost>> {
         self.facets
             .text
             .window_text_input()
@@ -902,6 +902,10 @@ impl PlatformWindow for AndroidWindow {
         flui_platform::RedrawRequester::request_redraw(&self.redraw());
     }
 
+    /// Never asked: Android tells no covering and keeps no covered window's
+    /// surface (`occluded_surface`), so no frame is owed to one (ADR-0389).
+    fn request_frame_at(&self, _: Option<flui_platform::EventTime>) {}
+
     fn redraw_requester(&self) -> Arc<dyn flui_platform::RedrawRequester> {
         Arc::new(self.redraw())
     }
@@ -977,9 +981,10 @@ impl PlatformWindow for AndroidWindow {
 
     /// `FluiView.startDragAndDrop`, once the view is installed, from API 24:
     /// what `InputCapabilities::outgoing_drag` claims.
-    fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform::transfer::drag::PlatformDragSource>> {
         (self.java_view.is_ready() && self.api.since::<DragSource>().is_some()).then(|| {
-            Arc::clone(&self.drag_source) as Arc<dyn flui_platform::drag::PlatformDragSource>
+            Arc::clone(&self.drag_source)
+                as Arc<dyn flui_platform::transfer::drag::PlatformDragSource>
         })
     }
 
@@ -1598,10 +1603,6 @@ pub(crate) mod system_chrome {
                     }
                 },
             );
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

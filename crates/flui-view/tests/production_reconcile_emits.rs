@@ -276,13 +276,11 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
             moved_render,
             moved_child_render,
         ] {
-            let node = pipeline
-                .render_tree()
-                .get(render_id)
-                .expect("mounted render ID must resolve before the move");
-            node.clear_needs_layout();
-            node.clear_needs_paint();
-            node.clear_needs_compositing_bits_update();
+            assert!(
+                pipeline.render_tree().contains(render_id),
+                "mounted render ID must resolve before the move"
+            );
+            flui_rendering::testing::raw_tree::clear_dirty_flags(pipeline, render_id);
         }
     });
 
@@ -370,38 +368,22 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
                 .needs_compositing_bits_update()
         );
         assert_eq!(
-            pipeline
-                .nodes_needing_layout()
-                .iter()
-                .map(|dirty| dirty.id)
-                .collect::<Vec<_>>(),
+            pipeline.queued_for_layout(),
             vec![root_render],
             "both changed parents propagate layout to their shared relayout boundary",
         );
         assert_eq!(
-            pipeline
-                .nodes_needing_compositing_bits_update()
-                .iter()
-                .map(|dirty| dirty.id)
-                .collect::<Vec<_>>(),
+            pipeline.queued_for_compositing_bits(),
             vec![root_render],
             "both membership changes share the root compositing walk",
         );
-        let semantics_ids = pipeline
-            .nodes_needing_semantics()
-            .iter()
-            .map(|dirty| dirty.id)
-            .collect::<Vec<_>>();
+        let semantics_ids = pipeline.queued_for_semantics();
         assert_eq!(semantics_ids.len(), 3, "{semantics_ids:?}");
         assert!(semantics_ids.contains(&parent_a_render));
         assert!(semantics_ids.contains(&destination_render));
         assert!(semantics_ids.contains(&moved_render));
         assert_eq!(
-            pipeline
-                .nodes_needing_paint()
-                .iter()
-                .map(|dirty| dirty.id)
-                .collect::<Vec<_>>(),
+            pipeline.queued_for_paint(),
             vec![root_render],
             "a fresh attachment interval canonically repaints through its boundary",
         );

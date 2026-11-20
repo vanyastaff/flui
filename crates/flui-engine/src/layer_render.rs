@@ -4,10 +4,9 @@
 //! from flui-layer.
 
 use flui_layer::{
-    BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
-    ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer,
-    OpacityLayer, PerformanceOverlayLayer, PictureLayer, PlatformViewLayer, ShaderMaskLayer,
-    TextureLayer, TransformLayer,
+    BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ColorFilterLayer,
+    FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer,
+    ShaderMaskLayer, TransformLayer,
 };
 
 use crate::{
@@ -63,7 +62,6 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
     fn render(&self, renderer: &mut R) {
         match self {
             // Leaf layers
-            Layer::Canvas(layer) => layer.render(renderer),
             Layer::Picture(layer) => layer.render(renderer),
 
             // Clip layers
@@ -84,8 +82,6 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
             Layer::BackdropFilter(layer) => layer.render(renderer),
 
             // Leaf layers (external content)
-            Layer::Texture(layer) => layer.render(renderer),
-            Layer::PlatformView(layer) => layer.render(renderer),
 
             // Linking layers
             Layer::Leader(layer) => layer.render(renderer),
@@ -94,17 +90,13 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
             // Annotation layers (metadata only, no visual rendering)
             Layer::AnnotatedRegion(_) => {
                 // AnnotatedRegion is metadata-only, no visual rendering needed
-            }
-
-            // Debug/Performance layers
-            Layer::PerformanceOverlay(layer) => layer.render(renderer),
+            } // Debug/Performance layers
         }
     }
 
     fn cleanup(&self, renderer: &mut R) {
         match self {
             // Leaf layers - no cleanup needed
-            Layer::Canvas(layer) => layer.cleanup(renderer),
             Layer::Picture(layer) => layer.cleanup(renderer),
 
             // Clip layers
@@ -125,18 +117,13 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
             Layer::BackdropFilter(layer) => layer.cleanup(renderer),
 
             // Leaf layers (external content)
-            Layer::Texture(layer) => layer.cleanup(renderer),
-            Layer::PlatformView(layer) => layer.cleanup(renderer),
 
             // Linking layers
             Layer::Leader(layer) => layer.cleanup(renderer),
             Layer::Follower(layer) => layer.cleanup(renderer),
 
             // Annotation layers (metadata only, no cleanup needed)
-            Layer::AnnotatedRegion(_) => {}
-
-            // Debug/Performance layers
-            Layer::PerformanceOverlay(layer) => layer.cleanup(renderer),
+            Layer::AnnotatedRegion(_) => {} // Debug/Performance layers
         }
     }
 }
@@ -144,12 +131,6 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
 // ============================================================================
 // LEAF LAYERS
 // ============================================================================
-
-impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for CanvasLayer {
-    fn render(&self, renderer: &mut R) {
-        dispatch_commands(self.display_list(), renderer);
-    }
-}
 
 impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PictureLayer {
     fn render(&self, renderer: &mut R) {
@@ -345,32 +326,6 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for BackdropF
 }
 
 // ============================================================================
-// EXTERNAL CONTENT LAYERS
-// ============================================================================
-
-impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TextureLayer {
-    fn render(&self, renderer: &mut R) {
-        if self.is_invisible() {
-            return;
-        }
-        renderer.render_texture(
-            self.texture_id(),
-            self.bounds(),
-            None,
-            self.filter_quality(),
-            self.opacity() as f32,
-            &flui_foundation::geometry::Matrix4::IDENTITY,
-        );
-    }
-}
-
-impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PlatformViewLayer {
-    fn render(&self, _renderer: &mut R) {
-        // Platform views are composited by the platform embedder
-    }
-}
-
-// ============================================================================
 // LINKING LAYERS
 // ============================================================================
 
@@ -395,21 +350,5 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for FollowerL
 
     fn cleanup(&self, _renderer: &mut R) {
         // No state to clean up
-    }
-}
-
-// ============================================================================
-// PERFORMANCE OVERLAY LAYER
-// ============================================================================
-
-impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
-    /// Replays the readout, shaped upstream, clipped to the bounds: the
-    /// bounds are all the damage producer repaints for the overlay each
-    /// frame, so a readout recorded past them must not ink outside them. A
-    /// hard-edge rect clip is a scissor and opens no offscreen.
-    fn render(&self, renderer: &mut R) {
-        renderer.push_clip_rect(&self.bounds(), flui_painting::paint::Clip::HardEdge);
-        dispatch_commands(self.readout(), renderer);
-        renderer.pop_clip();
     }
 }

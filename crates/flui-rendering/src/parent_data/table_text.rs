@@ -1,18 +1,10 @@
-//! Specialized parent data types - Table and Text layouts.
+//! Specialized parent data types - Table layouts.
 
 use std::hash::{Hash, Hasher};
 
-use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, canonical_bits_f64};
 
-// `TextRange` used to be declared here as well; flui-painting's typography owns
-// the concept and its copy is a strict superset. Imported privately, not re-exported: every
-// other consumer in the workspace already reaches for
-// `flui_painting::typography::TextRange` directly, so a `pub use` here would be
-// public surface with no consumer.
-use flui_painting::typography::TextRange;
-
-use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
+use super::base::ParentData;
 
 /// Where a `Table`/`RenderTable` cell should be placed vertically within its
 /// row's resolved height.
@@ -148,89 +140,5 @@ impl Hash for TableCellParentData {
         self.x.hash(state);
         self.y.hash(state);
         self.vertical_alignment.hash(state);
-    }
-}
-
-// ============================================================================
-// TEXT PARENT DATA
-// ============================================================================
-
-/// Parent data for inline text spans in rich text.
-///
-/// Combines container functionality (for inline spans) with text range
-/// information.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextParentData {
-    /// Offset from paragraph origin.
-    pub offset: Offset,
-
-    /// Container mixin for sibling text spans.
-    pub container: ContainerParentDataMixin<RenderId>,
-
-    /// Range of text covered by this span (start, end indices).
-    ///
-    /// `None` if span doesn't represent a text range (e.g., inline widget).
-    pub span: Option<TextRange>,
-}
-
-impl TextParentData {
-    /// Create with optional text range.
-    pub const fn new(span: Option<TextRange>) -> Self {
-        Self {
-            offset: Offset::ZERO,
-            container: ContainerParentDataMixin::new(),
-            span,
-        }
-    }
-
-    /// Create at origin with no text range.
-    pub const fn zero() -> Self {
-        Self::new(None)
-    }
-
-    /// Create with text range.
-    pub const fn with_range(start: usize, end: usize) -> Self {
-        Self::new(Some(TextRange::new(start, end)))
-    }
-
-    /// Builder: set text range.
-    pub fn with_span(mut self, span: TextRange) -> Self {
-        self.span = Some(span);
-        self
-    }
-
-    /// Builder: set offset.
-    pub const fn with_offset(mut self, offset: Offset) -> Self {
-        self.offset = offset;
-        self
-    }
-
-    /// Check if span has text range.
-    #[inline]
-    pub const fn has_span(&self) -> bool {
-        self.span.is_some()
-    }
-
-    /// Get span length if present.
-    #[inline]
-    pub fn span_length(&self) -> Option<usize> {
-        self.span.as_ref().map(TextRange::len)
-    }
-}
-
-impl Default for TextParentData {
-    fn default() -> Self {
-        Self::zero()
-    }
-}
-
-impl ParentData for TextParentData {}
-
-impl Hash for TextParentData {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        canonical_bits_f64(self.offset.dx).hash(state);
-        canonical_bits_f64(self.offset.dy).hash(state);
-        self.container.hash(state);
-        self.span.hash(state);
     }
 }

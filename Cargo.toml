@@ -40,6 +40,7 @@ members = [
     # H: hosts
     "crates/flui-native", # The core host: native and headless hosts
     "crates/flui-app",    # Per-window UiRuntimes and the run loop
+    "crates/flui-driver", # Drives a running app: locate, act, wait, report (ADR-0238)
     "crates/flui-cli",    # `flui` CLI: create, run, build, doctor, devices
 
     # pkg: official packages, built on flui-sdk alone (ADR-0088)
@@ -237,6 +238,8 @@ windows-collections = "0.3"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
+# `HashTable`: a hash index whose keys live in the caller's own storage.
+hashbrown = { version = "0.17", default-features = false }
 slab = "0.4.12"
 
 # SERIALIZATION - Core functionality
@@ -246,8 +249,6 @@ serde_json = "1.0"
 # feature) and the desktop agent server's tool parameters.
 schemars = "1.0"
 cargo_metadata = "0.23.1"
-# Core wasm import inspection in xtask. No validator, component model or serde.
-wasmparser = { version = "0.262", default-features = false, features = ["std"] }
 sha2 = { version = "0.11", default-features = false }
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
@@ -270,6 +271,10 @@ objc2-service-management = { version = "0.3.2", default-features = false }
 # geometry, which `objc2-core-foundation` holds.
 objc2-ui-kit = { version = "0.3.2", default-features = false }
 objc2-core-foundation = { version = "0.3.2", default-features = false }
+# flui-driver's macOS lane: CGEvent input, its event tap and the displays (CoreGraphics), and the
+# accessibility API assistive technology reads (`AXUIElement`), of the same generation.
+objc2-core-graphics = { version = "0.3.2", default-features = false }
+objc2-application-services = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 block2 = "0.6.2"
 # ANDROID - the NativeActivity glue flui-native and flui-app share.
@@ -292,6 +297,8 @@ dirs = "6"
 
 # The semantics and agent-protocol vocabulary (ADR-0095).
 flui-protocol = { path = "crates/flui-protocol", version = "=0.2.0-dev" }
+# The driver's client (ADR-0238), versioned apart from the train; `flui-cli` is its front end.
+flui-driver = { path = "crates/flui-driver", version = "=0.1.0-dev" }
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
@@ -307,7 +314,6 @@ flui-testing = { path = "crates/flui-testing", version = "=0.2.0-dev" }
 
 # The package-author surface (ADR-0088 §4); Evolving, its own `0.N` version.
 flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
-
 # The capability traits with no OS backend (ADR-0082).
 flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
@@ -459,8 +465,8 @@ regex = "1"
 walkdir = "2.5"
 clap = { version = "4.5", features = ["derive"] }
 
-# SOURCE ANALYSIS - flui-macros' derives and xtask's source gates. Each member
-# names the features it needs (`full`, `visit`, `span-locations`).
+# SOURCE ANALYSIS - flui-macros' derives, and the syn parses of xtask's generators
+# and checks. Each member names the features it needs (`full`, `parsing`, `visit`).
 proc-macro2 = "1"
 syn = "3"
 # TOML that keeps a document's layout: `#[flui::main]` reads the crate's manifest with it, and
@@ -560,7 +566,7 @@ insta = "1"
 proptest = "1"
 
 # COVERAGE-GUIDED FUZZING - libFuzzer's runtime, linked into the fuzz targets
-# (`cargo xtask fuzz`). A crate names it under `cfg(fuzzing)` only, so no other
+# (`.cargo/fuzz.toml`). A crate names it under `cfg(fuzzing)` only, so no other
 # build compiles it.
 libfuzzer-sys = "0.4"
 
@@ -580,7 +586,7 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 # unexpected_cfgs: a typo in one of the many `cfg(target_arch = ...)` /
 # `cfg(feature = ...)` gates would otherwise compile to a silently-dead branch —
 # exactly the failure mode that kept the web backend from ever being exercised.
-# `fuzzing` is the one name beyond rustc's and Cargo's own: `cargo xtask fuzz`
+# `fuzzing` is the one name beyond rustc's and Cargo's own: `.cargo/fuzz.toml`
 # sets it for the fuzz targets.
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzing)'] }
 # unsafe_op_in_unsafe_fn: edition 2024 already warns; denying states that an
@@ -759,7 +765,7 @@ categories = ["gui", "rendering::engine"]
 [package.metadata.flui]
 tier = "H"
 tier-kind = "stable"
-order = 4
+order = 5
 # The facade names official packages until they build on the SDK.
 edge-exceptions = [
     { to = "flui-cupertino", exit = "ADR-0088", reason = "the optional `cupertino` catalog re-export" },
@@ -792,6 +798,7 @@ flui-devtools = { workspace = true, optional = true }
 flui-assets = { workspace = true, optional = true }
 flui-painting = { workspace = true }
 flui-rendering = { workspace = true }
+flui-semantics = { workspace = true }
 flui-objects = { workspace = true }
 flui-interaction = { workspace = true }
 flui-testing = { workspace = true, optional = true }

@@ -4,7 +4,7 @@
 //! reading in the candidate window, and an email, URL, phone or number field
 //! the keyboard its purpose asks for.
 
-use flui_platform::text_store::{NumberFormat, TextInputPurpose, TextStoreStatus};
+use flui_platform::text::store::{NumberFormat, TextInputPurpose, TextStoreStatus};
 use windows::Win32::{
     Foundation::{E_NOTIMPL, E_UNEXPECTED},
     System::{Com::CoTaskMemAlloc, Variant::VARIANT},
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn a_field_gets_the_scope_its_status_asks_for() {
-        use flui_platform::text_store::TextInputOptions;
+        use flui_platform::text::store::TextInputOptions;
 
         let plain = TextStoreStatus::EDITABLE_SINGLE_LINE;
         let of = |purpose| plain.with_text_input(TextInputOptions::new(purpose));

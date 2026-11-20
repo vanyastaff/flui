@@ -3,8 +3,8 @@
 
 use flui_foundation::PresentationId;
 use flui_platform::PlatformWindow;
-use flui_platform::data_transfer::TransferActions;
-use flui_platform::drag::{AllowedActions, DragError};
+use flui_platform::transfer::data::TransferActions;
+use flui_platform::transfer::drag::{AllowedActions, DragError};
 
 use super::item::DragItem;
 use super::owner::{DragHandle, DragSession, DragStart};

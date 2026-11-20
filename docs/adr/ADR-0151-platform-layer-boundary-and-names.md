@@ -374,8 +374,8 @@ winit embeds one `NotSupportedError { reason }` in three error enums
 separates "cannot be represented" (`HandleError::NotSupported`) from "temporarily unavailable"
 (`HandleError::Unavailable`; [rust-windowing/raw-window-handle@1b859486d7 src/lib.rs:320-345](https://github.com/rust-windowing/raw-window-handle/blob/1b859486d7/src/lib.rs#L320-L345)).
 FLUI already has the retryable class in three places under three spellings
-(`HandleError::Unavailable`, `StorageError::Busy` at `crates/flui-platform-api/src/storage.rs:310`,
-the bounded-retry rule of the gesture geometry at `platform_window.rs:238-241`); `Unavailable` is
+(`HandleError::Unavailable`, `StorageError::Busy`,
+the bounded-retry rule of `PlatformWindow::gesture_geometry`); `Unavailable` is
 that class named once.
 
 ### 5. Stability: closed enums decided, the closure gated, the seal explicit, the version with the train
@@ -808,7 +808,8 @@ directories). They add no area to it.
   forbids `accesskit`, `tokio`, `tracing` and `parking_lot`; tier K forbids `flui-native` and not
   the contract), `globals` (re-keyed entries), `module-dag` (extended to `flui-native` as in
   section 10) and `checks`.
-- `cargo heli xtask cross-typecheck` for Windows, macOS, Android, iOS and wasm32 on every pull
+- CI's `cross-typecheck` and `wasm-check` jobs for Windows, macOS, Android, iOS and wasm32, which
+  run on main (ADR-0375) and on a branch through `gh workflow run CI --ref <branch>` for a pull
   request that touches a host or either rename.
 - Before the first publication: the API-closure gate of ADR-0089 §6 and `clippy::exhaustive_enums`
   on the contract, with every closed enum carrying its reason.
@@ -827,7 +828,7 @@ directories). They add no area to it.
 - Each rename: the map re-run on its own output changes nothing; regenerated trybuild snapshots
   are reviewed as diffs. The second rename's opening check finds no `flui-platform` or
   `flui_platform` token outside the archival roots and this ADR.
-- No manifest declares an `a11y` feature; `cargo heli xtask cross-typecheck` builds the Windows
+- No manifest declares an `a11y` feature; the `cross-typecheck` job builds the Windows
   and macOS AccessKit adapters without a flag, and the AT-SPI adapter builds in every build of the
   Linux host, where a real-loop test reads it from a window under Xvfb.
 - The panic-boundary gate fails on a planted `extern "C"` function or OS callback that does not

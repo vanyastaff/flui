@@ -1,0 +1,515 @@
+//! The handles a test writes against: a [`Window`], an [`ElementLocator`] (a description,
+//! re-resolved at every use) and an [`Element`] (one resolved element, its handle
+//! generation-checked by the app). Each borrows the [`Driver`] and mirrors the method table: a
+//! gesture method on a locator or an element is the table's `element.<gesture>`, with the options
+//! the builder set.
+
+use std::time::Duration;
+
+use flui_protocol::act::{ActOutcome, Actionability, ActionabilityParams};
+use flui_protocol::geometry::LogicalPoint;
+use flui_protocol::input::{
+    ActionSequence, Direction, DragParams, GestureOptions, InputParams, InputPath, InputPolicy,
+    Journal, JournalParams, LongPressParams, PinchParams, PressKeysParams, Released,
+    ScrollIntoViewParams, SwipeParams, TapParams, TypeTextParams,
+};
+use flui_protocol::locator::{LocateParams, Locator, Matches, Target};
+use flui_protocol::method::{self, Method as _};
+use flui_protocol::session::{Placement, WindowParams};
+use flui_protocol::snapshot::Snapshot;
+use flui_protocol::tree::{ElementRef, ReadParams, ReadQuery, Tree, WindowId};
+use flui_protocol::wait::{Condition, WaitOutcome};
+
+use crate::compose;
+use crate::driver::Driver;
+use crate::error::Result;
+use crate::projection::Projection;
+use crate::scenario::WindowSpec;
+
+/// One window of the app.
+pub struct Window<'d> {
+    pub(crate) driver: &'d mut Driver,
+    pub(crate) id: WindowId,
+}
+
+impl<'d> Window<'d> {
+    pub(crate) fn new(driver: &'d mut Driver, id: WindowId) -> Self {
+        Self { driver, id }
+    }
+
+    /// The window's handle.
+    #[must_use]
+    pub fn id(&self) -> WindowId {
+        self.id
+    }
+
+    /// The elements `locator` describes in this window, resolved at each use.
+    pub fn locate(&mut self, locator: Locator) -> ElementLocator<'_> {
+        ElementLocator::new(self.driver, locator.in_window(self.id))
+    }
+
+    /// The element `element`, read before.
+    pub fn element(&mut self, element: ElementRef) -> Element<'_> {
+        Element::new(self.driver, element)
+    }
+
+    /// The window's semantics tree.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn read(&mut self) -> Result<Tree> {
+        self.read_with(ReadQuery::new())
+    }
+
+    /// The part of the tree `query` asks for, within its budgets.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn read_with(&mut self, query: ReadQuery) -> Result<Tree> {
+        self.driver
+            .agent::<method::SemanticsRead>(ReadParams::new(self.id).query(query), Duration::ZERO)
+    }
+
+    /// The window's size, scale, position and focus.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn placement(&mut self) -> Result<Placement> {
+        self.driver
+            .agent::<method::WindowPlacement>(WindowParams::new(self.id), Duration::ZERO)
+    }
+
+    /// The window as the OS accessibility API shows it, through the session's lane, projected
+    /// onto the wire's nodes ([`Lane::read_tree`](crate::Lane::read_tree)). Its nodes' ids number
+    /// them in the order they were read: they are no handles the app issued.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_accessibility_tree` without
+    /// a lane that reads one; the lane's and the app's failures.
+    pub fn os_tree(&mut self) -> Result<Tree> {
+        let placement = self.placement()?;
+        let lane = self.driver.lane().ok_or_else(|| {
+            crate::Error::not_supported("os_accessibility_tree", "the session has no OS lane")
+        })?;
+        lane.run(move |lane| lane.read_tree(&placement))?
+    }
+
+    /// Activate the element whose identifier is `identifier` through the OS accessibility API, as
+    /// a screen reader does ([`Lane::invoke`](crate::Lane::invoke)): proof that assistive
+    /// technology can act on it, not only read it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_invoke` without a lane that
+    /// acts through one; the lane's and the app's failures.
+    pub fn os_invoke(&mut self, identifier: &str) -> Result<()> {
+        let placement = self.placement()?;
+        let lane = self.driver.lane().ok_or_else(|| {
+            crate::Error::not_supported("os_invoke", "the session has no OS lane")
+        })?;
+        let identifier = identifier.to_owned();
+        lane.run(move |lane| lane.invoke(&placement, &identifier))?
+    }
+
+    /// The window's semantics tree and its OS accessibility tree, each as its normalized outline
+    /// (ADR-0095 §4): whether assistive technology reads what the app published.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`] and [`Self::os_tree`].
+    pub fn compare_projection(&mut self) -> Result<Projection> {
+        let os = self.os_tree()?;
+        let app = self.read()?;
+        Ok(Projection::of(&app, &os))
+    }
+
+    /// Whether the window is the one `spec` describes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`](crate::Error::InvalidArgument) naming the expected and the
+    /// actual size and scale when it is not.
+    pub fn check_size(&mut self, spec: WindowSpec) -> Result<()> {
+        spec.check(&self.placement()?)
+    }
+
+    /// Hold out for `condition` on the window's frame and event timeline, at most `timeout` of
+    /// the app's clock; a wait that runs out is an answer, `satisfied: false`, with why the window
+    /// had not settled.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn wait_until(&mut self, condition: Condition, timeout: Duration) -> Result<WaitOutcome> {
+        compose::wait_until(self.driver, self.id, condition, timeout)
+    }
+
+    /// Perform `actions` by the session's input path.
+    ///
+    /// # Errors
+    ///
+    /// As `input.perform`.
+    pub fn perform(&mut self, actions: ActionSequence) -> Result<ActOutcome> {
+        let params = InputParams::new(self.id, actions);
+        self.driver
+            .command(method::InputPerform::NAME, params, compose::perform)
+    }
+
+    /// Perform `actions` by `policy`'s input path.
+    ///
+    /// # Errors
+    ///
+    /// As `input.perform`.
+    pub fn perform_via(
+        &mut self,
+        actions: ActionSequence,
+        policy: InputPolicy,
+    ) -> Result<ActOutcome> {
+        let mut params = InputParams::new(self.id, actions);
+        params.via = Some(policy);
+        self.driver
+            .command(method::InputPerform::NAME, params, compose::perform)
+    }
+
+    /// Tap at `at`, in the window's logical surface coordinates: the explicit last resort.
+    ///
+    /// # Errors
+    ///
+    /// As `element.tap`.
+    pub fn tap_at(&mut self, at: LogicalPoint) -> Result<ActOutcome> {
+        let params = TapParams::new(Target::Point {
+            window: self.id,
+            at,
+        });
+        self.driver
+            .command(method::ElementTap::NAME, params, compose::tap)
+    }
+
+    /// Release every contact and key the agent holds for this window.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn release_input(&mut self) -> Result<Released> {
+        self.driver
+            .agent::<method::InputRelease>(WindowParams::new(self.id), Duration::ZERO)
+    }
+
+    /// The input the window's journal still holds.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn journal(&mut self) -> Result<Journal> {
+        self.driver
+            .agent::<method::InputJournal>(JournalParams::new(self.id), Duration::ZERO)
+    }
+}
+
+impl std::fmt::Debug for Window<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Window")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The gesture methods both handles share, each the table's `element.<gesture>` with the handle's
+/// target and options.
+macro_rules! gestures {
+    () => {
+        /// Prefer `path` for this handle's actions, falling back when the target lacks it.
+        #[must_use]
+        pub fn via(mut self, path: InputPath) -> Self {
+            self.options.via = Some(InputPolicy::prefer(path));
+            self
+        }
+
+        /// Take `path` only, refusing any other.
+        #[must_use]
+        pub fn require(mut self, path: InputPath) -> Self {
+            self.options.via = Some(InputPolicy::require(path));
+            self
+        }
+
+        /// Skip every actionability check but `attached`.
+        #[must_use]
+        pub fn force(mut self) -> Self {
+            self.options.force = true;
+            self
+        }
+
+        /// Give finding the element actionable `timeout`; the session's when not set.
+        #[must_use]
+        pub fn timeout(mut self, timeout: Duration) -> Self {
+            self.options.timeout_ms = Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX));
+            self
+        }
+
+        /// Read `snapshot` back after each action.
+        #[must_use]
+        pub fn snapshot(mut self, snapshot: Snapshot) -> Self {
+            self.options.snapshot = snapshot;
+            self
+        }
+
+        /// Tap it.
+        ///
+        /// # Errors
+        ///
+        /// As `element.tap`: not found, ambiguous, not actionable, a path the policy requires
+        /// that the target lacks, the app's own failure.
+        pub fn tap(&mut self) -> Result<ActOutcome> {
+            let mut params = TapParams::new(self.target());
+            params.options = self.options;
+            self.driver.command(method::ElementTap::NAME, params, compose::tap)
+        }
+
+        /// Tap it twice, as one double tap.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`].
+        pub fn double_tap(&mut self) -> Result<ActOutcome> {
+            let mut params = TapParams::new(self.target());
+            params.options = self.options;
+            self.driver.command(method::ElementDoubleTap::NAME, params, compose::double_tap)
+        }
+
+        /// Press and hold it, `hold` long or the long-press delay and a margin.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`].
+        pub fn long_press(&mut self, hold: Option<Duration>) -> Result<ActOutcome> {
+            let params = serde_json::json!({
+                "target": self.target(),
+                "duration_ms": hold.map(|hold| u64::try_from(hold.as_millis()).unwrap_or(u64::MAX)),
+            });
+            let params: LongPressParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementLongPress::NAME, params, compose::long_press)
+        }
+
+        /// Press it, move to `to`, release.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`], for either end.
+        pub fn drag_to(&mut self, to: impl Into<Target>) -> Result<ActOutcome> {
+            let params = serde_json::json!({ "target": self.target(), "to": to.into() });
+            let params: DragParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementDragTo::NAME, params, compose::drag_to)
+        }
+
+        /// A stroke from it towards `direction` that ends below the fling velocity.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`].
+        pub fn swipe(&mut self, direction: Direction) -> Result<ActOutcome> {
+            let params = serde_json::json!({ "target": self.target(), "direction": direction });
+            let params: SwipeParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementSwipe::NAME, params, |driver, params| compose::swipe(driver, params, false))
+        }
+
+        /// A stroke from it towards `direction` that ends above the fling velocity.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`].
+        pub fn fling(&mut self, direction: Direction) -> Result<ActOutcome> {
+            let params = serde_json::json!({ "target": self.target(), "direction": direction });
+            let params: SwipeParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementFling::NAME, params, |driver, params| compose::swipe(driver, params, true))
+        }
+
+        /// Two contacts around its centre, spreading (`scale` above 1) or closing.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`].
+        pub fn pinch(&mut self, scale: f64) -> Result<ActOutcome> {
+            let params = serde_json::json!({ "target": self.target(), "scale": scale });
+            let params: PinchParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementPinch::NAME, params, compose::pinch)
+        }
+
+        /// Scroll each scrollable ancestor until it is visible.
+        ///
+        /// # Errors
+        ///
+        /// As `element.scroll_into_view`.
+        pub fn scroll_into_view(&mut self) -> Result<ActOutcome> {
+            let params = serde_json::json!({ "target": self.target() });
+            let params: ScrollIntoViewParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementScrollIntoView::NAME, params, compose::scroll_into_view)
+        }
+
+        /// Focus it, then commit `text` into it.
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`].
+        pub fn type_text(&mut self, text: &str) -> Result<ActOutcome> {
+            let params = serde_json::json!({ "target": self.target(), "text": text });
+            let params: TypeTextParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementTypeText::NAME, params, compose::type_text)
+        }
+
+        /// Focus it, then press each chord in turn (`"Control+a"`, `"Enter"`).
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::tap`].
+        pub fn press_keys(&mut self, chords: &[&str]) -> Result<ActOutcome> {
+            let params = serde_json::json!({ "target": self.target(), "keys": chords });
+            let params: PressKeysParams = with_options(params, self.options)?;
+            self.driver.command(method::ElementPressKeys::NAME, params, compose::press_keys)
+        }
+    };
+}
+
+/// `params` with `options` flattened in, read as a method's parameters.
+fn with_options<P: serde::de::DeserializeOwned>(
+    mut params: serde_json::Value,
+    options: GestureOptions,
+) -> Result<P> {
+    let invalid = |error: serde_json::Error| {
+        crate::Error::invalid_argument(format!("a gesture's parameters do not read: {error}"))
+    };
+    if let (Some(fields), serde_json::Value::Object(extra)) = (
+        params.as_object_mut(),
+        serde_json::to_value(options).map_err(invalid)?,
+    ) {
+        fields.extend(extra);
+    }
+    serde_json::from_value(params).map_err(invalid)
+}
+
+/// The elements a locator describes, resolved at every use: never a cached node.
+pub struct ElementLocator<'a> {
+    driver: &'a mut Driver,
+    locator: Locator,
+    options: GestureOptions,
+}
+
+impl<'a> ElementLocator<'a> {
+    pub(crate) fn new(driver: &'a mut Driver, locator: Locator) -> Self {
+        Self {
+            driver,
+            locator,
+            options: GestureOptions::default(),
+        }
+    }
+
+    fn target(&self) -> Target {
+        Target::Locator(self.locator.clone())
+    }
+
+    /// The locator.
+    #[must_use]
+    pub fn locator(&self) -> &Locator {
+        &self.locator
+    }
+
+    pub(crate) fn driver(&mut self) -> &mut Driver {
+        self.driver
+    }
+
+    /// Every element it matches now.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn matches(&mut self) -> Result<Matches> {
+        self.driver.agent::<method::SemanticsLocate>(
+            LocateParams::new(self.locator.clone()),
+            Duration::ZERO,
+        )
+    }
+
+    /// The one element it matches now: strictly, unless it picks one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Ambiguous`](crate::Error::Ambiguous) and
+    /// [`Error::NotFound`](crate::Error::NotFound) after waiting for one to appear.
+    pub fn resolve(self) -> Result<Element<'a>> {
+        let timeout = self
+            .options
+            .timeout_ms
+            .map_or(self.driver.timeout, Duration::from_millis);
+        let handle = compose::resolve(self.driver, &self.target(), timeout)?;
+        Ok(Element {
+            driver: self.driver,
+            handle,
+            options: self.options,
+        })
+    }
+
+    gestures!();
+}
+
+impl std::fmt::Debug for ElementLocator<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElementLocator")
+            .field("locator", &self.locator)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One element, resolved: its handle names it for as long as it stays, and answers `gone` once
+/// it is removed, never another element in its slot, as the app's generational ids guarantee.
+pub struct Element<'a> {
+    driver: &'a mut Driver,
+    handle: ElementRef,
+    options: GestureOptions,
+}
+
+impl<'a> Element<'a> {
+    pub(crate) fn new(driver: &'a mut Driver, handle: ElementRef) -> Self {
+        Self {
+            driver,
+            handle,
+            options: GestureOptions::default(),
+        }
+    }
+
+    fn target(&self) -> Target {
+        Target::Element(self.handle)
+    }
+
+    /// The element's handle, `w3/e12`.
+    #[must_use]
+    pub fn reference(&self) -> ElementRef {
+        self.handle
+    }
+
+    /// Attached, visible, stable, enabled and receives, from one frame.
+    ///
+    /// # Errors
+    ///
+    /// When the app cannot answer.
+    pub fn actionability(&mut self) -> Result<Actionability> {
+        self.driver.agent::<method::ElementActionability>(
+            ActionabilityParams::new(self.handle),
+            Duration::ZERO,
+        )
+    }
+
+    gestures!();
+}
+
+impl std::fmt::Debug for Element<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Element")
+            .field("handle", &self.handle)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}

@@ -141,7 +141,7 @@ flui-painting = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
-# pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to
+# pinned by lib tests that run on wasm32 (CI's `wasm-check`). Pinned to
 # the release that pairs with the locked wasm-bindgen; the unpinned "0.3"
 # resolves to one requiring a newer wasm-bindgen and would bump the workspace
 # lock as a side effect of adding a dev-dependency. flui-foundation carries the
@@ -150,12 +150,12 @@ proptest = { workspace = true }
 wasm-bindgen-test = "=0.3.77"
 
 # libFuzzer's runtime, for the fuzz target below. Named under `cfg(fuzzing)`,
-# which only `cargo xtask fuzz` sets, so no other build compiles it.
+# which only `.cargo/fuzz.toml` sets, so no other build compiles it.
 [target.'cfg(fuzzing)'.dev-dependencies]
 libfuzzer-sys = { workspace = true }
 
-# The fuzz target of the development agent's wire (`cargo xtask fuzz
-# agent_wire`): an example, so it shares this manifest's lock and
+# The fuzz target of the development agent's wire (fuzz.yml's
+# `agent_wire`): an example, so it shares this manifest's lock and
 # dev-dependencies and builds on stable as a replayer of crash inputs.
 [[example]]
 name = "fuzz_agent_wire"

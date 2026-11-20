@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{
+use flui_platform::text::store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text::store::{
     CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, PointMode, PressTarget,
     RangeRect, Selection, SelectionUi, TextStore, TextStoreError, TextStoreHost,
     TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
@@ -593,11 +593,11 @@ impl TextStore for ReentrantStore {
 
     fn request_lock(
         &self,
-        grant: flui_platform::text_store::LockGrant,
-        timing: flui_platform::text_store::LockTiming,
-    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+        grant: flui_platform::text::store::LockGrant,
+        timing: flui_platform::text::store::LockTiming,
+    ) -> Result<flui_platform::text::store::LockOutcome, flui_platform::text::store::TextStoreError>
     {
-        if matches!(&grant, flui_platform::text_store::LockGrant::Read(_)) {
+        if matches!(&grant, flui_platform::text::store::LockGrant::Read(_)) {
             let on_read = self.on_read.borrow_mut().take();
             if let Some(on_read) = on_read {
                 on_read();
@@ -997,12 +997,12 @@ fn failing_store_calls_deliver_focus_before_the_next_edit() {
             let other = InMemoryTextStore::new("other");
             let _ = other
                 .request_lock(
-                    flui_platform::text_store::LockGrant::read_write(|session| {
+                    flui_platform::text::store::LockGrant::read_write(|session| {
                         session
                             .set_composition(Some(composing(span(0, 5))))
                             .unwrap();
                     }),
-                    flui_platform::text_store::LockTiming::Sync,
+                    flui_platform::text::store::LockTiming::Sync,
                 )
                 .unwrap();
             let latest = InMemoryTextStore::new("latest");
@@ -1549,9 +1549,9 @@ impl TextStore for FieldWithCommands {
 
     fn request_lock(
         &self,
-        grant: flui_platform::text_store::LockGrant,
-        timing: flui_platform::text_store::LockTiming,
-    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+        grant: flui_platform::text::store::LockGrant,
+        timing: flui_platform::text::store::LockTiming,
+    ) -> Result<flui_platform::text::store::LockOutcome, flui_platform::text::store::TextStoreError>
     {
         self.inner.request_lock(grant, timing)
     }
@@ -1698,9 +1698,9 @@ impl TextStore for FieldKeepingItsObserver {
 
     fn request_lock(
         &self,
-        grant: flui_platform::text_store::LockGrant,
-        timing: flui_platform::text_store::LockTiming,
-    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+        grant: flui_platform::text::store::LockGrant,
+        timing: flui_platform::text::store::LockTiming,
+    ) -> Result<flui_platform::text::store::LockOutcome, flui_platform::text::store::TextStoreError>
     {
         self.inner.request_lock(grant, timing)
     }
@@ -1743,7 +1743,7 @@ fn a_layout_change_asks_for_the_geometry_of_the_focused_field_only() {
     let changes = context.changes.borrow().len();
     let observer = kept.kept.borrow().clone().expect("the field was observed");
     observer.layout_changed();
-    observer.text_changed(flui_platform::text_store::TextChange {
+    observer.text_changed(flui_platform::text::store::TextChange {
         start: Utf16Offset::ZERO,
         old_end: Utf16Offset::ZERO,
         new_end: Utf16Offset::ZERO,
@@ -1875,8 +1875,8 @@ impl TextStore for FieldAwaitingLayout {
     fn request_lock(
         &self,
         grant: LockGrant,
-        timing: flui_platform::text_store::LockTiming,
-    ) -> Result<flui_platform::text_store::LockOutcome, TextStoreError> {
+        timing: flui_platform::text::store::LockTiming,
+    ) -> Result<flui_platform::text::store::LockOutcome, TextStoreError> {
         let grant = match grant {
             LockGrant::Read(body) => {
                 let laid_out = self.laid_out.get();

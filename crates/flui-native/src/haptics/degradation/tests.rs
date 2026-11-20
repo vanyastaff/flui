@@ -21,7 +21,7 @@ use flui_platform::WindowOptions;
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,
 };
-use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, input::pointer::DeviceId};
 
 use HapticOutcome::{Approximated, FellBack, Submitted};
 
@@ -718,7 +718,7 @@ fn the_headless_window_plays_a_stale_source_on_its_actuator() {
         .expect("ready");
     let haptics: Arc<dyn PlatformHaptics> = window.haptics().expect("headless has an actuator");
     assert!(
-        haptics.as_any().is::<HeadlessHaptics>(),
+        (&*haptics as &dyn std::any::Any).is::<HeadlessHaptics>(),
         "the window's own actuator, which knows no device"
     );
     let unplugged = DeviceId::new(std::num::NonZeroU64::new(42).expect("nonzero"));

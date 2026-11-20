@@ -7,18 +7,17 @@
 //!
 //! The look after a run is what follows a delivery up: a frame AppKit runs in
 //! a display pass may leave the deadline due again or arm a new one, a state
-//! change (a window covered, which then owes a frame) reaches the application
-//! in a window callback, and input may arm a deadline with no frame asked (a
-//! gesture's). No owner turn of the loop need follow any of them, so without
-//! that look the deadline they leave would be unseen. A look is one owner-
-//! queue post, coalesced with any already queued.
+//! change reaches the application in a window callback, and input may arm a
+//! deadline with no frame asked (a gesture's). No owner turn of the loop need
+//! follow any of them, so without that look the deadline they leave would be
+//! unseen. A look is one owner-queue post, coalesced with any already queued.
 
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use flui_platform::WindowHandler;
-use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::input::capabilities::InputCapabilities;
 
 use crate::owner::window_delivery::WindowDelivery;
 
@@ -57,7 +56,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use flui_platform::input_capabilities::InputCapabilities;
+    use flui_platform::input::capabilities::InputCapabilities;
     use flui_platform::{DispatchEventResult, EventTime, FrameRequest, ImeEvent, PlatformInput};
     use flui_testing::window_handler::RecordingWindowHandler;
 

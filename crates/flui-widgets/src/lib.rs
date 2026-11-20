@@ -201,7 +201,7 @@ pub use image::AssetImage;
 pub use image::NetworkImage;
 pub use image::{
     DecodeJob, DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider,
-    ImageProviderError, ImageServices, ImageState, MemoryImage, Texture, TextureState,
+    ImageProviderError, ImageServices, ImageState, MemoryImage, Texture,
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent,
@@ -363,7 +363,9 @@ pub use flui_view::HapticsMode;
 // Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
 // (re-exported from the `flui-objects` catalog, their home beside
 // the render objects that read them).
-pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+pub use flui_objects::{
+    CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit, VerticalDirection,
+};
 // `WrapAlignment`/`WrapCrossAlignment` configure `Wrap`'s main-axis distribution
 // and per-child cross-axis positioning.
 pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
@@ -385,9 +387,10 @@ pub use flui_rendering::delegates::{
 pub use flui_interaction::events::ButtonChange;
 // What `MouseRegion::cursor` takes: a system icon, an application's image, or
 // none.
-pub use flui_rendering::hit_testing::{
-    Cursor, CursorIcon, CursorImage, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch,
-    PointerEvent,
+pub use flui_interaction::{
+    events::{Cursor, CursorIcon, CursorImage, PointerEvent},
+    ids::DeviceId,
+    pointer::{EventPropagation, HitTestBehavior, PointerDispatch},
 };
 // The shared scroll state `ScrollController::position()` returns,
 // `Scrollable::new`'s closure receives and `Viewport::new` takes — a widget
@@ -399,8 +402,8 @@ pub use flui_interaction::gesture::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
     TapDetails,
 };
-pub use flui_platform::pointer::PanZoomEvent;
-pub use flui_rendering::semantics::{
+pub use flui_platform::input::pointer::PanZoomEvent;
+pub use flui_semantics::{
     ActionCall, AnnounceError, Announcer, AutoComplete, CellPosition, Current, HasPopup,
     HeadingLevel, Invalid, LiveSetting, NumericRange, NumericRangeError, Reveal,
     ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
@@ -480,19 +483,23 @@ pub mod prelude {
         DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
         TapDetails,
     };
-    pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
+    pub use flui_interaction::{
+        events::{CursorIcon, PointerEvent},
+        ids::DeviceId,
+        pointer::{EventPropagation, HitTestBehavior, PointerDispatch},
+    };
+    pub use flui_objects::{
+        CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit, VerticalDirection,
+    };
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
     pub use flui_painting::Alignment;
     pub use flui_painting::BoxFit;
     pub use flui_painting::paint::Clip;
     pub use flui_painting::styling::Color;
     pub use flui_painting::typography::TextBaseline;
-    pub use flui_platform::pointer::PanZoomEvent;
+    pub use flui_platform::input::pointer::PanZoomEvent;
     pub use flui_platform::{InvalidLocale, Locale};
     pub use flui_rendering::constraints::AxisDirection;
     pub use flui_rendering::constraints::BoxConstraints;
-    pub use flui_rendering::hit_testing::{
-        CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
-    };
     pub use flui_rendering::view::ScrollPosition;
 }

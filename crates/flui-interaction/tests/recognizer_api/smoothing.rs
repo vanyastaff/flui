@@ -451,7 +451,8 @@ struct ContactLog {
 
 /// Stamp `event` at `step` with a sensor `pressure`.
 fn pressed(mut event: PointerEvent, step: usize, pressure: f32) -> PointerEvent {
-    let pressure = flui_platform::pointer::Pressure::try_new(pressure).expect("unit pressure");
+    let pressure =
+        flui_platform::input::pointer::Pressure::try_new(pressure).expect("unit pressure");
     match &mut event {
         PointerEvent::Down(data) => data.sample.pressure = Some(pressure),
         PointerEvent::Up(data) => data.sample.pressure = Some(pressure),

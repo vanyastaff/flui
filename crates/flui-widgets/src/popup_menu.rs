@@ -17,15 +17,15 @@ use std::time::Duration;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_interaction::focus::FocusNode;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::{MainAxisSize, SubtreeAnchor};
 use flui_painting::AlignmentDirectional;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextStyle;
-use flui_platform::keyboard::NamedKey;
-use flui_platform::pointer::PointerKind;
+use flui_platform::input::keyboard::NamedKey;
+use flui_platform::input::pointer::PointerKind;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
@@ -223,20 +223,16 @@ impl MenuPlacement {
 }
 
 impl SingleChildLayoutDelegate for MenuPlacement {
-    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+    fn constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
         constraints.loosen()
     }
 
-    fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset {
+    fn position_for_child(&self, size: Size, child_size: Size) -> Offset {
         self.position(size, child_size)
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        old_delegate.as_any().downcast_ref::<Self>() != Some(self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        (old_delegate as &dyn Any).downcast_ref::<Self>() != Some(self)
     }
 }
 

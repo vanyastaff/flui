@@ -11,20 +11,20 @@ Citations below name symbols, not line numbers.
 
 | Layer | FLUI | Notes |
 |---|---|---|
-| `Layer` and its container behaviour | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 19 variants; no `Box<dyn Layer>` (decision 1). |
+| `Layer` and its container behaviour | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 15 variants; no `Box<dyn Layer>` (decision 1). |
 | `PictureLayer` | [`src/layer/picture.rs`](src/layer/picture.rs) | `Arc<DisplayList>`; the leaf the paint walk emits. |
-| `TextureLayer`, `PlatformViewLayer`, `PerformanceOverlayLayer` | `texture.rs`, `platform_view.rs`, `performance_overlay.rs` | Present as vocabulary; see [Producers](#producers). |
+| `Effect` | [`src/layer/effect.rs`](src/layer/effect.rs) | Every layer but a picture: what `ContentBuilder::push_effect` takes, so an effect of a content never draws; what a content draws is a `Chunk`. |
 | `OffsetLayer` (and the `offset` field on `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | Translation is a per-variant field; the shared query is `Layer::local_translation` (decision 3). |
-| `ClipRectLayer`, `ClipRRectLayer`, `ClipRSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
+| `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
-| `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_transform`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
-| `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `LayerTree::find_annotations` (`src/tree/annotations.rs`); see [Producers](#producers). |
-| `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
-| `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | A frozen `SceneVersion` or `LayerTree` (decision 6). |
+| `LayerLink`, `LeaderLayer`, `FollowerLayer`, `LeaderClip` | [`src/link.rs`](src/link.rs) `LayerLink`; `SceneVersion::follower_transform` resolves a follower (`src/scene/geometry.rs`), and `resolve_follower_transform` over a hand-built tree (`src/tree/follower.rs`, feature `testing`) is its oracle; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
+| `AnnotatedRegionLayer` | `annotated_region.rs` | Carries an `AnnotationValue`; written by `RenderAnnotatedRegion`, read by `SceneVersion::find_annotation`, whose oracle over a hand-built tree is `LayerTree::find_annotations` (`src/tree/annotations.rs`, feature `testing`); see [Producers](#producers). |
+| `SceneBuilder` push/pop, `build` to a `Scene` | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is a scene patch (decision 5). |
+| `Scene` | [`src/scene/mod.rs`](src/scene/mod.rs) `Scene` | One `SceneVersion`; `Scene::new` converts a hand-built `LayerTree` (decision 6). |
 | Retained scene | [`src/scene/`](src/scene/) `SceneOwner`, `SceneVersion`, `BoundaryContent`, `SceneOp` | A persistent version changed by typed patches (decision 9), which `flui-rendering`'s paint writes; what ADR-0304 still owes is its item of [`docs/gaps.md`](../../docs/gaps.md). |
 | Retained layers across frames | the retained scene (decision 9) | A clean repaint boundary keeps its `BoundaryContent` in the next version and costs no operation; the engine walks the version in place and skips each boundary and each chunk a partial frame's damage cannot reach (`SceneVersion::subtree_cull`). Cross-frame damage is the footprint of the patch (decision 9), not a comparison of frames. |
 | Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
-| `Layer::Canvas(CanvasLayer)` | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
+| `TextureLayer`, `PlatformViewLayer` | none | A texture is a `DrawOp::Texture` in a picture (ADR-0233), so it sits under the clips and transforms of its chunk and in its recording; a native view inside the UI has no scene form yet ([`docs/gaps.md`](../../docs/gaps.md), "No native views inside the UI"). |
 
 ---
 
@@ -35,18 +35,17 @@ Each decision names the shape chosen and why, and the tests that pin it.
 ### 1. Closed `Layer` enum, not a `Layer` class hierarchy
 
 `Layer` is a closed enum and deliberately **not** `#[non_exhaustive]`: compile-time exhaustiveness
-is the contract with `flui-engine`, whose wgpu backend matches every variant. A 20th variant breaks
+is the contract with `flui-engine`, whose wgpu backend matches every variant. A new variant breaks
 that match and lands its GPU lowering in the same change. There is no third-party `impl Layer`
 extension point, and plugin authors cannot define layer types — the accepted trade-off.
 
-Payloads are inline unless the variant would dominate the enum (`Canvas` carries a live recorder,
-~184 B); `Picture` (`Arc` + `Rect`), `ClipPath` (`Arc<Path>`) and `PerformanceOverlay` are small
-and unboxed, so a sealed picture run costs no heap allocation beyond its `Arc`. The budget is
+Every payload is inline: `Picture` (`Arc` + `Rect`) and `ClipPath` (`Arc<Path>`) are small, so a
+sealed picture run costs no heap allocation beyond its `Arc`. The budget is
 128 B; re-measure before boxing anything. **Unasserted:** no test pins this.
 
 ### 2. Append-only `LayerTree` with a leader index, not a mutable tree plus a side registry
 
-The tree is not retained across frames: a fresh one is built per frame, so it needs exactly one structural
+A tree is built whole and never edited (a frame retains the scene instead, §9), so it needs one structural
 primitive: `LayerTree::push_child(parent, node)`, which mints the child's id in the call that links
 it. A fresh id has no descendants, so a cycle or a doubly-parented node cannot be expressed; there
 is no `remove`, no re-parenting, no node-level link setter, no `&mut` reach into a node, and no
@@ -57,7 +56,7 @@ alias (nothing is ever freed). A parent is always pushed before its child, so it
 allocation. `LayerId` stays a plain 1-based index; a generational id is only
 needed if a holder ever outlives the frame that minted it (none does today).
 
-`LayerLink` is a `Copy` token, so the tree holds `leaders: HashMap<LayerLink, LayerId>`, filled in `push_child` when the layer is
+`LayerLink` is a `Copy` token, so the tree holds `leaders: FxHashMap<LayerLink, LayerId>`, filled in `push_child` when the layer is
 a `Leader`. The earlier shape — a `LinkRegistry` beside the tree that the composer filled and the
 UI runtime had to commit "as one pair" with the tree — duplicated the leader's offset and size off the
 `LeaderLayer` and kept a reverse follower index nothing read. Two leaders on one link in one frame
@@ -66,16 +65,16 @@ is a widget-tree error; a debug build trips, a release build keeps the later one
 Tests: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`),
 `tests/follower.rs` (`linked_across_offset_branches_sums_both_chains`, which finds a leader pushed under a
 branch through the index), `flui-engine/src/layer_walk.rs` (`a_deep_chain_survives_a_small_stack`).
-That `push_child` under an unknown parent panics, and that a semantics-failure retry submits the
-retained tree with its leader index intact: **Unasserted:** no test pins this.
+That `push_child` under an unknown parent panics: **Unasserted:** no test pins this.
 
 ### 3. One `Layer::local_translation`, read by the walk and the resolver
 
 The chain math needs one dispatch point for "this layer translates its children". Flattening `OffsetLayer` into per-variant `offset` fields had lost it: the engine pushed translations for `Offset`, `Transform`, `Opacity`, `ImageFilter`
 and `Leader`, while the resolver summed only `Offset` and `Transform` — so a follower nested under
 its own leader rendered double-translated. `Layer::local_translation` is now the one place the set
-of translating variants is written down. `resolve_follower_transform` walks both chains from the
-common ancestor (exclusive) and multiplies, per layer, the `Transform`'s whole matrix, a nested
+of translating variants is written down. `SceneVersion::follower_transform`, and its oracle over a
+hand-built tree `resolve_follower_transform`, walk both chains from the
+common ancestor (exclusive) and multiply, per layer, the `Transform`'s whole matrix, a nested
 `Follower`'s own resolved transform, or the translation `local_translation` answers
 ([ADR-0276](../../docs/adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)).
 
@@ -106,17 +105,30 @@ Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
 
 `flui-rendering`'s `FragmentComposer` writes each repainted boundary's content through
 `ContentBuilder` into a `SceneWriter` patch (decision 9), and the engine walks the applied version in place
-(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for hand-authored scenes (`flui_app::run_direct`, examples,
-the GPU readback tests). `pop` returns `Option<LayerId>` — an empty stack is absence, the
-`Vec::pop` contract — so the crate has no error type. The builder's typed `push_*`/`add_*` are
+(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for a hand-authored scene
+(hot-reload plugins, examples, the GPU readback tests), as `dart:ui`'s `SceneBuilder` is: `push`,
+`add` and `pop` return the builder for chaining and no layer ids, since `build` hands back a
+`Scene` whose version names its own nodes; a caller that keeps ids builds a `LayerTree` with
+`push_child`. A `pop` with nothing open is the caller's bug, which a debug build asserts, so the
+crate has no error type. The builder's typed `push_*`/`add_*` are
 one-line conveniences over `push(impl Into<Layer>)` / `add(..)`; a variant without one is reached
 through `push(SomeLayer::new(..))`.
 
-### 6. `Scene` is what the raster side draws, frozen
+### 6. `Scene` holds one version; a hand-built tree becomes one
 
-A `Scene` holds a retained `SceneVersion` (`Scene::of_version`), which the engine walks in place,
-or a `LayerTree` (`Scene::new`), which a plugin image, a hand-built scene and a headless capture
-still hand it; `Scene::content` names which. It adds one fact over either: no `&mut` path back.
+A `Scene` holds a retained `SceneVersion`, which the engine walks in place; it adds one fact over
+the version: no `&mut` path back. A frame's paint publishes its version (`Scene::of_version`). A
+scene authored by hand (a hot-reload plugin's image, an example, a GPU readback test) is built as a
+`LayerTree` and converted when the scene is made: `Scene::new` runs `SceneVersion::from_tree`,
+one node holding the tree, each picture without children a chunk of its recording and every other
+layer an effect over its children. The engine therefore walks one form, closes damage over one
+form (`SceneVersion::close_damage`) and keeps no tree walk, no tree-side backdrop closure and no
+straddle self-heal for trees whose damage carries no such closure (ADR-0304 §9). A version from
+`from_tree` comes from an owner of its own, so its lineage pairs with no other scene's and its
+first frame on any target is full. The conversion's equivalence is pinned by
+`flui-engine`'s `layer_walk::tests::a_version_walks_as_its_flattened_tree` (a version's walk
+equals the walk of its flattened tree's version) and by `SceneVersion::from_tree`'s doctest.
+
 Its former `size`, `root` and `frame_number` fields had no reader that did not already hold the
 value (`root` was a copy of `LayerTree::root` that eleven of thirteen callers left disagreeing;
 `frame_number` is the presentation's counter, read back by its writer; `size` had no reader).
@@ -130,15 +142,11 @@ set.
 `flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, the footprint of a scene patch
 (decision 9), are defined here. The tracker keeps the seam's `Region` (up to eight disjoint rects,
 ADR-0304 §5), merged as `Region::insert` merges, and the engine redraws it rect by rect or under its bounding box (ADR-0304 §9, the engine's
-`ARCHITECTURE.md`). The overlay's numbers (a frame-clock reading of the
-presentation's frame history) are computed in `flui-runtime`, beside the presentation that knows when a frame was
-composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the
-caller's `TextContext` into the display list the layer carries, so the engine replays shaped
-labels and shapes nothing (ADR-0092). `record` stays here, beside the layer, because it is the
-one recorder of the layer's readout; it holds no state.
-`PerformanceOverlayOption`
-crosses the engine boundary as itself rather than as a `u32`
-(`performance_overlay_readout_rows`).
+`ARCHITECTURE.md`). The performance overlay has no layer of its own: `flui-runtime`, beside the
+presentation that knows when a frame was composited, samples its numbers from the frame clock,
+records the readout through the UI runtime's `TextContext` and publishes it as one chunk under a
+clip at a scene node of its own (`performance_overlay_matrix`), so the engine replays shaped labels
+and shapes nothing (ADR-0092).
 
 ### 8. The stamp differ is the damage oracle — [ADR-0304 §4](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
 
@@ -168,7 +176,8 @@ grown the same way, since the engine composites its whole output; a colour or im
 paints transparent black has no bound and makes the frame `Full(Unbounded)`. Damage that meets a
 closure takes all of it, and damage that meets one member of a backdrop group takes the rect over every
 member's (a `Closures` set keys them by `BackdropGroupKey`), to a fixed point of at most 64 rounds. The engine's backdrop planning
-calls the same two functions. The result is `Full` for an unpairable frame (first frame,
+reaches the same two functions through `SceneVersion::close_damage`, and the crate exports them
+only under `testing`, for the oracle's tests. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped
 twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and otherwise one
 `DamageRect` in whole pixels, rounded outward with a 1 px anti-aliasing margin. `DamageMode::Off`
@@ -179,7 +188,7 @@ misses a change under-reports silently; the differ derives damage from the two w
 answer that shares none of the footprint's bookkeeping (`patch_damage_covers_diff_damage`). It is
 not on the frame path: a walk of every layer each frame is the cost the retained scene removed
 (`damage_diff` bench: about 200 µs for 1,000 boundaries). Tests: `src/damage/tests.rs`,
-`scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
+`damage/region.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
 
 ### 9. The retained scene is a persistent value — [ADR-0304 §1–§3](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
 
@@ -242,8 +251,8 @@ damages the moved subtree at both placements. After the operations every followe
 again in both versions against its link's last attached leader (a published node no slot
 reaches draws nothing and never shadows it), and one whose transform changed damages its subtree
 under both. Both chains of a follower stop at the lowest common ancestor of it and its leader, as
-`resolve_follower_transform` walks them, so nested followers cost their unshared chains. A picture
-or canvas effect changes its display list's damage extent. A subtree carries, beside its local
+`SceneVersion::follower_transform` walks them, so nested followers cost their unshared chains. A picture
+effect changes its display list's damage extent. A subtree carries, beside its local
 bounds, the device-pixel kernel its filters spread by (the renderer takes a kernel in physical
 pixels, which bounds in a boundary's space would shrink under a shrinking ancestor; a filter adds
 its own to the maximum of its children's, a sum along a chain), and a
@@ -304,19 +313,23 @@ a repaint writes into a reclaimed chunk and never into a held one
 (one impl per type, no generic consumer); composition callbacks (see the module map); the `needs_add_to_scene` dirty-bit
 protocol (it fed retained-layer reuse, which this architecture does not have); `LayerNode::offset` (a second
 way to say "translate" that no production tree ever set); the 57 generated `is_*/as_*/as_*_mut`
-accessors bar the four with callers (`as_leader`, `as_follower`, `as_performance_overlay`); the
+accessors bar the two with callers (`as_leader`, `as_follower`); the
 `f32` sugar constructors (`OffsetLayer::from_xy`, `FollowerLayer::below/above/..`,
 `Clip*Layer::circular/circle/oval`), second spellings of the geometry constructors; the `testing`
 feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `prelude` and
-`VERSION` (no importer).
+`VERSION` (no importer); `PerformanceOverlayLayer` and its `PerformanceOverlayOption` (a layer
+that drew beside the chunks that draw, and options no row honoured: the readout is a chunk
+`flui-runtime` records).
 
 ---
 
 ## Producers
 
-Five variants have no production producer today: `Canvas`, `Texture`, `PlatformView`,
-`ColorFilter`, `ImageFilter`. The other fourteen are built in production, all but one by
-`flui-rendering`'s paint composer (`crates/flui-rendering/src/pipeline/owner/paint.rs`):
+Three variants have no production producer today: `Picture`, `ColorFilter` and `ImageFilter`.
+The other twelve are written into the retained scene as effect entries of a boundary's content
+(`ContentBuilder::push_effect`), by `flui-rendering`'s paint composer
+(`crates/flui-rendering/src/pipeline/owner/paint/composer.rs`, `push_layer`) and, for the performance
+overlay, by `flui-runtime`:
 
 - `scope_layer` and `clip_layer` turn a recorded `FragmentScope` or `PaintClip` into `Opacity`,
   `ClipRect`, `ClipRRect`, `ClipSuperellipse`, `ClipPath`, `ShaderMask`, `BackdropFilter`,
@@ -324,23 +337,28 @@ Five variants have no production producer today: `Canvas`, `Texture`, `PlatformV
   `PaintClip::RSuperellipse`, which `RenderClipRSuperellipse` (`flui-objects`, behind the
   `ClipRSuperellipse` widget) records; `AnnotatedRegion` comes from `PaintContext::with_annotated_region`,
   which `RenderAnnotatedRegion` calls;
-- `FragmentComposer` builds `Offset` (the root at a device pixel ratio of 1, and each
-  repaint-boundary child in `place_boundary_impl`), `Transform` (the root's device-pixel-ratio
-  scale, and a node's own paint transform in `own_effect_layers`) and `Picture` (each sealed
-  recording, `seal_picture`);
-- `flui-runtime` adds `PerformanceOverlay` (`PerformanceOverlayLayer::record` in
-  `crates/flui-runtime/src/presentation.rs`).
+- `FragmentComposer` writes `Offset` (the root at a device pixel ratio of 1) and `Transform` (the
+  root's device-pixel-ratio scale, and a node's own paint transform in `own_effect_layers`). A
+  sealed recording is a chunk, not a `Picture` (`seal_picture`), and a repaint-boundary child is a
+  slot (`place_boundary_impl`);
+- `flui-runtime`'s presentation scene writes a `ClipRect`, under a `Transform` at a device pixel
+  ratio other than 1, over the performance overlay's chunk (`presentation_scene.rs`).
 
-`Texture` and `PlatformView` carry real contracts (`freeze`, `hit_test_behavior`) awaiting the
-platform layer. External textures reach the GPU without the layer: `RenderTexture`
-(`flui-objects`) records a `DrawOp::Texture` into its picture, and the host hands each frame's
-`TextureRegistry` updates to the backend before it renders. `Canvas` is a recorder inside the output
-vocabulary that `PictureLayer` already covers, built only by tests and benches. `ColorFilter` and
+An external texture is not a layer: `RenderTexture` (`flui-objects`) records a `DrawOp::Texture`
+into its picture (ADR-0233), the version indexes each chunk's texture draws, and a texture frame
+damages those users (`SceneVersion::texture_damage`), while the host hands each frame's
+`TextureRegistry` updates to the backend before it renders. A native view inside the UI has no
+form in the scene: the ADR that brings one decides its compositing, hit-testing and semantics
+([`docs/gaps.md`](../../docs/gaps.md)). `Picture` is what a hand-built tree and
+`SceneVersion::flatten` draw a chunk as. `ColorFilter` and
 `ImageFilter` are lowered by `flui-engine` (`layer_render.rs`), but no `FragmentScope` produces
-them: a widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
+them ([`docs/gaps.md`](../../docs/gaps.md), "No widget filters its subtree's colours or pixels"): a
+widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
 `flui-painting`) inside a picture. `AnnotatedRegion` has both halves: the writer above and the
-reader `LayerTree::find_annotations` (`src/tree/annotations.rs`, tested in `tests/annotations.rs`),
-which no production path calls yet. Whether each unproduced variant is "not wired yet" or
+reader `SceneVersion::find_annotation`, which `flui-runtime`'s `overlay_style.rs` asks for the
+system UI overlay style under a probe point; `LayerTree::find_annotations`
+(`src/tree/annotations.rs`, feature `testing`, tested in `tests/annotations.rs`) answers the same for a hand-built
+tree, the oracle of the version's read. Whether each unproduced variant is "not wired yet" or
 "never" is a roadmap decision, not a crate one — recorded here so it is not re-derived.
 
 ---
@@ -350,16 +368,16 @@ which no production path calls yet. Whether each unproduced variant is "not wire
 | Site | Primitive | Category |
 |---|---|---|
 | `LayerTree::nodes` | `Vec<LayerNode>` | Owned, single mutator; no lock, no atomics |
-| `LayerTree::leaders` | `HashMap<LayerLink, LayerId>` | Owned, filled during the build |
-| `Scene`, `SceneSnapshot` | by value | Moved across the raster boundary; `Send + Sync` plain data, pinned by `static_assertions` in `scene_snapshot.rs` |
-| `LayerLink::new` | `static AtomicU64`, `Relaxed` | Identity only; the RMW is atomic under every ordering and publishes nothing else |
+| `LayerTree::leaders` | `FxHashMap<LayerLink, LayerId>` | Owned, filled during the build |
+| `Scene`, `SceneSnapshot` | by value | Moved across the raster boundary; `Send + Sync` plain data, pinned by a compile-time `Send + Sync` check in `scene_snapshot.rs` |
+| `LayerLink::new` | `static AtomicIdMint<NonZeroU64>` | Identity only; minted from every UI thread, never wraps, panics after 2^64 - 1 links |
 | `Lineage::fresh` | `static AtomicIdMint<NonZeroU64>` (`counter` grant) | Identity only; minted from every UI thread, never wraps, refuses with `IdExhausted` |
 | `SceneVersion` | `Arc` over persistent tables of `Arc` nodes | Immutable once applied; `Send + Sync` by its auto traits (`a_version_is_send_and_sync`), shared by the owner and the raster side |
 | `SceneOwner` | owned ledger and `IdMint` | Single owner (the UI runtime); `Send`, not `Sync` |
 | `ContentToken` (feature `testing`) | `Arc<()>`, compared by `Arc::ptr_eq` | Identity only; no data behind the pointer, no `static` |
 | `LayerDiffer` (feature `testing`) | owned records of one tree | Single owner (the test that compares); no lock |
-| `TextureRegistry` | `Arc` of a `parking_lot::Mutex` over the registry state, plus `Arc<dyn Fn() + Send + Sync>` wake and listeners | Shared by one presentation with frame producers on any thread (`src/texture_registry.rs`) |
+| `TextureRegistry` | `Arc` of a `parking_lot::Mutex` over the registry state, plus an `Arc<dyn Fn() + Send + Sync>` wake | Shared by one presentation with frame producers on any thread (`src/texture_registry.rs`) |
 
 No `unsafe` in the crate. Its one lock is `TextureRegistry`'s; its `dyn`s are that registry's
-wake and listener callbacks and the `Arc<dyn Any + Send + Sync>` inside `AnnotationValue`
+wake callback and the `Arc<dyn Any + Send + Sync>` inside `AnnotationValue`
 (`src/layer/annotated_region.rs`).

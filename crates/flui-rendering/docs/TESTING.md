@@ -369,7 +369,7 @@ matcher can pass silently and is brittle on benign paint refactors.  Use `snapsh
 
 ### A.3 — Fallible runs and overflow inspection
 
-#### `try_run_frame` / `try_run_layout` / `expect_layout_error`
+#### `try_run_frame` / `try_run_layout`
 
 The default `run_layout` / `run_frame` panic on any `RenderError`.  The fallible variants
 surface the error instead:
@@ -378,7 +378,6 @@ surface the error instead:
 |--------|---------|---------|
 | `try_run_layout()` | `Result<LayoutRun, RenderError>` | Layout errors (`UnboundedConstraint`, `ContractViolation`, …) |
 | `try_run_frame()` | `Result<FrameRun, RenderError>` | Paint panics captured as `RenderError::Poisoned` |
-| `expect_layout_error()` | `RenderError` | Assert that this tree _must_ fail layout (panics if it succeeds) |
 
 A render object whose `paint_raw` panics surfaces as `RenderError::Poisoned` — the pipeline
 wraps every paint body with `catch_unwind`:

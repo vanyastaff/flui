@@ -14,6 +14,7 @@ mod color;
 mod decoration;
 mod gradient;
 mod hsl_hsv;
+mod lerp_retained;
 mod physical_model;
 mod shadow;
 mod table_border;

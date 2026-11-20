@@ -7,12 +7,13 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
+use flui_layer::Effect;
 use flui_layer::{
     BackdropFilterLayer, BackdropGroupKey, BoundaryContent, Chunk, ClipRectLayer, Closures,
     ContentToken, ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, EntryAddress,
     EntryIndex, FollowerLayer, ImageFilterLayer, Layer, LayerDiffer, LayerLink, LayerNode,
     LayerTree, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, Placement, Region,
-    Scene, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer,
+    SceneNodeId, SceneOp, SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer,
     close_over, resolve_follower_transform,
 };
 use flui_painting::paint::{BlendMode, Clip, ImageFilter, ImageSampling, ImageTransform};
@@ -147,7 +148,7 @@ pub(crate) fn an_effect_chain_change_damages_every_slot_under_it() {
     let beside = chunk(9, beside, Rect::from_xywh(600.0, 500.0, 20.0, 20.0));
     let top = |alpha: f64| {
         let mut top = BoundaryContent::builder();
-        top.push_effect(Layer::from(OpacityLayer::new(alpha)), RenderId::new(1), 0);
+        top.push_effect(Effect::from(OpacityLayer::new(alpha)), RenderId::new(1), 0);
         top.slot(b);
         top.slot(c);
         top.pop_effect();
@@ -193,14 +194,14 @@ pub(crate) fn a_follower_resolves_after_its_leaders_boundary_moves_parents() {
     );
     let mut leading = BoundaryContent::builder();
     leading.push_effect(
-        Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+        Effect::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
         RenderId::new(1),
         0,
     );
     writer.push(publish(leader, leading.finish()));
     let version = writer.next_content_version().expect("a version");
     let mut following = BoundaryContent::builder();
-    following.push_effect(Layer::from(FollowerLayer::new(link)), RenderId::new(2), 0);
+    following.push_effect(Effect::from(FollowerLayer::new(link)), RenderId::new(2), 0);
     following.chunk(chunk(2, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
     writer.push(publish(follower, following.finish()));
     let holding = |child: Option<SceneNodeId>| {
@@ -257,7 +258,7 @@ pub(crate) fn an_unattached_leader_never_shadows_the_attached_one() {
     let leading = || {
         let mut content = BoundaryContent::builder();
         content.push_effect(
-            Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+            Effect::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
             RenderId::new(1),
             0,
         );
@@ -266,7 +267,7 @@ pub(crate) fn an_unattached_leader_never_shadows_the_attached_one() {
     writer.push(publish(leader, leading()));
     let version = writer.next_content_version().expect("a version");
     let mut following = BoundaryContent::builder();
-    following.push_effect(Layer::from(FollowerLayer::new(link)), RenderId::new(2), 0);
+    following.push_effect(Effect::from(FollowerLayer::new(link)), RenderId::new(2), 0);
     following.chunk(chunk(2, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
     writer.push(publish(follower, following.finish()));
     let mut holding = BoundaryContent::builder();
@@ -311,7 +312,7 @@ pub(crate) fn damage_under_one_backdrop_group_member_takes_every_member() {
     ] {
         let group = BackdropGroupKey::new();
         let filter = |x: f64, grouped: bool| {
-            Layer::from(
+            Effect::from(
                 BackdropFilterLayer::new(
                     ImageFilter::blur(2.0),
                     BlendMode::SrcOver,
@@ -375,7 +376,7 @@ pub(crate) fn a_magnifier_damages_its_sampling_fringe() {
     let version = writer.next_content_version().expect("a version");
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        Layer::from(ImageFilterLayer::new(
+        Effect::from(ImageFilterLayer::new(
             ImageFilter::try_magnify(Point::new(0.0, 0.0), 10.0).expect("a finite magnifier"),
         )),
         RenderId::new(1),
@@ -430,7 +431,7 @@ pub(crate) fn a_magnifier_reads_a_partly_covered_source_pixel_whole() {
             let version = writer.next_content_version().expect("a version");
             let mut content = BoundaryContent::builder();
             content.push_effect(
-                Layer::from(ImageFilterLayer::new(filter.clone())),
+                Effect::from(ImageFilterLayer::new(filter.clone())),
                 RenderId::new(1),
                 0,
             );
@@ -479,7 +480,7 @@ pub(crate) fn a_follower_at_the_nesting_limit_damages_what_it_draws() {
     let root = writer.current().root();
     let (p, anchor) = (writer.mint_node(), writer.mint_node());
     let links: Vec<LayerLink> = (0..17).map(|_| LayerLink::new()).collect();
-    let leader = |link: LayerLink| Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0)));
+    let leader = |link: LayerLink| Effect::from(LeaderLayer::new(link, Size::new(10.0, 10.0)));
     let mut first = BoundaryContent::builder();
     first.push_effect(leader(links[0]), RenderId::new(1), 0);
     writer.push(publish(anchor, first.finish()));
@@ -491,7 +492,7 @@ pub(crate) fn a_follower_at_the_nesting_limit_damages_what_it_draws() {
     top.slot(p);
     for (ordinal, pair) in (0_u32..).step_by(2).zip(links.windows(2)) {
         top.push_effect(
-            Layer::from(FollowerLayer::new(pair[0])),
+            Effect::from(FollowerLayer::new(pair[0])),
             RenderId::new(2),
             ordinal,
         );
@@ -500,7 +501,7 @@ pub(crate) fn a_follower_at_the_nesting_limit_damages_what_it_draws() {
         top.pop_effect();
     }
     top.push_effect(
-        Layer::from(FollowerLayer::new(links[16])),
+        Effect::from(FollowerLayer::new(links[16])),
         RenderId::new(2),
         100,
     );
@@ -536,7 +537,7 @@ pub(crate) fn a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it() 
     let (p, leader, follower) = (writer.mint_node(), writer.mint_node(), writer.mint_node());
     let mut leading = BoundaryContent::builder();
     leading.push_effect(
-        Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+        Effect::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
         RenderId::new(1),
         0,
     );
@@ -544,7 +545,7 @@ pub(crate) fn a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it() 
     let version = writer.next_content_version().expect("a version");
     let mut following = BoundaryContent::builder();
     following.push_effect(
-        Layer::from(FollowerLayer::new(link).with_leader_clip(LeaderClip::Hide)),
+        Effect::from(FollowerLayer::new(link).with_leader_clip(LeaderClip::Hide)),
         RenderId::new(2),
         0,
     );
@@ -553,7 +554,7 @@ pub(crate) fn a_clip_on_the_leaders_branch_that_hides_its_follower_damages_it() 
     let clipped = |clip: Rect<f64>| {
         let mut content = BoundaryContent::builder();
         content.push_effect(
-            Layer::from(ClipRectLayer::new(clip, Clip::HardEdge)),
+            Effect::from(ClipRectLayer::new(clip, Clip::HardEdge)),
             RenderId::new(3),
             0,
         );
@@ -602,32 +603,32 @@ pub(crate) fn a_hidden_follower_hides_the_followers_of_the_leader_inside_it() {
     );
     let mut leading = BoundaryContent::builder();
     leading.push_effect(
-        Layer::from(LeaderLayer::new(outer, Size::new(10.0, 10.0))),
+        Effect::from(LeaderLayer::new(outer, Size::new(10.0, 10.0))),
         RenderId::new(1),
         0,
     );
     writer.push(publish(leader, leading.finish()));
     let mut relay = BoundaryContent::builder();
     relay.push_effect(
-        Layer::from(FollowerLayer::new(outer).with_leader_clip(LeaderClip::Hide)),
+        Effect::from(FollowerLayer::new(outer).with_leader_clip(LeaderClip::Hide)),
         RenderId::new(2),
         0,
     );
     relay.push_effect(
-        Layer::from(LeaderLayer::new(inner, Size::new(10.0, 10.0))),
+        Effect::from(LeaderLayer::new(inner, Size::new(10.0, 10.0))),
         RenderId::new(2),
         1,
     );
     writer.push(publish(hiding, relay.finish()));
     let version = writer.next_content_version().expect("a version");
     let mut following = BoundaryContent::builder();
-    following.push_effect(Layer::from(FollowerLayer::new(inner)), RenderId::new(3), 0);
+    following.push_effect(Effect::from(FollowerLayer::new(inner)), RenderId::new(3), 0);
     following.chunk(chunk(3, version, Rect::from_xywh(0.0, 0.0, 20.0, 20.0)));
     writer.push(publish(escaping, following.finish()));
     let clipped = |clip: Rect<f64>| {
         let mut content = BoundaryContent::builder();
         content.push_effect(
-            Layer::from(ClipRectLayer::new(clip, Clip::HardEdge)),
+            Effect::from(ClipRectLayer::new(clip, Clip::HardEdge)),
             RenderId::new(4),
             0,
         );
@@ -672,7 +673,7 @@ pub(crate) fn a_filter_under_a_shrinking_ancestor_damages_its_device_kernel() {
     let version = writer.next_content_version().expect("a version");
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
+        Effect::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
         RenderId::new(1),
         0,
     );
@@ -680,7 +681,7 @@ pub(crate) fn a_filter_under_a_shrinking_ancestor_damages_its_device_kernel() {
     writer.push(publish(filtered, content.finish()));
     let mut top = BoundaryContent::builder();
     top.push_effect(
-        Layer::from(TransformLayer::new(
+        Effect::from(TransformLayer::new(
             Matrix4::translation(-10.0, 100.0, 0.0) * Matrix4::scaling(0.01, 0.01, 1.0),
         )),
         RenderId::new(2),
@@ -718,7 +719,7 @@ pub(crate) fn a_deep_effect_chain_applies_without_recursion() {
             let mut content = BoundaryContent::builder();
             for ordinal in 0..DEPTH {
                 content.push_effect(
-                    Layer::from(OffsetLayer::new(Offset::new(0.001, 0.0))),
+                    Effect::from(OffsetLayer::new(Offset::new(0.001, 0.0))),
                     RenderId::new(1),
                     ordinal,
                 );
@@ -759,7 +760,7 @@ pub(crate) fn a_clip_over_a_shrunk_filter_keeps_its_device_kernel() {
     let version = writer.next_content_version().expect("a version");
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        Layer::from(ClipRectLayer::new(
+        Effect::from(ClipRectLayer::new(
             Rect::from_ltrb(80.0, 80.0, 90.0, 90.0),
             Clip::HardEdge,
         )),
@@ -767,12 +768,12 @@ pub(crate) fn a_clip_over_a_shrunk_filter_keeps_its_device_kernel() {
         0,
     );
     content.push_effect(
-        Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
+        Effect::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
         RenderId::new(1),
         1,
     );
     content.push_effect(
-        Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
+        Effect::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
         RenderId::new(1),
         2,
     );
@@ -810,7 +811,7 @@ pub(crate) fn a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel() {
     writer.push(publish(child, BoundaryContent::builder().finish()));
     let mut clipped = BoundaryContent::builder();
     clipped.push_effect(
-        Layer::from(ClipRectLayer::new(
+        Effect::from(ClipRectLayer::new(
             Rect::from_ltrb(80.0, 80.0, 90.0, 90.0),
             Clip::HardEdge,
         )),
@@ -818,7 +819,7 @@ pub(crate) fn a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel() {
         0,
     );
     clipped.push_effect(
-        Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
+        Effect::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
         RenderId::new(1),
         1,
     );
@@ -835,7 +836,7 @@ pub(crate) fn a_clip_over_a_shrunk_slotted_filter_keeps_its_device_kernel() {
     let version = writer.next_content_version().expect("a version");
     let mut filtered = BoundaryContent::builder();
     filtered.push_effect(
-        Layer::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
+        Effect::from(ImageFilterLayer::new(ImageFilter::Dilate { radius: 20.0 })),
         RenderId::new(2),
         0,
     );
@@ -874,7 +875,7 @@ pub(crate) fn filter_inputs_are_read_once_the_damage_reaches_them() {
         let mut content = BoundaryContent::builder();
         for ordinal in 0..FILTERS {
             content.push_effect(
-                Layer::from(ImageFilterLayer::new(ImageFilter::blur(2.0))),
+                Effect::from(ImageFilterLayer::new(ImageFilter::blur(2.0))),
                 RenderId::new(1),
                 ordinal,
             );
@@ -937,7 +938,7 @@ pub(crate) fn sibling_followers_pair_in_one_pass_over_their_links() {
         for ordinal in 0..FOLLOWERS + extra {
             let link = links[usize::try_from(ordinal).expect("a small index") % links.len()];
             content.push_effect(
-                Layer::from(FollowerLayer::new(link)),
+                Effect::from(FollowerLayer::new(link)),
                 RenderId::new(1),
                 ordinal,
             );
@@ -1018,7 +1019,7 @@ pub(crate) fn nested_filter_kernels_add_along_the_chain() {
         let mut content = BoundaryContent::builder();
         for (ordinal, filter) in (0_u32..).zip(filters) {
             content.push_effect(
-                Layer::from(ImageFilterLayer::new(filter)),
+                Effect::from(ImageFilterLayer::new(filter)),
                 RenderId::new(1),
                 ordinal,
             );
@@ -1031,7 +1032,7 @@ pub(crate) fn nested_filter_kernels_add_along_the_chain() {
         writer.push(publish(filtered, content.finish()));
         let mut top = BoundaryContent::builder();
         top.push_effect(
-            Layer::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
+            Effect::from(TransformLayer::new(Matrix4::scaling(0.01, 0.01, 1.0))),
             RenderId::new(2),
             0,
         );
@@ -1054,46 +1055,6 @@ pub(crate) fn nested_filter_kernels_add_along_the_chain() {
     }
 }
 
-/// A picture effect changes what its damage extent covers: one that fills
-/// the canvas and then draws a small rect damages the whole surface when its
-/// fill changes, though its bounds hold only the rect.
-pub(crate) fn a_picture_effect_damages_its_damage_extent() {
-    let filled = |color: Color| {
-        let mut canvas = Canvas::new();
-        canvas.draw_color(color, BlendMode::SrcOver);
-        canvas.draw_rect(
-            Rect::from_xywh(10.0, 10.0, 10.0, 10.0),
-            &Paint::fill(Color::RED),
-        );
-        let mut content = BoundaryContent::builder();
-        content.push_effect(
-            Layer::from(PictureLayer::new(canvas.finish())),
-            RenderId::new(1),
-            0,
-        );
-        content.finish()
-    };
-    let mut owner = SceneOwner::new();
-    let mut writer = owner.writer();
-    let root = writer.current().root();
-    let painted = writer.mint_node();
-    writer.push(publish(painted, filled(Color::BLUE)));
-    let mut top = BoundaryContent::builder();
-    top.slot(painted);
-    writer.push(publish(root, top.finish()));
-    owner.apply(SURFACE).expect("a filled picture");
-
-    let mut writer = owner.writer();
-    writer.push(publish(painted, filled(Color::GREEN)));
-    owner.apply(SURFACE).expect("the fill changes");
-    let whole = covering(0.0, 0.0, 800.0, 600.0);
-    match owner.patch_damage() {
-        DamageRegion::Full(_) => {}
-        DamageRegion::Region(region) => assert!(covered(region.rects(), whole), "{region:?}"),
-        DamageRegion::Unchanged => panic!("the fill changes pixels"),
-    }
-}
-
 /// Resolving nested followers costs their chains below the lowest common
 /// ancestor: twelve followers, each with its leader beside it inside the one
 /// before, resolve once in each version (24 resolutions), where both chains
@@ -1112,7 +1073,7 @@ pub(crate) fn nested_followers_resolve_below_their_common_ancestor() {
         let link = LayerLink::new();
         let ordinal = u32::try_from(2 * level).expect("a small level");
         top.push_effect(
-            Layer::from(LeaderLayer::with_offset(
+            Effect::from(LeaderLayer::with_offset(
                 link,
                 Size::new(10.0, 10.0),
                 Offset::new(1.0, 1.0),
@@ -1122,7 +1083,7 @@ pub(crate) fn nested_followers_resolve_below_their_common_ancestor() {
         );
         top.pop_effect();
         top.push_effect(
-            Layer::from(FollowerLayer::new(link)),
+            Effect::from(FollowerLayer::new(link)),
             RenderId::new(1),
             ordinal + 1,
         );
@@ -1194,7 +1155,7 @@ pub(crate) fn damage_under_a_backdrop_takes_what_it_reads() {
     let mut top = BoundaryContent::builder();
     top.slot(a);
     top.push_effect(
-        Layer::from(BackdropFilterLayer::new(
+        Effect::from(BackdropFilterLayer::new(
             ImageFilter::blur(2.0),
             BlendMode::SrcOver,
             Rect::from_xywh(200.0, 200.0, 100.0, 100.0),
@@ -1218,20 +1179,19 @@ pub(crate) fn damage_under_a_backdrop_takes_what_it_reads() {
 }
 
 /// New images of a texture damage the device footprint of each attached
-/// entry that draws it, a chunk's texture draw and a texture layer alike,
-/// closed over the backdrop that reads one of them, and nothing else: not a
-/// sibling, not an unattached node that draws it, nothing for a texture no
-/// entry draws (ADR-0304 §9).
+/// entry that draws it, closed over the backdrop that reads one of them, and
+/// nothing else: not a sibling, not an unattached node that draws it, nothing
+/// for a texture no entry draws (ADR-0304 §9).
 pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
     let (texture, other) = (
         flui_painting::paint::TextureId::new(7),
         flui_painting::paint::TextureId::new(8),
     );
-    let drawing = |version: ContentVersion| {
+    let drawing = |version: ContentVersion, at: Rect<f64>| {
         let mut canvas = Canvas::new();
         canvas.draw_texture(
             texture,
-            Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+            at,
             None,
             flui_painting::paint::FilterQuality::Low,
             1.0,
@@ -1245,6 +1205,7 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
         )));
         content.finish()
     };
+    let small = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
     let mut owner = SceneOwner::new();
     let mut writer = owner.writer();
     let root = writer.current().root();
@@ -1255,29 +1216,23 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
         writer.mint_node(),
     );
     let version = writer.next_content_version().expect("a version");
-    writer.push(publish(a, drawing(version)));
-    let mut layer = BoundaryContent::builder();
-    layer.push_effect(
-        Layer::from(flui_layer::TextureLayer::new(
-            texture,
-            Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
-        )),
-        RenderId::new(3),
-        0,
-    );
-    layer.pop_effect();
-    writer.push(publish(b, layer.finish()));
+    writer.push(publish(a, drawing(version, small)));
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(
+        b,
+        drawing(version, Rect::from_xywh(0.0, 0.0, 30.0, 30.0)),
+    ));
     let version = writer.next_content_version().expect("a version");
     let mut plain = BoundaryContent::builder();
     plain.chunk(chunk(4, version, Rect::from_xywh(0.0, 0.0, 30.0, 30.0)));
     writer.push(publish(c, plain.finish()));
     let version = writer.next_content_version().expect("a version");
-    writer.push(publish(loose, drawing(version)));
+    writer.push(publish(loose, drawing(version, small)));
     let mut top = BoundaryContent::builder();
     top.slot(a);
     top.slot(b);
     top.push_effect(
-        Layer::from(BackdropFilterLayer::new(
+        Effect::from(BackdropFilterLayer::new(
             ImageFilter::blur(2.0),
             BlendMode::SrcOver,
             Rect::from_xywh(290.0, 290.0, 60.0, 60.0),
@@ -1305,7 +1260,7 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
     );
     assert!(
         covered(&damage, covering(283.0, 283.0, 357.0, 357.0)),
-        "the texture layer and what the backdrop over it reads: {damage:?}"
+        "the user under the backdrop and what the backdrop reads: {damage:?}"
     );
     let sibling = covering(500.0, 100.0, 530.0, 130.0);
     assert!(
@@ -1328,6 +1283,55 @@ pub(crate) fn a_texture_frame_damages_the_footprint_of_its_users() {
         version.texture_damage([], SURFACE.size, &mut scratch),
         DamageRegion::Unchanged
     );
+}
+
+/// A version draws a texture when an attached entry draws it: a loose
+/// node's draw and a texture nothing names draw nothing.
+pub(crate) fn a_version_draws_only_the_textures_of_attached_users() {
+    let (attached, loose_only, unnamed) = (
+        flui_painting::paint::TextureId::new(7),
+        flui_painting::paint::TextureId::new(9),
+        flui_painting::paint::TextureId::new(8),
+    );
+    let drawing = |texture, version: ContentVersion| {
+        let mut canvas = Canvas::new();
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+            None,
+            flui_painting::paint::FilterQuality::Low,
+            1.0,
+        );
+        let mut content = BoundaryContent::builder();
+        content.chunk(Arc::new(Chunk::new(
+            RenderId::new(2),
+            0,
+            version,
+            canvas.finish(),
+        )));
+        content.finish()
+    };
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (a, loose) = (writer.mint_node(), writer.mint_node());
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(a, drawing(attached, version)));
+    let version = writer.next_content_version().expect("a version");
+    writer.push(publish(loose, drawing(loose_only, version)));
+    let mut top = BoundaryContent::builder();
+    top.slot(a);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(a, 100.0, 100.0));
+    owner.apply(SURFACE).expect("an attached and a loose user");
+
+    let version = owner.current();
+    assert!(version.draws_texture(attached));
+    assert!(
+        !version.draws_texture(loose_only),
+        "the loose user is not drawn"
+    );
+    assert!(!version.draws_texture(unnamed));
 }
 
 // patch_damage_covers_diff_damage
@@ -1376,7 +1380,7 @@ enum Item {
     },
     Effect {
         owner: u32,
-        layer: Layer,
+        layer: Effect,
         items: Vec<Item>,
     },
     Slot(usize),
@@ -1430,18 +1434,18 @@ impl Model {
 
 /// An effect the oracle bounds the way the patch does: an opacity, an
 /// affine transform, a clip or a backdrop blur.
-fn effect(rng: &mut Rng) -> Layer {
+fn effect(rng: &mut Rng) -> Effect {
     match rng.below(4) {
-        0 => Layer::from(OpacityLayer::new([0.3, 0.6, 1.0][rng.below(3)])),
+        0 => Effect::from(OpacityLayer::new([0.3, 0.6, 1.0][rng.below(3)])),
         1 => {
             let scale = [0.5, 1.0, 2.0][rng.below(3)];
-            Layer::from(TransformLayer::new(
+            Effect::from(TransformLayer::new(
                 Matrix4::translation(rng.coord(200) - 100.0, rng.coord(200) - 100.0, 0.0)
                     * Matrix4::scaling(scale, scale, 1.0),
             ))
         }
-        2 => Layer::from(ClipRectLayer::hard_edge(rng.rect())),
-        _ => Layer::from(BackdropFilterLayer::new(
+        2 => Effect::from(ClipRectLayer::hard_edge(rng.rect())),
+        _ => Effect::from(BackdropFilterLayer::new(
             ImageFilter::blur([1.0, 3.0][rng.below(2)]),
             BlendMode::SrcOver,
             rng.rect(),
@@ -1494,7 +1498,7 @@ fn initial(rng: &mut Rng, owner: &mut SceneOwner, model: &mut Model) {
             0,
             Item::Effect {
                 owner,
-                layer: Layer::from(LeaderLayer::with_offset(
+                layer: Effect::from(LeaderLayer::with_offset(
                     link,
                     Size::new(10.0, 10.0),
                     Offset::new(rng.coord(100), rng.coord(100)),
@@ -1506,7 +1510,7 @@ fn initial(rng: &mut Rng, owner: &mut SceneOwner, model: &mut Model) {
         let owner = model.owner();
         model.items[0].push(Item::Effect {
             owner,
-            layer: Layer::from(FollowerLayer::new(link)),
+            layer: Effect::from(FollowerLayer::new(link)),
             items,
         });
         model.leader = Some((node, link));
@@ -1582,7 +1586,7 @@ fn mutate(rng: &mut Rng, owner: &mut SceneOwner, model: &mut Model, plant: bool)
                 let effects: Vec<usize> = (0..model.items[node].len())
                     .filter(|&index| {
                         matches!(&model.items[node][index], Item::Effect { layer, .. }
-                            if !matches!(layer, Layer::Leader(_) | Layer::Follower(_)))
+                            if !matches!(layer.as_layer(), Layer::Leader(_) | Layer::Follower(_)))
                     })
                     .collect();
                 if effects.is_empty() {
@@ -1629,19 +1633,13 @@ fn mutate(rng: &mut Rng, owner: &mut SceneOwner, model: &mut Model, plant: bool)
                 let at = model.items[leader]
                     .iter()
                     .position(|item| {
-                        matches!(
-                            item,
-                            Item::Effect {
-                                layer: Layer::Leader(_),
-                                ..
-                            }
-                        )
+                        matches!(item, Item::Effect { layer, .. } if matches!(layer.as_layer(), Layer::Leader(_)))
                     })
                     .expect("the leader's boundary holds it");
                 let Item::Effect { layer, .. } = &mut model.items[leader][at] else {
                     unreachable!("the position holds the leader");
                 };
-                *layer = Layer::from(LeaderLayer::with_offset(
+                *layer = Effect::from(LeaderLayer::with_offset(
                     link,
                     Size::new(10.0, 10.0),
                     Offset::new(rng.coord(300), rng.coord(300)),
@@ -1702,7 +1700,7 @@ impl Oracle {
         bake(&stamped, stamped.root(), &mut baked, root);
         let mut closures = Closures::new();
         backdrops(&baked, baked.root(), Matrix4::IDENTITY, &mut closures);
-        (self.differ.diff(&Scene::new(baked), SURFACE.size), closures)
+        (self.differ.diff(&baked, SURFACE.size), closures)
     }
 
     fn stamped(&mut self, version: &SceneVersion) -> LayerTree {
@@ -1820,7 +1818,7 @@ fn covers(patch: DamageRegion, diff: DamageRegion, closures: &Closures) -> bool 
 
 /// What each backdrop of `tree` reads and writes.
 fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Closures) {
-    let layer = tree.get_layer(id).expect("a node of the tree");
+    let layer = tree.layer(id).expect("a node of the tree");
     let ctm = if let Layer::Transform(transform) = layer {
         parent * *transform.transform()
     } else {
@@ -2056,7 +2054,7 @@ pub(crate) fn damage_under_a_fractional_clip_edge_takes_the_shared_pixel() {
     writer.push(publish(node, content));
     let mut top = BoundaryContent::builder();
     top.push_effect(
-        Layer::from(ClipRectLayer::new(
+        Effect::from(ClipRectLayer::new(
             Rect::from_ltrb(89.6, 0.0, 128.0, 40.0),
             Clip::AntiAlias,
         )),
@@ -2108,13 +2106,13 @@ fn content_clip_repaint(
         let mut content = BoundaryContent::builder();
         if let Some(transform) = transform {
             content.push_effect(
-                Layer::from(TransformLayer::new(transform)),
+                Effect::from(TransformLayer::new(transform)),
                 RenderId::new(3),
                 0,
             );
         }
         content.push_effect(
-            Layer::from(ClipRectLayer::new(clip, Clip::AntiAlias)),
+            Effect::from(ClipRectLayer::new(clip, Clip::AntiAlias)),
             RenderId::new(1),
             0,
         );
@@ -2246,7 +2244,7 @@ pub(crate) fn a_follower_over_a_content_clip_takes_the_scale_it_resolves_to() {
     let (leader, follower) = (writer.mint_node(), writer.mint_node());
     let mut leading = BoundaryContent::builder();
     leading.push_effect(
-        Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+        Effect::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
         RenderId::new(1),
         0,
     );
@@ -2254,9 +2252,9 @@ pub(crate) fn a_follower_over_a_content_clip_takes_the_scale_it_resolves_to() {
     writer.push(publish(leader, leading.finish()));
     let version = writer.next_content_version().expect("a version");
     let mut following = BoundaryContent::builder();
-    following.push_effect(Layer::from(FollowerLayer::new(link)), RenderId::new(2), 0);
+    following.push_effect(Effect::from(FollowerLayer::new(link)), RenderId::new(2), 0);
     following.push_effect(
-        Layer::from(ClipRectLayer::new(
+        Effect::from(ClipRectLayer::new(
             Rect::from_ltrb(89.6 * local, 0.0, 128.0 * local, 40.0 * local),
             Clip::AntiAlias,
         )),
@@ -2273,7 +2271,7 @@ pub(crate) fn a_follower_over_a_content_clip_takes_the_scale_it_resolves_to() {
     writer.push(publish(follower, following.finish()));
     let mut top = BoundaryContent::builder();
     top.push_effect(
-        Layer::from(TransformLayer::new(Matrix4::scaling(scale, scale, 1.0))),
+        Effect::from(TransformLayer::new(Matrix4::scaling(scale, scale, 1.0))),
         RenderId::new(3),
         0,
     );
@@ -2326,12 +2324,12 @@ pub(crate) fn a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shar
     writer.push(publish(child, content));
     let mut held = BoundaryContent::builder();
     held.push_effect(
-        Layer::from(TransformLayer::new(Matrix4::scaling(0.5, 0.5, 1.0))),
+        Effect::from(TransformLayer::new(Matrix4::scaling(0.5, 0.5, 1.0))),
         RenderId::new(3),
         0,
     );
     held.push_effect(
-        Layer::from(ClipRectLayer::new(
+        Effect::from(ClipRectLayer::new(
             Rect::from_ltrb(179.2, 0.0, 256.0, 80.0),
             Clip::AntiAlias,
         )),
@@ -2389,7 +2387,7 @@ pub(crate) fn a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared() 
         for how in [ClipMove::Republish, ClipMove::Repaint, ClipMove::Update] {
             let local = 1.0 / ancestors.iter().product::<f64>();
             let clip = |left: f64| {
-                Layer::from(ClipRectLayer::new(
+                Effect::from(ClipRectLayer::new(
                     Rect::from_ltrb(left * local, 0.0, 128.0 * local, 40.0 * local),
                     Clip::AntiAlias,
                 ))
@@ -2422,7 +2420,7 @@ pub(crate) fn a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared() 
             let mut top = BoundaryContent::builder();
             for (index, &scale) in ancestors.iter().enumerate() {
                 top.push_effect(
-                    Layer::from(TransformLayer::new(Matrix4::scaling(scale, scale, 1.0))),
+                    Effect::from(TransformLayer::new(Matrix4::scaling(scale, scale, 1.0))),
                     RenderId::new(3 + index),
                     0,
                 );
@@ -2484,7 +2482,7 @@ pub(crate) fn a_repaint_in_a_scrolled_viewport_damages_only_what_it_shows() {
     let viewport = |chunks: &[Arc<Chunk>]| {
         let mut content = BoundaryContent::builder();
         content.push_effect(
-            Layer::from(ClipRectLayer::new(
+            Effect::from(ClipRectLayer::new(
                 Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
                 Clip::AntiAlias,
             )),
@@ -2492,7 +2490,7 @@ pub(crate) fn a_repaint_in_a_scrolled_viewport_damages_only_what_it_shows() {
             0,
         );
         content.push_effect(
-            Layer::from(OffsetLayer::new(Offset::new(0.0, -scroll))),
+            Effect::from(OffsetLayer::new(Offset::new(0.0, -scroll))),
             RenderId::new(2),
             0,
         );
@@ -2551,7 +2549,7 @@ pub(crate) fn an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_sha
     let version = writer.next_content_version().expect("a version");
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        Layer::from(ClipRectLayer::new(
+        Effect::from(ClipRectLayer::new(
             Rect::from_ltrb(179.2, 0.0, 256.0, 80.0),
             Clip::AntiAlias,
         )),
@@ -2563,7 +2561,7 @@ pub(crate) fn an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_sha
     writer.push(publish(holder, content.finish()));
     let mut top = BoundaryContent::builder();
     top.push_effect(
-        Layer::from(TransformLayer::new(Matrix4::scaling(0.5, 0.5, 1.0))),
+        Effect::from(TransformLayer::new(Matrix4::scaling(0.5, 0.5, 1.0))),
         RenderId::new(3),
         0,
     );
@@ -2616,12 +2614,12 @@ fn long_content(rng: &mut Rng) -> SceneOwner {
         match rng.below(40) {
             0 if open < 3 => {
                 let layer = match rng.below(3) {
-                    0 => Layer::from(TransformLayer::new(
+                    0 => Effect::from(TransformLayer::new(
                         Matrix4::translation(rng.coord(200) - 100.0, rng.coord(200) - 100.0, 0.0)
                             * Matrix4::rotation_z(rng.coord(100) / 100.0),
                     )),
-                    1 => Layer::from(ClipRectLayer::new(rng.rect(), Clip::HardEdge)),
-                    _ => Layer::from(ImageFilterLayer::new(ImageFilter::blur(1.0 + rng.coord(8)))),
+                    1 => Effect::from(ClipRectLayer::new(rng.rect(), Clip::HardEdge)),
+                    _ => Effect::from(ImageFilterLayer::new(ImageFilter::blur(1.0 + rng.coord(8)))),
                 };
                 content.push_effect(layer, RenderId::new(1), ordinal);
                 ordinal += 1;
@@ -2732,7 +2730,7 @@ pub(crate) fn a_cull_skips_a_run_of_chunks_only_where_it_skips_each() {
         let mut content = BoundaryContent::builder();
         if under_effect {
             content.push_effect(
-                Layer::from(TransformLayer::new(Matrix4::translation(
+                Effect::from(TransformLayer::new(Matrix4::translation(
                     offset, offset, 0.0,
                 ))),
                 RenderId::new(1),

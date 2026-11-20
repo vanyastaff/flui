@@ -457,9 +457,11 @@ stashed and used after its element is defunct. Capability acquisition is split o
 **Rule.** Each element node carries its resolved inherited scope, built at mount and shared by
 refcount down runs of non-providers. A provider's scope is one layer holding the types it
 publishes, over a shared pointer to the scope above; a nearer provider of a type shadows a farther
-one. `find_inherited_provider` walks at most four layers and then asks one table: the provider
-whose parent's chain is four layers long folds that chain into a new table, so a lookup stays
-O(1) at any depth.
+one. A lookup scans at most seven layers and then asks one table, so it stays O(1) at any
+depth. Where the tables sit depends on provider depth alone: the layer at each multiple of four
+folds its chain into one table, once, the first time a provider four layers below it mounts, and
+every provider four to seven layers below it shares that table. A control whose own providers
+nest fewer than four deep copies no table, however many providers sit above it.
 `#[derive(InheritedData)]` generates `FieldMask` constants per field; `InheritedView::changed_fields`
 diffs old and new data per field; `depend_on_field(mask, …)` records a masked dependency, and a
 provider update rebuilds only dependents whose mask intersects the change. The whole-type read

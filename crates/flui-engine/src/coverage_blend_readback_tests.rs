@@ -112,7 +112,7 @@ fn try_blend_through_an_anti_aliased_clip(
         builder.build()
     };
 
-    let pixels = renderer.render_layer_tree(&tree, (SIDE, SIDE))?;
+    let pixels = renderer.render_scene(&tree, (SIDE, SIDE))?;
     Ok(sample_the_clip_edge(&pixels))
 }
 
@@ -321,7 +321,7 @@ fn portable_transparent_clear_plus_and_overlap(
         let mut builder = SceneBuilder::new();
         builder.add_picture(canvas.finish());
         let pixels = renderer
-            .render_layer_tree(&builder.build(), (8, 8))
+            .render_scene(&builder.build(), (8, 8))
             .expect("portable coverage render");
         let offset = (4 * 8 + 2) * 4;
         let actual = pixels[offset..offset + 4].try_into().expect("RGBA pixel");
@@ -350,7 +350,7 @@ fn portable_transparent_clear_plus_and_overlap(
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
     let pixels = renderer
-        .render_layer_tree(&builder.build(), (8, 8))
+        .render_scene(&builder.build(), (8, 8))
         .expect("group saturated Plus render");
     let fringe = (4 * 8 + 2) * 4;
     assert_pixel(
@@ -395,7 +395,7 @@ fn portable_fractional_src_gradient_preserves_destination(
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
     let pixels = renderer
-        .render_layer_tree(&builder.build(), (8, 8))
+        .render_scene(&builder.build(), (8, 8))
         .expect("portable gradient render");
     for y in [1usize, 4, 6] {
         let alpha = (y as f32 + 0.5) / 8.0;
@@ -466,7 +466,7 @@ fn portable_intrinsic_gradient_clear_ignores_source_alpha(
         let mut builder = SceneBuilder::new();
         builder.add_picture(canvas.finish());
         renderer
-            .render_layer_tree(&builder.build(), (16, 16))
+            .render_scene(&builder.build(), (16, 16))
             .expect("intrinsic coverage render")
     };
     for family in 0..3 {
@@ -556,7 +556,7 @@ fn ssaa_saturated_plus_clamps_before_coverage(
         let mut builder = SceneBuilder::new();
         builder.add_picture(canvas.finish());
         renderer
-            .render_layer_tree(&builder.build(), (64, 64))
+            .render_scene(&builder.build(), (64, 64))
             .expect("SSAA Plus witness render")
     };
     let reference = render(BlendMode::SrcOver, Color::BLACK, Color::WHITE);
@@ -619,7 +619,7 @@ fn cropped_gradient_clear_runs_preserve_barrier_and_order(
     let mut builder = SceneBuilder::new();
     builder.add_picture(canvas.finish());
     let pixels = renderer
-        .render_layer_tree(&builder.build(), (32, 32))
+        .render_scene(&builder.build(), (32, 32))
         .expect("cropped ordered gradients");
     let sample = |x: usize| -> [u8; 4] {
         pixels[(16 * 32 + x) * 4..(16 * 32 + x) * 4 + 4]
@@ -702,7 +702,7 @@ fn cropped_fragment_clip_origin_matches_attachment(
         let mut builder = SceneBuilder::new();
         builder.add_picture(canvas.finish());
         let pixels = portable
-            .render_layer_tree(&builder.build(), (32, 32))
+            .render_scene(&builder.build(), (32, 32))
             .expect("cropped clip render");
         let sample = |x: usize| -> [u8; 4] {
             pixels[(12 * 32 + x) * 4..(12 * 32 + x) * 4 + 4]
@@ -765,7 +765,7 @@ fn portable_porter_duff_translucent_destination(
             let mut builder = SceneBuilder::new();
             builder.add_picture(canvas.finish());
             let pixels = portable
-                .render_layer_tree(&builder.build(), (8, 8))
+                .render_scene(&builder.build(), (8, 8))
                 .expect("translucent destination render");
             for (x, coverage) in [(0usize, 0.0), (2, 0.5), (4, 1.0)] {
                 let offset = (4 * 8 + x) * 4;

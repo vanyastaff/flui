@@ -17,6 +17,10 @@ pub(super) struct AdmittedSegment {
     pub(super) segment_start: Instant,
     pub(super) woken: bool,
     pub(super) pending: bool,
+    /// A texture frame or retirement waited for the raster host: the segment
+    /// publishes the held version for it when its tree changed nothing
+    /// (ADR-0304 §8).
+    pub(super) textures: bool,
     pub(super) resuming: bool,
     pub(super) completion: bool,
 }
@@ -186,22 +190,30 @@ impl<'runtime> PresentationSampling<'runtime> {
             tracing::trace!(target: "flui.pace", event = "segment_backoff", presentation = ?presentation.id(), "presentation waits out a dropped frame");
             return;
         }
-        // An unseen window whose quiet period is over draws the frame it owes its surface. The
+        // An unseen window whose owed frame a frame of its own window served draws it. The
         // grant waits in its clock for the first poll this or a later pump makes (text
         // preparation may hold this one); the next quiet period starts when the frame runs.
-        presentation.grant_occluded_frame(runtime.session.get(), presentation.clock().now());
+        let owed_granted =
+            presentation.grant_occluded_frame(runtime.session.get(), presentation.clock().now());
         let mut selected = None;
         let mut completion_entered = self.completion_entered;
         self.run(SamplingStage::Preparation, |recovery| {
             let resuming = presentation.text_preparation.borrow().segment.is_some();
             if !text_preparation::can_run(presentation) {
+                // The served owed frame is held: asked for again once the preparation's
+                // outcome moves on (ADR-0389).
+                if owed_granted {
+                    presentation.hold_owed_frame();
+                }
                 return;
             }
             presentation.reconcile_semantics_enablement();
             let woken = presentation.take_redraw_pending();
             let pending = presentation.prepare_pending_work(recovery);
+            // A texture frame is drawn whatever layout waits for: it changes no tree.
+            let textures = presentation.owes_texture_frame();
             let blocked = presentation.pipeline().with(PipelineOwner::layout_waits_for_input);
-            if (woken && !blocked) || pending || resuming {
+            if (woken && !blocked) || pending || textures || resuming {
                 presentation.clock().mark_demand(DemandKind::Dirty);
             }
             let completion = presentation.has_eligible_completion();
@@ -215,8 +227,8 @@ impl<'runtime> PresentationSampling<'runtime> {
                 // A hidden presentation's clock produces only the frame it owed.
                 presentation.occluded_frame_drawn(now);
             }
-            if decision.should_run_segment() && !(blocked && !pending && !resuming) {
-                selected = Some(AdmittedSegment { decision, segment_start, woken, pending, resuming, completion });
+            if decision.should_run_segment() && !(blocked && !pending && !textures && !resuming) {
+                selected = Some(AdmittedSegment { decision, segment_start, woken, pending, textures, resuming, completion });
                 if runtime.scheduler.phase() == flui_scheduler::SchedulerPhase::Frame {
                     presentation.begin_completion_segment();
                     completion_entered = true;

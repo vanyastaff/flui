@@ -34,6 +34,11 @@ impl Lineage {
     pub fn get(self) -> u64 {
         self.0.get()
     }
+
+    /// The raw value as a layer link carries it.
+    pub(crate) fn as_non_zero(self) -> NonZeroU64 {
+        self.0
+    }
 }
 
 /// Which applied version of a scene this is.

@@ -140,7 +140,7 @@ fn retirement_competition() {
     assert_eq!(
         drops.load(Ordering::SeqCst),
         2,
-        "the second envelope is destroyed under containment"
+        "the second callback is destroyed under containment"
     );
     assert!(notifier.is_empty());
     let later = Arc::new(AtomicUsize::new(0));
@@ -183,7 +183,7 @@ fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: 
     assert_eq!(
         drops.load(Ordering::SeqCst),
         2,
-        "the later envelope is still destroyed"
+        "the later callback is still destroyed"
     );
     flui_foundation::panic::discard_payload(failure);
 }
@@ -1011,4 +1011,102 @@ fn an_inert_subscription_detaches_nothing() {
         1,
         "its own detach is the real one"
     );
+}
+
+/// Sets its flag when the listener's captures are destroyed.
+struct CaptureLife(Rc<std::cell::Cell<bool>>);
+impl Drop for CaptureLife {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
+/// A listener that ends its own registration inside its call keeps its
+/// captures until its round's tail: by its subscription's detach, and by a
+/// withdrawal whose by-value callback the caller drops at once. Either way it
+/// fires in no later round.
+#[test]
+fn a_listener_that_removes_itself_keeps_its_captures_until_the_tail() {
+    for withdraw in [false, true] {
+        let notifier = ChangeNotifier::new();
+        let destroyed = Rc::new(std::cell::Cell::new(false));
+        let alive_after_removal = Rc::new(std::cell::Cell::new(false));
+        let calls = Rc::new(AtomicUsize::new(0));
+        let own = Rc::new(RefCell::new(None::<Subscription>));
+        let own_id = Rc::new(std::cell::Cell::new(None::<flui_foundation::ListenerId>));
+        let listener: Rc<dyn Fn()> = Rc::new({
+            let capture = CaptureLife(Rc::clone(&destroyed));
+            let alive_after_removal = Rc::clone(&alive_after_removal);
+            let calls = Rc::clone(&calls);
+            let own = Rc::clone(&own);
+            let own_id = Rc::clone(&own_id);
+            let notifier = notifier.clone();
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let subscription = own.borrow_mut().take();
+                drop(subscription);
+                if let Some(id) = own_id.take() {
+                    drop(notifier.take_listener(id));
+                }
+                alive_after_removal.set(!capture.0.get());
+            }
+        });
+        if withdraw {
+            let relay = Rc::clone(&listener);
+            own_id.set(Some(notifier.add_with_recovery(Rc::new(move |_| relay()))));
+        } else {
+            *own.borrow_mut() = Some(notifier.listen(Rc::clone(&listener)));
+        }
+        drop(listener);
+
+        notifier.notify_listeners();
+        assert!(
+            alive_after_removal.get(),
+            "the captures outlive the removal inside their own call (withdraw: {withdraw})"
+        );
+        assert!(
+            destroyed.get(),
+            "the round's tail retires the removed listener (withdraw: {withdraw})"
+        );
+        assert!(!notifier.has_listeners());
+        notifier.notify_listeners();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a listener that removed itself fires in no later round (withdraw: {withdraw})"
+        );
+    }
+}
+
+/// A listener added during a round fires from the next round on, not in the
+/// round that added it.
+#[test]
+fn a_listener_added_during_a_round_fires_from_the_next_round() {
+    let notifier = ChangeNotifier::new();
+    let late_calls = Rc::new(AtomicUsize::new(0));
+    let added = Rc::new(RefCell::new(Vec::<Subscription>::new()));
+    let _adder = notifier.listen(Rc::new({
+        let notifier = notifier.clone();
+        let late_calls = Rc::clone(&late_calls);
+        let added = Rc::clone(&added);
+        move || {
+            if added.borrow().is_empty() {
+                let late_calls = Rc::clone(&late_calls);
+                let subscription = notifier.listen(Rc::new(move || {
+                    late_calls.fetch_add(1, Ordering::SeqCst);
+                }));
+                added.borrow_mut().push(subscription);
+            }
+        }
+    }));
+
+    notifier.notify_listeners();
+    assert_eq!(
+        late_calls.load(Ordering::SeqCst),
+        0,
+        "the round that added the listener does not reach it"
+    );
+    notifier.notify_listeners();
+    assert_eq!(late_calls.load(Ordering::SeqCst), 1, "the next round does");
+    added.borrow_mut().clear();
 }

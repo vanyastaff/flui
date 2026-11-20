@@ -109,13 +109,9 @@ fn an_idle_presentation_speaks_an_announcement() {
     .expect("runtime");
     let slot = Slot::default();
     runtime
-        .attach_root_widget_with_size(
-            &Announcing {
-                slot: Arc::clone(&slot),
-            },
-            40.0,
-            40.0,
-        )
+        .attach_root_widget(&Announcing {
+            slot: Arc::clone(&slot),
+        })
         .expect("mount");
     let pump = |runtime: &mut UiRuntime| {
         let _ = runtime.pump(
@@ -244,13 +240,9 @@ fn semantics_stop_with_the_last_listener_and_restart_whole() {
     .expect("runtime");
     let slot = Slot::default();
     runtime
-        .attach_root_widget_with_size(
-            &Announcing {
-                slot: Arc::clone(&slot),
-            },
-            40.0,
-            40.0,
-        )
+        .attach_root_widget(&Announcing {
+            slot: Arc::clone(&slot),
+        })
         .expect("mount");
     let pump = |runtime: &mut UiRuntime| {
         let _ = runtime.pump(

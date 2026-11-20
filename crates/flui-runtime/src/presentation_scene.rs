@@ -19,16 +19,23 @@
 //! scene holds that debt beside the target the version was applied for, so a
 //! retry that finds another target or a newer version repaints instead. Only a
 //! verdict that shows the version, or a new version applied, pays the debt.
+//!
+//! A frame that paints nothing while a texture frame waits in the
+//! presentation's registry publishes the current version again too, when it
+//! was applied for the frame's target: the raster host takes the texture
+//! frame with it and damages only the texture's users (ADR-0304 §8, §9).
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
+use crate::performance_overlay::Readout;
 use flui_foundation::RenderId;
 use flui_foundation::SurfaceGeneration;
 use flui_foundation::geometry::DevicePixelRatio;
 use flui_layer::{
-    BoundaryContent, Layer, ReleasedContents, ResyncReason, SceneNodeId, SceneOp, SceneOwner,
-    ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey, TransformLayer,
+    BoundaryContent, ClipRectLayer, ReleasedContents, ResyncReason, SceneNodeId, SceneOp,
+    SceneOwner, ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey,
+    TextureRegistry, TransformLayer,
 };
 
 /// The retained scene of one presentation, and the node its debug overlay is
@@ -36,8 +43,8 @@ use flui_layer::{
 #[derive(Debug, Default)]
 pub(crate) struct PresentationScene {
     owner: SceneOwner,
-    /// The overlay's node while the overlay is shown.
-    overlay: Option<SceneNodeId>,
+    /// The overlay the current version shows.
+    overlay: Option<ShownOverlay>,
     /// Patches refused in a row since the last one applied: a second
     /// refusal is a producer defect a rebuild did not cure, so it asks for
     /// no retry.
@@ -50,6 +57,13 @@ pub(crate) struct PresentationScene {
     /// its lineage ([`Self::held_retry`]). A republish leaves it: the
     /// republished frame may be discarded before any verdict.
     owed: Option<SceneVersionId>,
+    /// The version the window refused: a texture frame does not publish it
+    /// again, since a refused window costs none (ADR-0334 §4); the frame
+    /// waits in the registry. It holds only while it is the current version,
+    /// so a frame that applies a version or renews the lineage ends it by
+    /// making another current, and the raster side showing it, or a later
+    /// version of its lineage, clears it ([`Self::completed`]).
+    refused: Option<SceneVersionId>,
 }
 
 /// What a version is drawn for: the surface's size in device pixels and the
@@ -58,6 +72,31 @@ pub(crate) struct PresentationScene {
 pub(crate) struct SceneTarget {
     pub(crate) size: (u32, u32),
     pub(crate) scale: DevicePixelRatio,
+}
+
+impl SceneTarget {
+    /// The target a frame laid out under `constraints` at `scale` draws for:
+    /// each logical extent in whole device pixels, snapped by the conversion
+    /// the hosts share (`flui_foundation::geometry::device_extent`), so the
+    /// patch's surface rounds as the window's does; an unbounded or
+    /// non-finite extent is no surface. The largest surface is a host's
+    /// policy, applied where it sizes the window, and the renderer refuses a
+    /// surface past its device's limit; the runtime holds neither, so it does
+    /// not clamp.
+    pub(crate) fn of(
+        constraints: flui_rendering::constraints::BoxConstraints,
+        scale: DevicePixelRatio,
+    ) -> Self {
+        let extent =
+            |logical: f64| flui_foundation::geometry::device_extent(logical, scale).unwrap_or(0);
+        Self {
+            size: (
+                extent(constraints.max_width),
+                extent(constraints.max_height),
+            ),
+            scale,
+        }
+    }
 }
 
 /// What a frame owes a version its surface withheld (ADR-0304 §7).
@@ -91,12 +130,26 @@ pub(crate) enum Produced {
 }
 
 /// The debug overlay a frame composes beside the pipeline's frame node: the
-/// readout and the device pixel ratio it is drawn under.
-pub(crate) struct OverlayFrame {
-    pub(crate) layer: Layer,
+/// readout, the context its labels are shaped through and the device pixel
+/// ratio it is drawn under.
+pub(crate) struct OverlayFrame<'t> {
+    pub(crate) readout: Readout,
+    pub(crate) text: &'t flui_rendering::TextContextHandle,
     pub(crate) device_pixel_ratio: f64,
-    /// The render object the overlay's effects are filed under.
+    /// The render object the overlay's effects and chunk are filed under.
     pub(crate) owner: RenderId,
+}
+
+/// The overlay the current version shows: its node and what its chunk was
+/// recorded from.
+#[derive(Debug)]
+struct ShownOverlay {
+    node: SceneNodeId,
+    readout: Readout,
+    /// The fonts generation the labels were shaped at: a registration may
+    /// shape the same text differently.
+    fonts: u64,
+    device_pixel_ratio: f64,
 }
 
 impl PresentationScene {
@@ -104,10 +157,10 @@ impl PresentationScene {
     /// root around the frame node and the overlay `compose` names, in the
     /// same patch. Returns `paint`'s answer: whether there is a patch to
     /// [`Self::apply`].
-    pub(crate) fn produce<E>(
+    pub(crate) fn produce<'t, E>(
         &mut self,
         paint: impl FnOnce(&mut SceneWriter<'_>) -> Result<bool, E>,
-        compose: impl FnOnce() -> (Option<SceneNodeId>, Option<OverlayFrame>),
+        compose: impl FnOnce() -> (Option<SceneNodeId>, Option<OverlayFrame<'t>>),
     ) -> Result<bool, E> {
         let mut writer = self.owner.writer();
         let painted = paint(&mut writer)?;
@@ -120,43 +173,24 @@ impl PresentationScene {
 
     /// Republishes the scene's root around the pipeline's `frame` node and
     /// the overlay, in the patch `writer` buffers, when it does not slot them
-    /// already; publishes the overlay's node with this frame's readout.
+    /// already; publishes the overlay's node when its readout changed.
     fn compose(
-        overlay_node: &mut Option<SceneNodeId>,
+        shown: &mut Option<ShownOverlay>,
         writer: &mut SceneWriter<'_>,
         frame: Option<SceneNodeId>,
-        overlay: Option<OverlayFrame>,
+        overlay: Option<OverlayFrame<'_>>,
     ) {
         let lineage = writer.current().id().lineage();
-        let previous = overlay_node.take().filter(|node| node.lineage() == lineage);
-        let overlay = overlay.map(|overlay| {
-            let node = previous.unwrap_or_else(|| writer.mint_node());
-            let mut content = BoundaryContent::builder();
-            let scaled = (overlay.device_pixel_ratio - 1.0).abs() >= f64::EPSILON;
-            if scaled {
-                content.push_effect(
-                    Layer::Transform(TransformLayer::new(
-                        flui_foundation::geometry::Matrix4::scaling(
-                            overlay.device_pixel_ratio,
-                            overlay.device_pixel_ratio,
-                            1.0,
-                        ),
-                    )),
-                    overlay.owner,
-                    0,
-                );
-            }
-            content.push_effect(overlay.layer, overlay.owner, u32::from(scaled));
-            writer.push(SceneOp::Publish {
-                node,
-                content: Arc::new(content.finish()),
-            });
-            node
-        });
-        if let Some(retired) = previous.filter(|_| overlay.is_none()) {
+        let previous = shown.take().filter(|shown| shown.node.lineage() == lineage);
+        let retired = previous.as_ref().map(|previous| previous.node);
+        *shown = match overlay {
+            Some(overlay) => Self::compose_overlay(writer, previous, overlay),
+            None => None,
+        };
+        let overlay = shown.as_ref().map(|shown| shown.node);
+        if let Some(retired) = retired.filter(|_| overlay.is_none()) {
             writer.push(SceneOp::Retire { node: retired });
         }
-        *overlay_node = overlay;
 
         let current = writer.current();
         let root = current.root();
@@ -175,6 +209,83 @@ impl PresentationScene {
             node: root,
             content: Arc::new(content.finish()),
         });
+    }
+
+    /// The overlay this frame shows: `previous` as it is when the readout,
+    /// the fonts and the scale are those it was recorded from, or while the
+    /// text context is lent; otherwise the readout recorded as a new content
+    /// version and published at `previous`'s node or a new one. A readout
+    /// that cannot be recorded shows none.
+    ///
+    /// Only the overlay's own chunk takes a new version, so no recording the
+    /// raster side keeps for another chunk changes with it, and a readout
+    /// that holds still publishes nothing and damages nothing.
+    fn compose_overlay(
+        writer: &mut SceneWriter<'_>,
+        previous: Option<ShownOverlay>,
+        overlay: OverlayFrame<'_>,
+    ) -> Option<ShownOverlay> {
+        let unchanged = |fonts: u64| {
+            previous.as_ref().is_some_and(|previous| {
+                previous.readout == overlay.readout
+                    && previous.fonts == fonts
+                    && previous.device_pixel_ratio.to_bits() == overlay.device_pixel_ratio.to_bits()
+            })
+        };
+        // The context is free at scene assembly; were it lent, the overlay
+        // keeps what it shows, or skips the frame, rather than panic on it.
+        let recorded = overlay.text.try_with(|text| {
+            let fonts = text.fonts().generation();
+            (!unchanged(fonts)).then(|| (fonts, overlay.readout.record(text)))
+        });
+        let (fonts, mut readout) = match recorded {
+            None => {
+                tracing::warn!(
+                    "performance overlay not recorded: the ui_runtime's text context is lent"
+                );
+                return previous;
+            }
+            Some(None) => return previous,
+            Some(Some((fonts, Ok(readout)))) => (fonts, readout),
+            Some(Some((_, Err(error)))) => {
+                tracing::warn!(%error, "performance overlay skipped: label layout failed");
+                return None;
+            }
+        };
+        // A lineage out of versions records no readout: the pipeline's own
+        // patch is refused with it and the scene is rebuilt.
+        let version = writer.next_content_version().ok()?;
+        let node = previous.map_or_else(|| writer.mint_node(), |previous| previous.node);
+        let mut content = BoundaryContent::builder();
+        let mut ordinal = 0;
+        if (overlay.device_pixel_ratio - 1.0).abs() >= f64::EPSILON {
+            content.push_effect(
+                TransformLayer::new(flui_foundation::geometry::Matrix4::scaling(
+                    overlay.device_pixel_ratio,
+                    overlay.device_pixel_ratio,
+                    1.0,
+                )),
+                overlay.owner,
+                ordinal,
+            );
+            ordinal += 1;
+        }
+        content.push_effect(
+            ClipRectLayer::hard_edge(crate::performance_overlay::BOUNDS),
+            overlay.owner,
+            ordinal,
+        );
+        content.chunk(writer.chunk(overlay.owner, 0, version, &mut readout));
+        writer.push(SceneOp::Publish {
+            node,
+            content: Arc::new(content.finish()),
+        });
+        Some(ShownOverlay {
+            node,
+            readout: overlay.readout,
+            fonts,
+            device_pixel_ratio: overlay.device_pixel_ratio,
+        })
     }
 
     /// Applies the buffered patch for `target`.
@@ -222,6 +333,14 @@ impl PresentationScene {
         }) {
             self.owed = None;
         }
+        // A window that shows the refused version, or a later one, takes
+        // frames again: a refusal that settled before a republish of the
+        // same version was shown no longer holds its texture frames.
+        if self.refused.is_some_and(|refused| {
+            refused.lineage() == rastered.lineage() && refused.seq() <= rastered.seq()
+        }) {
+            self.refused = None;
+        }
         self.owner.completed(Some(rastered))
     }
 
@@ -254,11 +373,43 @@ impl PresentationScene {
             Some(_) => HeldRetry::Repaint,
         }
     }
+    /// Whether `textures` holds updates the held version owes a publication
+    /// for (ADR-0304 §8): a retirement, or a pending frame of a texture an
+    /// attached entry of the version draws. `false` unless the version was
+    /// applied for `target`, the target the window's pipeline now lays out
+    /// for, and while the window refuses the version ([`Self::refuse`]): a
+    /// target change is carried by the repaint it causes, and a texture
+    /// nothing shows, or a window that takes nothing, costs no frame; their
+    /// updates wait for the next publication. The one answer the runner's
+    /// gate, sampling admission and the frame's republish read.
+    pub(crate) fn owes_texture_frame(
+        &self,
+        textures: &TextureRegistry,
+        target: Option<SceneTarget>,
+    ) -> bool {
+        if target.is_none() || self.target != target {
+            return false;
+        }
+        let current = self.owner.current();
+        if self.refused == Some(current.id()) {
+            return false;
+        }
+        textures.has_updates_for(|texture| current.draws_texture(texture))
+    }
 
-    /// The withheld version again, with the damage since the acknowledged
-    /// base, for a frame that painted nothing. The debt stays until the
-    /// frame's verdict: shown, it is paid ([`Self::completed`]); withheld
-    /// again, it is owed again.
+    /// The window refused `version`: a texture frame does not publish it
+    /// again until a frame applies a version ([`Self::apply`]) or the raster
+    /// side shows it ([`Self::completed`]).
+    fn refuse(&mut self, version: SceneVersionId) {
+        self.refused = Some(version);
+    }
+
+    /// The current version again, with the damage since the acknowledged
+    /// base, for a frame that painted nothing: a withheld version owed to the
+    /// screen, or the held version a texture frame rides to the raster host
+    /// (ADR-0304 §7, §8). A withheld version's debt stays until the frame's
+    /// verdict: shown, it is paid ([`Self::completed`]); withheld again, it
+    /// is owed again.
     pub(crate) fn republish(&self) -> ScenePublication {
         self.owner.publication()
     }
@@ -291,6 +442,9 @@ pub(crate) struct SceneSlot {
     /// The newest version the raster side showed while the scene was lent,
     /// acknowledged when it returns.
     completed_owed: Cell<Option<SceneVersionId>>,
+    /// The version the window refused while the scene was lent, latched when
+    /// it returns.
+    refused_owed: Cell<Option<SceneVersionId>>,
 }
 
 impl Default for SceneSlot {
@@ -299,6 +453,7 @@ impl Default for SceneSlot {
             scene: RefCell::new(Some(PresentationScene::default())),
             renew_owed: Cell::new(None),
             completed_owed: Cell::new(None),
+            refused_owed: Cell::new(None),
         }
     }
 }
@@ -368,6 +523,31 @@ impl SceneSlot {
         Ok(())
     }
 
+    /// See [`PresentationScene::owes_texture_frame`]. `false` while a frame
+    /// holds the scene: that frame answers for itself.
+    pub(crate) fn owes_texture_frame(
+        &self,
+        textures: &TextureRegistry,
+        target: Option<SceneTarget>,
+    ) -> bool {
+        self.scene
+            .borrow()
+            .as_ref()
+            .is_some_and(|scene| scene.owes_texture_frame(textures, target))
+    }
+
+    /// The window refused `version`; see [`PresentationScene::refuse`].
+    /// While a frame holds the scene the refusal waits for its return, where
+    /// a version that frame applied overrides it.
+    pub(crate) fn refuse(&self, version: SceneVersionId) {
+        let mut scene = self.scene.borrow_mut();
+        if let Some(scene) = scene.as_mut() {
+            scene.refuse(version);
+        } else {
+            self.refused_owed.set(Some(version));
+        }
+    }
+
     /// Runs the destructors of what the scene's owner released, here with no
     /// borrow held (an annotation's `Drop` is user code), and hands the owner
     /// back what nobody else holds, for its next frames to write into
@@ -424,7 +604,7 @@ impl Drop for LentScene<'_> {
         let Some(mut scene) = self.scene.take() else {
             return;
         };
-        // An acknowledgement, then a renewal, owed while the frame held the
+        // An acknowledgement, a refusal, then a renewal, owed while the frame held the
         // scene run before it is back; what they release drops with the slot
         // free.
         let acknowledged = self
@@ -432,6 +612,9 @@ impl Drop for LentScene<'_> {
             .completed_owed
             .take()
             .map(|rastered| scene.completed(rastered));
+        if let Some(refused) = self.slot.refused_owed.take() {
+            scene.refuse(refused);
+        }
         let released = self
             .slot
             .renew_owed
@@ -468,6 +651,141 @@ mod tests {
             size: (800, 600),
             scale: DevicePixelRatio::ONE,
         })
+    }
+
+    /// A readout of `fps` frames per second.
+    fn readout(fps: f64) -> Readout {
+        Readout::of(&crate::performance_overlay::PerformanceSample {
+            fps,
+            frame_time_ms: 16.7,
+            diagnostic_line: None,
+        })
+    }
+
+    /// A frame that paints nothing of the pipeline's and composes the
+    /// overlay `readout` names, shaped through `text`; the raster side then
+    /// shows the version, so the next publication's damage is that frame's
+    /// own.
+    fn overlay_frame(
+        scene: &mut PresentationScene,
+        text: &flui_rendering::TextContextHandle,
+        readout: Option<Readout>,
+    ) -> ScenePublication {
+        let painted = scene.produce(
+            |_| Ok::<_, ()>(true),
+            || {
+                let overlay = readout.map(|readout| OverlayFrame {
+                    readout,
+                    text,
+                    device_pixel_ratio: 1.0,
+                    owner: RenderId::new(1),
+                });
+                (None, overlay)
+            },
+        );
+        assert_eq!(painted, Ok(true));
+        assert!(matches!(
+            scene.apply(SceneTarget {
+                size: (800, 600),
+                scale: DevicePixelRatio::ONE,
+            }),
+            Produced::Applied { .. }
+        ));
+        let publication = scene.publication();
+        drop(scene.completed(publication.scene.id()));
+        publication
+    }
+
+    /// The overlay's one chunk in `publication`'s version.
+    fn overlay_chunk(publication: &ScenePublication) -> Option<Arc<flui_layer::Chunk>> {
+        let version = &publication.scene;
+        let node = version.node(version.root())?.content().slots().next()?;
+        version
+            .node(node)?
+            .content()
+            .entries()
+            .iter()
+            .find_map(|entry| match entry {
+                flui_layer::Entry::Chunk { chunk, .. } => Some(Arc::clone(chunk)),
+                flui_layer::Entry::Effect { .. } | flui_layer::Entry::Slot { .. } => None,
+            })
+    }
+
+    /// A readout that holds still records nothing and damages nothing; one
+    /// that changes, or whose fonts gained a face, records its chunk anew and
+    /// damages the overlay's bounds alone. Fails if every frame records the
+    /// readout (damage each frame) or if a change of numbers or fonts keeps
+    /// the old recording (a stale overlay).
+    #[test]
+    fn the_overlay_records_its_readout_only_when_it_changes() {
+        let fonts = flui_painting::FontCollection::new();
+        let text = flui_rendering::TextContextHandle::new(flui_painting::TextContext::new(&fonts));
+        let mut scene = PresentationScene::default();
+        let first = overlay_frame(&mut scene, &text, Some(readout(60.0)));
+        let recorded = overlay_chunk(&first).expect("the overlay is shown");
+
+        let still = overlay_frame(&mut scene, &text, Some(readout(60.0)));
+        assert_eq!(
+            still.damage,
+            DamageRegion::Unchanged,
+            "numbers that hold still"
+        );
+        let kept = overlay_chunk(&still).expect("the overlay is shown");
+        assert!(Arc::ptr_eq(&kept, &recorded), "the chunk is kept");
+
+        let bounds = |publication: &ScenePublication| match &publication.damage {
+            DamageRegion::Region(region) => region.bounds(),
+            other => panic!("the overlay damages a region: {other:?}"),
+        };
+        let changed = overlay_frame(&mut scene, &text, Some(readout(30.0)));
+        assert_ne!(
+            overlay_chunk(&changed).map(|chunk| chunk.version()),
+            Some(recorded.version()),
+            "new numbers record anew"
+        );
+        let covering =
+            flui_layer::DamageRect::try_covering(crate::performance_overlay::BOUNDS, (800, 600))
+                .expect("the bounds are finite")
+                .expect("the bounds meet the surface");
+        assert_eq!(
+            bounds(&changed).union(covering),
+            covering,
+            "the overlay damages inside its bounds: {:?}",
+            changed.damage
+        );
+
+        let before = overlay_chunk(&changed).expect("the overlay is shown");
+        fonts
+            .register_font(flui_painting::testing::PROBE_MONO_100)
+            .expect("the probe face loads");
+        let refonted = overlay_frame(&mut scene, &text, Some(readout(30.0)));
+        assert_ne!(
+            overlay_chunk(&refonted).map(|chunk| chunk.version()),
+            Some(before.version()),
+            "a registered face records anew"
+        );
+    }
+
+    /// While the text context is lent, a shown overlay stays as it is and an
+    /// overlay not yet shown waits; turning the overlay off retires its node.
+    /// Fails if a lent context panics the frame, drops the shown overlay, or
+    /// leaves a retired overlay slotted.
+    #[test]
+    fn a_lent_text_context_keeps_the_overlay_shown() {
+        let text = flui_rendering::TextContextHandle::standalone();
+        let mut scene = PresentationScene::default();
+        let waiting = text.with(|_| overlay_frame(&mut scene, &text, Some(readout(60.0))));
+        assert!(overlay_chunk(&waiting).is_none(), "nothing to show yet");
+
+        let shown = overlay_frame(&mut scene, &text, Some(readout(60.0)));
+        let recorded = overlay_chunk(&shown).expect("a free context records it");
+        let lent = text.with(|_| overlay_frame(&mut scene, &text, Some(readout(30.0))));
+        assert_eq!(lent.damage, DamageRegion::Unchanged);
+        let kept = overlay_chunk(&lent).expect("the overlay stays shown");
+        assert!(Arc::ptr_eq(&kept, &recorded));
+
+        let off = overlay_frame(&mut scene, &text, None);
+        assert!(overlay_chunk(&off).is_none(), "the overlay is retired");
     }
 
     /// While a frame holds the scene, code it runs that reaches the slot is

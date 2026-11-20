@@ -7,7 +7,7 @@
 //! geometry changes (its size, or where it stands after a scroll), including
 //! after a relayout no build caused. A
 //! [`LeaderWatch`] is that signal: the owner compares each live watch against
-//! the layer tree each painted frame commits and queues only the watches whose
+//! the scene version each painted frame is applied as and queues only the watches whose
 //! value changed into the frame's post-frame lane. A steady layout queues
 //! nothing and requests no frame.
 
@@ -28,7 +28,7 @@ pub struct LeaderGeometry {
     /// The leader's laid-out size: the extent its followers' anchors align
     /// within.
     pub size: Size<f64>,
-    /// The leader's top-left corner in the coordinates of the layer tree's
+    /// The leader's top-left corner in the coordinates of the scene's
     /// root, which a scroll or a transform above the leader moves while its
     /// size stays; `None` when a transform on its chain is singular or not
     /// finite.

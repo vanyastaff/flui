@@ -7,11 +7,12 @@ use std::sync::Arc;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::inspect::SnapshotQuery;
+use flui_layer::Effect;
 use flui_layer::testing::inspect::structure;
 use flui_layer::{
     AnnotatedRegionLayer, BoundaryContent, Chunk, ClipRectLayer, ContentVersion, FollowerLayer,
-    Layer, LayerLink, LeaderClip, LeaderLayer, OffsetLayer, Placement, SceneNodeId, SceneOp,
-    SceneOwner, SurfaceKey, TransformLayer, leader_origin, resolve_follower_transform,
+    LayerLink, LeaderClip, LeaderLayer, OffsetLayer, Placement, SceneNodeId, SceneOp, SceneOwner,
+    SurfaceKey, TransformLayer, leader_origin, resolve_follower_transform,
 };
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
@@ -54,15 +55,15 @@ const LINKS: usize = 3;
 
 /// One random effect, with each link led and followed at most once so a
 /// layer of the flattened tree is named by its link alone.
-fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [bool]) -> Layer {
+fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [bool]) -> Effect {
     match rng.below(7) {
-        0 => Layer::from(OffsetLayer::new(Offset::new(
+        0 => Effect::from(OffsetLayer::new(Offset::new(
             rng.signed(50.0),
             rng.signed(50.0),
         ))),
         1 => {
             let scale = 0.5 + rng.unit() * 1.5;
-            Layer::from(TransformLayer::new(
+            Effect::from(TransformLayer::new(
                 Matrix4::translation(rng.signed(40.0), rng.signed(40.0), 0.0)
                     * Matrix4::rotation_z(rng.signed(1.0))
                     * Matrix4::scaling(scale, scale, 1.0),
@@ -70,7 +71,7 @@ fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [
         }
         2 => {
             let (x, y) = (rng.signed(60.0), rng.signed(60.0));
-            Layer::from(ClipRectLayer::new(
+            Effect::from(ClipRectLayer::new(
                 Rect::from_xywh(x, y, 20.0 + rng.unit() * 80.0, 20.0 + rng.unit() * 80.0),
                 Clip::HardEdge,
             ))
@@ -78,10 +79,10 @@ fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [
         3 => {
             let link = rng.below(LINKS);
             if led[link] {
-                return Layer::from(OffsetLayer::zero());
+                return Effect::from(OffsetLayer::zero());
             }
             led[link] = true;
-            Layer::from(LeaderLayer::with_offset(
+            Effect::from(LeaderLayer::with_offset(
                 links[link],
                 Size::new(10.0 + rng.unit() * 40.0, 10.0 + rng.unit() * 40.0),
                 Offset::new(rng.signed(30.0), rng.signed(30.0)),
@@ -90,10 +91,10 @@ fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [
         6 => {
             let value = Arc::new(u32::try_from(rng.below(1_000)).expect("below 1 000"));
             if rng.chance(30) {
-                Layer::from(AnnotatedRegionLayer::sized_by_parent(value))
+                Effect::from(AnnotatedRegionLayer::sized_by_parent(value))
             } else {
                 let (x, y) = (rng.signed(60.0), rng.signed(60.0));
-                Layer::from(AnnotatedRegionLayer::new(
+                Effect::from(AnnotatedRegionLayer::new(
                     Rect::from_xywh(x, y, 10.0 + rng.unit() * 90.0, 10.0 + rng.unit() * 90.0),
                     value,
                 ))
@@ -102,7 +103,7 @@ fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [
         _ => {
             let link = rng.below(LINKS);
             if followed[link] {
-                return Layer::from(OffsetLayer::zero());
+                return Effect::from(OffsetLayer::zero());
             }
             followed[link] = true;
             let clip = if rng.chance(50) {
@@ -110,7 +111,7 @@ fn effect(rng: &mut Rng, links: &[LayerLink], led: &mut [bool], followed: &mut [
             } else {
                 LeaderClip::Escape
             };
-            Layer::from(
+            Effect::from(
                 FollowerLayer::new(links[link])
                     .with_leader_clip(clip)
                     .with_show_when_unlinked(rng.chance(50))
@@ -223,7 +224,7 @@ fn first_disagreement(cases: u64) -> Option<String> {
             let size_from_tree = tree
                 .leaders()
                 .filter(|(led, _)| *led == link)
-                .filter_map(|(_, id)| Some(tree.get_layer(id)?.as_leader()?.size()))
+                .filter_map(|(_, id)| Some(tree.layer(id)?.as_leader()?.size()))
                 .last();
             if size_from_tree != version.leader_size(link) {
                 return Some(format!(

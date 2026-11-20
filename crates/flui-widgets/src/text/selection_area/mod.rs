@@ -31,15 +31,13 @@ use flui_interaction::{
     focus::KeyEventResult,
     text_input::{ClipboardCapability, ClipboardHandle},
 };
+use flui_layer::LayerLink;
 use flui_objects::{RenderParagraph, SubtreeAnchor};
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::TextLink;
-use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_rendering::semantics::{
-    DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsRole,
-};
+use flui_semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsRole};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{
@@ -959,7 +957,7 @@ impl SelectionModel {
     /// says), so the text reported for a selection is the text an adapter
     /// selected and the text the pointer selects. While semantics is on, that
     /// is the last publication's order: the assembly orders a document's
-    /// texts by [`reading_order`](flui_rendering::semantics::reading_order) after any sort keys, and a
+    /// texts by [`reading_order`](flui_semantics::reading_order) after any sort keys, and a
     /// text it does not publish (offstage, excluded, silenced) is left out.
     /// Without it, the same function orders the texts' laid-out boxes, and
     /// texts beneath an ancestor that leaves its subtree out of semantics are
@@ -996,7 +994,7 @@ impl SelectionModel {
                             laid_out_box(owner, &entries[index].subtree).unwrap_or(UNPLACED)
                         })
                         .collect();
-                    flui_rendering::semantics::reading_order(&boxes, direction)
+                    flui_semantics::reading_order(&boxes, direction)
                         .into_iter()
                         .map(|at| presented[at])
                         .map(|index| (index, shown(index)))

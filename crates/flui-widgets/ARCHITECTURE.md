@@ -423,7 +423,10 @@ removal and nested-provider precedence. The runtime's
 `preferred_locales_select_resources_and_direction` exercises loaded resources.
 
 `RichText` reads inherited text sizing and weight adjustment during its stateless
-build and passes them with its unchanged authored spans to a private render view.
+build, and the ambient `Directionality` when it names no direction of its own (a
+run that names one takes no dependency), and passes them, the resolved direction
+included, with its unchanged authored spans to a private render view
+(`a_text_run_reads_the_ambient_direction_unless_it_names_one`).
 It reads them in `build` rather than through `RenderObjectContext::depend_on`,
 and native settings never enter `RenderObjectContext`. The paragraph update reports layout and semantics invalidation when sizing changes, so the same
 render object produces updated geometry. Weight changes likewise invalidate layout
@@ -1418,9 +1421,10 @@ images and the loads in flight (ADR-0250), so every `AssetImage` and
 `NetworkImage` of one source in one runtime shares a decode, another runtime
 keeps its own, and the runtime trims its cache under memory pressure. On a host
 without the capability a load answers `ImageProviderError::ImageCacheUnavailable` and
-reads nothing. Their `ImageCacheKey` holds the path or the URL alone: the cache
-and the client an `Image` acquired do not change while it is mounted, so the key
-need not name them. Two HTTP clients can be answered different images at one
+reads nothing. An `AssetImage` reads through the asset bundle `Image` acquires as
+`AssetBundleCapability` (ADR-0384 §6). Their `ImageCacheKey` holds the asset key or the URL
+alone: the cache, the bundle and the client an `Image` acquired do not change while it is
+mounted, so the key need not name them. Two HTTP clients can be answered different images at one
 URL, so the cache keeps a network image under its client's `HttpAuthority` as
 well (ADR-0280 §6), and `NetworkImage::cached` probes with the client its
 `Image` acquired. A custom provider keys by a typed value
@@ -2591,7 +2595,7 @@ child.
 
 ### 34. `EditableText` answers an input method's pulls; one platform session is one change
 
-**Choice:** `EditableText` is a `flui_platform::text_store::TextStore` (ADR-0090). The
+**Choice:** `EditableText` is a `flui_platform::text::store::TextStore` (ADR-0090). The
 input method reads the text, selection, composition and geometry in UTF-16
 offsets and edits under a lock; a push `ImeEvent` is projected onto the same
 store. A read-write session is written back to the controller once, at the

@@ -26,9 +26,8 @@
 //! pipeline's phase counters differenced across the frame and what its scene
 //! patch cost. `flui-widgets`' `perf` test target drives a fixed app through idle,
 //! scroll, text-change and full-reassemble frames, asserts budgets on those
-//! reports, and — when `FLUI_PERF_OUT` names a directory — writes each
-//! scenario's counts there for `cargo xtask perf` to compare with the
-//! checked-in baseline.
+//! reports, and — when `FLUI_PERF_BASELINE` is `check` — holds each
+//! scenario's counts to the checked-in baseline.
 //!
 //! ## Example
 //!
@@ -85,6 +84,7 @@
 #![deny(missing_docs)]
 
 pub mod a11y;
+pub mod agent_service;
 pub mod backend_conformance;
 pub mod clipboard;
 pub mod control_cost;
@@ -115,6 +115,7 @@ pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
     InvokeActionError, NodeId, TreeId,
 };
+pub use agent_service::{ConversationRefused, HeadlessAgentService, HeadlessConversation};
 pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
@@ -132,8 +133,8 @@ pub use gesture_alternatives::{
 };
 pub use host::{
     HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
-    HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, StartedOsDrag, UnshownFrame,
-    WindowSystemMismatch,
+    HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, ScriptedTextSizing, StartedOsDrag,
+    UnshownFrame, WindowSystemMismatch,
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;
@@ -150,7 +151,7 @@ pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 /// returns for a frame of the UI runtime.
 ///
 /// Counts, not timings: every figure is a deterministic function of the tree
-/// and the change applied, which is what lets `cargo xtask perf` compare them
+/// and the change applied, which is what lets a perf scenario compare them
 /// exactly against a checked-in baseline.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -243,11 +244,9 @@ impl SceneReport {
             (0, 0)
         } else {
             match &after.patch_damage {
-                flui_rendering::layer::DamageRegion::Unchanged => (0, 0),
-                flui_rendering::layer::DamageRegion::Region(region) => {
-                    (region.rects().len() as u64, 0)
-                }
-                flui_rendering::layer::DamageRegion::Full(_) => (0, 1),
+                flui_layer::DamageRegion::Unchanged => (0, 0),
+                flui_layer::DamageRegion::Region(region) => (region.rects().len() as u64, 0),
+                flui_layer::DamageRegion::Full(_) => (0, 1),
             }
         };
         Self {
@@ -278,9 +277,9 @@ impl std::ops::AddAssign for SceneReport {
 /// semantics hides nothing from it.
 pub(crate) fn take_semantics_findings(
     pipeline: &flui_rendering::pipeline::PipelineCell,
-) -> Vec<flui_rendering::semantics::SemanticsDiagnostic> {
+) -> Vec<flui_semantics::SemanticsDiagnostic> {
     use flui_rendering::pipeline::PipelineOwner;
-    use flui_rendering::semantics::SemanticsDiagnostic;
+    use flui_semantics::SemanticsDiagnostic;
 
     let mut findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
     // Withheld text runs report an exhausted identity space, not an author

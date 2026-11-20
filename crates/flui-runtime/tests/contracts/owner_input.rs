@@ -23,7 +23,7 @@ fn key(code: Code) -> PlatformInput {
 /// HTML creates no replay obligation when the canvas owns the next press.
 fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     use flui_interaction::focus::FocusNode;
-    use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
+    use flui_platform::input::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
     use flui_runtime::owner::WindowObservation;
     use flui_widgets::{
         Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator, SizedBox,
@@ -38,7 +38,7 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     let saves = Rc::new(Cell::new(0));
     let action_saves = Rc::clone(&saves);
     runtime
-        .attach_root_widget_with_size(
+        .attach_root_widget(
             &Actions::new(
                 Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
                     .shortcut(
@@ -51,8 +51,6 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
             .action(CallbackAction::new(move |_ctx, _intent: &SaveIntent| {
                 action_saves.set(action_saves.get() + 1);
             })),
-            160.0,
-            80.0,
         )
         .expect("mount real Focus and Shortcuts consumers");
     runtime.synchronize_window_snapshot(
@@ -708,27 +706,23 @@ fn accessibility_input_reaches_the_semantics_owner() {
     let clicks = Rc::new(Cell::new(0));
     let clicked = Rc::clone(&clicks);
     runtime
-        .attach_root_widget_with_size(
-            &Row::new((
-                Semantics::new()
-                    .container(true)
-                    .label("Send")
-                    .on_click(move |_ctx| clicked.set(clicked.get() + 1))
-                    .child(SizedBox::new(10.0, 10.0)),
-                Semantics::new()
-                    .container(true)
-                    .label("Boom")
-                    .on_click(|_ctx| {
-                        // Typed `()`: a handler that only diverges has no outcome.
-                        if std::hint::black_box(true) {
-                            std::panic::panic_any("assistive handler failure");
-                        }
-                    })
-                    .child(SizedBox::new(10.0, 10.0)),
-            )),
-            40.0,
-            40.0,
-        )
+        .attach_root_widget(&Row::new((
+            Semantics::new()
+                .container(true)
+                .label("Send")
+                .on_click(move |_ctx| clicked.set(clicked.get() + 1))
+                .child(SizedBox::new(10.0, 10.0)),
+            Semantics::new()
+                .container(true)
+                .label("Boom")
+                .on_click(|_ctx| {
+                    // Typed `()`: a handler that only diverges has no outcome.
+                    if std::hint::black_box(true) {
+                        std::panic::panic_any("assistive handler failure");
+                    }
+                })
+                .child(SizedBox::new(10.0, 10.0)),
+        )))
         .expect("mount");
     struct Sink;
     impl flui_runtime::sink::FrameSink for Sink {
@@ -907,8 +901,8 @@ impl flui_rendering::traits::RenderBox for PanicOnHit {
 /// object's panic: the path to every other target is complete, and the panic
 /// is the caller's to report once the event reached it.
 fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
-    use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
     use flui_rendering::traits::RenderObject;
+    use flui_runtime::renderer_binding::ViewHitTest;
 
     let binding = flui_runtime::renderer_binding::RenderingBinding::new(
         flui_rendering::TextContextHandle::standalone(),
@@ -940,14 +934,13 @@ fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
     pipeline.withdraw_layout();
     let mut result = flui_interaction::pointer::HitTestResult::new();
     assert!(matches!(
-        binding.hit_test_in_view(&mut result, position, kind, 0),
+        binding.hit_test(&mut result, position, kind),
         ViewHitTest::TreeBusy
     ));
     assert!(result.is_empty(), "a busy tree leaves the result untouched");
 
     pipeline.publish_layout();
-    let ViewHitTest::Answered { panic } = binding.hit_test_in_view(&mut result, position, kind, 0)
-    else {
+    let ViewHitTest::Answered { panic } = binding.hit_test(&mut result, position, kind) else {
         panic!("a published layout answers");
     };
     assert_eq!(
@@ -981,8 +974,9 @@ type NestedLocks = Rc<RefCell<Vec<String>>>;
 /// run when the dispatch returns.
 fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
     use flui_interaction::testing::InMemoryTextStore;
-    use flui_platform::text_store::{
-        Composition, LockGrant, LockOutcome, LockTiming, TextStore, Utf16Offset, Utf16Range,
+    use flui_platform::text::store::{
+        Composition, LockGrant, LockOutcome, LockTiming, TextStore,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     let owner = OwnerHost::new();
@@ -1016,9 +1010,9 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
     let log: NestedLocks = Rc::default();
     let (nested, seen) = (Rc::clone(&erased), Rc::clone(&log));
     runtime
-        .attach_root_widget_with_size(
+        .attach_root_widget(
             &flui_widgets::Listener::new()
-                .behavior(flui_rendering::hit_testing::HitTestBehavior::Opaque)
+                .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                 .on_pointer_down(move |_, _| {
                     let read = Rc::clone(&seen);
                     let sync = nested.request_lock(
@@ -1039,8 +1033,6 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
                     seen.borrow_mut().push(format!("async {deferred:?}"));
                 })
                 .child(flui_widgets::SizedBox::new(40.0, 40.0)),
-            40.0,
-            40.0,
         )
         .expect("mount the press's handler");
     runtime.synchronize_window_snapshot(

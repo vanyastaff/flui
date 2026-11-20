@@ -1,7 +1,7 @@
 //! `RenderCustomMultiChildLayoutBox` — delegates multi-child layout to a
 //! [`MultiChildLayoutDelegate`].
 //!
-//! The contract: parent size is `constraints.constrain(delegate.get_size)`;
+//! The contract: parent size is `constraints.constrain(delegate.size)`;
 //! intrinsics use the same finite-tight probe as layout; dry layout never
 //! touches children; every child must carry a `LayoutId`/parent-data id; and
 //! the delegate must lay out each child exactly once.
@@ -52,7 +52,7 @@ impl RenderCustomMultiChildLayoutBox {
         if Rc::ptr_eq(&self.delegate, &delegate) {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
+        let type_changed = !crate::dynamic_type::same_concrete_type(&*self.delegate, &*delegate);
         let relayout = type_changed || delegate.should_relayout(&*self.delegate);
         self.delegate = delegate;
         if relayout {
@@ -63,20 +63,20 @@ impl RenderCustomMultiChildLayoutBox {
     }
 
     /// Delegate size, then incoming constraints.
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
-        constraints.constrain(self.delegate.get_size(constraints))
+    fn size(&self, constraints: BoxConstraints) -> Size {
+        constraints.constrain(self.delegate.size(constraints))
     }
 
     fn intrinsic_width(&self, height: f64) -> f64 {
         let width = self
-            .get_size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
+            .size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
             .width;
         if width.is_finite() { width } else { 0.0 }
     }
 
     fn intrinsic_height(&self, width: f64) -> f64 {
         let height = self
-            .get_size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
+            .size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
             .height;
         if height.is_finite() { height } else { 0.0 }
     }
@@ -139,7 +139,7 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
         ctx: &mut BoxLayoutContext<'_, Variable, MultiChildLayoutParentData>,
     ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
-        let size = self.get_size(constraints);
+        let size = self.size(constraints);
         self.child_count = ctx.child_count();
         let slots = Self::child_slots(ctx);
         let mut delegate_context = DelegateLayoutContext::new(ctx, slots);
@@ -185,7 +185,7 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
-        Ok(self.get_size(constraints))
+        Ok(self.size(constraints))
     }
 
     fn hit_test(

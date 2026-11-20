@@ -16,10 +16,12 @@ use std::{
     sync::Arc,
 };
 
-use flui_foundation::Leaf;
+use flui_foundation::{Leaf, geometry::Size};
 use flui_rendering::pipeline::{LocalRenderInvalidationHandle, PipelineOwner};
-use flui_rendering::prelude::*;
 use flui_rendering::testing::SceneHost;
+use flui_rendering::{
+    BoxLayoutContext, constraints::BoxConstraints, parent_data::BoxParentData, traits::RenderBox,
+};
 
 use crate::common::BoxedRenderObject;
 
@@ -241,15 +243,15 @@ pub(crate) fn subtree_cleanup_withdraws_all_selected_handles_before_user_code() 
             .extend(old_handles.iter().cloned());
         let detaches = Rc::new(Cell::new(0));
         let drops = Rc::new(Cell::new(0));
-        owner
-            .render_tree_mut()
-            .get_mut(root)
-            .expect("live root")
-            .set_parent_data(Box::new(RetirementParentData {
+        let installed = owner.update_parent_data(root, |parent_data| {
+            parent_data.set(Box::new(RetirementParentData {
                 peers: Rc::clone(&peers),
                 detaches: Rc::clone(&detaches),
                 drops: Rc::clone(&drops),
             }));
+            flui_rendering::RenderUpdateImpact::NONE
+        });
+        assert!(installed.is_some(), "live root");
         owner.set_on_need_visual_update(|| {
             let observed = PEERS.with(|saved| saved.borrow_mut().take());
             if let Some(observed) = observed {
@@ -616,7 +618,7 @@ pub(crate) fn a_relocated_subtree_takes_its_new_depth() {
     let token = owner
         .detach_render_subtrees(&[moved])
         .expect("attached subtree");
-    owner.render_tree_mut().adopt_child(deep, moved);
+    owner.adopt_render_child(deep, moved);
     owner
         .attach_render_subtrees(token)
         .expect("same subtree, new position");

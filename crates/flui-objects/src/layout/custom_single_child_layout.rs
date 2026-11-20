@@ -2,7 +2,7 @@
 //! child position to a [`SingleChildLayoutDelegate`].
 //!
 //! The contract: the delegate's parent size is always constrained by incoming
-//! constraints, intrinsics probe `get_size(tight_for_finite(...))`, dry layout
+//! constraints, intrinsics probe `size(tight_for_finite(...))`, dry layout
 //! never touches the child, and live/dry baselines add the delegated child
 //! offset to the child's baseline.
 
@@ -59,7 +59,7 @@ impl RenderCustomSingleChildLayoutBox {
         if Rc::ptr_eq(&self.delegate, &delegate) {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
+        let type_changed = !crate::dynamic_type::same_concrete_type(&*self.delegate, &*delegate);
         let relayout = type_changed || delegate.should_relayout(&*self.delegate);
         self.delegate = delegate;
         if relayout {
@@ -70,12 +70,12 @@ impl RenderCustomSingleChildLayoutBox {
     }
 
     /// Delegate size, then incoming constraints.
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
-        constraints.constrain(self.delegate.get_size(constraints))
+    fn size(&self, constraints: BoxConstraints) -> Size {
+        constraints.constrain(self.delegate.size(constraints))
     }
 
     fn child_constraints(&self, constraints: BoxConstraints) -> BoxConstraints {
-        self.delegate.get_constraints_for_child(constraints)
+        self.delegate.constraints_for_child(constraints)
     }
 
     fn child_size_for_position(child_constraints: BoxConstraints, actual_child_size: Size) -> Size {
@@ -88,14 +88,14 @@ impl RenderCustomSingleChildLayoutBox {
 
     fn intrinsic_width(&self, height: f64) -> f64 {
         let width = self
-            .get_size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
+            .size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
             .width;
         if width.is_finite() { width } else { 0.0 }
     }
 
     fn intrinsic_height(&self, width: f64) -> f64 {
         let height = self
-            .get_size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
+            .size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
             .height;
         if height.is_finite() { height } else { 0.0 }
     }
@@ -146,7 +146,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
-        let size = self.get_size(constraints);
+        let size = self.size(constraints);
 
         if ctx.child_count() == 0 {
             self.clear_child_state();
@@ -159,7 +159,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         let child_size_for_position = Self::child_size_for_position(child_constraints, child_size);
         self.child_offset = self
             .delegate
-            .get_position_for_child(size, child_size_for_position);
+            .position_for_child(size, child_size_for_position);
         ctx.position_child(0, self.child_offset);
         self.record_child_baselines(ctx)?;
 
@@ -214,7 +214,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutContext<'_>,
     ) -> flui_rendering::RenderResult<Size> {
-        Ok(self.get_size(constraints))
+        Ok(self.size(constraints))
     }
 
     fn compute_dry_baseline(
@@ -235,8 +235,8 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         } else {
             ctx.child_dry_layout(0, child_constraints)?
         };
-        let size = self.get_size(constraints);
-        let child_offset = self.delegate.get_position_for_child(size, child_size);
+        let size = self.size(constraints);
+        let child_offset = self.delegate.position_for_child(size, child_size);
         Ok(Some(child_baseline + child_offset.dy))
     }
 

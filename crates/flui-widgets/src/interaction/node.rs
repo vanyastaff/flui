@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::FocusNode;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_interaction::{
     gesture::{TapDetails, TapDownDetails, TapUpDetails},
     pointer::PointerDispatch,
@@ -33,7 +34,6 @@ use flui_interaction::{
 use flui_objects::{FocusRingStyle, RenderInteractive, RenderListener, SubtreeAnchor};
 use flui_platform::TargetPlatform;
 use flui_rendering::RenderUpdateImpact;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::environment::PlatformConvention;
 use flui_view::prelude::*;
@@ -41,17 +41,18 @@ use flui_view::{
     Provided, RenderObjectContext, RenderView, RenderViewState, StatefulRenderView,
     impl_stateful_render_view,
 };
+use smallvec::SmallVec;
 
 use super::actions::{
     Action, ActionChain, EnclosingActions, ErasedAction, FocusRecord, Intent, layered_chain,
     shared_action,
 };
 use super::focus::{FocusChangeHandler, render_box_rect_provider};
-use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
+use super::focus_host::{FocusConfig, FocusEdges, FocusHost};
 use super::focus_ring::DefaultFocusRingStyle;
 use super::gesture_detector::{PressCallbacks, PressShape, PressSource, TapSlot};
 use super::listener::{ContactCallbacks, pointer_callback, release_targets};
-use super::raw_gesture_detector::RecognizerHost;
+use super::raw_gesture_detector::{FactoryEntry, RecognizerHost};
 use crate::support::{event_callback, value_callback};
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
 use crate::{Listener, MouseRegion, Semantics, SemanticsAnchor, SemanticsRole, Toggled};
@@ -445,26 +446,28 @@ impl InteractiveNode {
     /// whether the control can be operated.
     fn focus_config(&self) -> Option<FocusConfig> {
         self.focus.as_ref().map(|config| {
-            let mut config = FocusConfig {
-                can_request_focus: Some(
-                    config.can_request_focus.unwrap_or(true) && self.operable(),
-                ),
-                ..config.clone()
-            };
-            if let Some(states) = &self.states {
-                config.on_focus_change = Some(writing_focus(
-                    states,
-                    WidgetState::Focused,
-                    config.on_focus_change.take(),
-                ));
-                config.on_visible_focus_change = Some(writing_focus(
-                    states,
-                    WidgetState::FocusVisible,
-                    config.on_visible_focus_change.take(),
-                ));
-            }
+            let mut config = config.clone();
+            config.can_request_focus =
+                Some(config.can_request_focus.unwrap_or(true) && self.operable());
             config
         })
+    }
+
+    /// The focus edges the focus part reports to: the control's own, after
+    /// the states the node writes. They stay out of the configuration, so
+    /// a node that writes states copies no handlers into it.
+    fn focus_edges(&self) -> FocusEdges {
+        let own = self
+            .focus
+            .as_ref()
+            .map_or_else(FocusEdges::default, FocusConfig::edges);
+        match &self.states {
+            Some(states) => FocusEdges {
+                focused: Some(writing_focus(states, WidgetState::Focused, own.focused)),
+                shown: Some(writing_focus(states, WidgetState::FocusVisible, own.shown)),
+            },
+            None => own,
+        }
     }
 
     /// The bindings the node declares: its own while the control can be
@@ -507,10 +510,7 @@ impl InteractiveNode {
     /// [`Focus`](crate::Focus) does.
     #[must_use]
     pub fn focusable(self, debug_label: &'static str) -> Self {
-        self.focus(FocusConfig {
-            debug_label: Some(debug_label),
-            ..FocusConfig::new()
-        })
+        self.focus(FocusConfig::labelled(debug_label))
     }
 
     /// Host `node` instead of a focus node of its own, as
@@ -519,10 +519,9 @@ impl InteractiveNode {
     /// switch.
     #[must_use]
     pub fn focus_node(self, node: Rc<FocusNode>) -> Self {
-        self.focus(FocusConfig {
-            node_ownership: FocusNodeOwnership::ManagedExternal(node),
-            ..FocusConfig::new()
-        })
+        let mut config = FocusConfig::new();
+        config.host_managed(node);
+        self.focus(config)
     }
 
     /// Host a focus node configured by `config`, as [`Focus`](crate::Focus)
@@ -618,14 +617,13 @@ pub struct InteractiveNodeState {
     tap: TapSlot,
     recognizers: RecognizerHost,
     focus: Option<FocusHost>,
-    /// The node's own bindings, as the latest view gave them.
-    own_actions: Option<Rc<Vec<(TypeId, ErasedAction)>>>,
-    /// The chain above the node, read in lifecycle hooks.
-    ambient_actions: Option<ActionChain>,
-    /// The node's bindings layered over the ambient chain. `None` while the
-    /// node binds nothing: the ambient chain is then the one in force, and
-    /// the node publishes none.
-    chain: Option<ActionChain>,
+    /// The chain in force at the node. While `layered`, it is the node's
+    /// own bindings, as the latest view gave them, hung under the chain
+    /// above the node, and the node publishes it; otherwise the node binds
+    /// nothing, this is the chain above it, and the node publishes none.
+    /// One field for the three, since a layered link holds the other two.
+    actions: Option<ActionChain>,
+    layered: bool,
     /// The platform convention the node is built under, recorded with the
     /// chain on the focus node. `None` before `init_state`.
     platform: Option<TargetPlatform>,
@@ -694,28 +692,57 @@ impl InteractiveNodeState {
         states.write(WRITTEN, values);
     }
 
-    fn layer_actions(&mut self) {
-        self.chain = self
-            .own_actions
-            .as_ref()
-            .map(|own| layered_chain(self.ambient_actions.clone(), Rc::clone(own)));
+    /// The chain above the node.
+    fn ambient_actions(&self) -> Option<ActionChain> {
+        if self.layered {
+            self.actions
+                .as_ref()
+                .and_then(ActionChain::enclosing)
+                .cloned()
+        } else {
+            self.actions.clone()
+        }
+    }
+
+    /// The node's own chain, which it publishes: `None` while it binds
+    /// nothing.
+    fn own_chain(&self) -> Option<&ActionChain> {
+        self.actions.as_ref().filter(|_| self.layered)
+    }
+
+    /// Hang `own` under `ambient`, or take `ambient` as the chain in force
+    /// when the node binds nothing. Returns the chain this replaces, for the
+    /// caller to drop: its actions are user code.
+    fn layer_actions(
+        &mut self,
+        ambient: Option<ActionChain>,
+        own: Option<Rc<Vec<(TypeId, ErasedAction)>>>,
+    ) -> Option<ActionChain> {
+        self.layered = own.is_some();
+        let next = match own {
+            Some(own) => Some(layered_chain(ambient, own)),
+            None => ambient,
+        };
+        std::mem::replace(&mut self.actions, next)
     }
 
     /// What the hosted focus node records: the chain in force at the node
     /// and the platform convention (ADR-0079).
     fn focus_record(&self) -> Option<FocusRecord> {
-        let chain = self
-            .chain
-            .clone()
-            .or_else(|| self.ambient_actions.clone())?;
-        Some(FocusRecord::new(chain, self.platform?))
+        Some(FocusRecord::new(self.actions.clone()?, self.platform?))
     }
 
     fn read_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.ambient_actions = EnclosingActions::depend_on(ctx);
+        let ambient = EnclosingActions::depend_on(ctx);
         self.platform = Some(PlatformConvention::of(ctx));
         self.ring_style = DefaultFocusRingStyle::shared(ctx);
-        self.layer_actions();
+        // The node's link is rehung under the chain now above it: in place
+        // while nothing else holds it yet, as at `init_state`.
+        let outgoing = match self.actions.as_mut().filter(|_| self.layered) {
+            Some(own) => own.rehang(ambient),
+            None => std::mem::replace(&mut self.actions, ambient),
+        };
+        drop(outgoing);
     }
 
     fn focus_node(&self) -> Option<&Rc<FocusNode>> {
@@ -785,15 +812,17 @@ impl StatefulRenderView for InteractiveNode {
     fn create_state(&self, ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         let tap = TapSlot::new(self.live_tap(), self.states.as_ref());
         InteractiveNodeState {
-            recognizers: RecognizerHost::new(tap.factory().as_slice()),
+            recognizers: RecognizerHost::default(),
             tap,
             focus: self
                 .focus_config()
                 .as_ref()
-                .map(|config| FocusHost::new(config, ctx)),
-            own_actions: self.declared_actions(),
-            ambient_actions: None,
-            chain: None,
+                .map(|config| FocusHost::new(config, self.focus_edges(), ctx)),
+            // Hung under nothing until `init_state` reads the chain above:
+            // the link is rehung there in place, so mounting allocates it
+            // once.
+            layered: self.actions.is_some(),
+            actions: self.declared_actions().map(|own| layered_chain(None, own)),
             platform: None,
             ring_style: None,
             anchor: SubtreeAnchor::new(),
@@ -827,7 +856,7 @@ impl StatefulRenderView for InteractiveNode {
 impl RenderViewState<InteractiveNode> for InteractiveNodeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.read_dependencies(ctx);
-        self.recognizers.init(ctx);
+        self.recognizers.init(ctx, self.tap.factory().as_slice());
         let record = self.focus_record();
         if let Some(focus) = &mut self.focus {
             let anchor = self.anchor.clone();
@@ -848,7 +877,12 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.read_dependencies(ctx);
-        self.recognizers.dependencies_changed(ctx);
+        let tap = &self.tap;
+        self.recognizers.dependencies_changed(ctx, || {
+            tap.factory()
+                .into_iter()
+                .collect::<SmallVec<[FactoryEntry; 1]>>()
+        });
         let record = self.focus_record();
         if let Some(focus) = &mut self.focus {
             focus.dependencies_changed(ctx, record);
@@ -865,12 +899,12 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
             self.recognizers.update(self.tap.factory().as_slice());
         });
         // The replaced bindings drop here; an action is user code.
-        failure.contain(|| self.own_actions = new.declared_actions());
-        self.layer_actions();
+        let ambient = self.ambient_actions();
+        failure.contain(|| drop(self.layer_actions(ambient, new.declared_actions())));
         let record = self.focus_record();
         if let (Some(focus), Some(config)) = (&mut self.focus, &new.focus_config()) {
             failure.contain(|| {
-                focus.update(config);
+                focus.update(config, new.focus_edges());
                 focus.record(record);
             });
         }
@@ -988,7 +1022,7 @@ impl RenderViewState<InteractiveNode> for InteractiveNodeState {
         if let Some(focus) = &self.focus {
             focus.provide(values);
         }
-        if let Some(chain) = &self.chain {
+        if let Some(chain) = self.own_chain() {
             values.value(EnclosingActions::new(chain.clone()));
         }
     }

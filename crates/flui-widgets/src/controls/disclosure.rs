@@ -7,11 +7,11 @@ use std::rc::Rc;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Size};
 use flui_interaction::focus::FocusNode;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::{CrossAxisAlignment, MainAxisSize};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
 use flui_rendering::delegates::CustomPainter;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, RebuildHandle, RebuildReason, WriterSource};
@@ -548,15 +548,11 @@ impl CustomPainter for Chevron {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             self.state != old.state
                 || self.direction != old.direction
                 || self.color != old.color
                 || self.focused != old.focused
         })
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use super::geometry::Reach;
 use super::id::{ContentVersion, NodeKey, SceneNodeId};
-use crate::layer::Layer;
+use crate::layer::{Effect, Layer};
 use crate::link::LayerLink;
 
 /// An entry's position in its boundary's paint-order stream.
@@ -78,11 +78,22 @@ impl Chunk {
         version: ContentVersion,
         commands: DisplayList,
     ) -> Self {
+        Self::of_shared(owner, ordinal, version, Arc::new(commands))
+    }
+
+    /// [`Self::new`] over commands another holder shares: a hand-built
+    /// tree's picture keeps its one recording.
+    pub(crate) fn of_shared(
+        owner: RenderId,
+        ordinal: u32,
+        version: ContentVersion,
+        commands: Arc<DisplayList>,
+    ) -> Self {
         let mut chunk = Self {
             owner,
             ordinal,
             version,
-            commands: Arc::new(commands),
+            commands,
             bounds: Bounds::Finite(Rect::ZERO),
             textures: SmallVec::new(),
             reads_destination: false,
@@ -561,17 +572,17 @@ struct LayerIndexes {
 }
 
 impl LayerIndexes {
-    fn of(effects: &[EffectScope], layers: &[Layer]) -> Self {
+    fn of(effects: &[EffectScope], layers: &[Effect]) -> Self {
         let mut indexes = Self::default();
         indexes.refill(effects, layers);
         indexes
     }
 
     /// Rebuilds the indexes for `layers` in the vectors already held.
-    fn refill(&mut self, effects: &[EffectScope], layers: &[Layer]) {
+    fn refill(&mut self, effects: &[EffectScope], layers: &[Effect]) {
         self.clear();
         for (index, layer) in effects.iter().map(|effect| effect.entry).zip(layers) {
-            match layer {
+            match layer.as_layer() {
                 Layer::Leader(leader) => {
                     self.links.push((leader.link(), LinkRole::Leader, index));
                 }
@@ -579,10 +590,9 @@ impl LayerIndexes {
                     self.links
                         .push((follower.link(), LinkRole::Follower, index));
                 }
-                Layer::Texture(texture) => self.textures.push((texture.texture_id(), index)),
                 _ => {}
             }
-            if layer_has_closure(layer) {
+            if layer_has_closure(layer.as_layer()) {
                 self.closures.push(index);
             }
         }
@@ -607,7 +617,7 @@ impl LayerIndexes {
 pub struct BoundaryContent {
     stream: Arc<Stream>,
     /// One layer per effect, in paint order.
-    layers: Vec<Layer>,
+    layers: Vec<Effect>,
     indexes: LayerIndexes,
 }
 
@@ -618,7 +628,7 @@ impl BoundaryContent {
         ContentBuilder::default()
     }
 
-    fn of(stream: Arc<Stream>, layers: Vec<Layer>) -> Self {
+    fn of(stream: Arc<Stream>, layers: Vec<Effect>) -> Self {
         let indexes = LayerIndexes::of(&stream.effects, &layers);
         Self {
             stream,
@@ -637,7 +647,7 @@ impl BoundaryContent {
     #[must_use]
     pub fn effect_layer(&self, entry: EntryIndex) -> Option<&Layer> {
         let at = self.effect_position(entry)?;
-        self.layers.get(at)
+        self.layers.get(at).map(Effect::as_layer)
     }
 
     /// Each effect's entry and layer, in paint order.
@@ -646,7 +656,7 @@ impl BoundaryContent {
             .effects
             .iter()
             .map(|effect| effect.entry)
-            .zip(self.layers.iter())
+            .zip(self.layers.iter().map(Effect::as_layer))
     }
 
     /// How many commands its chunks hold in all: what a raster planner
@@ -681,7 +691,7 @@ impl BoundaryContent {
     }
 
     /// Each effect's layer, as [`Self::effects`] orders them.
-    pub(crate) fn layers(&self) -> &[Layer] {
+    pub(crate) fn layers(&self) -> &[Effect] {
         &self.layers
     }
 
@@ -796,7 +806,7 @@ impl BoundaryContent {
     pub(crate) fn effects_into(
         &self,
         target: &mut Self,
-        replaced: impl IntoIterator<Item = (EntryIndex, Layer)>,
+        replaced: impl IntoIterator<Item = (EntryIndex, Effect)>,
     ) -> Result<(), EntryIndex> {
         target.stream = Arc::clone(&self.stream);
         target.layers.clone_from(&self.layers);
@@ -933,19 +943,24 @@ impl Default for BoundaryContent {
 #[derive(Debug, Default)]
 pub struct ContentBuilder {
     entries: Vec<Entry>,
-    layers: Vec<Layer>,
+    layers: Vec<Effect>,
     open: SmallVec<[EntryIndex; 8]>,
 }
 
 impl ContentBuilder {
-    /// Pushes `layer` under the open effect and opens it.
-    pub fn push_effect(&mut self, layer: Layer, owner: RenderId, ordinal: u32) -> EntryIndex {
+    /// Pushes `effect` under the open effect and opens it.
+    pub fn push_effect(
+        &mut self,
+        effect: impl Into<Effect>,
+        owner: RenderId,
+        ordinal: u32,
+    ) -> EntryIndex {
         let index = self.push(|parent| Entry::Effect {
             owner,
             ordinal,
             parent,
         });
-        self.layers.push(layer);
+        self.layers.push(effect.into());
         self.open.push(index);
         index
     }

@@ -1,7 +1,7 @@
 //! Widget-level coverage for the accessibility semantics wrappers.
 
 use crate::common::{lay_out, loose};
-use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction};
+use flui_semantics::{ActionCall, ActionDecodeError, SemanticsAction};
 use flui_widgets::ScrollView;
 use flui_widgets::{MergeSemantics, Semantics, SemanticsRole, SizedBox};
 
@@ -203,9 +203,7 @@ pub(crate) fn collection_consumer_preserves_unknown_and_explicit_nested_sets() {
         }
     }
 
-    use flui_rendering::semantics::{
-        SemanticsCollection, SemanticsCollectionKind, SemanticsConfiguration,
-    };
+    use flui_semantics::{SemanticsCollection, SemanticsCollectionKind, SemanticsConfiguration};
     let mut authored = SemanticsConfiguration::new();
     authored.set_collection(SemanticsCollection::new(
         SemanticsCollectionKind::List,
@@ -434,7 +432,7 @@ pub(crate) fn a_semantics_barrier_crosses_proxies_but_stops_at_its_boundary() {
 }
 
 pub(crate) fn semantics_sort_keys_reorder_published_siblings_after_local_updates() {
-    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsSortKey};
+    use flui_semantics::{SemanticsConfiguration, SemanticsSortKey};
     use flui_widgets::Row;
 
     let item = |label: &str, order: f64| {
@@ -493,7 +491,7 @@ pub(crate) fn sliver_fade_keeps_geometry_and_retargets_paint_and_semantics() {
     let alpha = |laid: &crate::common::LaidOut| {
         laid.layer_tree().and_then(|tree| {
             tree.iter().find_map(|(_, node)| {
-                if let flui_rendering::layer::Layer::Opacity(opacity) = node.layer() {
+                if let flui_layer::Layer::Opacity(opacity) = node.layer() {
                     Some(opacity.alpha())
                 } else {
                     None
@@ -606,7 +604,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         delegates::{FlowDelegate, FlowPaintingContext},
     };
     use flui_widgets::Flow;
-    use std::{any::Any, cell::Cell};
+    use std::cell::Cell;
 
     #[derive(Debug)]
     struct Delegate {
@@ -615,10 +613,10 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         notifier: Rc<ChangeNotifier>,
     }
     impl FlowDelegate for Delegate {
-        fn get_size(&self, constraints: BoxConstraints) -> Size {
+        fn size(&self, constraints: BoxConstraints) -> Size {
             constraints.biggest()
         }
-        fn get_constraints_for_child(
+        fn constraints_for_child(
             &self,
             _index: usize,
             constraints: BoxConstraints,
@@ -640,9 +638,6 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         }
         fn repaint(&self) -> Option<Rc<dyn Listenable>> {
             Some(self.notifier.clone())
-        }
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
     let selected = Rc::new(Cell::new(0));
@@ -707,7 +702,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
 pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_size() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
-    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey};
+    use flui_semantics::{SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey};
     use flui_widgets::{CustomPaint, CustomPainter};
 
     #[derive(Debug)]
@@ -731,9 +726,6 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
                 Rect::from_origin_size(Point::ZERO, Size::new(size.width / 2.0, size.height)),
                 config,
             )]
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
     let view = |width, label, rebuild_semantics| {
@@ -780,7 +772,7 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
 pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey, TextContent, TextRun,
         TextRunParts, TextRunPosition, TextRunSelection,
     };
@@ -838,9 +830,6 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
                 Rect::from_origin_size(Point::ZERO, size),
                 config,
             )]
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
     let view = |text| {
@@ -917,6 +906,85 @@ pub(crate) fn retained_visibility_hides_child_semantics_by_default() {
             tree.find_by_label("retained visibility child").is_ok(),
             announced,
             "visible={visible}, maintain_semantics={maintain_semantics}: {}",
+            tree.describe()
+        );
+    }
+}
+
+/// A fully transparent `Opacity` or `SliverOpacity` hides its child's
+/// semantics unless `always_include_semantics` keeps them; any positive
+/// opacity publishes them. The first row mounts with the flag set at `0.0`,
+/// and every later row is a rebuild of the same widget.
+pub(crate) fn transparent_opacity_hides_semantics_unless_always_included() {
+    use flui_widgets::{Opacity, SliverOpacity, SliverToBoxAdapter, Viewport};
+
+    const SEQUENCE: [(f64, bool, bool); 8] = [
+        (0.0, true, true),
+        (0.0, false, false),
+        (0.1, false, true),
+        (1.0, false, true),
+        (0.0, false, false),
+        (0.0, true, true),
+        (1.0, true, true),
+        (0.0, false, false),
+    ];
+    let labelled = |label: &'static str| {
+        Semantics::new()
+            .container(true)
+            .label(label)
+            .child(SizedBox::new(40.0, 20.0))
+    };
+
+    let boxed = |alpha, always| {
+        Opacity::new(alpha)
+            .always_include_semantics(always)
+            .child(labelled("faded box"))
+    };
+    let (first_alpha, first_always, _) = SEQUENCE[0];
+    let mut laid = lay_out(boxed(first_alpha, first_always), loose(200.0));
+    laid.enable_semantics();
+    laid.tick();
+    for (index, (alpha, always, announced)) in SEQUENCE.into_iter().enumerate() {
+        if index > 0 {
+            laid.pump_widget(boxed(alpha, always));
+        }
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(
+            tree.find_by_label("faded box").is_ok(),
+            announced,
+            "Opacity({alpha}), always_include_semantics={always}: {}",
+            tree.describe()
+        );
+        assert_eq!(
+            laid.size(laid.root()),
+            crate::common::size(40.0, 20.0),
+            "a transparent child is still laid out"
+        );
+    }
+
+    let sliver = |alpha, always| {
+        Viewport::new(
+            flui_rendering::view::ScrollPosition::fixed(0.0),
+            (SliverOpacity::new(alpha)
+                .always_include_semantics(always)
+                .child(SliverToBoxAdapter::new().child(labelled("faded sliver"))),),
+        )
+    };
+    let mut laid = lay_out(
+        sliver(first_alpha, first_always),
+        crate::common::tight(100.0, 100.0),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    for (index, (alpha, always, announced)) in SEQUENCE.into_iter().enumerate() {
+        if index > 0 {
+            laid.pump_widget(sliver(alpha, always));
+        }
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        assert_eq!(
+            tree.find_by_label("faded sliver").is_ok(),
+            announced,
+            "SliverOpacity({alpha}), always_include_semantics={always}: {}",
             tree.describe()
         );
     }
@@ -1042,6 +1110,202 @@ pub(crate) fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
     );
 }
 
+/// A fit change that only moves the fitted transform moves the child's
+/// published semantics with its pixels: `Contain` scales the 40×40 child to
+/// fill the 200×200 box, `None` leaves it at its size, centred.
+pub(crate) fn a_fitted_child_moved_by_a_fit_change_moves_its_semantics() {
+    use flui_painting::BoxFit;
+    use flui_widgets::{FittedBox, Semantics};
+
+    let fitted = |fit| {
+        FittedBox::new().fit(fit).child(
+            Semantics::new()
+                .label("fitted")
+                .child(SizedBox::new(40.0, 40.0)),
+        )
+    };
+    let mut laid = lay_out(fitted(BoxFit::Contain), crate::common::tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let bounds = |laid: &crate::common::LaidOut| {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("fitted")
+            .expect("the fitted child is published");
+        let rect = tree.window_bounds(&node).expect("the node has bounds");
+        (rect.x0, rect.x1)
+    };
+    assert_eq!(
+        bounds(&laid),
+        (0.0, 200.0),
+        "Contain: the child fills the box"
+    );
+
+    laid.pump_widget(fitted(BoxFit::None));
+    laid.tick();
+    assert_eq!(
+        bounds(&laid),
+        (80.0, 120.0),
+        "None: the child keeps its size, centred"
+    );
+}
+/// Content painted in a viewport's cache extent, past its paint clip, is hidden
+/// only on the node it forms: on its own it forms a hidden node (an annotated
+/// node, an unannotated wrapper, a link region), and merged into a node in view
+/// it leaves that node visible. A container and its child both past the clip
+/// merge into one hidden node, as they merge in view.
+pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() {
+    use flui_view::{BoxedView, ViewExt as _};
+    use flui_widgets::{Column, ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+
+    let labelled = |text: &'static str| {
+        Semantics::new()
+            .container(true)
+            .label(text)
+            .child(SizedBox::new(40.0, 20.0))
+            .boxed()
+    };
+    // "outside" is laid out below "inside" but painted 150 lower, past the
+    // 100-high viewport and inside its cache extent. The spacer makes the
+    // content overflow the viewport, which only then clips what it paints.
+    let row = || {
+        Column::new((
+            labelled("inside"),
+            Transform::translate(0.0, 150.0).child(labelled("outside")),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    let clipped = |content: BoxedView| {
+        SizedBox::new(100.0, 100.0)
+            .child(Viewport::new(
+                ScrollPosition::fixed(0.0),
+                (SliverToBoxAdapter::new().child(content),),
+            ))
+            .boxed()
+    };
+    // Whether the published node labelled `label` is hidden, read from the
+    // whole update: the reachable tree leaves a hidden node out.
+    let hidden = |view: BoxedView, label: &str| {
+        let mut laid = lay_out(view, loose(200.0));
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        tree.raw()
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some(label))
+            .map_or_else(
+                || panic!("no node labelled {label:?}\n{}", tree.describe()),
+                |(_, node)| node.is_hidden(),
+            )
+    };
+
+    assert!(
+        hidden(clipped(row().boxed()), "outside"),
+        "premise: unmerged, the content past the clip forms a hidden node"
+    );
+    assert!(
+        !hidden(
+            clipped(MergeSemantics::new().child(row()).boxed()),
+            "inside outside"
+        ),
+        "the merged node's own rect overlaps the clip, so it is not hidden"
+    );
+
+    // An ordinary merge: an annotated child past the clip merges into a
+    // labelled container whose own rect is in view, and the container stays
+    // visible.
+    let holder = || {
+        Semantics::new()
+            .container(true)
+            .label("holder")
+            .child(Column::new((
+                SizedBox::new(40.0, 20.0).boxed(),
+                Transform::translate(0.0, 150.0)
+                    .child(Semantics::new().label("x").child(SizedBox::new(40.0, 20.0)))
+                    .boxed(),
+                SizedBox::new(10.0, 300.0).boxed(),
+            )))
+    };
+    assert!(
+        !hidden(clipped(holder().boxed()), "holder x"),
+        "the container takes the label of content past the clip and stays visible"
+    );
+
+    // The container past the clip too: the child merges into it as it does in
+    // view, and the one node they form is hidden.
+    let hidden_holder = || {
+        Column::new((
+            Transform::translate(0.0, 150.0)
+                .child(
+                    Semantics::new()
+                        .container(true)
+                        .label("holder")
+                        .child(Semantics::new().label("x").child(SizedBox::new(40.0, 20.0))),
+                )
+                .boxed(),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    assert!(
+        hidden(clipped(hidden_holder().boxed()), "holder x"),
+        "a container and its child past the clip form one hidden node"
+    );
+
+    // An unannotated wrapper past the clip still forms a node of its own, the
+    // node the clip's flag hides; the label inside is moved back into view.
+    let wrapper = || {
+        Column::new((
+            Transform::translate(0.0, 150.0)
+                .child(
+                    SizedBox::new(40.0, 20.0)
+                        .child(Transform::translate(0.0, -150.0).child(labelled("cached"))),
+                )
+                .boxed(),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    let hidden_nodes = {
+        let mut laid = lay_out(clipped(wrapper().boxed()), loose(200.0));
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        tree.raw()
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.is_hidden())
+            .count()
+    };
+    assert_eq!(
+        hidden_nodes, 1,
+        "the wrapper past the clip forms one hidden node"
+    );
+    assert!(
+        !hidden(clipped(wrapper().boxed()), "cached"),
+        "the label in view is not hidden"
+    );
+
+    // A text region: a link span past the clip forms a node of its own, which
+    // the clip hides.
+    let linked = || {
+        use flui_painting::typography::TextSpan;
+        use flui_widgets::RichText;
+        Column::new((
+            Transform::translate(0.0, 150.0)
+                .child(
+                    RichText::new(TextSpan::new("go").with_link("app://go"))
+                        .on_link(|_ctx, _link| {}),
+                )
+                .boxed(),
+            SizedBox::new(10.0, 300.0).boxed(),
+        ))
+    };
+    assert!(
+        hidden(clipped(linked().boxed()), "go"),
+        "a link region past the clip forms a hidden node"
+    );
+}
+
 // ===========================================================================
 // Actions: a platform request, routed back to the widget's own callback
 // ===========================================================================
@@ -1049,7 +1313,7 @@ pub(crate) fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_rendering::semantics::{AccessibilityNodeId, SemanticsActionRequest};
+use flui_semantics::{AccessibilityNodeId, SemanticsActionRequest};
 use flui_testing::widgets::LaidOut;
 use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_view::{SignalWriteExt as _, View};
@@ -1549,17 +1813,13 @@ pub(crate) fn a_detached_mount_advertises_no_actions() {
 }
 
 /// The configuration the single `Semantics` wrapper has mounted.
-fn mounted_configuration(laid: &LaidOut) -> flui_rendering::semantics::SemanticsConfiguration {
+fn mounted_configuration(laid: &LaidOut) -> flui_semantics::SemanticsConfiguration {
     let [id] = laid.find_semantics_wrappers()[..] else {
         panic!("one Semantics wrapper is mounted");
     };
-    laid.pipeline_owner().with_mut(|owner| {
+    laid.pipeline_owner().with(|owner| {
         owner
-            .render_tree_mut()
-            .get_mut(id)
-            .and_then(|node| {
-                node.downcast_render_object_mut::<flui_objects::RenderSemanticsAnnotations>()
-            })
+            .render_object::<flui_objects::RenderSemanticsAnnotations>(id)
             .map(|render| render.configuration().clone())
             .expect("the wrapper is a RenderSemanticsAnnotations")
     })
@@ -1601,7 +1861,7 @@ pub(crate) fn a_set_value_request_without_its_text_is_refused_rather_than_emptie
 /// Platform actions preserve direction and exact values across queued delivery.
 /// The signal write forces the real frame producer to republish the result.
 pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_producer() {
-    use flui_rendering::semantics::NumericRange;
+    use flui_semantics::NumericRange;
 
     let state = Rc::new(Cell::new(false));
     let described = Rc::clone(&state);
@@ -1726,7 +1986,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
 
 /// Native range metadata cannot admit non-finite values or reversed bounds.
 pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
-    use flui_rendering::semantics::{ActionCall, NumericRange, NumericRangeError};
+    use flui_semantics::{ActionCall, NumericRange, NumericRangeError};
     for (value, min, max, step, error) in [
         (f64::NAN, 0.0, 1.0, 1.0, NumericRangeError::NonFinite),
         (
@@ -2347,7 +2607,7 @@ pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
 /// (sort key, then tree order): the merging node's own, else the first
 /// descendant's that may act, never a later one's.
 pub(crate) fn a_merged_action_runs_the_first_handler_in_reading_order() {
-    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsSortKey};
+    use flui_semantics::{SemanticsConfiguration, SemanticsSortKey};
     use flui_widgets::Column;
 
     let merged = |host: Semantics| MergeSemantics::new().child(host);
@@ -2742,9 +3002,8 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
             identifier: "volume",
             role: Some(flui_testing::a11y::Role::Slider),
             view: || {
-                let range =
-                    flui_rendering::semantics::NumericRange::try_new(25.0, 0.0, 100.0, 10.0)
-                        .expect("valid range");
+                let range = flui_semantics::NumericRange::try_new(25.0, 0.0, 100.0, 10.0)
+                    .expect("valid range");
                 Slider::new(range)
                     .label("Volume")
                     .on_changed(|_ctx, _value| {})
@@ -3188,9 +3447,10 @@ fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
     );
 }
 
-/// The reverse: a wrapper in the cache extent gives its hidden flag to the
-/// labelled container it merges into, and moving it into view ends that flag.
-fn a_wrapper_moved_out_of_the_cache_extent_unhides_its_container() {
+/// The reverse, under a labelled container: a wrapper the move takes out of
+/// the cache extent and back merges into the container, and the container is
+/// published as a rebuild publishes it.
+fn a_wrapper_moved_out_of_the_cache_extent_under_a_container() {
     use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
     let position = ScrollPosition::fixed(0.0);
     publishes_as_built_afresh(
@@ -3361,7 +3621,7 @@ pub(crate) fn a_moved_transform_re_places_the_semantics_inside_it() {
             ),
             (
                 "a wrapper moved out of the cache extent",
-                a_wrapper_moved_out_of_the_cache_extent_unhides_its_container,
+                a_wrapper_moved_out_of_the_cache_extent_under_a_container,
             ),
             (
                 "reading order in a document",

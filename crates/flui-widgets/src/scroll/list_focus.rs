@@ -27,7 +27,7 @@ use flui_foundation::{SaltedKey, Subscription};
 use flui_interaction::focus::{
     EntryTarget, FocusCause, FocusNode, FocusNodeRegistration, KeyEventResult,
 };
-use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::input::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::view::{ScrollPosition, ViewportOffset as _};
 use flui_view::element::ElementKind;
@@ -41,7 +41,7 @@ use crate::interaction::focus::Focus;
 use crate::interaction::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 use crate::semantics::{ExcludeSemantics, Semantics, SliverSemantics};
 use flui_objects::SubtreeAnchor;
-use flui_rendering::semantics::{SemanticsConfiguration, SemanticsRole};
+use flui_semantics::{SemanticsConfiguration, SemanticsRole};
 
 // ============================================================================
 // The controller

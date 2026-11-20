@@ -9,7 +9,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_interaction::haptics::HapticCut;
 use flui_layer::SceneVersionId;
 use flui_platform::SystemUiOverlayStyle;
-use flui_platform::input_regions::InputRegion;
+use flui_platform::input::regions::InputRegion;
 use flui_scheduler::{FramePhaseDurations, FrameTelemetryCut, Instant, PresentOutcome};
 use std::panic::resume_unwind;
 
@@ -694,6 +694,11 @@ impl UiRuntime {
                         .borrow()
                         .iter()
                         .any(|pending| pending.tree_revision >= tree_revision);
+                    // A refused window costs no texture frame: the version it refused is not
+                    // published again for one until a frame applies a version (ADR-0334 §4).
+                    if render_verdict == SubmitVerdict::Refused {
+                        producer.scene.refuse(shown);
+                    }
                     let mut held = FirstPanic::new();
                     if render_verdict == SubmitVerdict::Failed
                         && !shown_by_later

@@ -14,7 +14,7 @@ use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerEvent, PointerEventExt};
 use flui_interaction::pointer::PointerEventResampler;
 use flui_platform::EventTime;
-use flui_platform::pointer::{
+use flui_platform::input::pointer::{
     CancelReason, PointerButton, PointerButtons, PointerCancel, PointerId, PointerKind,
     PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
     PointerSource,

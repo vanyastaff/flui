@@ -5,8 +5,8 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [checkbox_alone]
-allocations = 98
-bytes = 12588
+allocations = 87
+bytes = 11217
 elements = 4
-reallocations = 3
+reallocations = 2
 render_nodes = 2

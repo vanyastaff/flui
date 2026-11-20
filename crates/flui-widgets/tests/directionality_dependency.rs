@@ -238,13 +238,13 @@ pub(crate) fn a_render_update_panic_on_a_dependency_rebuild_shows_the_error_view
     assert_eq!(log.borrow().last(), Some(&Some(TextDirection::Rtl)));
 }
 
-/// Flipping the ambient direction above a preserved `Row` and `Align` reaches
+/// Flipping the ambient direction above a preserved `Row`, `Align` and `Table` reaches
 /// their render objects as a dependency rebuild: the same render objects (no
 /// remount) lay their children out from the other edge.
 pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() {
     use crate::media_query_fields::StaticChild;
     use flui_view::ViewExt;
-    use flui_widgets::Row;
+    use flui_widgets::{Row, Table, TableRow};
 
     let row = || StaticChild {
         inner: Row::new((SizedBox::new(50.0, 50.0), SizedBox::new(30.0, 50.0))).boxed(),
@@ -254,10 +254,19 @@ pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() 
             .child(SizedBox::new(40.0, 40.0))
             .boxed(),
     };
+    // Two columns of the default `Flex(1.0)`, so each is 100 wide.
+    let table = || StaticChild {
+        inner: Table::new(vec![TableRow::new(vec![
+            SizedBox::new(50.0, 50.0).boxed(),
+            SizedBox::new(30.0, 50.0).boxed(),
+        ])])
+        .boxed(),
+    };
 
     for (name, view, ltr_x, rtl_x, render_type) in [
         ("Row", row().boxed(), 0.0, 150.0, "RenderFlex"),
         ("Align", align().boxed(), 0.0, 160.0, "RenderAlign"),
+        ("Table", table().boxed(), 0.0, 100.0, "RenderTable"),
     ] {
         let mut laid = lay_out(
             Directionality::new(TextDirection::Ltr, view.clone()),
@@ -290,4 +299,239 @@ pub(crate) fn a_direction_flip_reconfigures_preserved_render_objects_in_place() 
         assert_eq!(laid.find_by_render_type(render_type), object);
         assert_eq!(first_child_x(&laid), ltr_x, "{name}: back to Ltr");
     }
+}
+
+/// Each shifted box takes an `AlignmentGeometry`: a directional alignment
+/// resolves against the ambient direction, `TOP_START` naming the top-left
+/// corner in LTR and the top-right one in RTL, and only a directional one
+/// takes a `Directionality` dependency. Built with no alignment, each keeps
+/// its default and takes none.
+pub(crate) fn shifted_boxes_resolve_a_directional_alignment_against_the_ambient_direction() {
+    use crate::common::{LaidOut, loose};
+    use flui_foundation::geometry::{Matrix4, Size};
+    use flui_objects::{RenderFittedBox, RenderTransform};
+    use flui_painting::AlignmentGeometry;
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::{
+        FittedBox, FractionallySizedBox, OverflowBox, SizedOverflowBox, Transform, UnconstrainedBox,
+    };
+
+    // The alignment a render object of type `T` was configured with.
+    fn configured<T: flui_rendering::RenderObject<flui_rendering::protocol::BoxProtocol>>(
+        laid: &LaidOut,
+        render_type: &str,
+        alignment: impl Fn(&T) -> Option<Alignment>,
+    ) -> Option<(f64, f64)> {
+        let id = laid.find_by_render_type(render_type);
+        laid.pipeline_owner().with(|owner| {
+            let render = owner
+                .render_tree()
+                .get(id)
+                .and_then(|node| node.as_box())
+                .and_then(|node| node.render_object().downcast_ref::<T>())
+                .expect("the shifted box is mounted");
+            alignment(render).map(|alignment| (alignment.x, alignment.y))
+        })
+    }
+    // Where a box placed its child.
+    fn child_offset(laid: &LaidOut, render_type: &str) -> (f64, f64) {
+        let id = laid.find_by_render_type(render_type);
+        let offset = laid.offset(laid.only_child(id));
+        (offset.dx, offset.dy)
+    }
+
+    // Each row builds the box with `alignment`, or with none at all.
+    type Make = fn(Option<AlignmentGeometry>) -> BoxedView;
+    type Read = fn(&LaidOut) -> Option<(f64, f64)>;
+    type Reading = Option<(f64, f64)>;
+    // A row: its name, the constraints it is laid out under, how to build it,
+    // how to read it, and the readings in LTR, in RTL and with no alignment.
+    // A layout box is read where it placed its child, under constraints that
+    // make it 200 wide: tight for a box that would shrink to its child under
+    // loose ones, loose for an overflow box, which takes its 200 slot itself.
+    type Case = (
+        &'static str,
+        flui_rendering::constraints::BoxConstraints,
+        Make,
+        Read,
+        (Reading, Reading, Reading),
+    );
+    let cases: [Case; 6] = [
+        (
+            "FittedBox",
+            loose(200.0),
+            |alignment| {
+                let fitted = FittedBox::new().child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(fitted.clone(), |alignment| fitted.alignment(alignment))
+                    .boxed()
+            },
+            |laid| {
+                configured(laid, "RenderFittedBox", |r: &RenderFittedBox| {
+                    Some(r.alignment())
+                })
+            },
+            (Some((-1.0, -1.0)), Some((1.0, -1.0)), Some((0.0, 0.0))),
+        ),
+        (
+            "FractionallySizedBox",
+            tight(200.0, 200.0),
+            |alignment| {
+                let sized = FractionallySizedBox::new()
+                    .width_factor(0.5)
+                    .child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(sized.clone(), |alignment| sized.alignment(alignment))
+                    .boxed()
+            },
+            |laid| Some(child_offset(laid, "RenderFractionallySizedBox")),
+            // Under the tight 200×200 box the child is 100 wide and 200 tall.
+            (Some((0.0, 0.0)), Some((100.0, 0.0)), Some((50.0, 0.0))),
+        ),
+        (
+            "UnconstrainedBox",
+            tight(200.0, 200.0),
+            |alignment| {
+                let unconstrained = UnconstrainedBox::new().child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(unconstrained.clone(), |alignment| {
+                        unconstrained.alignment(alignment)
+                    })
+                    .boxed()
+            },
+            |laid| Some(child_offset(laid, "RenderConstraintsTransformBox")),
+            (Some((0.0, 0.0)), Some((160.0, 0.0)), Some((80.0, 80.0))),
+        ),
+        (
+            "Transform",
+            loose(200.0),
+            |alignment| {
+                let transform = Transform::new(Matrix4::IDENTITY).child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(transform.clone(), |alignment| {
+                        transform.alignment(alignment)
+                    })
+                    .boxed()
+            },
+            |laid| configured(laid, "RenderTransform", RenderTransform::alignment),
+            // `Transform::new` has no pivot alignment until one is set.
+            (Some((-1.0, -1.0)), Some((1.0, -1.0)), None),
+        ),
+        (
+            "OverflowBox",
+            loose(200.0),
+            |alignment| {
+                let overflow = OverflowBox::new()
+                    .min_width(40.0)
+                    .max_width(40.0)
+                    .child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(overflow.clone(), |alignment| overflow.alignment(alignment))
+                    .boxed()
+            },
+            |laid| Some(child_offset(laid, "RenderConstrainedOverflowBox")),
+            (Some((0.0, 0.0)), Some((160.0, 0.0)), Some((80.0, 80.0))),
+        ),
+        (
+            "SizedOverflowBox",
+            loose(200.0),
+            |alignment| {
+                let overflow =
+                    SizedOverflowBox::new(Size::new(200.0, 200.0)).child(SizedBox::new(40.0, 40.0));
+                alignment
+                    .map_or(overflow.clone(), |alignment| overflow.alignment(alignment))
+                    .boxed()
+            },
+            |laid| Some(child_offset(laid, "RenderSizedOverflowBox")),
+            (Some((0.0, 0.0)), Some((160.0, 0.0)), Some((80.0, 80.0))),
+        ),
+    ];
+
+    for (name, constraints, make, read, (ltr, rtl, default)) in cases {
+        let directional = Some(AlignmentGeometry::from(AlignmentDirectional::TOP_START));
+        let mut laid = lay_out(
+            Directionality::new(TextDirection::Ltr, make(directional)),
+            constraints,
+        );
+        assert_eq!(read(&laid), ltr, "{name}: start is the left edge in LTR");
+        assert_eq!(
+            laid.inherited_dependent_count::<Directionality>(),
+            1,
+            "{name}: a directional alignment depends on the direction"
+        );
+        laid.pump_widget(Directionality::new(TextDirection::Rtl, make(directional)));
+        assert_eq!(read(&laid), rtl, "{name}: start is the right edge in RTL");
+
+        for (alignment, expected, what) in [
+            (
+                Some(AlignmentGeometry::from(Alignment::TOP_LEFT)),
+                ltr,
+                "an absolute alignment",
+            ),
+            (None, default, "the default alignment"),
+        ] {
+            let mut laid = lay_out(
+                Directionality::new(TextDirection::Rtl, make(alignment)),
+                constraints,
+            );
+            assert_eq!(read(&laid), expected, "{name}: {what} stays put under RTL");
+            assert_eq!(
+                laid.inherited_dependent_count::<Directionality>(),
+                0,
+                "{name}: {what} takes no dependency"
+            );
+        }
+    }
+}
+
+/// A direction flip that moves a `FittedBox`'s directional alignment moves the
+/// child's published semantics with its pixels: the fitted transform places
+/// both, so the flip re-places the child's node from the left edge to the
+/// right one.
+pub(crate) fn a_fitted_child_moved_by_a_direction_flip_moves_its_semantics() {
+    use crate::media_query_fields::StaticChild;
+    use flui_painting::BoxFit;
+    use flui_view::ViewExt;
+    use flui_widgets::{FittedBox, Semantics};
+
+    let fitted = || {
+        StaticChild {
+            inner: FittedBox::new()
+                .fit(BoxFit::None)
+                .alignment(AlignmentDirectional::TOP_START)
+                .child(
+                    Semantics::new()
+                        .label("fitted")
+                        .child(SizedBox::new(40.0, 40.0)),
+                )
+                .boxed(),
+        }
+        .boxed()
+    };
+    let mut laid = lay_out(
+        Directionality::new(TextDirection::Ltr, fitted()),
+        tight(200.0, 200.0),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    let left = |laid: &crate::common::LaidOut| {
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        let node = tree
+            .find_by_label("fitted")
+            .expect("the fitted child is published");
+        tree.window_bounds(&node).expect("the node has bounds").x0
+    };
+    assert_eq!(
+        left(&laid),
+        0.0,
+        "LTR: the child's node is at the left edge"
+    );
+
+    laid.pump_widget(Directionality::new(TextDirection::Rtl, fitted()));
+    laid.tick();
+    assert_eq!(
+        left(&laid),
+        160.0,
+        "RTL: the child's node moved to the right edge"
+    );
 }

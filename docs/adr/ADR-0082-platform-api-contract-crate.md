@@ -355,11 +355,11 @@ by the `flui_platform` crate doctest, which implements `PlatformTextInput` and
 - `flui-native`'s `host_window` tests (a headless `open_window` result keeps its bridge and
   upcasts to the same window; its surface target is a raw-handle source).
 
-A backend change is checked by `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS.
+A backend change is checked by CI's `cross-typecheck` job for Win32, AppKit, Android and iOS.
 For the second change only Win32 and AppKit (`aarch64-apple-darwin`, with `a11y`) and the Linux
 `winit-backend` build of `flui-native` with `a11y` were type-checked. Outstanding for it:
 
-- `cargo xtask cross-typecheck` for Android and iOS (the `android` and `ios` backends, the
+- the `cross-typecheck` job's Android and iOS legs (the `android` and `ios` backends, the
   `android.rs`/`ios.rs` runners and `session_controller`), and a wasm32 check of the web
   backend and the `web.rs` runner;
 - a recorded live run on Windows ([`cargo xtask device windows-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs)), and a UIA check that a

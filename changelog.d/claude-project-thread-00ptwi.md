@@ -12,7 +12,7 @@
   `flui-platform/testing` in the dev-dependencies of a test that records haptics. A headless
   window's actuator is no longer a `FakeHaptics`: it plays every request and keeps nothing.
 - **`flui-platform`**, **`flui-interaction`**: `LockArbiter`, `CompositionLedger`,
-  `EditGeneration` and `committed_text` moved from `flui_platform::text_store` to
+  `EditGeneration` and `committed_text` moved from `flui_platform::text::store` to
   `flui_interaction::text_input`, re-exported for text-widget authors as
   `flui_sdk::interaction::text_input`; the reference store `InMemoryTextStore` moved to
   `flui_interaction::testing` (feature `testing`) and is re-exported by

@@ -17,7 +17,7 @@ use flui_interaction::events::{
 };
 use flui_painting::Alignment;
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::input::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_testing::widgets::SharedSignal;

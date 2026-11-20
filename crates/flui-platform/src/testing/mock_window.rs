@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size, WindowMetrics};
 
 use crate::capability::{PortalParent, Resolver};
-use crate::drag::PlatformDragSource;
 use crate::haptics::PlatformHaptics;
-use crate::input_regions::InputRegion;
+use crate::input::regions::InputRegion;
+use crate::transfer::drag::PlatformDragSource;
 use crate::{
     AdmittedCommand, ApplyError, CapabilityAbsence, Cursor, CursorError, DisplayId, FrameRateHint,
     GestureGeometry, PlatformSystemChrome, PlatformTextInput, PlatformWindow, PreferenceQueryError,
@@ -91,6 +91,7 @@ mod base {
         ) -> Result<(), ApplyError>;
         fn gesture_geometry(&self) -> GeometryAnswer;
         fn request_redraw(&self);
+        fn request_frame_at(&self, at: Option<crate::EventTime>);
         fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>>;
         fn surface_target(&self) -> Arc<dyn SurfaceTarget>;
         fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>>;
@@ -175,6 +176,10 @@ impl Base for Standalone {
     }
 
     fn request_redraw(&self) {}
+
+    /// Never asked: a standalone double's state is never occluded, so no
+    /// frame is owed to it while covered (ADR-0389).
+    fn request_frame_at(&self, _: Option<crate::EventTime>) {}
 
     fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>> {
         None
@@ -268,6 +273,10 @@ impl Base for Over {
 
     fn request_redraw(&self) {
         self.0.request_redraw();
+    }
+
+    fn request_frame_at(&self, at: Option<crate::EventTime>) {
+        self.0.request_frame_at(at);
     }
 
     fn redraw_requester(&self) -> Option<Arc<dyn RedrawRequester>> {
@@ -659,6 +668,12 @@ impl<B: Base> PlatformWindow for MockWindow<B> {
         self.base.request_redraw();
     }
 
+    /// What its base does: a standalone double is never asked, one over
+    /// another window hands the request to it.
+    fn request_frame_at(&self, at: Option<crate::EventTime>) {
+        self.base.request_frame_at(at);
+    }
+
     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
         let requests = Arc::clone(&self.redraw_requests);
         let hook = self.redraw_hook.clone();
@@ -876,7 +891,7 @@ mod tests {
             let outcome = wrapper.set_input_regions(&[]);
 
             assert_eq!(outcome.is_ok(), honours);
-            let recorded: Vec<Vec<crate::input_regions::InputRegion>> =
+            let recorded: Vec<Vec<crate::input::regions::InputRegion>> =
                 if honours { vec![vec![]] } else { vec![] };
             assert_eq!(wrapper.input_regions(), recorded, "honoured: {honours}");
             assert_eq!(told.get(), usize::from(honours), "honoured: {honours}");

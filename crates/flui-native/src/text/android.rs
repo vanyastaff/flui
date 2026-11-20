@@ -65,9 +65,10 @@ pub(crate) mod ime {
 
     use flui_foundation::IdMint;
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         Capitalization, Composition, Correction, EnterAction, Selection, TextInputPurpose,
-        TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
+        TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus,
+        utf16::{Utf16Offset, Utf16Range},
     };
 
     use crate::text::ime::{diff, document_text};
@@ -864,7 +865,7 @@ mod input {
     use std::sync::Arc;
 
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore, TextStoreEdit,
         TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
     };
@@ -892,7 +893,7 @@ mod input {
     /// acts on Enter by the action its status names (a Next field moves the
     /// focus on), as it does on every host.
     fn editor_action_keys(uptime_ms: i64) -> [flui_platform::PlatformInput; 2] {
-        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+        use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
         let time = flui_platform::EventTime::from_nanos(
             u64::try_from(uptime_ms)
                 .unwrap_or(0)

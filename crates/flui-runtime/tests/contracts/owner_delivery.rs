@@ -1103,34 +1103,24 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
     };
     if case == TextServiceCase::Unavailable {
         runtime
-            .attach_root_widget_with_size(
+            .attach_root_widget(
                 &flui_widgets::EditableText::new(
                     flui_widgets::TextEditingController::with_text("native sizing owner"),
                     Rc::clone(&focus),
                 )
                 .text_style(flui_painting::typography::TextStyle::default().with_font_size(14.0)),
-                400.0,
-                400.0,
             )
             .expect("mount real editable document");
     } else if case == TextServiceCase::Replace {
         runtime
-            .attach_root_widget_with_size(
-                &DeliveredAuthoredText {
-                    size: Rc::clone(&authored_size),
-                    rebuild: Rc::clone(&rebuild),
-                },
-                400.0,
-                400.0,
-            )
+            .attach_root_widget(&DeliveredAuthoredText {
+                size: Rc::clone(&authored_size),
+                rebuild: Rc::clone(&rebuild),
+            })
             .expect("mount retained authored state before native delivery");
     } else {
         runtime
-            .attach_root_widget_with_size(
-                &flui_widgets::Text::new("native sizing owner"),
-                400.0,
-                400.0,
-            )
+            .attach_root_widget(&flui_widgets::Text::new("native sizing owner"))
             .expect("mount actual text before native delivery");
     }
     let address = install(&owner, runtime);
@@ -1190,8 +1180,9 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
     );
     assert_eq!(effects.scenes.get(), 0);
     if case == TextServiceCase::Unavailable {
-        use flui_platform::text_store::{
-            LockGrant, LockOutcome, LockTiming, TextStoreError, Utf16Offset, Utf16Range,
+        use flui_platform::text::store::{
+            LockGrant, LockOutcome, LockTiming, TextStoreError,
+            utf16::{Utf16Offset, Utf16Range},
         };
         for _ in 0..3 {
             dispatcher

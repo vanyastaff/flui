@@ -22,7 +22,7 @@ pub fn layer_kind(layer: &Layer) -> &'static str {
 /// Every layer in pre-order with its depth.
 fn walk(tree: &LayerTree) -> impl Iterator<Item = (usize, &Layer)> + '_ {
     tree.descendants(tree.root())
-        .filter_map(move |(id, depth)| tree.get_layer(id).map(|layer| (depth, layer)))
+        .filter_map(move |(id, depth)| tree.layer(id).map(|layer| (depth, layer)))
 }
 
 /// Every value `pick` returns, in pre-order.

@@ -9,7 +9,7 @@ use accesskit::{
     Action, ActionData, ActionRequest, NodeId, Role, TextPosition, TextSelection, TreeId,
 };
 use flui_foundation::TextDirection;
-use flui_rendering::semantics::ActionDecodeError;
+use flui_semantics::ActionDecodeError;
 use flui_testing::InvokeActionError;
 use flui_widgets::{
     Column, MergeSemantics, Row, SelectionArea, SelectionContainer, Semantics, SizedBox, Text,
@@ -371,7 +371,7 @@ pub(crate) fn a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_
 pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
-    use flui_rendering::semantics::{
+    use flui_semantics::{
         DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsConfiguration,
         SemanticsRegion, SemanticsRegionKey, TextContent, TextRun, TextRunParts,
     };
@@ -412,9 +412,6 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
                 Rect::from_origin_size(Point::ZERO, size),
                 config,
             )]
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 
@@ -819,7 +816,7 @@ pub(crate) fn blocked_text_refuses_assistive_selection() {
 /// Red-check: order the texts by place in the render tree (the report is
 /// "\n").
 pub(crate) fn sort_keys_order_the_reported_text() {
-    use flui_rendering::semantics::{SemanticsConfiguration, SemanticsSortKey};
+    use flui_semantics::{SemanticsConfiguration, SemanticsSortKey};
 
     let keyed = |text: &str, order: f64| {
         let mut config = SemanticsConfiguration::new();

@@ -6,11 +6,11 @@ use flui_foundation::geometry::Size;
 use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::{CursorRequest, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
     traits::{HitTestOutcome, PaintEffects, RenderObject},
 };
+use flui_interaction::pointer::{CursorRequest, HitTestBehavior, MouseTrackerAnnotation};
 
 // ============================================================================
 // RenderBox Trait with Arity and ParentData
@@ -288,14 +288,6 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     // Baseline
     // ========================================================================
 
-    /// Returns the distance from the top of the box to the first baseline.
-    fn get_distance_to_baseline(
-        &self,
-        baseline: TextBaseline,
-    ) -> crate::error::RenderResult<Option<f64>> {
-        self.compute_distance_to_actual_baseline(baseline)
-    }
-
     /// Computes the distance from the top of the box to its first baseline.
     fn compute_distance_to_actual_baseline(
         &self,
@@ -524,7 +516,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// events that land on this box. The blanket `RenderObject<BoxProtocol>`
     /// impl forwards to this — concrete types override here, not on
     /// `RenderObject`. See [`RenderObject::pointer_target`].
-    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+    fn pointer_target(&self) -> Option<flui_interaction::pointer::PointerTarget> {
         None
     }
 
@@ -536,7 +528,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// impl forwards to this — concrete types override here, not on
     /// `RenderObject`. See [`RenderObject::scroll_target`] for the two-channel
     /// (observe vs claim) delivery contract.
-    fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
+    fn scroll_target(&self) -> Option<flui_interaction::pointer::ScrollTarget> {
         None
     }
 
@@ -547,13 +539,13 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// trackpad pinch ticks. The blanket `RenderObject<BoxProtocol>` impl
     /// forwards to this. See [`RenderObject::pan_zoom_target`] for the
     /// two-channel (observe vs claim) delivery contract.
-    fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
+    fn pan_zoom_target(&self) -> Option<flui_interaction::pointer::PanZoomTarget> {
         None
     }
 
     /// The data-only arbitrated smart zoom target this box contributes to its
     /// hit entry. Default `None`; see [`RenderObject::smart_zoom_target`].
-    fn smart_zoom_target(&self) -> Option<crate::hit_testing::SmartZoomTarget> {
+    fn smart_zoom_target(&self) -> Option<flui_interaction::pointer::SmartZoomTarget> {
         None
     }
 
@@ -564,7 +556,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
 
     /// Opaque payload this box attaches to any hit that lands on it — see
     /// [`RenderObject::metadata`].
-    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
+    fn metadata(&self) -> Option<flui_interaction::pointer::HitMetadata> {
         None
     }
 
@@ -587,14 +579,14 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// [`RenderObject::describe_semantics_configuration`].
     fn describe_semantics_configuration(
         &self,
-        _config: &mut crate::semantics::SemanticsConfiguration,
+        _config: &mut flui_semantics::SemanticsConfiguration,
     ) {
     }
 
     /// Independently keyed accessible parts of this box's custom content.
     /// See [`RenderObject::semantics_regions`].
-    fn semantics_regions(&self, _size: Size) -> crate::semantics::SemanticsRegions {
-        crate::semantics::SemanticsRegions::default()
+    fn semantics_regions(&self, _size: Size) -> flui_semantics::SemanticsRegions {
+        flui_semantics::SemanticsRegions::default()
     }
 
     /// Whether the semantics assembly walk should skip this box's entire
@@ -681,16 +673,6 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
     /// Default: no-op. See
     /// [`RenderObject::detach`].
     fn detach(&mut self) {}
-
-    /// Short human-readable name for diagnostics and error messages.
-    ///
-    /// Default: [`core::any::type_name::<Self>()`] (the fully-qualified Rust
-    /// type name). Override to return a stable short name (e.g.
-    /// `"RenderPadding"`) that is independent of crate layout.
-    /// See [`RenderObject::debug_name`].
-    fn debug_name(&self) -> &'static str {
-        core::any::type_name::<Self>()
-    }
 }
 
 /// Text baseline types for baseline alignment.
@@ -739,7 +721,7 @@ where
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <BoxProtocol as crate::protocol::Protocol>::ErasedLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
+    ) -> crate::error::RenderResult<Size> {
         // The real bridge.
         //
         // The pipeline / `RenderEntry::layout_leaf_only` hands us a
@@ -782,12 +764,12 @@ where
 
     fn hit_test_raw(
         &self,
-        position: crate::protocol::ProtocolPosition<BoxProtocol>,
+        position: flui_foundation::geometry::Offset,
         child_count: usize,
         size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
-            Option<crate::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<flui_foundation::geometry::Offset>,
             Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {
@@ -845,15 +827,15 @@ where
 
     fn dry_layout_raw(
         &self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        constraints: BoxConstraints,
         ctx: &mut crate::context::BoxDryLayoutContext<'_>,
-    ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
+    ) -> crate::error::RenderResult<Size> {
         T::compute_dry_layout(self, constraints, ctx)
     }
 
     fn dry_baseline_raw(
         &self,
-        constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
+        constraints: BoxConstraints,
         baseline: crate::traits::TextBaseline,
         ctx: &mut crate::context::BoxDryBaselineContext<'_>,
     ) -> crate::error::RenderResult<Option<f64>> {
@@ -946,23 +928,23 @@ where
         <T as RenderBox>::joins_hits_below(self)
     }
 
-    fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {
+    fn metadata(&self) -> Option<flui_interaction::pointer::HitMetadata> {
         <T as RenderBox>::metadata(self)
     }
 
-    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+    fn pointer_target(&self) -> Option<flui_interaction::pointer::PointerTarget> {
         <T as RenderBox>::pointer_target(self)
     }
 
-    fn scroll_target(&self) -> Option<crate::hit_testing::ScrollTarget> {
+    fn scroll_target(&self) -> Option<flui_interaction::pointer::ScrollTarget> {
         <T as RenderBox>::scroll_target(self)
     }
 
-    fn pan_zoom_target(&self) -> Option<crate::hit_testing::PanZoomTarget> {
+    fn pan_zoom_target(&self) -> Option<flui_interaction::pointer::PanZoomTarget> {
         <T as RenderBox>::pan_zoom_target(self)
     }
 
-    fn smart_zoom_target(&self) -> Option<crate::hit_testing::SmartZoomTarget> {
+    fn smart_zoom_target(&self) -> Option<flui_interaction::pointer::SmartZoomTarget> {
         <T as RenderBox>::smart_zoom_target(self)
     }
 
@@ -979,7 +961,7 @@ where
 
     fn describe_semantics_configuration(
         &self,
-        config: &mut crate::semantics::SemanticsConfiguration,
+        config: &mut flui_semantics::SemanticsConfiguration,
     ) {
         <T as RenderBox>::describe_semantics_configuration(self, config);
     }
@@ -988,7 +970,7 @@ where
         <T as RenderBox>::visits_child_for_semantics(self, child_slot, size)
     }
 
-    fn semantics_regions(&self, size: Size) -> crate::semantics::SemanticsRegions {
+    fn semantics_regions(&self, size: Size) -> flui_semantics::SemanticsRegions {
         <T as RenderBox>::semantics_regions(self, size)
     }
 
@@ -1022,10 +1004,6 @@ where
 
     fn detach(&mut self) {
         <T as RenderBox>::detach(self);
-    }
-
-    fn debug_name(&self) -> &'static str {
-        <T as RenderBox>::debug_name(self)
     }
 
     fn child_parent_data_type_id(&self) -> std::any::TypeId {

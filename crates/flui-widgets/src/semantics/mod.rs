@@ -40,14 +40,12 @@ use flui_objects::{
     GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
     RenderSemanticsAnnotations, RenderSliverSemanticsAnnotations, SemanticsActionRoute,
 };
-use flui_rendering::{
-    protocol::{BoxProtocol, SliverProtocol},
-    semantics::{
-        ActionCall, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel, Invalid,
-        LiveSetting, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
-        SemanticsConfiguration, SemanticsRelation, SemanticsRole, SetSize, SortDirection,
-        TableShape, Toggled,
-    },
+use flui_rendering::protocol::{BoxProtocol, SliverProtocol};
+use flui_semantics::{
+    ActionCall, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel, Invalid, LiveSetting,
+    Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
+    SemanticsConfiguration, SemanticsRelation, SemanticsRole, SetSize, SortDirection, TableShape,
+    Toggled,
 };
 use flui_view::{
     Child, CreationSite, EventContext, EventOutcome, IntoView, RenderObjectContext,
@@ -865,7 +863,7 @@ impl Semantics {
     /// A node with no role of its own becomes a slider; a node that declares
     /// one (a spin button, a progress bar) keeps it.
     #[must_use]
-    pub fn numeric_range(mut self, range: flui_rendering::semantics::NumericRange) -> Self {
+    pub fn numeric_range(mut self, range: flui_semantics::NumericRange) -> Self {
         self.configuration.set_numeric_range(range);
         self
     }
@@ -1033,7 +1031,7 @@ impl Semantics {
     #[must_use]
     pub fn on_set_text_selection<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventContext<'_>, flui_rendering::semantics::TextSelection) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, flui_semantics::TextSelection) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
@@ -1073,7 +1071,7 @@ impl Semantics {
     #[must_use]
     pub fn document_selection(
         mut self,
-        selection: Option<flui_rendering::semantics::DocumentSelection>,
+        selection: Option<flui_semantics::DocumentSelection>,
     ) -> Self {
         self.configuration.set_document_selection(selection);
         self
@@ -1089,7 +1087,7 @@ impl Semantics {
     #[must_use]
     pub fn on_set_document_selection<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventContext<'_>, flui_rendering::semantics::DocumentSelection) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, flui_semantics::DocumentSelection) -> R + 'static,
         R: EventOutcome,
     {
         let handler = value_callback(handler);
@@ -1338,9 +1336,7 @@ impl Semantics {
 
     /// The handler that tells `target`'s table where the assistive
     /// technology's cursor is.
-    fn assistive_focus_route(
-        target: LocalPayloadTarget,
-    ) -> flui_rendering::semantics::AssistiveFocusHandler {
+    fn assistive_focus_route(target: LocalPayloadTarget) -> flui_semantics::AssistiveFocusHandler {
         Rc::new(move |within| deliver_assistive_focus(target, within))
     }
 

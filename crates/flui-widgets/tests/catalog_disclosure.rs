@@ -7,12 +7,12 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Point, Rect};
 use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
+use flui_layer::Layer;
 use flui_painting::DrawOp;
 use flui_painting::paint::Clip;
 use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::layer::Layer;
-use flui_rendering::semantics::{AccessibilityNodeId, ActionCall, SemanticsActionRequest};
+use flui_semantics::{AccessibilityNodeId, ActionCall, SemanticsActionRequest};
 use flui_testing::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::{BuildContext, IntoView, StatelessView, View};
 use flui_widgets::{
@@ -144,7 +144,7 @@ fn body_paint(app: &LaidOut) -> Vec<BodyPaint> {
             let mut clips: Vec<Rect> = Vec::new();
             let mut parent = tree.parent(id);
             while let Some(id) = parent {
-                let layer = tree.get_layer(id).expect("live layer ancestor");
+                let layer = tree.layer(id).expect("live layer ancestor");
                 let transform = match layer {
                     Layer::Offset(offset) => Some(Matrix4::translation(
                         offset.offset().dx,

@@ -1,9 +1,9 @@
 //! [`BackdropFilter`] — filters what is already painted behind its child —
 //! and [`BackdropGroup`], whose grouped filters share one backdrop.
 
+use flui_layer::BackdropGroupKey;
 use flui_objects::RenderBackdropFilter;
 use flui_painting::paint::{BlendMode, ImageFilter};
-use flui_rendering::layer::BackdropGroupKey;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::LifecycleContext;
 use flui_view::prelude::{BuildContext, BuildContextExt, StatefulView, StatelessView, ViewState};

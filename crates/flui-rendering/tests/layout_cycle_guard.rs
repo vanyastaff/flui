@@ -1,10 +1,10 @@
 //! Layout cycle guard tests.
 //!
 //! Verifies [`PipelineOwner::layout_dirty_root`] surfaces
-//! [`RenderError::LayoutCycle`] on cyclic re-entry (via the
-//! `SubtreeArena::by_id` per-slot `AtomicBool` in-flight flag +
-//! RAII `LayoutCycleGuard`), and that the guard's `Drop` runs on
-//! panic so the in-flight flag stays consistent across frames.
+//! [`RenderError::LayoutCycle`] on cyclic re-entry (via the per-slot
+//! in-flight bit the walk's RAII `LayoutFrame` holds), and that the
+//! frame's drop runs on panic so the in-flight flag stays consistent
+//! across frames.
 
 use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};
@@ -26,7 +26,7 @@ use crate::common::fresh_layout_pipeline;
 ///
 /// The contract: when a user widget's `perform_layout` calls
 /// `ctx.layout_child` for an ancestor id that's already in flight up
-/// the recursion stack, the `LayoutCycleGuard::enter` collision
+/// the recursion stack, the `LayoutFrame::enter` collision
 /// returns `Err(RenderError::LayoutCycle(id))`. The layout-child
 /// callback in `layout_subtree_borrowed` collapses that Err to
 /// `Size::ZERO` + sets `descendant_error_flag` for the current call
@@ -41,14 +41,17 @@ use crate::common::fresh_layout_pipeline;
 /// for their declared first child, so the cycle is reachable.
 pub(crate) fn callback_reentry_poisons_structural_cycle() {
     let mut pipeline = fresh_layout_pipeline();
-    let p1 = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let p2 = pipeline
-        .render_tree_mut()
-        .insert_box_child(p1, Box::new(RenderPadding::all(2.0)))
-        .expect("p2 insert");
-    pipeline.render_tree_mut().append_unlinked_child(p2, p1);
+    let p1 = flui_rendering::testing::raw_tree::insert_box(
+        &mut pipeline,
+        Box::new(RenderPadding::all(5.0)),
+    );
+    let p2 = flui_rendering::testing::raw_tree::insert_box_child(
+        &mut pipeline,
+        p1,
+        Box::new(RenderPadding::all(2.0)),
+    )
+    .expect("p2 insert");
+    flui_rendering::testing::raw_tree::append_unlinked_child(&mut pipeline, p2, p1);
 
     let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     // P1.perform_layout → layout_child(0) → recurses into P2.
@@ -87,7 +90,7 @@ pub(crate) fn callback_reentry_poisons_structural_cycle() {
 /// RAII safety: a non-leaf user widget whose
 /// `perform_layout` panics must leave the in-flight flag clean
 /// for the next frame (the panic is caught by `catch_unwind` in the
-/// non-leaf path AND the `LayoutCycleGuard`'s Drop runs on unwind).
+/// non-leaf path AND the `LayoutFrame`'s drop runs on unwind).
 ///
 /// Frame 1: panicking widget → catch_unwind catches the panic →
 /// `layout_dirty_root` returns `Err(RenderError::Poisoned)`. Guard's
@@ -99,9 +102,9 @@ pub(crate) fn callback_reentry_poisons_structural_cycle() {
 /// without needing a separate mock for the set state.
 pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
     use flui_foundation::Single;
+    use flui_interaction::pointer::HitTestBehavior;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
-        hit_testing::HitTestBehavior,
         parent_data::BoxParentData,
         traits::RenderBox,
     };
@@ -147,13 +150,16 @@ pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
     }
 
     let mut pipeline = fresh_layout_pipeline();
-    let parent_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(PanicOnceWidget::default()));
-    let _child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(parent_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
-        .expect("child insert");
+    let parent_id = flui_rendering::testing::raw_tree::insert_box(
+        &mut pipeline,
+        Box::new(PanicOnceWidget::default()),
+    );
+    let _child_id = flui_rendering::testing::raw_tree::insert_box_child(
+        &mut pipeline,
+        parent_id,
+        Box::new(RenderColoredBox::red(20.0, 20.0)),
+    )
+    .expect("child insert");
 
     let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
 

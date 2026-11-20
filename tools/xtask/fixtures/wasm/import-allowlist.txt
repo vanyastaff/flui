@@ -1,2 +1,0 @@
-__wbindgen_externref_xform__
-__wbindgen_placeholder__

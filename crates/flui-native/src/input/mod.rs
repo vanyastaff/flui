@@ -24,7 +24,7 @@
 //! recordings in `tests/` decode with are public and hidden from the
 //! documentation; nothing outside the crate's own tests names them.
 
-use flui_platform::pointer::{PointerId, PointerKind, PointerRole, PointerSource};
+use flui_platform::input::pointer::{PointerId, PointerKind, PointerRole, PointerSource};
 
 #[doc(hidden)]
 pub mod assembly;

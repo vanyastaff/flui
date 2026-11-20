@@ -7,6 +7,7 @@ use std::rc::Rc;
 use flui_foundation::RenderId;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::storage::RenderTree;
+use flui_rendering::testing::raw_tree::{self, RawTree};
 
 use crate::common::BoxedRenderObject;
 
@@ -72,21 +73,16 @@ fn object(label: &'static str, log: &DropLog) -> BoxedRenderObject {
 }
 
 /// Where [`build`] inserts: a bare tree, or an owner that queues each node it inserts.
-trait Holds {
+trait Holds: RawTree {
     fn add(&mut self, parent: Option<RenderId>, object: BoxedRenderObject) -> RenderId;
-    fn tree(&mut self) -> &mut RenderTree;
 }
 
 impl Holds for RenderTree {
     fn add(&mut self, parent: Option<RenderId>, object: BoxedRenderObject) -> RenderId {
         match parent {
-            Some(parent) => self.insert_box_child(parent, object).expect("live parent"),
-            None => self.insert_box(object),
+            Some(parent) => raw_tree::insert_box_child(self, parent, object).expect("live parent"),
+            None => raw_tree::insert_box(self, object),
         }
-    }
-
-    fn tree(&mut self) -> &mut RenderTree {
-        self
     }
 }
 
@@ -99,10 +95,6 @@ impl Holds for PipelineOwner {
             None => self.insert(object),
         }
     }
-
-    fn tree(&mut self) -> &mut RenderTree {
-        self.render_tree_mut()
-    }
 }
 
 /// Builds `root → [a → [a1], b]` under `parent` (or as a root), then bends its lists as `shape`
@@ -114,17 +106,15 @@ fn build(host: &mut impl Holds, parent: Option<RenderId>, shape: Shape, log: &Dr
     let b = host.add(Some(root), object("b", log));
     match shape {
         Shape::Whole => {}
-        Shape::Cycle => host.tree().append_unlinked_child(a1, root),
-        Shape::DuplicateChild => host.tree().append_unlinked_child(root, b),
+        Shape::Cycle => raw_tree::append_unlinked_child(host, a1, root),
+        Shape::DuplicateChild => raw_tree::append_unlinked_child(host, root, b),
         Shape::StaleChild => {
-            let gone = host
-                .tree()
-                .insert_box_child(a, object("gone", log))
-                .expect("live parent");
-            assert_eq!(host.tree().remove_recursive(gone), 1);
+            let gone =
+                raw_tree::insert_box_child(host, a, object("gone", log)).expect("live parent");
+            assert_eq!(raw_tree::remove_subtree(host, gone), 1);
             assert_eq!(*log.borrow(), ["gone"]);
             log.borrow_mut().clear();
-            host.tree().append_unlinked_child(a, gone);
+            raw_tree::append_unlinked_child(host, a, gone);
         }
     }
     root
@@ -136,7 +126,8 @@ fn walk_order(tree: &RenderTree, root: RenderId) -> Vec<RenderId> {
     vec![root, a, tree.children(a)[0], tree.children(root)[1]]
 }
 
-/// `RenderTree::remove_recursive` lists each live node once in pre-order and drops them in reverse.
+/// Removing a bare tree's subtree (`raw_tree::remove_subtree`, `RenderTree::remove_recursive`)
+/// lists each live node once in pre-order and drops them in reverse.
 #[test]
 fn a_subtree_leaves_the_tree_once_children_first() {
     for shape in SHAPES {
@@ -149,7 +140,11 @@ fn a_subtree_leaves_the_tree_once_children_first() {
             walk_order(&tree, root),
             "{shape:?}: each live id once, in pre-order",
         );
-        assert_eq!(tree.remove_recursive(root), 4, "{shape:?}: every live node");
+        assert_eq!(
+            raw_tree::remove_subtree(&mut tree, root),
+            4,
+            "{shape:?}: every live node"
+        );
         assert_eq!(
             *log.borrow(),
             ["b", "a1", "a", "root"],

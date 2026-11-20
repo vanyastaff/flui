@@ -98,6 +98,7 @@ and edits its row.
 | A widget navigates, opens a dialog or pops its page | `Router::<R>::of(ctx)` and `PageHandle::of(ctx)` resolved in `build`, the handle moved into the callback; a dialog or menu is a `PopupRoute` pushed with `PageHandle::push_popup` (ADR-0330) | a navigator handle: `Navigator`, `NavigatorHandle` and `WidgetsApp::navigator` left the public API (ADR-0330 §4), and inside `flui-widgets` only the navigator, the Router and the menus' popup placement reach `NavigatorHandle` |
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock; presentations at independent cadences are separate hosts | a frame loop over raw owners (ADR-0083 §4 deleted `HeadlessBinding` and its `pump_frame`) |
 | The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
+| A trait object its owner downcasts to the concrete type | `Any` as a supertrait, upcast `&dyn Trait` to `&dyn Any` (trait upcasting) | a required `fn as_any(&self) -> &dyn Any` every implementor writes by hand |
 | A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
 
 ## Codebase map
@@ -163,9 +164,12 @@ conversation:
   `test` on Linux (ADR-0375): main checks wasm32, type-checks the Windows, macOS, iOS and Android
   backends and runs the nested, compile-fail and feature-gated suites, the sizes, perf and miri,
   and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
-  (`nightly-platforms.yml`). So a change to a native backend, a shader, a trybuild case or a
-  size is run locally before the PR, a size on a Linux x86_64 host, the baseline's. A red `main`
-  is fixed forward within the hour or reverted.
+  (`nightly-platforms.yml`). So a change to a native backend, a shader or a trybuild case is run
+  locally before the PR, and a change that can move a size (the changes
+  [testing](docs/testing.md) lists beside the `size` job) or that changes the steps of a job only
+  main runs ("Before each push" item 14) is run on its branch with
+  `gh workflow run CI --ref <branch>`. A red
+  `main` is fixed forward within the hour or reverted.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -226,6 +230,10 @@ and the readers of "Before a merge" look for a change that breaks one:
   host), and a Rust source file has at most 3000 production lines.
 - A relative link in markdown stays inside the repository: lychee follows `../` above the root,
   where the runner's checkout makes it resolve (ADR-0383 §4).
+- `wasm-check` runs the wasm32 tests of each package whose dev-dependencies on wasm32 include
+  `wasm-bindgen-test`, and of flui-native's `web_browser`, which it names, and fails a target that
+  passes no assertion, except a lib target beside a `wasm32` target; its discovery and its count
+  are shell no pull request runs, so a change to them keeps both rules (ADR-0383 §5).
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
   private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
   `docs/gaps.md`.
@@ -326,7 +334,8 @@ with an answer you can point to in the code; the reviewers ask the same ones.
     `*.stderr`, `*.snap` or protocol schema, a raised perf baseline, fewer tests, a new
     `#[ignore]`, a new `deny.toml` or `typos.toml` value? For each, was the old expectation
     wrong, or is the code? An expectation moved to turn a check green is the defect the check was
-    there to find. The pull request's body says why for each.
+    there to find. The pull request's body says why for each. A change to the steps of a job only
+    main runs links a full-lane run of the head that merges (`gh workflow run CI --ref <branch>`).
 
 ## Before a merge
 

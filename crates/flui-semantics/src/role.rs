@@ -50,7 +50,17 @@ pub enum Urgency {
 impl Urgency {
     /// The `author_id` the announcer node of this urgency publishes under,
     /// which tests and agents read announcements by (ADR-0240). It is in a
-    /// namespace no widget identifier uses.
+    /// namespace no widget identifier uses, the framework's, which the
+    /// normalized projection leaves out:
+    ///
+    /// ```
+    /// use flui_protocol::tree::FRAMEWORK_IDENTIFIER_PREFIX;
+    /// use flui_semantics::Urgency;
+    ///
+    /// for urgency in [Urgency::Polite, Urgency::Assertive] {
+    ///     assert!(urgency.announcer_identifier().starts_with(FRAMEWORK_IDENTIFIER_PREFIX));
+    /// }
+    /// ```
     #[must_use]
     pub const fn announcer_identifier(self) -> &'static str {
         match self {

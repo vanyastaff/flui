@@ -75,6 +75,7 @@ mod occluded_frame;
 mod overlay_style;
 pub mod owner;
 pub mod owner_turn;
+mod performance_overlay;
 pub mod presentation;
 mod presentation_forest;
 mod presentation_scene;

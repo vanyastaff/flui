@@ -67,10 +67,7 @@ static UNIQUE_KEYS: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
 /// let key2 = ValueKey::new(42);
 /// assert!(key1.key_eq(&key2));
 /// ```
-pub trait ViewKey: 'static {
-    /// Get the key as a trait object for downcasting.
-    fn as_any(&self) -> &dyn Any;
-
+pub trait ViewKey: Any {
     /// Check equality with another key.
     fn key_eq(&self, other: &dyn ViewKey) -> bool;
 
@@ -244,13 +241,9 @@ where
 }
 
 impl<T: Clone + Hash + Eq + fmt::Debug + 'static> ViewKey for ValueKey<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
+        let other: &dyn Any = other;
         other
-            .as_any()
             .downcast_ref::<Self>()
             .is_some_and(|other| self.value == other.value)
     }
@@ -317,9 +310,8 @@ impl SaltedKey {
     /// `key` itself, or the item key inside it when `key` is a salt.
     #[must_use]
     pub fn unsalt(key: &dyn ViewKey) -> &dyn ViewKey {
-        key.as_any()
-            .downcast_ref::<Self>()
-            .map_or(key, SaltedKey::inner)
+        let any: &dyn Any = key;
+        any.downcast_ref::<Self>().map_or(key, SaltedKey::inner)
     }
 }
 
@@ -338,13 +330,9 @@ impl fmt::Debug for SaltedKey {
 }
 
 impl ViewKey for SaltedKey {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
+        let other: &dyn Any = other;
         other
-            .as_any()
             .downcast_ref::<Self>()
             .is_some_and(|other| self.inner.key_eq(&*other.inner))
     }
@@ -432,13 +420,9 @@ impl fmt::Debug for UniqueKey {
 }
 
 impl ViewKey for UniqueKey {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
+        let other: &dyn Any = other;
         other
-            .as_any()
             .downcast_ref::<Self>()
             .is_some_and(|other| self.id == other.id)
     }

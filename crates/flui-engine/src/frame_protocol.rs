@@ -16,18 +16,6 @@ use crate::damage::{DamageTracker, FramePlan, plan_frame};
 use crate::error::EngineResult;
 use crate::retained_target::RetainedTarget;
 
-/// What recording one frame's content found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[must_use = "a straddling shape owes the next frame a full repaint"]
-pub(crate) struct RecordedContent {
-    /// Whether an advanced shape straddled the rect of the pass that drew
-    /// it: outside that rect the retained pixels under it may be stale, so
-    /// the next frame renders in full.
-    pub(crate) straddled: bool,
-    /// The work the frame's walk and recording did.
-    pub(crate) counters: RasterCounters,
-}
-
 /// The raster side's work for one frame of the frame protocol, which the
 /// engine's gate tests read (ADR-0304 §9) and the frame's trace event
 /// carries; an offscreen slot's frame (`GpuContext`) keeps no count. Fixed
@@ -106,9 +94,8 @@ pub(crate) trait FrameSteps {
     /// Records and encodes the frame's content into `(view, texture)`;
     /// `retained` says the target is the retained texture rather than the
     /// surface, `partial` how a partial frame redraws its region, `reads`
-    /// whether it may replay kept recordings. Answers
-    /// what the recording found, an advanced shape straddling a pass's rect
-    /// among it, in which case the next frame renders in full.
+    /// whether it may replay kept recordings. Answers what the walk and the
+    /// recording did.
     ///
     /// # Errors
     /// The content pass's failure, which is the frame's.
@@ -120,7 +107,7 @@ pub(crate) trait FrameSteps {
         partial: Option<&flui_layer::Region>,
         reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<RecordedContent>;
+    ) -> EngineResult<RasterCounters>;
 
     /// Copies the whole retained texture onto the surface's view.
     fn blit(
@@ -328,7 +315,7 @@ impl FrameProtocol {
         size: (u32, u32),
         intermediate_required: bool,
     ) -> FramePlan {
-        if let Some(dead) = lineage.draws((), Some(scene.content())) {
+        if let Some(dead) = lineage.draws((), Some(scene.version())) {
             painter.drop_recordings_of(dead);
         }
         self.include_backdrop_dependencies(scene, size);
@@ -373,34 +360,21 @@ impl FrameProtocol {
         scene: &flui_layer::Scene,
         size: (u32, u32),
     ) {
-        use flui_layer::{DamageRegion, Region, SceneContent};
+        use flui_layer::{DamageRegion, Region};
 
+        let version = scene.version();
         for _ in 0..Region::MAX {
             let Some(region) = self.damage.region() else {
                 return;
             };
             let owed = DamageRegion::Region(region);
-            let closed = match scene.content() {
-                // A retained version closes the damage over its own filters and
-                // destination-reading chunks, reading only those (ADR-0304 §6):
-                // each publication's damage was closed under its version, and the
-                // damage owed here may join several.
-                SceneContent::Version(version) => version.close_damage(owed, size),
-                SceneContent::Tree(tree) => {
-                    let closures = tree_backdrop_closures(tree);
-                    // Growing one read region can expose a second filter: the
-                    // fixed point is reached before the partial clear and any
-                    // recording, not next frame (ADR-0304 §6).
-                    flui_layer::close_over(owed, &closures, size)
-                }
-            };
+            // The version closes the damage over its own filters and
+            // destination-reading chunks, reading only those (ADR-0304 §6):
+            // each publication's damage was closed under its version, and the
+            // damage owed here may join several.
+            let closed = version.close_damage(owed, size);
             self.apply_closed(owed, closed);
             let Some(region) = self.damage.region() else {
-                return;
-            };
-            // A hand-built tree has no chunks to weigh: it is redrawn rect by
-            // rect.
-            let SceneContent::Version(version) = scene.content() else {
                 return;
             };
             if region.rects().len() == 1 {
@@ -550,9 +524,10 @@ impl FrameProtocol {
         if let Some(candidate) = retained {
             self.retained.commit(candidate);
         }
-        self.force_full_next_frame = recorded.straddled;
+        // The frame committed: the full retry armed when it began is withdrawn.
+        self.force_full_next_frame = false;
         self.damage_off = false;
-        self.counters = recorded.counters;
+        self.counters = recorded;
         let (evictions, bytes) = steps.0.recording_cache_counts();
         self.counters.recording_cache_evictions = evictions;
         self.counters.recording_cache_bytes = bytes;
@@ -610,40 +585,4 @@ impl FrameProtocol {
     pub(crate) fn retained_texture(&self) -> Option<&wgpu::Texture> {
         self.retained.texture()
     }
-}
-
-/// The read closure of every backdrop filter in `tree`, under its transform.
-///
-/// Clips and isolation are ignored: extra repaint is safe, a missing input
-/// is not. Replay still admits its exact read footprint.
-fn tree_backdrop_closures(tree: &flui_layer::LayerTree) -> flui_layer::Closures {
-    use flui_foundation::geometry::Matrix4;
-    use flui_layer::Layer;
-
-    let mut stack = vec![(tree.root(), Matrix4::IDENTITY)];
-    let mut closures = flui_layer::Closures::new();
-    while let Some((id, parent)) = stack.pop() {
-        let Some(node) = tree.get(id) else {
-            continue;
-        };
-        let layer = node.layer();
-        let transform = match layer {
-            Layer::Transform(layer) => parent * *layer.transform(),
-            Layer::Follower(_) => {
-                let Some(follower) = flui_layer::resolve_follower_transform(tree, id) else {
-                    continue;
-                };
-                parent * follower
-            }
-            _ => {
-                let offset = layer.local_translation();
-                parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
-            }
-        };
-        if let Layer::BackdropFilter(_) = layer {
-            closures.push_effect(layer, &transform, Rect::ZERO);
-        }
-        stack.extend(node.children().iter().map(|&child| (child, transform)));
-    }
-    closures
 }

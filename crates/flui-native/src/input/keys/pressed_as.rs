@@ -1,6 +1,6 @@
 //! The key a held key was pressed as, kept until its release.
 
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
 
 /// The keys whose repeats and release must name the key their key-down did,
 /// while they are held, by the host's own name for the key (`Id`: a key code,
@@ -73,7 +73,7 @@ impl<Id: PartialEq> PressedAs<Id> {
 #[cfg(test)]
 mod tests {
     use flui_platform::EventTime;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
 
     use super::PressedAs;
 

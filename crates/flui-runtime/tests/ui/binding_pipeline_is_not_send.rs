@@ -1,4 +1,3 @@
-use flui_rendering::binding::RendererBinding;
 use flui_runtime::renderer_binding::RenderingBinding;
 
 fn require_send<T: Send>(_: T) {}

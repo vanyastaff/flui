@@ -230,10 +230,11 @@ Every agent method is an owner-inbox job run at the next frame boundary, as `Sem
 today (`flui-runtime/src/ui_runtime/agent.rs`). The endpoint thread never touches owner state; it
 parses, enqueues, waits a bounded time and answers. Consequences:
 
-- **Consistency.** A locate, an actionability check and an injection planned in one request see
-  one committed tree (`semantics.locate` answers with the tree revision). The driver's composed
-  `element.tap` sends `element.actionability` and `input.inject` as one `batch` job when the path
-  is synthetic, so no frame runs between check and injection.
+- **Consistency.** A locate and an actionability check each read one committed tree
+  (`semantics.locate` answers with the tree revision). The protocol has no `batch` method: the
+  driver's composed `element.tap` sends `element.actionability`, then `input.inject` at the point
+  the facts named, and the stability check needs two frames anyway; an element that moved between
+  the two is what `receives` at the next check catches.
 - **Waits do not poll.** `wait.until` registers the condition with the owner. The owner evaluates
   it after each frame's semantics publish and after each input delivery, and answers when it holds or
   at the deadline. Live targets express the deadline in the runtime's `ClockSource`, so a test's
@@ -416,24 +417,24 @@ use flui_driver::{Driver, Launch, Locator, Role, expect};
 
 #[test]
 fn increments() -> flui_driver::Result<()> {
-    let mut driver = Driver::launch(Launch::from_env_or_headless(app))?; // FLUI_DRIVER_TARGET picks the target
-    let window = driver.main_window()?;
-    let button = window.locate(Locator::role(Role::Button).name("Increment"));
-    button.tap()?;                                            // session InputPolicy decides the path
+    let mut driver = Driver::launch(Launch::headless(app))?;  // or Launch::executable, cargo_example
+    let mut window = driver.main_window()?;
+    window.locate(Locator::role(Role::Button).name("Increment")).tap()?; // the session's policy picks the path
     expect(window.locate(Locator::identifier("counter"))).to_have_value("1")?;
-    window.capture_presented()?.region_of(&button)?.expect_baseline("increment-pressed")?;
     Ok(())
 }
 ```
+
+Captures and baselines (`capture_presented`, `expect_baseline`) join with the pixels task (FD10).
 
 - `Driver` owns one target and its connection. It is `Send` but not `Sync`; front ends wrap it in
   a worker when they need concurrency. Methods are synchronous. Lanes that need a thread affinity
   (UIA's COM apartment, AppKit's main thread) run on a lane worker thread the target owns, as
   desktop-mcp's `worker.rs` does today. A queued job is cancellable by one compare-and-swap.
-- `Window`, `Element` and `ElementLocator` are cheap handles borrowing the `Driver`
-  (`&mut Driver` for acts, `&Driver` for reads). Their methods mirror the method table one to one.
-  Each gesture method has a builder for options (`.via(InputPath::Os)`, `.force()`,
-  `.timeout(..)`).
+- `Window`, `Element` and `ElementLocator` are cheap handles borrowing the `Driver` mutably (a
+  read sends a request too). Their methods mirror the method table one to one. The options of a
+  gesture are set on the handle before it (`.via(InputPath::Os)`, `.require(..)`, `.force()`,
+  `.timeout(..)`, `.snapshot(..)`).
 - `expect(locator)` gives retrying assertions with a 5 s default (`to_have_value`, `to_have_name`,
   `to_be_checked`, `to_be_enabled`, `to_be_focused`, `to_have_count`, `to_be_gone`). Each is one
   `wait.until` with a `Matches` condition, never a client-side poll loop. `expect_soft`
@@ -450,25 +451,34 @@ fn increments() -> flui_driver::Result<()> {
 
 ```rust
 trait Connection: Send {
-    fn call(&mut self, method: &'static str, params: Value, deadline: Instant) -> Result<Reply>;
-    fn events(&mut self) -> &Receiver<Event>;
+    fn hello(&self) -> &HelloReply;
+    fn call(&mut self, call: Call) -> Result<Value>;   // Call: method, effect, params, budget
+    fn take_events(&mut self) -> (Vec<Event>, u64);    // and how many were dropped unread
 }
 ```
 
 Three implementations: `SocketConnection` (NDJSON plus blob frames over `interprocess`, or over
-the `adb`-forwarded TCP loopback), `BidiConnection` (`script.callFunction` and `script.message`)
-and `InProcess` (headless, calling the runtime's agent directly, feature `headless`). The trait is
-private: front ends see `Driver`.
+the `adb`-forwarded TCP loopback), `BidiConnection` (`script.callFunction` and `script.message`,
+with the Chrome lane) and `InProcess` (headless, feature `headless`). `InProcess` speaks the same
+lines: it runs the agent's own conversation (`flui_runtime::agent::Session`, through
+`flui_testing::HeadlessAgentService`, since `flui-runtime` admits only the hosts) on the headless
+app's thread, and counts a call's budget in the host's virtual frames. The trait is private:
+front ends see `Driver`.
 
 ### Coordinates (F9)
 
-The agent answers surface-logical rects plus `window.placement`: the surface origin in screen
-coordinates, the scale factor, and the monitor's device-pixel origin where the OS has one. Lanes
-map them with checked arithmetic in `f64`, refuse non-finite results and refuse a point outside
-the window's visible surface as `outside_target`. Points are never clamped into it. Mapping and
-refusal sit in one pure module with a table test over extreme scales (0.5 to 8), negative monitor
-origins, fractional boundaries and RTL mirroring (an RTL window's rects are already physical-left
-based, so mapping is direction-free; a test pins that).
+The agent answers surface-logical rects plus `window.placement`: the surface's logical size and
+scale, and whether it is shown and focused. Where the surface sits on screen is the lane's to say
+(`Lane::locate_window`, which reads the placement's `position` where an app reports one); a lane
+that knows its monitors' device-pixel origins (mixed-DPI desktops) adds them to the geometry when it
+lands. The OS path maps each point with checked arithmetic in `f64`, refuses non-finite results and
+refuses a point outside the window's surface as `outside_target`. Points are never clamped into
+it. Whether the point is shown (not clipped by an ancestor, not covered) is the actionability
+check's, which the app answers before the point is chosen; the mapping checks the surface's
+bounds. Mapping and refusal sit in one pure module with a table test over extreme scales (0.5 to
+8), negative origins, fractional boundaries and RTL (an RTL window's points are already
+physical-left based, so mapping is direction-free; a test pins that, and another drives an OS tap
+on an RTL row's first button through a scripted lane).
 
 ### OS input on a shared desktop
 
@@ -482,12 +492,16 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
    an ad-hoc CLI call announces its own single action. On an interactive terminal on a shared
    desktop, `flui drive` also waits a 3 s grace period, which `--yes` skips.
 2. **User-activity abort.** Each desktop lane watches for input it did not inject:
-   - Windows: `WH_MOUSE_LL` / `WH_KEYBOARD_LL` hooks on the lane worker; events without
-     `LLMHF_INJECTED`/`LLKHF_INJECTED` are the user's. Touch and pen come through
-     `GetPointerInfo`'s source device, set against the synthetic device handle;
-   - macOS: a listen-only `CGEventTap` comparing `kCGEventSourceUnixProcessID` and the source state
-     with the lane's own source;
-   - X11: XInput2 raw events from devices other than the XTEST virtual devices;
+   - Windows: `WH_MOUSE_LL` / `WH_KEYBOARD_LL` hooks on a guard thread; an event is the lane's
+     only when it carries `LLMHF_INJECTED`/`LLKHF_INJECTED` and the lane's tag in its extra
+     information, so another program's injected input ends a run too. Touch and pen come as raw
+     input from the digitizers, which a device sends and the lane's synthetic device does not. A
+     hook procedure posts what it saw to its own thread's queue, so no trampoline holds the state;
+   - macOS: a listen-only session `CGEventTap`; an event is the lane's only with the private source
+     state, the lane's tag as its user data and the driver's `kCGEventSourceUnixProcessID`, and a
+     tap the system turned off ends the run;
+   - X11: XInput2 raw events from devices other than the XTEST virtual devices, and from them
+     past the count of events the lane faked (another program's XTEST input);
    - Wayland: none available, so OS input there requires an isolated session;
    - Android: on a physical device, `getevent` on input devices other than the lane's `uinput`
      device (`adb shell input` events come from no device node and are told apart by that); an
@@ -498,11 +512,12 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
    run *cannot verify* with `interrupted_by_user` (F11). A lane with no guard on a shared desktop
    refuses OS input with `not_supported{capability: "user_activity_guard"}` and names the
    isolation mode to use.
-3. **Isolation modes.** `IsolationMode` is part of the session and the report:
+3. **Isolation modes.** `Isolation` (`flui_protocol::session`) is part of the session and the
+   report:
 
 | Platform | Isolation mode | How the driver uses it |
 |---|---|---|
-| Windows | three candidates, each gated by a spike in FD11 that shows injected input stays out of the host session and GPU presentation works: Windows Sandbox (`.wsb` with the build mapped read-only, the driver launched inside); a second user session; a loopback RDP session to the same machine (the separate-desktop approach UFO² documents) | the driver runs inside and writes its report and trace to a mapped or shared folder; a candidate that fails its spike is removed from the spec |
+| Windows | three candidates, each gated by a spike (its procedure and go/no-go criteria in tasks.md, FD11) that shows injected input stays out of the host session and GPU presentation works: Windows Sandbox (`.wsb` with the build mapped read-only, the driver launched inside); a second user session; a loopback RDP session to the same machine (the separate-desktop approach UFO² documents). Until a spike passes, the lane refuses its mode (`not_supported` naming `windows_isolation_<mode>`) | the driver runs inside and writes its report and trace to a mapped or shared folder; a candidate that fails its spike is removed from the spec |
 | Linux | Xvfb (CI default) or a separate seat; for Wayland a headless or nested compositor (weston, cage) | `DISPLAY` / `WAYLAND_DISPLAY` set for the launched app and the lane only |
 | macOS | a second user session (fast user switching) or a VM | the run happens in that session; the host session is untouched |
 | Android | an emulator (`emulator -no-window`) when hardware fidelity is not the point | the target picks the AVD; a physical device is chosen explicitly |
@@ -515,27 +530,37 @@ guard.
 ### Lanes
 
 ```rust
-trait Lane: Send {
-    fn capabilities(&self) -> LaneCapabilities;
-    fn inject(&mut self, seq: &ActionSequence, at: &Placement) -> Result<LaneEffect>;
+pub trait Lane: Send {
+    fn name(&self) -> &str;
+    fn capabilities(&self) -> LaneCapabilities;      // pointers, keys, isolation, guarded, fidelity
+    fn guard(&mut self) -> Option<&mut dyn ActivityGuard>;
+    fn locate_window(&mut self, placement: &Placement) -> Result<WindowGeometry>;
+    fn check(&mut self, events: &[OsEvent]) -> Result<()>; // before the first event; accepts by default
+    fn send(&mut self, event: &OsEvent) -> Result<()>; // one event: a single-step move, a press, a pause
     fn release_all(&mut self) -> Result<()>;
-    fn capture(&mut self, window: &OsWindow, region: Option<DeviceRect>) -> Result<Image>;
-    fn os_tree(&mut self, window: &OsWindow, query: &ReadQuery) -> Result<Tree>;
-    fn launch(&mut self, launch: &Launch, agent: &AgentLaunch) -> Result<OsProcess>;
+    fn read_tree(&mut self, placement: &Placement) -> Result<Tree>;          // not_supported by default
+    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()>; // not_supported by default
+    fn capture_window(&mut self, placement: &Placement) -> Result<pixels::Image>; // not_supported by default
 }
 ```
 
-A trait object, because the lane is chosen at run time from the target. Each lane is a module
+The driver turns an action sequence into `OsEvent`s (`steps::os_events`) and sends them through
+`lane::send_guarded`, which asks `check` once, then the guard before every event, and releases on
+every exit, so the user-activity rule is held once, at the seam. The OS tree (`read_tree`, the
+projection `os.compare_projection` compares) and activation through the accessibility API
+(`invoke`) came with the Windows lane, and so did its capture (`capture_window`), which FD10 makes
+the `os` source; launching through a lane joins with the device lanes. A trait object,
+because the lane is chosen at run time from the target. Each lane is a module
 behind `cfg(target_os)` or a cargo feature (`android`, `ios-sim`, `chrome`, `wayland`; the host
 desktop lane is default). An operation the lane lacks is `not_supported` naming it, before any
 event is sent.
 
 | Lane | Real input | OS accessibility read | OS capture | Process |
 |---|---|---|---|---|
-| windows | `SendInput` (mouse, keys, `VK_PACKET` text); `InjectSyntheticPointerInput` (touch, pen); TSF IME through the target's text store is out of the lane's reach, so IME uses `input.inject`. The safety checks are ported from desktop-mcp (`input/{mod,device}.rs`): foreground, window under each point, physical state, Sticky Keys, held-input recovery | UIA (`uiautomation`), the role table from `tools/xtask/src/device/uia_role_table.rs` | Windows Graphics Capture (`windows-capture`), window-scoped | `CreateProcess` in a kill-on-close job |
-| macos | `CGEventPostToPid` (mouse, keys, scroll, tablet pen fields) via `objc2-core-graphics` | AX via `objc2-application-services` (`AXUIElement`), replacing `macos-ax-client.swift` | ScreenCaptureKit window capture (`objc2-screen-capture-kit`), replacing `screencapture -l` | `posix_spawn` in a process group |
-| x11 | XTEST (`x11rb`), ported from `tools/live-smoke` | AT-SPI (`atspi`) | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG` |
-| wayland | libei through the RemoteDesktop portal (`reis`, `ashpd`); portal refusal is cannot-verify | AT-SPI | ScreenCast portal (`ashpd`, PipeWire), window-scoped | same as x11 |
+| windows | `SendInput` (mouse, keys, `VK_PACKET` text); `InjectSyntheticPointerInput` (touch, pen); TSF IME through the target's text store is out of the lane's reach, so IME uses `input.inject`. The safety checks are ported from desktop-mcp (`input/{mod,device}.rs`): the input desktop, foreground, window under each point, physical state, shell hotkeys and Sticky Keys, held-input recovery | UIA through the `windows` crate, the role table from `tools/xtask/src/device/uia_role_table.rs` (`lane::windows::roles`) | Windows Graphics Capture through the `windows` crate, window-scoped | `CreateProcess` in a kill-on-close job |
+| macos | `CGEventPostToPid` from a private, tagged event source (mouse, keys, scroll in points) via `objc2-core-graphics`; a pen is refused while the AppKit host reads tablet events as the mouse | AX via `objc2-application-services` (`AXUIElement`), replacing `macos-ax-client.swift` | ScreenCaptureKit window capture from macOS 14, the framework loaded by name through the Objective-C runtime since FLUI runs on releases without it, replacing `screencapture -l` | a process group of its own (`process_group(0)`, on every Unix host), killed whole with the session |
+| x11 | XTEST (`x11rb`): keys by the server's keymap, a character on no key through a spare key mapped for the text; touch and pen refused | AT-SPI (`atspi`), the role table `lane::atspi::roles` | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG`, from a thread the session keeps |
+| wayland | libei (`reis`) from a compositor's EIS socket or the RemoteDesktop portal (asked over zbus); keys and text through EI's text interface; portal refusal is cannot-verify | AT-SPI | none: the ScreenCast portal's PipeWire stream needs a C library no Linux build links (`docs/gaps.md`) | same as x11 |
 | android | `adb shell input` (tap, swipe, keyevent, text, stylus, mouse) and `uinput` JSON-line scripts for stylus and touchpad, ported from `android_input.rs`. `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers and removes a test device once per session, and stylus and touchpad answer `not_supported` where it fails; system UI such as the soft keyboard located by `uiautomator dump` | `uiautomator dump` for system UI only: FLUI publishes no Android accessibility tree, so FLUI nodes are `not_supported` until an adapter lands (recorded in `docs/gaps.md`) | `screencap -p` via `exec-out` | `adb install`, `am start` with extras, `am force-stop` |
 | ios_sim | Simulator HID: `SimDeviceLegacyHIDClient` from `SimulatorKit.framework` through `objc2` dynamic loading, the channel `idb` uses. A runtime probe checks the selectors on first use and answers `not_supported` with the Xcode version when they are missing | none (FLUI's iOS backend publishes no AX tree; recorded in gaps) | `simctl io <udid> screenshot` | `simctl install/launch/terminate` |
 | chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys); IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, ported from `bidi.rs` | none: the canvas exposes no DOM accessibility tree for FLUI nodes today (recorded in gaps); `browsingContext.locateNodes` with `accessibility` reads it once a DOM mirror exists | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from Chrome for Testing (`chrome.rs`), page served by `tiny_http` |
@@ -573,10 +598,10 @@ no-go escalates to the owner, never to a silent Swift fallback.
 
 ### Pixels
 
-`pixels` compares RGBA8 images (`image` for codecs):
+`pixels` compares RGBA8 images (`png` for the codec, the one `image` already brings in):
 
 - **Stable capture.** Capture, then capture the next presented frame, until two consecutive
-  captures are equal or the timeout passes (`toHaveScreenshot`).
+  captures, masked, are equal or the timeout passes (`toHaveScreenshot`).
 - **Masks.** Each mask locator's rect is painted a fixed colour in both images before comparing.
 - **Metric.** Per-pixel YIQ ΔE (the pixelmatch metric Playwright and kittest use), default
   threshold 0.1, plus `max_diff_pixels` (default 0) or `max_diff_ratio`. Anti-aliased pixels are
@@ -584,13 +609,14 @@ no-go escalates to the owner, never to a silent Swift fallback.
   unless asked: FLUI's own rasterizer is the thing under test, and its anti-aliasing is part of what
   a baseline pins. `ignore_antialiasing` is an opt-in for app-level screens. Each comparison
   records the adapter, backend, font set and scale factor beside its result.
-- **Baselines.** `<baseline dir>/<name>/<backend>-<os>.png`, backend from the capture
-  (`presented-win32`, `rendered-headless`, …). The baseline dir defaults to `tests/baselines/`
-  of the calling crate. A missing baseline fails and writes `.new.png`; a mismatch writes
-  `.new.png` and `.diff.png`. `FLUI_DRIVER_UPDATE_BASELINES=failing|all` rewrites them, and is
-  refused when `CI` is set.
-- **Predicates.** `color_at(point, rgba, tolerance)`, `differs_from(&capture, region)`,
-  `equals(&capture, region)`, `uniform(region, tolerance)`, `stable_for(frames)`.
+- **Baselines.** `<baseline dir>/<name>/<source>-<backend>-<os>.png`, source and backend from
+  the capture (`presented-win32`, `rendered-headless`, `os-windows`, …), under the directory the
+  caller names. A missing baseline fails and writes `.new.png`; a mismatch writes `.new.png` and
+  `.diff.png`. `FLUI_DRIVER_UPDATE_BASELINES=none|missing|changed|all` writes them, is refused
+  when `CI` is set, and a check that wrote a baseline still fails.
+- **Predicates.** On a capture: `expect_color_at(point, rgba, tolerance)`,
+  `expect_differs_from(&capture, region)`, `expect_same_as(&capture, region)`,
+  `expect_uniform(region, tolerance)`; on a window, `expect_stable_for(frames)`.
 - Fonts: captures come from apps on bundled fonts (`FontCollection::new()`), which
   `docs/testing.md` already requires of tests. A baseline is recorded per backend because GPU
   rasterization differs (kittest documents the sources: MSAA, filtering, float rounding).
@@ -601,8 +627,8 @@ A trace is a directory `<name>.flui-trace/`:
 
 - `trace.jsonl`: a header, then rows;
 - `input.jsonl`: an ADR-0215 recording, verbatim;
-- `native/<backend>.jsonl`: native recordings in the codec of
-  `crates/flui-platform/tests/native_recording/`;
+- `native/<n>.jsonl`: one native recording per stream the backend journals, in the protocol's
+  native recording format (`flui_protocol::native_recording`), with `native/index.json`;
 - `evidence/<sha256>.<png|json>`: content-addressed, so a repeated tree snapshot costs nothing.
 
 ```text
@@ -618,7 +644,8 @@ Commands carry locators as the caller wrote them, never only the resolved handle
 re-resolves (Playwright traces keep the locator). Evidence has a size budget per trace (default
 256 MiB). Over budget, it writes a `gap` row and keeps going. A trace is complete only when it ends
 with `end`, and a crash leaves an incomplete trace that readers report as such (ADR-0215's rule).
-Modes: `off`, `on`, `retain_on_failure` (written to a temp dir, kept only when the report fails).
+Modes: `off`, `on`, `retain_on_failure` (written in place, removed when the report passes; a
+`cannot_verify` run keeps it).
 
 - `trace.replay(trace, target)` re-issues the commands and compares each result with the recorded
   one modulo volatile fields: handles renumbered by first appearance, times, frame ids. Evidence is
@@ -800,7 +827,7 @@ pub enum Verdict { Pass, Fail, CannotVerify }
 ```
 
 The verdict is `Fail` if any check failed, else `CannotVerify` if any requested check could not
-run, else `Pass`. The report lists `checked` and `not_checked` (with reasons) for every check, so
+run or nothing was checked, else `Pass`. The report lists `checked` and `not_checked` (with reasons) for every check, so
 a pass always says what it covered. `Report::exit_code()` maps them to 0, 1 and 2. A report prints the same way everywhere: a
 human block plus one final line `FLUI_DRIVER_VERDICT=<pass|fail|cannot_verify>`, or `--json`. A
 scenario is `fn(&mut Driver, &mut Report) -> Result<()>`. An `Error` that `is_cannot_verify`
@@ -828,7 +855,7 @@ becomes a cannot-verify check, never a failure.
     tools answer a snapshot delta by default.
   - **Groups (`--caps a,b`):** `session` (`session_attach`, `session_capabilities`, `window_placement`, `wait_frames`, `wait_settled`, `motion_set`), `input` (`input_perform`, `input_inject`, `input_os`, the other
     gestures), `inspect`, `pixels`, `record` (with `trace_*`), `perf`, `audit`, `explore`, and
-    `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `capture_os`, as Playwright MCP gates coordinate tools).
+    `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `capture.os`, as Playwright MCP gates coordinate tools).
 
   Tool failure is `isError` with the error object; protocol failure is a JSON-RPC error. Captures
   return image content plus `CaptureMeta`. The adapter keeps no handle state: refs are `w3/e12`
@@ -919,15 +946,15 @@ enforced, not just intended.
 
 | Today | Becomes |
 |---|---|
-| `windows-a11y` (UIA walk, invoke) | scenario: launch `a11y_probe`, `os.compare_projection`, semantic actions through UIA and through the agent, the roles page |
-| `windows-gallery` (built on the integration branch now, against `examples/interaction_gallery`) | the **first scenario ported**: the same checks, by identifier, synthetic by default and OS input as the certification variant |
-| `windows-input` (contract child test + SendInput probe) | scenario: `input.os` mouse, wheel, touch and pen against `interaction_gallery`, verified through the journal; native recording captured and held against the goldens (`record.start{native}`) |
-| `windows-notes` | scenario on `two_screens`: chords, `VK_PACKET` text, IME through `input.inject`, DPI after resize |
+| `windows-a11y` (UIA walk, invoke) | scenario on the driver's scenario app (`a11y_probe` is gone): `os.compare_projection`, semantic actions through UIA and through the agent, the roles page (a page of every role of the role table) |
+| `windows-gallery` (built on the integration branch, against `examples/interaction_gallery`, both gone) | the **first scenario ported**, on the driver's scenario gallery until `interaction_gallery` returns: its checks by identifier, synthetic by default and OS input as the certification variant |
+| `windows-input` (contract child test + SendInput probe) | scenario: OS mouse, wheel, touch, pen and keys against the scenario gallery, verified through the journal, and a press beside the controls leaving them alone; native recording captured and held against the goldens (`record.start{native}`) once the driver records native input |
+| `windows-notes` | scenario on a note field (`two_screens` is gone): chords, `VK_PACKET` text, IME through `input.inject`; DPI after resize once the driver resizes a window |
 | `web-input` (BiDi, wasm probe, JS API) | scenario on the chrome target: the same checks through the agent, and the probe's JS API is deleted |
 | `android-input` (adb, uinput, F-key probe, `status.txt`) | scenario on the android target: lane input, journal verification, `record` events replace F12 flush, and `dumpsys` reads stay as lane helpers (`AndroidLane::shell`) |
 | `macos-*` (Python, Swift, `screencapture`) | scenarios on the macos target; `tools/device-checks/` is deleted |
 | `ios-*` (Swift XCUITest, Python) | scenarios on the ios_sim target |
-| `live-smoke` (X11 XTEST) | scenarios on the x11 and wayland targets |
+| `live-smoke` (X11 XTEST; deleted with the probes, #1827) | the device-check scenarios on the x11 target (its press and wheel checks); its occlusion and close checks wait for driver operations that occlude and close a window |
 
 `plan.rs` keeps only build and package steps, and only until `flui-cli`'s build pipeline covers them.
 The bespoke probes `android_input_probe` and `web_input_probe` are deleted, and so are their command
@@ -943,8 +970,13 @@ fixture, with an identifier on every interactive widget.
   pins that the agent refuses a handle it cannot tell apart, never re-binds it (F6). The same
   applies to the element and layer ids that `InspectId` wraps.
 - One owner per window serializes jobs (F7). The endpoint keeps a bounded queue per connection
-  (`busy` beyond it) and a connection cap. OS lanes take a host-wide input lock (a named mutex on
-  Windows, a lock file elsewhere), so two drivers never interleave real input.
+  (`busy` beyond it) and a connection cap. OS lanes take the desktop's input lock (an OS file lock,
+  one per user's desktop, in a directory only that user can write: `$XDG_RUNTIME_DIR` where it
+  names an existing directory, or else an owner-only `flui-driver-<uid>` in the temporary
+  directory on Unix, the user's own temporary
+  directory on Windows; `busy` only while another handle holds the lock, a lock file this user
+  may only read opened for reading, one it cannot open the driver's I/O failure, never retried),
+  so two drivers never interleave real input on one desktop.
 - Accepted work stays deliverable (F3). An action enqueued before its deadline stays queued; the
   reply says `may_have_run`. The driver never resends an `Acts` method on timeout; front ends
   surface the effect.

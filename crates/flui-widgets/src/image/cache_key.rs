@@ -11,11 +11,12 @@ use std::{rc::Rc, sync::Arc};
 /// [`Image`](super::Image) holds while it is mounted: a rebuild whose provider
 /// has an equal key resolves nothing again.
 ///
-/// Keys are typed, never labels. `AssetImage` keys by its path and
-/// `NetworkImage` by its URL, and an asset path never equals a URL with the
-/// same text; the image cache they load through is the one the mounted
-/// `Image` acquired, which does not change while it is mounted, so the key
-/// need not name it. `MemoryImage` keys by its bytes and `FileImage` by its
+/// Keys are typed, never labels. `AssetImage` keys by its asset key and
+/// `NetworkImage` by its URL, and an asset key never equals a URL with the
+/// same text; the image cache and the asset bundle they load through are the
+/// ones the mounted `Image` acquired, which do not change while it is
+/// mounted, so the key need not name them. `MemoryImage` keys by its bytes
+/// and `FileImage` by its
 /// path, and neither equals the other or an asset or network source. A
 /// custom provider keys by a value of its own type through
 /// [`custom`](Self::custom); values of different types are never equal.
@@ -24,7 +25,7 @@ pub struct ImageCacheKey(Repr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Repr {
-    /// `AssetImage`: its asset path.
+    /// `AssetImage`: its asset key as written.
     #[cfg(feature = "asset-images")]
     Asset(Arc<str>),
     /// `NetworkImage`: its URL.
@@ -57,10 +58,10 @@ impl ImageCacheKey {
         Self(Repr::File(path))
     }
 
-    /// The key of the asset at `path`.
+    /// The key of the asset `key` names, as written.
     #[cfg(feature = "asset-images")]
-    pub(super) fn asset(path: Arc<str>) -> Self {
-        Self(Repr::Asset(path))
+    pub(super) fn asset(key: Arc<str>) -> Self {
+        Self(Repr::Asset(key))
     }
 
     /// The key of the image at `url`, with whatever client the
@@ -111,8 +112,7 @@ impl fmt::Debug for MemoryKey {
 #[derive(Clone)]
 struct CustomKey(Rc<dyn DynKey>);
 
-trait DynKey: fmt::Debug {
-    fn as_any(&self) -> &dyn Any;
+trait DynKey: Any + fmt::Debug {
     fn dyn_eq(&self, other: &dyn DynKey) -> bool;
     fn dyn_hash(&self, state: &mut dyn Hasher);
 }
@@ -121,13 +121,8 @@ impl<K> DynKey for K
 where
     K: Hash + Eq + fmt::Debug + 'static,
 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn dyn_eq(&self, other: &dyn DynKey) -> bool {
-        other
-            .as_any()
+        (other as &dyn Any)
             .downcast_ref::<K>()
             .is_some_and(|other| other == self)
     }

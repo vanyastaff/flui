@@ -292,7 +292,7 @@ impl tracing::Subscriber for LateFontDiagnostic {
 
         let mut message = FontChangeMessage(false);
         event.record(&mut message);
-        if event.metadata().target() == "flui_rendering::pipeline::owner::accessors"
+        if event.metadata().target() == "flui_rendering::pipeline::owner::invalidation"
             && message.0
             && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
         {
@@ -335,14 +335,10 @@ fn late_font_diagnostic_case(change_on_report: bool) {
     let primary_mounted = Rc::new(RefCell::new(None));
     let primary_builds = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size(
-            &SamplingView {
-                mounted: Rc::clone(&primary_mounted),
-                built_samples: Rc::clone(&primary_builds),
-            },
-            800.0,
-            600.0,
-        )
+        .attach_root_widget(&SamplingView {
+            mounted: Rc::clone(&primary_mounted),
+            built_samples: Rc::clone(&primary_builds),
+        })
         .expect("primary late font root");
     let sibling_id = runtime
         .install_presentation(runtime.assemble_presentation(crate::owner_publication::window()));
@@ -351,7 +347,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
     let size = Arc::new(AtomicU64::new(20.0_f64.to_bits()));
     let rebuild = Arc::new(Mutex::new(None));
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             sibling_id,
             &flui_widgets::Column::new(vec![
                 SamplingView {
@@ -366,8 +362,6 @@ fn late_font_diagnostic_case(change_on_report: bool) {
                     })
                     .boxed(),
             ]),
-            800.0,
-            600.0,
         )
         .expect("fresh sibling with real text");
     let mut sink = FontWidthSink::default();
@@ -587,28 +581,22 @@ fn background_deadline_case(unknown: bool) {
     let primary_mounted = Rc::new(RefCell::new(None));
     let primary_builds = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size(
-            &SamplingView {
-                mounted: Rc::clone(&primary_mounted),
-                built_samples: Rc::clone(&primary_builds),
-            },
-            800.0,
-            600.0,
-        )
+        .attach_root_widget(&SamplingView {
+            mounted: Rc::clone(&primary_mounted),
+            built_samples: Rc::clone(&primary_builds),
+        })
         .expect("primary background root");
     let sibling_id = runtime
         .install_presentation(runtime.assemble_presentation(crate::owner_publication::window()));
     let sibling_mounted = Rc::new(RefCell::new(None));
     let sibling_builds = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             sibling_id,
             &SamplingView {
                 mounted: Rc::clone(&sibling_mounted),
                 built_samples: Rc::clone(&sibling_builds),
             },
-            800.0,
-            600.0,
         )
         .expect("sibling background root");
     let _ = runtime.pump(&mut clock, &mut Sink);
@@ -657,7 +645,9 @@ fn background_deadline_case(unknown: bool) {
         panic_after_effect: true,
     });
     let contact = |value| {
-        flui_platform::pointer::PointerId::new(std::num::NonZeroU64::new(value).expect("contact"))
+        flui_platform::input::pointer::PointerId::new(
+            std::num::NonZeroU64::new(value).expect("contact"),
+        )
     };
     if unknown {
         let _ = primary.arena.add(contact(71), &unknown_timer);
@@ -785,23 +775,19 @@ fn delivery_case(delivery: Delivery) {
             mounted: Rc::clone(&primary_mounted),
             built_samples: Rc::clone(&primary_builds),
         });
-    runtime
-        .attach_root_widget_with_size(&root, 800.0, 600.0)
-        .expect("primary root");
+    runtime.attach_root_widget(&root).expect("primary root");
     let _ = runtime.pump(&mut clock, &mut Sink);
     let sibling = runtime.assemble_presentation(crate::owner_publication::window());
     let sibling_id = runtime.install_presentation(sibling);
     let sibling_mounted = Rc::new(RefCell::new(None));
     let sibling_builds = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             sibling_id,
             &SamplingView {
                 mounted: Rc::clone(&sibling_mounted),
                 built_samples: Rc::clone(&sibling_builds),
             },
-            800.0,
-            600.0,
         )
         .expect("sibling root");
     let _ = runtime.pump(&mut clock, &mut Sink);
@@ -851,10 +837,10 @@ fn delivery_case(delivery: Delivery) {
     }
     if delivery == Delivery::Deadline {
         let down = flui_interaction::events::make_down_event_for_id_with_button(
-            flui_platform::pointer::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_platform::input::pointer::PointerId::new(std::num::NonZeroU64::MIN),
             flui_foundation::geometry::Offset::new(5.0, 5.0),
-            flui_platform::pointer::PointerKind::Touch,
-            flui_platform::pointer::PointerButton::PRIMARY,
+            flui_platform::input::pointer::PointerKind::Touch,
+            flui_platform::input::pointer::PointerButton::PRIMARY,
         )
         .expect("finite touch");
         runtime.enter(|runtime| {
@@ -1116,14 +1102,10 @@ fn source_failure_case(failure: SourceFailure) {
     let primary_mounted = Rc::new(RefCell::new(None));
     let primary_builds = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size(
-            &SamplingView {
-                mounted: Rc::clone(&primary_mounted),
-                built_samples: Rc::clone(&primary_builds),
-            },
-            800.0,
-            600.0,
-        )
+        .attach_root_widget(&SamplingView {
+            mounted: Rc::clone(&primary_mounted),
+            built_samples: Rc::clone(&primary_builds),
+        })
         .expect("primary root");
     let _ = runtime.pump(&mut clock, &mut Sink);
     let sibling = runtime.assemble_presentation(crate::owner_publication::window());
@@ -1131,14 +1113,12 @@ fn source_failure_case(failure: SourceFailure) {
     let sibling_mounted = Rc::new(RefCell::new(None));
     let sibling_builds = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             sibling_id,
             &SamplingView {
                 mounted: Rc::clone(&sibling_mounted),
                 built_samples: Rc::clone(&sibling_builds),
             },
-            800.0,
-            600.0,
         )
         .expect("sibling root");
     let _ = runtime.pump(&mut clock, &mut Sink);
@@ -1313,7 +1293,7 @@ fn one_pump_shares_its_selected_time_across_parent_and_child() {
     )
     .expect("manual-clock runtime");
     runtime
-        .attach_root_widget_with_size(&flui_widgets::SizedBox::square(10.0), 800.0, 600.0)
+        .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
         .expect("mounted root");
     let registry = runtime.vsync();
     let child = Vsync::new();
@@ -1379,7 +1359,7 @@ fn manual_frame_runtime(host: &ManualClock) -> UiRuntime {
     )
     .expect("manual-clock runtime");
     runtime
-        .attach_root_widget_with_size(&flui_widgets::SizedBox::square(10.0), 800.0, 600.0)
+        .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
         .expect("mounted root");
     runtime
 }

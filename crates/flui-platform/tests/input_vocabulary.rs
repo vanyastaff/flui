@@ -7,8 +7,8 @@ use core::time::Duration;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::pointer::{
+use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::input::pointer::{
     ContactSize, HoverDistance, InputValueError, PanZoomTransform, PenOrientation, PointerButton,
     PointerButtons, PointerId, PointerKind, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRole, PointerSample, PointerSource, Pressure, Quantity, ScrollDelta,
@@ -344,7 +344,7 @@ fn event_times_subtract_without_underflow() {
 }
 
 fn coalescing_preserves_the_latest_dispatch_and_real_history() {
-    use flui_platform::keyboard::Modifiers;
+    use flui_platform::input::keyboard::Modifiers;
     let old_current = sampled_at(10);
     let changed_sensor = old_current.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
     let older = PointerMove::new(mouse(), PointerButtons::NONE, old_current)
@@ -383,7 +383,7 @@ fn coalescing_preserves_the_latest_dispatch_and_real_history() {
 }
 
 fn coalescing_transfers_only_checked_history_ownership() {
-    use flui_platform::keyboard::Modifiers;
+    use flui_platform::input::keyboard::Modifiers;
     let sensor = sampled_at(20).with_pressure(Pressure::try_new(0.2).expect("pressure"));
     let boundary_sensor = sampled_at(10).with_pressure(Pressure::try_new(0.2).expect("pressure"));
     for (old_time, old_history, new_history, expected) in [
@@ -450,8 +450,8 @@ fn coalescing_transfers_only_checked_history_ownership() {
 }
 
 fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
-    use flui_platform::keyboard::Modifiers;
-    use flui_platform::pointer::DeviceId;
+    use flui_platform::input::keyboard::Modifiers;
+    use flui_platform::input::pointer::DeviceId;
     let ordinary = sampled_at(25);
     let sensor = ordinary.with_pressure(Pressure::try_new(0.2).expect("valid pressure"));
     let initial = PointerMove::new(
@@ -483,7 +483,7 @@ fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
 }
 
 fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
-    use flui_platform::pointer::{DeviceId, MismatchedPointerSource};
+    use flui_platform::input::pointer::{DeviceId, MismatchedPointerSource};
     let base = mouse();
     for other in [
         PointerSource::new(PointerId::try_from(2_u64).expect("nonzero"), base.kind)
@@ -541,7 +541,7 @@ fn position_mapping_preserves_readings_and_refuses_partial_output() {
         PointerButtons::only(PointerButton::SECONDARY),
         sample(1.0),
     )
-    .with_modifiers(flui_platform::keyboard::Modifiers::SHIFT)
+    .with_modifiers(flui_platform::input::keyboard::Modifiers::SHIFT)
     .with_coalesced(vec![sample(0.0)])
     .with_predicted(vec![sample(2.0)]);
     let original = movement.clone();
@@ -679,7 +679,7 @@ fn input_vocabulary_contract() {
 
 /// A pan/zoom event is a trackpad's, whatever pointer info it was built from.
 fn a_pan_zoom_event_is_always_a_trackpad_gesture() {
-    use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
+    use flui_platform::input::pointer::{PanZoomEvent, PanZoomPhase};
     let event = PanZoomEvent::new(mouse(), T0, position(1.0, 1.0), PanZoomPhase::Start);
     assert_eq!(event.pointer().kind, PointerKind::Trackpad);
 }

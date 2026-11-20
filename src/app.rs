@@ -7,8 +7,6 @@
 //! reaches the presentation through [`crate::view::BuildContext`] and its lifecycle hooks.
 
 pub use flui_app::app::DevReload;
-#[cfg(not(target_os = "ios"))]
-pub use flui_app::run_direct;
 pub use flui_app::{
     AppConfig, AppId, AppIdError, AppIdentity, Application, BackendFailure, DiagnosticsProfile,
     EXIT_CODE_HUNG, FontRegistrationError, FrameLatency, GpuBackend, LaunchError, MotionOverride,

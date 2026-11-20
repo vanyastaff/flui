@@ -13,15 +13,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use flui_foundation::Leaf;
 use flui_foundation::geometry::Size;
+use flui_interaction::events::CursorIcon;
 use flui_interaction::focus::FocusNode;
 use flui_painting::styling::Color;
 use flui_platform::Cursor;
-use flui_platform::text_store::{
-    LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, Utf16Offset,
+use flui_platform::text::store::{
+    LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, utf16::Utf16Offset,
 };
-use flui_rendering::hit_testing::CursorIcon;
-use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
+use flui_rendering::{
+    BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
+};
 use flui_scheduler::SchedulerPhase;
 use flui_testing::widgets::{ProbeSignals, SignalProbe, lay_out, loose, tight};
 use flui_testing::{A11yTree, Action, ActionRequest, HeadlessHost, HeadlessWindow, TreeId};

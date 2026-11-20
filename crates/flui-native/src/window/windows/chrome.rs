@@ -18,7 +18,7 @@
 )]
 
 use flui_foundation::geometry::DevicePoint;
-use flui_platform::input_regions::{
+use flui_platform::input::regions::{
     CaptionButton, ChromeHit, DeviceInputRegion, ResizeEdge, chrome_hit,
 };
 
@@ -219,7 +219,7 @@ pub(crate) const fn outer_extent(adjusted: Edges, app_title_bar: bool) -> Edges 
 #[cfg(test)]
 mod tests {
     use flui_foundation::geometry::DeviceRect;
-    use flui_platform::input_regions::InputRegionKind;
+    use flui_platform::input::regions::InputRegionKind;
 
     use super::*;
 

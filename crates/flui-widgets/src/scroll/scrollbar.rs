@@ -38,15 +38,15 @@ use flui_foundation::geometry::{Axis, Offset, Rect, Size};
 use flui_foundation::{ChangeNotifier, Listenable, Subscription};
 use flui_interaction::events::{PointerEvent, PointerEventExt as _};
 use flui_interaction::pointer::EventPropagation;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_painting::{Canvas, paint::Paint, styling::Color};
-use flui_platform::input_capabilities::PointerKindSet;
-use flui_platform::pointer::ScrollEvent;
+use flui_platform::input::capabilities::PointerKindSet;
+use flui_platform::input::pointer::ScrollEvent;
 use flui_platform::{
     ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, WheelPreferences,
 };
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::delegates::CustomPainter;
-use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::view::ViewportOffset as _;
 use flui_view::environment::{GestureArenaScope, MediaQuery, VsyncScope};
 use flui_view::prelude::StatefulView;
@@ -880,7 +880,7 @@ impl CustomPainter for ScrollbarPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any()
+        (old as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| !Rc::ptr_eq(&old.bar, &self.bar))
     }
@@ -891,10 +891,6 @@ impl CustomPainter for ScrollbarPainter {
 
     fn hit_test(&self, position: Offset) -> Option<bool> {
         Some(self.bar.takes(position).is_some())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

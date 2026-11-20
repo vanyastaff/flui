@@ -98,8 +98,11 @@ struct RetiredSources {
     /// Status observers a refusal held back: never admitted, so they retire
     /// through the controller's containment rather than the channel's.
     refused_status: SmallVec<[Opaque<StatusObserver>; 2]>,
-    status_callbacks: SmallVec<[Rc<NotificationCallback<AnimationStatus>>; 4]>,
-    value_callbacks: SmallVec<[Opaque<Rc<flui_foundation::NotificationCallback<()>>>; 4]>,
+    /// Withdrawn registrations, one inline each: a callback is three words
+    /// and every queued `ControllerDelivery` carries these lists, so a wider
+    /// inline buffer grows each slot of the pending queue.
+    status_callbacks: SmallVec<[NotificationCallback<AnimationStatus>; 1]>,
+    value_callbacks: SmallVec<[Opaque<flui_foundation::NotificationCallback<()>>; 1]>,
 }
 
 impl RetiredSources {

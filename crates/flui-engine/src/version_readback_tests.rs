@@ -325,7 +325,7 @@ fn clipped_multiply(writer: &mut SceneWriter<'_>, clip: Rect<f64>, color: Color)
     );
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        flui_layer::Layer::from(flui_layer::ClipRectLayer::hard_edge(clip)),
+        flui_layer::Effect::from(flui_layer::ClipRectLayer::hard_edge(clip)),
         RenderId::new(2),
         0,
     );
@@ -577,7 +577,7 @@ fn gap_reader(
     root_too: bool,
     heavy: usize,
 ) {
-    use flui_layer::{BackdropFilterLayer, Layer};
+    use flui_layer::{BackdropFilterLayer, Effect};
     use flui_painting::paint::{BlendMode, ImageFilter};
 
     for (index, (&node, x)) in boxes.iter().zip([0.0, 70.0]).enumerate() {
@@ -633,7 +633,7 @@ fn gap_reader(
         content.slot(node);
     }
     content.push_effect(
-        Layer::from(BackdropFilterLayer::new(
+        Effect::from(BackdropFilterLayer::new(
             ImageFilter::blur(3.0),
             BlendMode::SrcOver,
             Rect::from_ltrb(45.0, 60.0, 55.0, 120.0),
@@ -764,7 +764,7 @@ fn grouped_readers(
     placed: FirstMember,
     root_too: bool,
 ) {
-    use flui_layer::{BackdropFilterLayer, Layer};
+    use flui_layer::{BackdropFilterLayer, Effect};
     use flui_painting::paint::{BlendMode, ImageFilter};
 
     let picture = |writer: &mut SceneWriter<'_>, id: usize, paint: &dyn Fn(&mut Canvas)| {
@@ -793,7 +793,7 @@ fn grouped_readers(
         placement: Placement::try_new(Offset::new(100.0, 4.0)).expect("a finite offset"),
     });
     let member = |bounds: Rect<f64>| {
-        Layer::from(
+        Effect::from(
             BackdropFilterLayer::new(ImageFilter::blur(3.0), BlendMode::SrcOver, bounds)
                 .with_group(Some(group.clone())),
         )
@@ -817,7 +817,7 @@ fn grouped_readers(
         // A save layer under a clip that shows the second member alone: the
         // first draws into the layer, whose composite the clip cuts.
         content.push_effect(
-            Layer::from(flui_layer::ClipRectLayer::new(
+            Effect::from(flui_layer::ClipRectLayer::new(
                 Rect::from_ltrb(90.0, 0.0, 128.0, 40.0),
                 flui_painting::paint::Clip::AntiAliasWithSaveLayer,
             )),
@@ -843,7 +843,7 @@ fn grouped_readers(
         if placed == FirstMember::Clipped {
             // Over none of the member's pixels.
             content.push_effect(
-                Layer::from(flui_layer::ClipRectLayer::new(
+                Effect::from(flui_layer::ClipRectLayer::new(
                     Rect::from_ltrb(60.0, 8.0, 70.0, 24.0),
                     flui_painting::paint::Clip::HardEdge,
                 )),
@@ -1014,7 +1014,7 @@ fn clipped_reader(
     [left, right]: [f64; 2],
     root_too: bool,
 ) {
-    use flui_layer::{BackdropFilterLayer, ClipRectLayer, ImageFilterLayer, Layer, OpacityLayer};
+    use flui_layer::{BackdropFilterLayer, ClipRectLayer, Effect, ImageFilterLayer, OpacityLayer};
     use flui_painting::paint::{BlendMode, Clip, ImageFilter};
 
     let picture = |writer: &mut SceneWriter<'_>, id: usize, paint: &dyn Fn(&mut Canvas)| {
@@ -1073,20 +1073,20 @@ fn clipped_reader(
     }));
     let window = Rect::from_ltrb(left, 0.0, 128.0, 40.0);
     let layers = match clip {
-        LayerClip::SaveLayer => vec![Layer::from(ClipRectLayer::new(
+        LayerClip::SaveLayer => vec![Effect::from(ClipRectLayer::new(
             window,
             Clip::AntiAliasWithSaveLayer,
         ))],
         LayerClip::HardOverOpacity => vec![
-            Layer::from(ClipRectLayer::new(window, Clip::HardEdge)),
-            Layer::from(OpacityLayer::new(0.5)),
+            Effect::from(ClipRectLayer::new(window, Clip::HardEdge)),
+            Effect::from(OpacityLayer::new(0.5)),
         ],
-        LayerClip::Unchanging => vec![Layer::from(ImageFilterLayer::new(ImageFilter::Compose(
+        LayerClip::Unchanging => vec![Effect::from(ImageFilterLayer::new(ImageFilter::Compose(
             Vec::new(),
         )))],
         LayerClip::SaveLayerOverImageFilter => vec![
-            Layer::from(ClipRectLayer::new(window, Clip::AntiAliasWithSaveLayer)),
-            Layer::from(ImageFilterLayer::new(ImageFilter::blur(1.0))),
+            Effect::from(ClipRectLayer::new(window, Clip::AntiAliasWithSaveLayer)),
+            Effect::from(ImageFilterLayer::new(ImageFilter::blur(1.0))),
         ],
     };
     let depth = layers.len();
@@ -1096,7 +1096,7 @@ fn clipped_reader(
     content.slot(nodes[0]);
     content.slot(nodes[1]);
     content.push_effect(
-        Layer::from(BackdropFilterLayer::new(
+        Effect::from(BackdropFilterLayer::new(
             ImageFilter::blur(3.0),
             BlendMode::SrcOver,
             Rect::from_ltrb(90.0, 8.0, 110.0, 24.0),
@@ -1205,14 +1205,14 @@ fn content_clipped_box(
     right: f64,
     root_too: bool,
 ) {
-    use flui_layer::{ClipRectLayer, Layer};
+    use flui_layer::{ClipRectLayer, Effect};
     use flui_painting::paint::Clip;
 
     let mut canvas = Canvas::new();
     canvas.draw_rect(Rect::from_ltrb(70.0, 4.0, right, 28.0), &Paint::fill(color));
     let mut content = BoundaryContent::builder();
     content.push_effect(
-        Layer::from(ClipRectLayer::new(
+        Effect::from(ClipRectLayer::new(
             Rect::from_ltrb(89.6, 0.0, 128.0, 40.0),
             Clip::AntiAlias,
         )),
@@ -1328,7 +1328,7 @@ fn clipped_stripes(
     spread: Option<f64>,
     backdrop: Option<Rect<f64>>,
 ) -> Vec<u8> {
-    use flui_layer::{BackdropFilterLayer, ClipRectLayer, ImageFilterLayer, Layer};
+    use flui_layer::{BackdropFilterLayer, ClipRectLayer, Effect, ImageFilterLayer};
     use flui_painting::paint::{BlendMode, Clip, ImageFilter};
 
     let mut owner = SceneOwner::new();
@@ -1363,7 +1363,7 @@ fn clipped_stripes(
         let mut content = BoundaryContent::builder();
         for (index, &(left, right)) in clips.iter().enumerate() {
             content.push_effect(
-                Layer::from(ClipRectLayer::new(
+                Effect::from(ClipRectLayer::new(
                     Rect::from_ltrb(left, 0.0, right, 40.0),
                     Clip::AntiAliasWithSaveLayer,
                 )),
@@ -1373,7 +1373,7 @@ fn clipped_stripes(
         }
         if let Some(sigma) = spread {
             content.push_effect(
-                Layer::from(ImageFilterLayer::new(ImageFilter::blur(sigma))),
+                Effect::from(ImageFilterLayer::new(ImageFilter::blur(sigma))),
                 RenderId::new(4),
                 0,
             );
@@ -1381,7 +1381,7 @@ fn clipped_stripes(
         content.chunk(stripes);
         if let Some(bounds) = backdrop {
             content.push_effect(
-                Layer::from(BackdropFilterLayer::new(
+                Effect::from(BackdropFilterLayer::new(
                     ImageFilter::blur(3.0),
                     BlendMode::SrcOver,
                     bounds,
@@ -1752,7 +1752,7 @@ fn publish_root(
     clipped: Option<(usize, f64)>,
 ) -> SceneVersion {
     use flui_foundation::geometry::{RRect, Radius};
-    use flui_layer::{ClipRRectLayer, Layer};
+    use flui_layer::{ClipRRectLayer, Effect};
     use flui_painting::paint::Clip;
 
     let mut writer = owner.writer();
@@ -1760,7 +1760,7 @@ fn publish_root(
     for (index, chunk) in chunks.iter().enumerate() {
         if let Some((_, radius)) = clipped.filter(|&(from, _)| from == index) {
             content.push_effect(
-                Layer::from(ClipRRectLayer::new(
+                Effect::from(ClipRRectLayer::new(
                     RRect::from_rect_and_radius(
                         Rect::from_xywh(2.0, 2.0, 120.0, 120.0),
                         Radius::circular(radius),
@@ -2157,17 +2157,35 @@ fn a_repainted_boundary_replays_the_chunks_that_did_not_change() {
     );
 }
 
-/// An empty layer tree, drawn in full between two frames of a version: a
-/// tree draws no scene owner, so the owner drawn before keeps its
-/// recordings, where a version of another owner would drop them.
-fn empty_frame(capture: &mut RetainedCapture) {
+/// A partial frame of `version` between two full ones, damaging a corner
+/// none of its chunks reaches: it records and replays nothing and keeps the
+/// lineage drawn before, where a frame of another owner's version (a
+/// hand-built tree included) would drop that lineage's recordings. The
+/// capture renders through its retained target, so the frame is partial.
+fn a_frame_beside_the_chunks(capture: &mut RetainedCapture, version: &SceneVersion) {
+    let corner = Rect::from_xywh(f64::from(SIDE) - 4.0, f64::from(SIDE) - 4.0, 2.0, 2.0);
     apply(
         capture,
-        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        DamageRegion::Region(flui_layer::Region::new(
+            flui_layer::DamageRect::try_covering(corner, (SIDE, SIDE))
+                .expect("a finite rect")
+                .expect("the corner is on the surface"),
+        )),
     );
     capture
-        .render_scene(&Scene::new(flui_layer::LayerTree::default()))
-        .expect("an empty frame renders");
+        .render_scene(&Scene::of_version(version.clone()))
+        .expect("the frame beside the chunks renders");
+    assert!(
+        matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
+        "{:?}",
+        capture.last_plan()
+    );
+    let counters = drawn(capture).counters;
+    assert_eq!(
+        (counters.chunks_recorded, counters.recording_cache_hits),
+        (0, 0),
+        "the frame beside the chunks draws none of them"
+    );
 }
 
 /// A kept recording names glyph and image texels, so each event that moves
@@ -2184,21 +2202,21 @@ fn an_atlas_reset_misses_every_cached_recording() {
     };
     // (row, what happens between the frames, whether the second frame and
     // the fresh one draw through the plugin font source, whether it hits)
-    type Between = fn(&mut RetainedCapture);
+    type Between = fn(&mut RetainedCapture, &SceneVersion);
     let rows: [(&str, Between, bool, bool); 4] = [
-        ("a frame between", empty_frame, false, true),
+        ("a frame between", a_frame_beside_the_chunks, false, true),
         (
             "a critical reclaim",
-            |capture| capture.reclaim(MemoryPressureLevel::Critical),
+            |capture, _| capture.reclaim(MemoryPressureLevel::Critical),
             false,
             false,
         ),
-        ("a font-source switch", |_| {}, true, false),
+        ("a font-source switch", |_, _| {}, true, false),
         (
             "an image-atlas reset",
-            |capture| {
+            |capture, version| {
                 capture.mark_image_atlas_full();
-                empty_frame(capture);
+                a_frame_beside_the_chunks(capture, version);
             },
             false,
             false,
@@ -2219,13 +2237,14 @@ fn an_atlas_reset_misses_every_cached_recording() {
     for (row, between, plugin, hits) in rows {
         let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         capture.keep_recorded_ir();
+        capture.require_intermediate();
         draw_until_admitted(&mut capture, &version);
         let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
         assert_eq!(
             first.counters.chunks_recorded, MIXED_CHUNKS,
             "{row}: the first frame records every chunk"
         );
-        between(&mut capture);
+        between(&mut capture, &version);
         let second = second_frame(&mut capture, plugin);
         let expected = if hits {
             (0, MIXED_CHUNKS)
@@ -2578,7 +2597,7 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
 #[test]
 fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
     use flui_foundation::geometry::{Matrix4, Point, RRect, Radius};
-    use flui_layer::{ClipRectLayer, FullReason, Layer, TransformLayer};
+    use flui_layer::{ClipRectLayer, Effect, FullReason, TransformLayer};
     use flui_painting::paint::{Clip, Path, Shader, TileMode};
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -2903,7 +2922,7 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         };
         let clipped = |content: &mut flui_layer::ContentBuilder, rect| {
             content.push_effect(
-                Layer::from(ClipRectLayer::new(rect, Clip::HardEdge)),
+                Effect::from(ClipRectLayer::new(rect, Clip::HardEdge)),
                 RenderId::new(1),
                 0,
             );
@@ -2928,7 +2947,7 @@ fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
         let scaled = ratio != 1.0;
         if scaled {
             top.push_effect(
-                Layer::from(TransformLayer::new(Matrix4::scaling(ratio, ratio, 1.0))),
+                Effect::from(TransformLayer::new(Matrix4::scaling(ratio, ratio, 1.0))),
                 RenderId::new(3),
                 0,
             );
@@ -3254,7 +3273,7 @@ struct ScrolledList {
 
 impl ScrolledList {
     fn new(visible: usize, rows: usize) -> Self {
-        use flui_layer::{ClipRectLayer, Layer};
+        use flui_layer::{ClipRectLayer, Effect};
         use flui_painting::paint::Clip;
 
         let height = visible as f64 * ROW_HEIGHT;
@@ -3300,7 +3319,7 @@ impl ScrolledList {
         });
         let mut top = BoundaryContent::builder();
         top.push_effect(
-            Layer::from(ClipRectLayer::new(
+            Effect::from(ClipRectLayer::new(
                 Rect::from_xywh(0.0, CLIP_TOP, f64::from(LIST_WIDTH), height),
                 Clip::HardEdge,
             )),
@@ -3427,7 +3446,7 @@ fn scroll_one_row_under_fixed_clip() {
 /// under the second; with no cull at the splice the IR keeps them.
 #[test]
 fn a_chunk_under_two_clips_draws_each_from_one_recording() {
-    use flui_layer::{ClipRectLayer, FullReason, Layer};
+    use flui_layer::{ClipRectLayer, Effect, FullReason};
     use flui_painting::paint::Clip;
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -3462,7 +3481,7 @@ fn a_chunk_under_two_clips_draws_each_from_one_recording() {
                 .expect("a finite offset"),
         });
         top.push_effect(
-            Layer::from(ClipRectLayer::new(clip, Clip::HardEdge)),
+            Effect::from(ClipRectLayer::new(clip, Clip::HardEdge)),
             RenderId::new(10 + index),
             0,
         );

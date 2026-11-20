@@ -156,8 +156,6 @@ mod owner_sampling;
 mod quit_consultation;
 #[path = "contracts/recovered_panic_context.rs"]
 mod recovered_panic_context;
-#[path = "contracts/render_view_lending.rs"]
-mod render_view_lending;
 #[path = "contracts/session_end_report.rs"]
 mod session_end_report;
 #[path = "contracts/session_end_steps.rs"]

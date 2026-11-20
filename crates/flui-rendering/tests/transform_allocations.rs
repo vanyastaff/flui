@@ -106,15 +106,11 @@ fn committed_transform_queries_reuse_ancestry_storage() {
 struct RowFlowDelegate;
 
 impl flui_rendering::delegates::FlowDelegate for RowFlowDelegate {
-    fn get_size(&self, constraints: BoxConstraints) -> Size {
+    fn size(&self, constraints: BoxConstraints) -> Size {
         constraints.biggest()
     }
 
-    fn get_constraints_for_child(
-        &self,
-        _index: usize,
-        constraints: BoxConstraints,
-    ) -> BoxConstraints {
+    fn constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::loose(constraints.biggest())
     }
 
@@ -134,10 +130,6 @@ impl flui_rendering::delegates::FlowDelegate for RowFlowDelegate {
     fn should_repaint(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool {
         false
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// A pointer moving over a painted tree hit-tests it without allocating: the
@@ -148,8 +140,8 @@ impl flui_rendering::delegates::FlowDelegate for RowFlowDelegate {
 fn warm_hit_tests_reuse_their_result_storage() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::PointerKind;
+    use flui_interaction::pointer::HitTestResult;
     use flui_objects::{RenderFlex, RenderFlow, RenderTransform};
-    use flui_rendering::hit_testing::HitTestResult;
 
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root =

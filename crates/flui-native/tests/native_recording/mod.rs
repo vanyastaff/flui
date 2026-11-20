@@ -10,8 +10,8 @@ mod families;
 use std::fmt::Write as _;
 
 use flui_platform::PlatformInput;
-use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{
+use flui_platform::input::keyboard::Modifiers;
+use flui_platform::input::pointer::{
     ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerKind, PointerRole, PointerSample,
     PointerSource, TouchpadSwipePhase,
 };
@@ -230,7 +230,7 @@ fn line(input: &PlatformInput) -> String {
     out
 }
 
-fn held(buttons: flui_platform::pointer::PointerButtons) -> Vec<u8> {
+fn held(buttons: flui_platform::input::pointer::PointerButtons) -> Vec<u8> {
     buttons.iter().map(|button| button.number().get()).collect()
 }
 

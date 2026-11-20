@@ -1012,8 +1012,8 @@ fn served_form(
 #[wasm_bindgen_test]
 fn a_focused_text_field_is_edited_through_its_element() {
     let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
-    store.set_text_input(flui_platform::text_store::TextInputOptions::new(
-        flui_platform::text_store::TextInputPurpose::Email,
+    store.set_text_input(flui_platform::text::store::TextInputOptions::new(
+        flui_platform::text::store::TextInputPurpose::Email,
     ));
     let (canvas, accessibility) = served_form(&store);
     let state = field("name").expect("the field's element");
@@ -1044,9 +1044,9 @@ fn a_focused_text_field_is_edited_through_its_element() {
         "the store's"
     );
     store.app_replace(
-        flui_platform::text_store::Utf16Range::try_new(
-            flui_platform::text_store::Utf16Offset::ZERO,
-            flui_platform::text_store::Utf16Offset::new(2),
+        flui_platform::text::store::utf16::Utf16Range::try_new(
+            flui_platform::text::store::utf16::Utf16Offset::ZERO,
+            flui_platform::text::store::utf16::Utf16Offset::new(2),
         )
         .expect("a range"),
         "AB",
@@ -1070,7 +1070,7 @@ fn a_focused_text_field_is_edited_through_its_element() {
     assert_eq!(canvas.keys.borrow().len(), keys + 1, "delivered once");
     assert_eq!(
         canvas.last_key().key,
-        flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Enter)
+        flui_platform::input::keyboard::Key::Named(flui_platform::input::keyboard::NamedKey::Enter)
     );
 }
 
@@ -1171,9 +1171,9 @@ async fn a_field_keeps_the_line_breaks_it_cannot_show() {
         let (canvas, _accessibility) = served_form(&store);
         if start == "ab" {
             store.app_replace(
-                flui_platform::text_store::Utf16Range::try_new(
-                    flui_platform::text_store::Utf16Offset::new(1),
-                    flui_platform::text_store::Utf16Offset::new(1),
+                flui_platform::text::store::utf16::Utf16Range::try_new(
+                    flui_platform::text::store::utf16::Utf16Offset::new(1),
+                    flui_platform::text::store::utf16::Utf16Offset::new(1),
                 )
                 .expect("a range"),
                 "\n",
@@ -1243,9 +1243,9 @@ async fn a_field_s_selection_keeps_its_direction() {
         (3, 1),
         "the active end is the start"
     );
-    store.app_select(flui_platform::text_store::Selection {
-        anchor: flui_platform::text_store::Utf16Offset::new(4),
-        active: flui_platform::text_store::Utf16Offset::new(2),
+    store.app_select(flui_platform::text::store::Selection {
+        anchor: flui_platform::text::store::utf16::Utf16Offset::new(4),
+        active: flui_platform::text::store::utf16::Utf16Offset::new(2),
     });
     let state = field("name").expect("the field");
     assert_eq!(

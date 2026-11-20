@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 
 use flui_foundation::InputSequenceId;
 
-use crate::{Unsupported, pointer::DeviceId};
+use crate::{Unsupported, input::pointer::DeviceId};
 
 /// When a haptic request plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

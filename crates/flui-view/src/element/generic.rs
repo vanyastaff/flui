@@ -74,7 +74,9 @@ struct CoreState {
     /// [`ElementTree`](crate::tree::ElementTree) through
     /// [`ElementBase::set_depth`](crate::view::ElementBase::set_depth)
     /// whenever the node's depth is set, before `mount` and on every move.
-    depth: usize,
+    /// Held in 32 bits, which share a word with the lifecycle and the dirty
+    /// flag: a tree four billion elements deep does not fit in memory.
+    depth: u32,
 
     /// Whether this element needs to rebuild.
     /// A listener between frames does not touch it: its rebuild handle queues
@@ -137,7 +139,8 @@ impl CoreState {
     }
 
     fn set_depth(&mut self, depth: usize) {
-        self.depth = depth;
+        self.depth =
+            u32::try_from(depth).expect("BUG: an element tree is never 2^32 elements deep");
     }
 
     fn mount(
@@ -580,7 +583,7 @@ where
     /// Get the depth in the element tree (root = 0), as last stamped by
     /// [`ElementBase::set_depth`](crate::view::ElementBase::set_depth).
     pub fn depth(&self) -> usize {
-        self.state.depth
+        usize::try_from(self.state.depth).expect("BUG: a 32-bit depth fits in usize")
     }
 
     /// Where the mounted view was created; unknown before mount.

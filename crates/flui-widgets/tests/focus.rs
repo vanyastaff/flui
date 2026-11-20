@@ -197,7 +197,7 @@ pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
     use flui_interaction::focus::{KeyEventResult, TraversalEdgeBehavior};
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
     use flui_widgets::interaction::FocusTraversalGroup;
     let origin = FocusNode::new();
@@ -684,10 +684,10 @@ fn reading_order_tree(
     )
 }
 
-fn tab_event(backward: bool) -> flui_platform::keyboard::KeyEvent {
+fn tab_event(backward: bool) -> flui_platform::input::keyboard::KeyEvent {
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
     };
     KeyEvent::new(
         KeyState::Down(KeyPress::First),
@@ -1184,6 +1184,105 @@ pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
     assert!(
         !node.has_primary_focus(),
         "the old element focused a node another owner adopted"
+    );
+}
+
+/// A `Focus` disposed after its caller-owned node was adopted elsewhere
+/// takes what it installed on the node with it: the node must not keep the
+/// old host's focus or key handler alive, and a `Shortcuts` above must not
+/// resolve through the old host's actions chain.
+pub(crate) fn a_superseded_focus_takes_its_record_and_callbacks_when_disposed() {
+    use crate::common::{lay_out, loose};
+    use flui_interaction::focus::KeyEventResult;
+    use flui_platform::{
+        EventTime,
+        input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
+    };
+    use flui_widgets::interaction::{Actions, CallbackAction, Intent, Shortcuts, SingleActivator};
+
+    struct SaveIntent;
+    impl Intent for SaveIntent {}
+
+    let node = FocusNode::with_debug_label("superseded-host-target");
+    // Each is held by one of the old host's handlers alone once its view is
+    // gone.
+    let captured = Rc::new(());
+    let key_captured = Rc::new(());
+    let saves = Rc::new(Cell::new(0_u32));
+    let tree = |hosted: bool| {
+        let child = if hosted {
+            let captured = Rc::clone(&captured);
+            let key_captured = Rc::clone(&key_captured);
+            let saves = Rc::clone(&saves);
+            Actions::new(
+                Focus::new(SizedBox::new(10.0, 10.0))
+                    .focus_node(Rc::clone(&node))
+                    .on_focus_change(move |_ctx, _focused| {
+                        let _ = &captured;
+                    })
+                    .on_key_event(move |_ctx, _event| {
+                        let _ = &key_captured;
+                        KeyEventResult::Ignored
+                    }),
+            )
+            .action(CallbackAction::new(move |_ctx, _intent: &SaveIntent| {
+                saves.set(saves.get() + 1);
+            }))
+            .into_view()
+            .boxed()
+        } else {
+            SizedBox::new(10.0, 10.0).into_view().boxed()
+        };
+        Shortcuts::new(child).shortcut(SingleActivator::character("s").control(), SaveIntent)
+    };
+    let ctrl_s = || {
+        KeyEvent::new(
+            KeyState::Down(KeyPress::First),
+            Key::character("s"),
+            Code::KeyS,
+            EventTime::from_nanos(0),
+        )
+        .with_modifiers(Modifiers::CONTROL)
+    };
+
+    let mut laid = lay_out(tree(true), loose(100.0));
+    laid.tick();
+    let manager = laid.focus_manager();
+    let _ = node.request_focus();
+    assert!(
+        manager.dispatch_key_event(&ctrl_s()).is_handled(),
+        "the shortcut resolves through the host's chain while it hosts the node"
+    );
+    assert_eq!(saves.get(), 1, "the host's action ran");
+
+    // The caller takes the node over where it hangs, so the host no longer
+    // owns its attachment when it goes.
+    let parent = node
+        .parent()
+        .expect("the mounted node hangs below a parent");
+    let _adopted = parent
+        .adopt_node(&node)
+        .expect("a live node moves under its caller");
+    laid.pump_widget(tree(false));
+    laid.tick();
+
+    assert_eq!(
+        Rc::strong_count(&captured),
+        1,
+        "the node keeps the disposed host's focus handler alive"
+    );
+    assert_eq!(
+        Rc::strong_count(&key_captured),
+        1,
+        "the node keeps the disposed host's key handler alive"
+    );
+    let _ = node.request_focus();
+    assert!(node.has_primary_focus(), "the adopted node takes focus");
+    let _ = manager.dispatch_key_event(&ctrl_s());
+    assert_eq!(
+        saves.get(),
+        1,
+        "the shortcut resolved through the disposed host's chain"
     );
 }
 

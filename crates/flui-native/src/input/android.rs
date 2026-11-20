@@ -35,7 +35,7 @@ pub mod keys {
 
     #![forbid(unsafe_code)]
 
-    use flui_platform::keyboard::{ImeComposition, NamedKey};
+    use flui_platform::input::keyboard::{ImeComposition, NamedKey};
 
     /// A key the native queue delivers while the input method composes belongs
     /// to the input method. Android hands every key to the input method before
@@ -82,7 +82,7 @@ pub mod keys {
 
     #[cfg(any(target_os = "android", test))]
     mod dead {
-        use flui_platform::keyboard::{Key, NamedKey};
+        use flui_platform::input::keyboard::{Key, NamedKey};
 
         /// What a character key's map entry gives under the event's meta
         /// state: `KeyCharacterMap.get`'s answer, without the JNI type.
@@ -241,8 +241,8 @@ pub(crate) mod motion {
 
     use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::EventTime;
-    use flui_platform::keyboard::Modifiers;
-    use flui_platform::pointer::{
+    use flui_platform::input::keyboard::Modifiers;
+    use flui_platform::input::pointer::{
         MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerButtons, PointerEvent,
         PointerKind, ScrollDelta, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
     };
@@ -1270,7 +1270,7 @@ pub(crate) mod scroll {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::DevicePixelRatio;
-    use flui_platform::pointer::{ScrollDelta, ScrollUnit};
+    use flui_platform::input::pointer::{ScrollDelta, ScrollUnit};
 
     use crate::input::scroll::{WheelAmount, wheel_step};
     use crate::version::gate::android::{AndroidApi, ScaledScrollFactor};
@@ -1441,9 +1441,9 @@ use std::{
 #[cfg(target_os = "android")]
 use android_activity::input::{Axis, KeyAction, MotionAction as NdkAction, ToolType};
 #[cfg(target_os = "android")]
-use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState};
+use flui_platform::input::keyboard::{Key, KeyEvent, KeyPress, KeyState};
 #[cfg(target_os = "android")]
-use flui_platform::{EventTime, keyboard::Modifiers as OwnedModifiers};
+use flui_platform::{EventTime, input::keyboard::Modifiers as OwnedModifiers};
 #[cfg(target_os = "android")]
 use keyboard_types::{Modifiers, NamedKey as UpstreamNamedKey};
 #[cfg(target_os = "android")]

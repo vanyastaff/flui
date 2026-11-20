@@ -332,12 +332,6 @@ created, since `UpdateScheduler` is not `Send`. Animation
 continuation demand is committed by the presentation frame path and routed
 through its wake capability, independent of this phase gate.
 
-`RenderingBinding::request_visual_update` (`flui-runtime`'s
-`renderer_binding.rs`) calls `ensure_visual_update`, so a backgrounded
-application does not schedule a frame on every pipeline request; the gate is
-the scheduler's alone, never a second copy at a call site.
-**Unasserted:** no test pins the binding's route.
-
 The phase gate is the dedup `request_frame_impl`'s `frame_scheduled`
 coalescing alone cannot provide: that flag says "a frame is already
 scheduled," not "a frame is already running and would observe this request
@@ -353,7 +347,7 @@ lifecycle (an owner that resumed, a test driving frames).
 **Mapping decision** (ADR-0027 leapfrog zone: runtime/scheduling topology
 is a sanctioned divergence point): the pipeline carrier goes through
 `UpdateScheduler`. `PipelineOwner::request_visual_update`
-(`flui-rendering/src/pipeline/owner/accessors.rs`) delivers the
+(`flui-rendering/src/pipeline/owner/invalidation.rs`) delivers the
 pipeline's visual-update wake (`flui-rendering/src/pipeline/notifier.rs`,
 an owned snapshot run with no notifier guard held), which invokes the
 closure a presentation registers via `owner.set_on_need_visual_update`

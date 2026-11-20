@@ -10,12 +10,12 @@ use flui_animation::Vsync;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point};
 use flui_painting::styling::Color;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::pointer::{
+use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
+use flui_platform::input::pointer::{
     DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
     PointerPosition, PointerRole, PointerSource, ScrollDelta, ScrollEvent, ScrollUnit,
 };
-use flui_platform::{EventTime, keyboard::Modifiers};
+use flui_platform::{EventTime, input::keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
 use flui_testing::{MouseScript, PenScript, PointerScript, TouchScript, TrackpadScript};
 use flui_view::environment::VsyncScope;

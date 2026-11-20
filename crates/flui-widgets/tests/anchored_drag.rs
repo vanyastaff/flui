@@ -64,7 +64,7 @@ const SIDE: f64 = 300.0;
 /// each.
 fn controls_width() -> f64 {
     2.0 * flui_interaction::gesture::GestureSettingsProvider::default()
-        .min_target_for(flui_platform::pointer::PointerKind::Touch)
+        .min_target_for(flui_platform::input::pointer::PointerKind::Touch)
 }
 
 /// Alternatives for a drag under test whose alternatives are not what the
@@ -129,7 +129,7 @@ fn painted(laid: &LaidOut) -> (f64, f64) {
 /// Where the first rectangle painted `color` is, through every layer above
 /// its picture: its left and top edges.
 pub(crate) fn painted_at(laid: &LaidOut, color: Color) -> (f64, f64) {
-    use flui_rendering::layer::Layer;
+    use flui_layer::Layer;
     let tree = laid.layer_tree().expect("a committed scene");
     for (_, node) in tree.iter() {
         let Layer::Picture(picture) = node.layer() else {
@@ -813,10 +813,10 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     use flui_interaction::drag::{DragOwner, ProcessNonce};
     use flui_platform::DragDropEvent;
     use flui_platform::EventTime;
-    use flui_platform::data_transfer::{
+    use flui_platform::input::pointer::PointerKind;
+    use flui_platform::transfer::data::{
         DataTransferOffer, RepresentationDescriptor, TransferActions, TransferFormat,
     };
-    use flui_platform::pointer::PointerKind;
 
     let vsync = Vsync::new();
     let sheet = controller(stops(&[(Stop::Closed, 0.0), (Stop::Open, 200.0)]));
@@ -824,7 +824,7 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     let owner = DragOwner::new(
         ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
         UiRuntimeId::new(7),
-        Arc::new(flui_platform::data_transfer::NullDragTransport),
+        Arc::new(flui_platform::transfer::data::NullDragTransport),
         Arc::new(|| {}),
     );
     let representations: Arc<[RepresentationDescriptor]> =

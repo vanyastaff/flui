@@ -42,7 +42,7 @@ replaces it as a whole and decides those rules instead.
 
 The platform side already has more than the widget side can reach:
 
-- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform/src/platform_window.rs`),
+- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform/src/window/platform_window.rs`),
   and `PresentationState::perform_haptic_feedback` resolves it
   (`crates/flui-runtime/src/presentation.rs:970`), but that method and its forwarder
   `UiRuntime::perform_haptic_feedback` (`crates/flui-runtime/src/ui_runtime/frame_clock.rs:466`) carry
@@ -306,7 +306,7 @@ that rule. The class holds:
 
 - **clipboard** and **data transfer**: `Platform::clipboard()` and `Platform::data_transfer()`
   (`crates/flui-native/src/traits/platform.rs:423,435`), already required;
-- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform/src/platform_window.rs`),
+- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform/src/window/platform_window.rs`),
   already required;
 - **text input and IME**: `PlatformWindow::text_input()`, today a defaulted method returning
   `None` (same file), becomes required;
@@ -453,4 +453,4 @@ the capability keeps its type `C`, so `ctx.capability::<C>()` call sites do not 
 | `not_registered_is_reported_before_no_window`, `a_closed_window_answers_no_window` | The lookup order of §3 | No seam |
 | Haptics: `NotOnThisPlatform` on a window without haptics; `FakeHaptics` on `HeadlessHostWindow` observes the call; `NotRegistered` without the plugin | ADR-0031's degradation contract | No seam |
 | `compile_fail` with a compiling twin: a `PlatformWindow` without `text_input`, and a backend extension impl without `accessibility`, do not compile | The core obligation of §5 | The defaults exist |
-| `cargo xtask cross-typecheck` for macOS with default features **and** with `a11y`, shown in the PR | The inert macOS path compiles | The prototype broke it (E0046) |
+| The `cross-typecheck` job's macOS leg, default features **and** `--all-features`, in a branch run the PR links | The inert macOS path compiles | The prototype broke it (E0046) |

@@ -99,6 +99,9 @@ which = { workspace = true }
 getrandom = { workspace = true }
 interprocess = { workspace = true }
 flui-protocol = { workspace = true, features = ["serde"] }
+# `flui record --native`: the native recording files a driver's trace writes too, by the
+# driver's one writer.
+flui-driver = { workspace = true }
 # `flui run --agent` in a browser: the WebSocket the browser's own remote
 # protocol (WebDriver BiDi in Firefox, the DevTools protocol in Chromium) is
 # spoken over. A loopback `ws://` connection to a browser this command
@@ -180,6 +183,6 @@ workspace = true
 [package.metadata.flui]
 tier = "H"
 tier-kind = "tool"
-order = 3
+order = 4
 # A host tool: it spawns cargo and serves files (mio, uuid).
 wasm = false

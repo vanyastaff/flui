@@ -2,7 +2,7 @@
 //! what each input path delivers as the code stands, without presence.
 
 use flui_platform::Availability;
-use flui_platform::input_regions::InputRegionKind;
+use flui_platform::input::regions::InputRegionKind;
 
 /// Each backend states what it implements, as the code stands; X11 has no
 /// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach
@@ -180,7 +180,7 @@ fn every_backend_says_whether_a_touchpad_hold_and_swipe_reach_it() {
 fn the_desktop_hosts_honour_the_chrome_regions_they_answer() {
     use crate::input::availability::{self as table, AndroidInputApis};
     use Availability::{Native, Unavailable};
-    use flui_platform::input_regions::{CaptionButton, ResizeEdge};
+    use flui_platform::input::regions::{CaptionButton, ResizeEdge};
 
     let android = table::android(AndroidInputApis {
         gesture_exclusion: true,

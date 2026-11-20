@@ -71,40 +71,23 @@
 
 // Public for exported macro expansion in downstream crates, not an authoring alias.
 #[doc(hidden)]
+pub use flui_foundation::Single as __MacroSingle;
+#[doc(hidden)]
 pub use flui_foundation::geometry::Size as __MacroSize;
 
-pub mod binding;
 pub mod constraints;
 pub mod context;
-// `sliver_grid_delegate` is part of the default build because
-// `RenderSliverGrid` now ships unconditionally in `flui-objects`.
-// `custom_painter`, `flow_delegate`, `single_child_layout_delegate`, and
-// `multi_child_layout_delegate` are unconditional the same way now that
-// `RenderCustomPaint`, `RenderFlow`, `RenderCustomSingleChildLayoutBox`,
-// and `RenderCustomMultiChildLayoutBox` ship unconditionally too
-//. The remaining companion-less delegate
-// (`custom_clipper`) stays gated inside `delegates/mod.rs` until its
-// render object lands — opt in via `--features experimental-delegates`.
 pub mod delegates;
 pub mod error;
-pub mod hit_testing;
 pub mod input_regions;
 pub mod inspect;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;
-/// Re-export semantics from flui-semantics crate.
-pub use flui_semantics as semantics;
 // `objects` module removed: concrete render objects live in the `flui-objects`
 // crate (the flui-objects extraction). flui-rendering now exports
 // only engine primitives (traits, pipeline, protocol, contexts, arena).
 pub mod storage;
-// Promoted from `cfg(test) pub(crate)` to the `testing` feature so
-// flui-objects' test crate can reach NoopSliver cross-crate when it enables
-// `features = ["testing"]`. Part of the custom-object-authoring test-support
-// contract (the flui-objects extraction).
-#[cfg(any(test, feature = "testing"))]
-pub mod test_support;
 // Protocol-agnostic windowing math (ADR-0003). Its public surface names no
 // render/sliver/protocol type, so it stays a general-purpose abstraction and is
 // cheaply extractable into a standalone crate once a 2nd direct consumer
@@ -121,118 +104,19 @@ pub mod traits;
 mod update;
 pub mod view;
 
-/// Re-export layer types from flui-layer crate for convenience.
-pub mod layer {
-    pub use flui_layer::*;
-}
-
-/// Prelude module for convenient imports.
-pub mod prelude {
-    // Arity system
-    // Re-export RenderId from flui_foundation
-    pub use flui_foundation::{RenderId, SemanticsId};
-    pub use flui_interaction::pointer::{HitTestBehavior, HitTestEntry, HitTestResult};
-    // Re-export commonly used value types
-    pub use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
-
-    // Per-child layout state (lives in box_protocol since it's a
-    // RawBoxLayoutContext implementation detail; re-exported here for
-    // convenience via the public-facing `protocol` module surface).
-    pub use crate::protocol::ChildState;
-    // Constraints from this crate
-    pub use crate::constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry};
-    // Context types for RenderBox and RenderSliver
-    pub use crate::context::{
-        BoxHitTestContext, BoxLayoutContext, FragmentRecorder, PaintContext, PaintFragment,
-        SliverHitTestContext, SliverLayoutContext,
-    };
-    // Error types
-    pub use crate::error::{PoisonPhase, RenderError, RenderResult};
-    // Hit testing. The parallel `BoxHitTestEntry`/`BoxHitTestResult`/
-    // `SliverHitTestEntry`/`SliverHitTestResult` exports that used to live
-    // here have been removed; the protocol-canonical versions live in
-    // `crate::protocol` and are re-exported alongside each
-    // `BoxProtocol`/`SliverProtocol` (see lib.rs protocol prelude).
-    // `PointerEventKind` was dropped alongside the deletion of the
-    // rendering-side `target.rs` module; canonical pointer-event types
-    // live in `flui_interaction::events`.
-    // Render hit-test metadata; executable tracking remains owned by the
-    // presentation's interaction runtime.
-    pub use crate::hit_testing::{CursorIcon, MouseTrackerAnnotation};
-    // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
-    pub use crate::protocol::IntoRenderObject;
-    // Arity types (canonical home: flui_foundation::arity)
-    pub use flui_foundation::{Arity, Leaf, Optional, Single, Variable};
-    // Tree types
-    pub use crate::storage::{RenderNode, RenderTree};
-    pub use crate::{
-        RenderUpdateImpact,
-        binding::{
-            RendererBinding, ViewHitTest, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
-            debug_dump_render_tree,
-        },
-        parent_data::{
-            BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,
-            SliverMultiBoxAdaptorParentData, SliverParentData, SliverPhysicalParentData,
-            StackParentData,
-        },
-        pipeline::{Canvas, Paint, PaintStyle, PipelineCell, PipelineOwner},
-        protocol::{BoxProtocol, Protocol, SliverProtocol},
-        semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner},
-        traits::{RenderBox, RenderObject, TextBaseline},
-        view::{
-            CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport,
-            RenderView, RevealedOffset, ScrollDirection, ScrollPosition, SliverPaintOrder,
-            ViewConfiguration, ViewportOffset,
-        },
-    };
-    // Grid, custom-paint, flow, and custom-layout delegates — always available
-    // because their companion render objects ship in the default build
-    //.
-    pub use crate::delegates::{
-        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
-        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
-        SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
-    };
-    // Remaining companion-less delegates still gated until their render
-    // objects land.
-    #[cfg(feature = "experimental-delegates")]
-    pub use crate::delegates::{CustomClipper, RectClipper};
-}
-
 // Re-export key types at crate root
 // Context system
 pub use context::{
     BoxHitTestContext, BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext,
     PaintContext, PaintFragment, SliverHitTestContext, SliverLayoutContext,
 };
-pub use error::{PoisonPhase, RenderError, RenderResult};
+pub use error::{PoisonPhase, RenderError, RenderResult, SemanticsError};
 pub use parent_data::ParentData;
 pub use pipeline::{
     LayoutPremise, PipelineCell, PipelineOwner, TextContextHandle, TextContextMut, TextSource,
 };
 pub use protocol::{
-    BoxChildSize,
-    // Concrete capabilities
-    BoxHitTest,
-    BoxLayout,
-    // Core protocol trait and implementations
-    BoxProtocol,
-    ChildLayout,
-    // Capability traits
-    HitTestCapability,
-    HitTestContextApi,
-    LayoutCapability,
-    LayoutContextApi,
-    Protocol,
-    // Type aliases
-    ProtocolConstraints,
-    ProtocolGeometry,
-    ProtocolHitResult,
-    ProtocolPosition,
-    SliverHitTest,
-    SliverLayout,
+    BoxChildSize, BoxProtocol, ChildLayout, HitTestContextApi, LayoutContextApi, Protocol,
     SliverProtocol,
 };
 pub use traits::RenderObject;

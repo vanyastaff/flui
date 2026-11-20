@@ -21,12 +21,10 @@ use flui_interaction::{
     pointer::InteractionDispatchHandle,
     text_input::{TextInputBackend, TextInputHandle, TextInputOwner},
 };
-use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
-use flui_platform::text_store::TextStoreHost;
+use flui_platform::text::store::TextStoreHost;
 use flui_platform::{Cursor, CursorError, CursorIcon, PlatformWindow};
-use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
@@ -46,7 +44,7 @@ use web_time::{Duration, Instant};
 use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
-use crate::occluded_frame::{OccludedFrame, Session, Sight};
+use crate::occluded_frame::{AskedFrame, OccludedFrame, OwedFrameRequest, Session, Sight};
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 use crate::ui_runtime::text_preparation::TextPreparation;
@@ -66,7 +64,7 @@ fn show_cursor(
     window: &dyn PlatformWindow,
     cursor: &Cursor,
     id: PresentationId,
-    device_id: flui_platform::pointer::PointerSource,
+    device_id: flui_platform::input::pointer::PointerSource,
 ) {
     let refused = match window.set_cursor(cursor) {
         Ok(()) => return,
@@ -505,17 +503,17 @@ pub struct PresentationState {
     held_pointer_input: RefCell<HeldPointerQueue>,
     /// The input regions collected when this frames scene was built, handed to the
     /// window once the sink accepts the scene (ADR-0217 §5).
-    staged_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
+    staged_input_regions: RefCell<Rc<[flui_platform::input::regions::InputRegion]>>,
     /// The input regions of the last committed frame, handed to the window again when
     /// it moves, so its backend can re-project them for a new display.
-    published_input_regions: RefCell<Rc<[flui_platform::input_regions::InputRegion]>>,
+    published_input_regions: RefCell<Rc<[flui_platform::input::regions::InputRegion]>>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery. `close()` clears its announce/event
-    /// callbacks unconditionally (production write); `UiRuntime::construct`
-    /// reads `platform_semantics_enabled_handle()` to wire the UI runtime's
-    /// renderer fan-out (production read) — announce/event delivery itself
+    /// callbacks unconditionally (production write); attaching the platform
+    /// bridge reads `platform_semantics_enabled_handle()` to wire the bridge's
+    /// activation listener (production read) — announce/event delivery itself
     /// still has no production caller.
     semantics: SemanticsHost,
     /// The semantics agent a development agent hook reads this presentation
@@ -576,12 +574,9 @@ pub struct PresentationState {
     /// may proceed, and the owner settles it on its turn. One per
     /// presentation, so it outlives every remount of the root.
     close_guard: CloseGuardSource,
-    /// Render tree, layout/paint pipeline coordination, and this
-    /// presentation's own semantics-enablement fan-out. Moved from the
-    /// retired UI runtime-level singular `UiRuntime::renderer`: `render_views`,
-    /// `first_frame_sent`, and the semantics-enabled listener are
-    /// per-presentation-window facts, not shareable once a UI runtime hosts more
-    /// than one presentation.
+    /// This presentation's root pipeline owner, its hit testing and its
+    /// first-frame gate: per-presentation facts, not shareable once a UI
+    /// runtime hosts more than one presentation.
     renderer: RenderingBinding,
     /// Total frames rendered successfully for this presentation. Moved here
     /// from the retired `AppBinding`: per-window frame accounting, beside
@@ -615,6 +610,14 @@ pub struct PresentationState {
     /// Whether this presentation owes its surface a frame while it cannot be
     /// seen, and since when it has drawn none ([`OccludedFrame`]).
     occluded_frame: Cell<OccludedFrame>,
+    /// What the window was last asked for the frame it owes (ADR-0389), and
+    /// whether that frame was held once its instant came. Shared with the
+    /// [`OwedFrameRequest`] that records a delivery.
+    owed_frame_asked: Rc<Cell<AskedFrame>>,
+    /// Whether a frame of this presentation's window, delivered since its
+    /// owed instant came, serves the frame it owes and no attempt has taken
+    /// it yet (ADR-0389).
+    owed_frame_served: Cell<bool>,
     /// What the window system does with the window's last frame while it
     /// keeps the window off the screen, as the host named it.
     occluded_surface: flui_platform::OccludedSurface,
@@ -1010,8 +1013,7 @@ impl PresentationState {
             ));
         });
 
-        let renderer =
-            RenderingBinding::new_with_pipeline(pipeline.clone(), capabilities.scheduler);
+        let renderer = RenderingBinding::new_with_pipeline(pipeline.clone());
 
         // Idle-wake wiring: a dirty mark (mark_needs_layout / mark_needs_paint)
         // fires this callback so a quiescent event loop produces the frame.
@@ -1109,11 +1111,6 @@ impl PresentationState {
         });
 
         let semantics = SemanticsHost::new();
-        // Semantics-enabled fan-out -> this presentation's own SemanticsHost.
-        let semantics_flag = semantics.platform_semantics_enabled_handle();
-        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
-            semantics_flag.store(enabled, Ordering::Relaxed);
-        }));
 
         // Whether this window's adapter says where the assistive technology's
         // cursor is: a widget that acts on it asks before relying on it.
@@ -1202,6 +1199,8 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            owed_frame_asked: Rc::default(),
+            owed_frame_served: Cell::new(false),
             occluded_surface,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
@@ -1236,8 +1235,7 @@ impl PresentationState {
     /// Standalone assembly with no UI runtime above it: this presentation's
     /// `WidgetsBinding` lazily self-owns a private `GlobalKeyScope` on first
     /// `GlobalKey` registration (never shared, so it never conflicts with
-    /// anything), and its `RenderingBinding` owns its own throwaway
-    /// `UpdateScheduler` (see [`RenderingBinding::new_for_test_with_pipeline`]).
+    /// anything).
     /// Used only by this module's own unit tests, which exercise
     /// presentation-local behavior (gestures/focus/haptics/overlay) in
     /// isolation; UI runtime-backed tests use [`Self::new`] through
@@ -1275,15 +1273,11 @@ impl PresentationState {
             owner.capabilities_mut().url_owner = Some(url_owner.clone());
         });
 
-        let renderer = RenderingBinding::new_for_test_with_pipeline(pipeline.clone());
+        let renderer = RenderingBinding::new_with_pipeline(pipeline.clone());
         // This path wires no platform accessibility (see the doc above).
         let accessibility: Option<Arc<dyn PlatformAccessibility>> = None;
 
         let semantics = SemanticsHost::new();
-        let semantics_flag = semantics.platform_semantics_enabled_handle();
-        renderer.add_semantics_enabled_listener(Arc::new(move |enabled| {
-            semantics_flag.store(enabled, Ordering::Relaxed);
-        }));
 
         let snapshot = window.state();
         let state = Self {
@@ -1357,6 +1351,8 @@ impl PresentationState {
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
             occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            owed_frame_asked: Rc::default(),
+            owed_frame_served: Cell::new(false),
             occluded_surface: flui_platform::OccludedSurface::Discarded,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
@@ -1678,6 +1674,26 @@ impl PresentationState {
         &self.textures
     }
 
+    /// Whether a texture update waits that the held version owes a
+    /// publication for: a retirement, or a frame of a texture it draws, while
+    /// the version was applied for the target the pipeline now lays out for
+    /// and the window does not refuse it (ADR-0304 §8, ADR-0334 §4). A frame
+    /// finding no tree work publishes the held version for it, and the
+    /// registry holds the update until the host takes it with a publication,
+    /// so a frame that never reached the host leaves it for the next. A
+    /// target change owes nothing here: the repaint it causes carries the
+    /// update, and a repaint that fails leaves no texture work to spin on.
+    /// The one predicate the runner's gate, sampling admission and the
+    /// frame's republish read; `false` while a frame holds the scene.
+    pub(crate) fn owes_texture_frame(&self) -> bool {
+        let target = self.pipeline.with(|owner| {
+            owner.root_constraints().map(|constraints| {
+                crate::presentation_scene::SceneTarget::of(constraints, owner.device_pixel_ratio())
+            })
+        });
+        self.scene.owes_texture_frame(&self.textures, target)
+    }
+
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery — the per-window home the retired
     /// `SemanticsBinding` singleton's enablement/announce/event state moved
@@ -1719,13 +1735,13 @@ impl PresentationState {
         // A frame whose regions did not change keeps the staged slice, so a
         // steady frame allocates no new one.
         if **staged != *regions {
-            *staged = Rc::<[flui_platform::input_regions::InputRegion]>::from(regions);
+            *staged = Rc::<[flui_platform::input::regions::InputRegion]>::from(regions);
         }
     }
 
     /// The input regions the frame about to be submitted carries: the slice the window gets
     /// once that frame is shown ([`Self::publish_input_regions`]).
-    pub(crate) fn staged_input_regions(&self) -> Rc<[flui_platform::input_regions::InputRegion]> {
+    pub(crate) fn staged_input_regions(&self) -> Rc<[flui_platform::input::regions::InputRegion]> {
         Rc::clone(&self.staged_input_regions.borrow())
     }
 
@@ -1737,7 +1753,7 @@ impl PresentationState {
     /// does: a backend that panics or reenters leaves them committed for the next move.
     pub(crate) fn publish_input_regions(
         &self,
-        regions: Rc<[flui_platform::input_regions::InputRegion]>,
+        regions: Rc<[flui_platform::input::regions::InputRegion]>,
     ) {
         *self.published_input_regions.borrow_mut() = Rc::clone(&regions);
         self.hand_input_regions(&regions);
@@ -1754,7 +1770,7 @@ impl PresentationState {
     /// Hands `regions` to the window. A window whose input capabilities leave input regions
     /// `Unavailable` refuses them on every frame; the regions then have no effect, which
     /// those capabilities already say, so the refusal is only traced.
-    fn hand_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion]) {
+    fn hand_input_regions(&self, regions: &[flui_platform::input::regions::InputRegion]) {
         if let Some(Err(refused)) = self.with_window(|window| window.set_input_regions(regions)) {
             tracing::trace!(%refused, "the window takes no input regions");
         }
@@ -1869,11 +1885,13 @@ impl PresentationState {
     }
 
     /// Whether frame work waits on this presentation: a demand its clock
-    /// keeps, a redraw mark, or tree work.
+    /// keeps, a redraw mark, tree work, or a texture frame the held version owes
+    /// ([`Self::owes_texture_frame`]).
     pub(crate) fn has_retained_frame_work(&self) -> bool {
         !self.clock.demand_mask().is_empty()
             || self.redraw_pending.get()
             || self.has_pending_work_snapshot()
+            || self.owes_texture_frame()
     }
 
     /// When this presentation, unseen with frame work waiting, draws the
@@ -1893,20 +1911,79 @@ impl PresentationState {
         self.has_retained_frame_work().then_some(due)
     }
 
-    /// At `now`, grant the owed frame of a presentation whose frame is due,
-    /// if it would still be shown (the window may have been locked since,
-    /// which only its sight says): the clock produces it at the first poll
-    /// that can. A hold before then (text preparation, a full sink) leaves it
-    /// due; the quiet period starts again only when it runs
-    /// ([`Self::occluded_frame_drawn`]).
-    pub(crate) fn grant_occluded_frame(&self, session: Session, now: Instant) {
-        if self.occluded_frame_at().is_none_or(|due| now < due) {
-            return;
+    /// What this presentation's window is to be asked for the frame it owes
+    /// its surface ([`Self::occluded_frame_at`], on the event timeline counted
+    /// from `epoch`), when that is not what it was last asked: the instant, or
+    /// the withdrawal of the one asked. `None` when the window was asked
+    /// exactly that, so a window hears an instant once (ADR-0389); an instant
+    /// whose frame was held ([`Self::hold_owed_frame`]) is asked again once its
+    /// text preparation releases it. A pure read: weighing the hold changes
+    /// nothing.
+    pub(crate) fn owed_frame_request(&self, epoch: Instant) -> Option<OwedFrameRequest> {
+        let at = self
+            .occluded_frame_at()
+            .map(|at| crate::occluded_frame::event_time(epoch, at));
+        OwedFrameRequest::of(&self.window, at, &self.owed_frame_asked, || {
+            crate::ui_runtime::text_preparation::outcome(self)
+        })
+    }
+
+    /// The frame this presentation owes was served and is held, its text
+    /// preparation waiting: the request drew nothing, so the window is asked
+    /// again once the preparation releases it, not while it waits. Records the
+    /// preparation's outcome generation now and nothing else.
+    pub(crate) fn hold_owed_frame(&self) {
+        let generation = crate::ui_runtime::text_preparation::outcome(self).generation;
+        self.owed_frame_asked
+            .set(self.owed_frame_asked.get().hold(generation));
+    }
+
+    /// This presentation's window delivered a frame (`note_frame_request`):
+    /// when the frame it owes its surface has come due, that frame serves it
+    /// (ADR-0389). Only a frame of its own window serves it, so the frames of
+    /// other windows, and work due elsewhere, never run it.
+    pub(crate) fn note_owed_frame_served(&self) {
+        if self
+            .occluded_frame_at()
+            .is_some_and(|due| self.clock.now() >= due)
+        {
+            self.owed_frame_served.set(true);
+        }
+    }
+
+    /// Whether a frame of this presentation's window serves the frame it owes
+    /// its surface now: delivered since its owed instant came, and not yet
+    /// taken by an attempt ([`Self::grant_occluded_frame`]).
+    pub(crate) fn serves_owed_frame(&self) -> bool {
+        self.owed_frame_served.get() && self.occluded_frame_at().is_some()
+    }
+
+    /// Forget a served owed frame no attempt took (a pump that rendered
+    /// nothing for this presentation): only a later frame of its window
+    /// serves it again.
+    pub(crate) fn forget_served_owed_frame(&self) {
+        self.owed_frame_served.set(false);
+    }
+
+    /// At `now`, grant the owed frame a frame of this presentation's window
+    /// served, if it would still be shown (the window may have been locked
+    /// since, which only its sight says): the clock produces it at the first
+    /// poll that can. The serve is taken whatever comes of it, so a frame held
+    /// past it (text preparation) is not served again by the next pump. The
+    /// quiet period starts again only when it runs
+    /// ([`Self::occluded_frame_drawn`]). Answers whether it was granted.
+    pub(crate) fn grant_occluded_frame(&self, session: Session, now: Instant) -> bool {
+        if !self.owed_frame_served.replace(false)
+            || self.occluded_frame_at().is_none_or(|due| now < due)
+        {
+            return false;
         }
         if self.occluded_sight(session).is_some_and(Sight::owes) {
             self.clock.grant_hidden_frame();
+            true
         } else {
             self.occluded_frame.set(OccludedFrame::NotOwed);
+            false
         }
     }
 
@@ -2158,7 +2235,8 @@ impl PresentationState {
     }
 
     /// Whether this presentation has work a frame would do: demand its clock keeps, a redraw it
-    /// was asked for, a build or a dirty node, or completion callbacks that wait. What a
+    /// was asked for, a build or a dirty node, completion callbacks that wait, or a texture frame
+    /// the held version owes ([`Self::owes_texture_frame`]). What a
     /// settlement that frees an in-flight place wakes the loop for, unless a dropped frame's
     /// backoff or an abandoned device holds the presentation (ADR-0305 §5).
     pub(crate) fn has_frame_work(&self) -> bool {
@@ -2166,6 +2244,7 @@ impl PresentationState {
             || self.redraw_pending.get()
             || self.has_pending_work_snapshot()
             || self.has_eligible_completion()
+            || self.owes_texture_frame()
     }
 
     /// While this presentation has frames pending, the latest the owner sleeps until: the next
@@ -2370,27 +2449,27 @@ impl PresentationState {
         self.performance_overlay.set(enabled);
     }
 
-    /// Record this frame and the overlay layer it composes above the
-    /// presentation's content, `None` while the overlay is off.
+    /// This frame's debug readout, to draw above the presentation's content,
+    /// `None` while the overlay is off.
     ///
-    /// The layer is published at a scene node of its own, slotted after the
+    /// The scene records it at a node of its own, slotted after the
     /// pipeline's frame node, so it composites above the content and no
-    /// boundary of the pipeline repaints for it.
+    /// boundary of the pipeline repaints for it; a readout equal to the one
+    /// shown records nothing (`PresentationScene`).
     ///
     /// # The overlay is inside what it measures
     ///
-    /// When enabled, this pulls `frames_since(None)`, rebuilds both
-    /// histograms and shapes the readout's seven labels through `text`, the
-    /// UI runtime's text context, on every composited frame. The cost is bounded — the
+    /// When enabled, this pulls `frames_since(None)` and rebuilds both
+    /// histograms on every composited frame, and the scene shapes the
+    /// readout's labels whenever they change. The cost is bounded — the
     /// telemetry ring is fixed-capacity, so it is O(ring), not O(session) —
     /// and no frame pays it while the overlay is off. But it is not free, and
     /// it lands *inside* the frames the overlay subsequently reports: read the
     /// displayed percentiles as the cost of running with the overlay on, not
     /// as the app's cost without it.
-    pub(crate) fn performance_overlay_layer(
+    pub(crate) fn performance_overlay_readout(
         &self,
-        text: &flui_rendering::TextContextHandle,
-    ) -> Option<flui_layer::Layer> {
+    ) -> Option<crate::performance_overlay::Readout> {
         if !self.performance_overlay.get() {
             return None;
         }
@@ -2411,37 +2490,13 @@ impl PresentationState {
             self.clock.produces_deferred(),
             self.frames_dropped(),
         );
-        let sample = PerformanceSample {
-            fps: pace.frames_per_second,
-            frame_time_ms: pace.frame_work.as_secs_f64() * 1000.0,
-            diagnostic_line: Some(&diagnostic_line),
-        };
-
-        // The readout's labels are shaped here, through the ui_runtime's text
-        // context, so the backend only rasterizes them (ADR-0092). The
-        // context is free at scene assembly; were it lent, a debug overlay
-        // skips a frame rather than panic it.
-        let Some(overlay) = text.try_with(|text| {
-            PerformanceOverlayLayer::record(
-                text,
-                PerformanceOverlayLayer::default_bounds(),
-                PerformanceOverlayOption::all(),
-                &sample,
-            )
-        }) else {
-            tracing::warn!("performance overlay skipped: the ui_runtime's text context is lent");
-            return None;
-        };
-
-        let overlay = match overlay {
-            Ok(overlay) => overlay,
-            Err(error) => {
-                tracing::warn!(%error, "performance overlay skipped: label layout failed");
-                return None;
-            }
-        };
-
-        Some(flui_layer::Layer::from(overlay))
+        Some(crate::performance_overlay::Readout::of(
+            &crate::performance_overlay::PerformanceSample {
+                fps: pace.frames_per_second,
+                frame_time_ms: pace.frame_work.as_secs_f64() * 1000.0,
+                diagnostic_line: Some(&diagnostic_line),
+            },
+        ))
     }
 
     fn attach_surface(&self) {
@@ -2980,27 +3035,5 @@ mod tests {
         presentation.close();
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
-    }
-
-    /// While the UI runtime's text context is lent, the overlay skips the frame
-    /// and leaves the tree as it was, rather than panic on the borrow; once
-    /// the loan ends, the next frame attaches it. Fails if the overlay
-    /// borrows the context unconditionally (a panic), or attaches an
-    /// unshaped readout while the context is lent.
-    #[test]
-    fn a_lent_text_context_skips_the_overlay_frame() {
-        let presentation = presentation();
-        presentation.set_performance_overlay(true);
-        let text = flui_rendering::TextContextHandle::standalone();
-
-        let lent = text.with(|_| presentation.performance_overlay_layer(&text));
-        assert!(lent.is_none(), "a lent context attaches no overlay");
-
-        let free = presentation.performance_overlay_layer(&text);
-        assert!(
-            free.as_ref()
-                .is_some_and(|layer| layer.as_performance_overlay().is_some()),
-            "a free context yields the overlay"
-        );
     }
 }

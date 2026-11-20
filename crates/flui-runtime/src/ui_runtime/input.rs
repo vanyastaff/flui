@@ -4,13 +4,13 @@ use super::UiRuntime;
 use super::presentation_lifecycle::HostLifecycle;
 use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
+use crate::renderer_binding::ViewHitTest;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{events::PointerEvent, ids::InputSurface};
-use flui_platform::keyboard::KeyState;
-use flui_platform::pointer::{ButtonChange, PointerButton};
+use flui_platform::input::keyboard::KeyState;
+use flui_platform::input::pointer::{ButtonChange, PointerButton};
 use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
-use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -195,8 +195,8 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
 
 /// Whether `event` is the press of Escape that cancels a drag: its first
 /// press, while no input method composes.
-fn is_escape_press(event: &flui_platform::keyboard::KeyEvent) -> bool {
-    use flui_platform::keyboard::{ImeComposition, Key, KeyPress, NamedKey};
+fn is_escape_press(event: &flui_platform::input::keyboard::KeyEvent) -> bool {
+    use flui_platform::input::keyboard::{ImeComposition, Key, KeyPress, NamedKey};
     matches!(
         event.state,
         KeyState::Down(KeyPress::First | KeyPress::Unpaired)
@@ -217,7 +217,7 @@ fn pointer_pressed(event: &PointerEvent) -> bool {
 /// repeat) or a pointer button pressed. Only these try a dropped frame before
 /// its backoff ends.
 fn is_discrete_press(input: &PlatformInput) -> bool {
-    use flui_platform::keyboard::KeyPress;
+    use flui_platform::input::keyboard::KeyPress;
     match input {
         PlatformInput::Keyboard(event) => {
             matches!(
@@ -237,7 +237,7 @@ fn is_discrete_press(input: &PlatformInput) -> bool {
 fn back_button_change(event: &PointerEvent) -> Option<(KeyState, EventTime)> {
     let (state, button, time) = match event {
         PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => (
-            KeyState::Down(flui_platform::keyboard::KeyPress::First),
+            KeyState::Down(flui_platform::input::keyboard::KeyPress::First),
             press.button(),
             press.sample.time,
         ),
@@ -760,7 +760,7 @@ impl UiRuntime {
         let mut result = flui_interaction::pointer::HitTestResult::new();
         match presentation
             .renderer()
-            .hit_test_in_view(&mut result, position, kind, 0)
+            .hit_test(&mut result, position, kind)
         {
             ViewHitTest::Answered { panic } => {
                 if let Some(payload) = panic {
@@ -882,10 +882,7 @@ impl UiRuntime {
                         let mut result = flui_interaction::pointer::HitTestResult::new();
                         let offset =
                             flui_foundation::geometry::Offset::new(position.dx, position.dy);
-                        match presentation
-                            .renderer()
-                            .hit_test_in_view(&mut result, offset, kind, 0)
-                        {
+                        match presentation.renderer().hit_test(&mut result, offset, kind) {
                             ViewHitTest::Answered { panic } => hit_panic = panic,
                             ViewHitTest::TreeBusy => {
                                 tracing::debug!("pointer hit test found the render tree busy");
@@ -1154,6 +1151,9 @@ impl UiRuntime {
         }
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_request.set(Some(request));
+            // A frame of a covered window's own window, its owed instant come, serves the frame
+            // it owes (ADR-0389): the window asked for it through its timed request.
+            presentation.note_owed_frame_served();
         }
         if recording {
             self.record_applied(

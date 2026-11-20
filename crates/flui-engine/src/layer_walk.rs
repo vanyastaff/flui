@@ -1,5 +1,5 @@
-//! Stack-safe traversal of what a [`Scene`](flui_layer::Scene) holds: a
-//! [`LayerTree`], or a retained [`SceneVersion`] walked in place (ADR-0304 §9).
+//! Stack-safe traversal of the retained [`SceneVersion`] a
+//! [`Scene`](flui_layer::Scene) holds, walked in place (ADR-0304 §9).
 //!
 //! Both the windowed renderer and the headless capture path walk a scene in
 //! the same order — render a node, descend into its children in paint order,
@@ -30,12 +30,8 @@
 //! until exit. GPU replay chooses each effect's active attachment after
 //! recording.
 
-use flui_foundation::LayerId;
 use flui_foundation::geometry::{Matrix4, Rect};
-use flui_layer::{
-    Entry, EntryAddress, EntryIndex, Layer, LayerTree, OffsetLayer, SceneContent, SceneNodeId,
-    SceneVersion,
-};
+use flui_layer::{Entry, EntryAddress, EntryIndex, Layer, OffsetLayer, SceneNodeId, SceneVersion};
 use smallvec::SmallVec;
 
 /// What a visitor wants the walk to do after a node is visited.
@@ -64,8 +60,6 @@ pub(crate) enum Item<'a> {
 /// around it.
 #[derive(Clone, Copy)]
 pub(crate) enum Site<'a> {
-    /// A layer of a tree.
-    Tree(&'a LayerTree, LayerId),
     /// An entry of a version's node.
     Entry(&'a SceneVersion, EntryAddress),
     /// A version's node itself.
@@ -77,27 +71,18 @@ impl Site<'_> {
     /// `None` when it draws nothing, or nothing here is a follower.
     pub(crate) fn follower_transform(self) -> Option<Matrix4> {
         match self {
-            Self::Tree(tree, id) => flui_layer::resolve_follower_transform(tree, id),
             Self::Entry(version, at) => version.follower_transform(at),
             Self::Node => None,
         }
     }
 
     /// An identity for matching a follower's enter with its exit.
-    fn key(self) -> Option<SiteKey> {
+    fn key(self) -> Option<EntryAddress> {
         match self {
-            Self::Tree(_, id) => Some(SiteKey::Layer(id)),
-            Self::Entry(_, at) => Some(SiteKey::Entry(at)),
+            Self::Entry(_, at) => Some(at),
             Self::Node => None,
         }
     }
-}
-
-/// [`Site`] without the scene it borrows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SiteKey {
-    Layer(LayerId),
-    Entry(EntryAddress),
 }
 
 pub(crate) trait SceneVisitor {
@@ -109,73 +94,6 @@ pub(crate) trait SceneVisitor {
     /// Run an item's post-children cleanup. Never called for an item whose
     /// `enter` returned [`Step::SkipSubtree`].
     fn exit(&mut self, site: Site<'_>, item: &Item<'_>);
-}
-
-/// Walks `scene` from its root in paint order. A version's slot whose
-/// subtree or chunk whose bounds cannot reach `cull`, in surface pixels, is
-/// skipped; a tree is walked whole. Answers how many reaches the walk tested
-/// against the cull: one per slot or chunk asked about, one per block of
-/// chunks.
-pub(crate) fn walk_scene<V: SceneVisitor>(
-    scene: SceneContent<'_>,
-    cull: Option<Rect<f64>>,
-    visitor: &mut V,
-) -> u64 {
-    match scene {
-        SceneContent::Tree(tree) => {
-            walk_layer_tree(tree, tree.root(), visitor);
-            0
-        }
-        SceneContent::Version(version) => walk_version(version, cull, visitor),
-    }
-}
-
-/// One frame of the explicit tree walk stack.
-///
-/// `Enter` visits a node and decides whether to descend; `Exit` runs the
-/// node's post-children cleanup, which is what makes the order
-/// render → children → cleanup rather than render → cleanup → children.
-enum Frame {
-    Enter(LayerId),
-    Exit(LayerId),
-}
-
-/// Walk `tree` from `root`, visiting nodes in paint order.
-///
-/// `enter` runs before a node's children (its `Step` decides whether there are
-/// any), `exit` runs after them. An id the tree does not know is skipped at
-/// whichever step reaches it.
-///
-/// Termination needs no guard: a `LayerTree` is append-only and links a node
-/// only in the call that mints its id (`LayerTree::push_child`), so neither a
-/// cycle nor a doubly-parented node is representable, and every node is
-/// entered exactly once.
-pub(crate) fn walk_layer_tree<V: SceneVisitor>(tree: &LayerTree, root: LayerId, visitor: &mut V) {
-    let mut stack = vec![Frame::Enter(root)];
-    while let Some(frame) = stack.pop() {
-        match frame {
-            Frame::Enter(id) => {
-                let Some(node) = tree.get(id) else {
-                    continue;
-                };
-                if visitor.enter(Site::Tree(tree, id), &Item::Layer(node.layer()))
-                    == Step::SkipSubtree
-                {
-                    continue;
-                }
-                stack.push(Frame::Exit(id));
-                for &child_id in node.children().iter().rev() {
-                    stack.push(Frame::Enter(child_id));
-                }
-            }
-            Frame::Exit(id) => {
-                let Some(node) = tree.get(id) else {
-                    continue;
-                };
-                visitor.exit(Site::Tree(tree, id), &Item::Layer(node.layer()));
-            }
-        }
-    }
 }
 
 /// An effect entry a node's walk has opened: whether its `enter` descended,
@@ -207,7 +125,7 @@ enum Visit {
 ///
 /// Termination: a version's slots form a tree (`SceneOwner::apply` refuses a
 /// cycle and a second parent), so every node is entered at most once.
-fn walk_version<V: SceneVisitor>(
+pub(crate) fn walk_scene<V: SceneVisitor>(
     version: &SceneVersion,
     cull: Option<Rect<f64>>,
     visitor: &mut V,
@@ -356,7 +274,7 @@ fn close_until<V: SceneVisitor>(
 /// whether a chunk may replay its kept recording. Answers what the
 /// walk and the recording did.
 pub(crate) fn record_scene(
-    scene: SceneContent<'_>,
+    scene: &SceneVersion,
     cull: Option<Rect<f64>>,
     reads: crate::recording_cache::CacheReads,
     backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
@@ -364,7 +282,7 @@ pub(crate) fn record_scene(
     struct Recorder<'a, 'b> {
         backend: &'a mut crate::layer_dispatcher::LayerDispatcher<'b>,
         error: Option<crate::EngineError>,
-        followers: Vec<SiteKey>,
+        followers: Vec<EntryAddress>,
         counters: crate::frame_protocol::RasterCounters,
         reads: crate::recording_cache::CacheReads,
     }
@@ -447,7 +365,7 @@ pub(crate) fn record_scene(
                 return Step::SkipSubtree;
             }
             self.backend.flush_active_transform();
-            if matches!(site, Site::Node | Site::Tree(..)) {
+            if matches!(site, Site::Node) {
                 self.counters.nodes_entered = self.counters.nodes_entered.saturating_add(1);
             }
             let step = match item {
@@ -516,6 +434,7 @@ pub(crate) fn record_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_layer::{Effect, LayerTree};
 
     /// The order both production walkers must produce, recorded as a string so
     /// a mismatch reads as the sequence rather than an index.
@@ -528,7 +447,6 @@ mod tests {
         fn enter(&mut self, site: Site<'_>, item: &Item<'_>) -> Step {
             let kind = match item {
                 Item::Layer(flui_layer::Layer::Offset(_)) => "offset",
-                Item::Layer(flui_layer::Layer::Canvas(_)) => "canvas",
                 Item::Layer(flui_layer::Layer::ClipRect(_)) => "clip",
                 Item::Layer(_) => "other",
                 Item::Placed(_) => "node",
@@ -545,7 +463,6 @@ mod tests {
 
     fn label(site: Site<'_>) -> String {
         match site {
-            Site::Tree(_, id) => id.get().to_string(),
             Site::Entry(_, at) => format!("@{}", at.entry.get()),
             Site::Node => String::new(),
         }
@@ -568,17 +485,17 @@ mod tests {
         const DEPTH: usize = 10_000;
 
         let mut tree = LayerTree::new(offset());
-        let root = tree.root();
-        let mut parent = root;
+        let mut parent = tree.root();
         for _ in 1..DEPTH {
             parent = tree.push_child(parent, offset());
         }
 
+        let version = SceneVersion::from_tree(&tree);
         let visited = std::thread::Builder::new()
             .stack_size(64 * 1024)
             .spawn(move || {
                 let mut rec = Recorder::default();
-                walk_layer_tree(&tree, root, &mut rec);
+                walk_scene(&version, None, &mut rec);
                 rec.log.len()
             })
             .expect("spawn the small-stack walker thread")
@@ -587,8 +504,8 @@ mod tests {
 
         assert_eq!(
             visited,
-            DEPTH * 2,
-            "every node entered and exited, on a 64 KiB stack"
+            (DEPTH + 1) * 2,
+            "the node and every effect entered and exited, on a 64 KiB stack"
         );
     }
 
@@ -675,33 +592,29 @@ mod tests {
         ))
     }
 
-    fn random_effect(
-        rng: &mut Rng,
-        link: flui_layer::LayerLink,
-        led: &mut bool,
-    ) -> flui_layer::Layer {
+    fn random_effect(rng: &mut Rng, link: flui_layer::LayerLink, led: &mut bool) -> Effect {
         use flui_foundation::geometry::{Offset, Size};
-        use flui_layer::{ClipRectLayer, FollowerLayer, Layer, LeaderLayer, TransformLayer};
+        use flui_layer::{ClipRectLayer, FollowerLayer, LeaderLayer, TransformLayer};
         match rng.below(5) {
-            0 => Layer::from(OffsetLayer::new(Offset::new(
+            0 => Effect::from(OffsetLayer::new(Offset::new(
                 rng.signed(40.0),
                 rng.signed(40.0),
             ))),
-            1 => Layer::from(TransformLayer::new(
+            1 => Effect::from(TransformLayer::new(
                 Matrix4::translation(rng.signed(30.0), rng.signed(30.0), 0.0)
                     * Matrix4::rotation_z(rng.signed(1.0)),
             )),
-            2 => Layer::from(ClipRectLayer::new(
+            2 => Effect::from(ClipRectLayer::new(
                 Rect::from_xywh(rng.signed(50.0), rng.signed(50.0), 60.0, 60.0),
                 flui_painting::paint::Clip::HardEdge,
             )),
-            3 if !std::mem::replace(led, true) => Layer::from(LeaderLayer::with_offset(
+            3 if !std::mem::replace(led, true) => Effect::from(LeaderLayer::with_offset(
                 link,
                 Size::new(20.0, 20.0),
                 Offset::new(rng.signed(30.0), rng.signed(30.0)),
             )),
-            3 => Layer::from(OffsetLayer::zero()),
-            _ => Layer::from(
+            3 => Effect::from(OffsetLayer::zero()),
+            _ => Effect::from(
                 FollowerLayer::new(link)
                     .with_target_offset(Offset::new(rng.signed(20.0), rng.signed(20.0)))
                     .with_size(Size::new(10.0, 10.0)),
@@ -779,7 +692,8 @@ mod tests {
         owner.current().clone()
     }
 
-    /// A version is walked as the tree it flattens to: the same layers,
+    /// A version is walked as the tree it flattens to, made a scene of its
+    /// own (`SceneVersion::from_tree`, one node): the same layers,
     /// chunks and placements in the same order, each follower at the same
     /// transform, over random trees of boundaries and effects.
     #[test]
@@ -791,14 +705,26 @@ mod tests {
             let version = random_version(&mut rng, count);
             let tree = version.flatten();
             let (mut walked, mut flattened) = (Trace::default(), Trace::default());
-            walk_scene(SceneContent::Version(&version), None, &mut walked);
-            walk_scene(SceneContent::Tree(&tree), None, &mut flattened);
-            assert_eq!(walked.log, flattened.log, "case {case}");
+            walk_scene(&version, None, &mut walked);
+            walk_scene(&SceneVersion::from_tree(&tree), None, &mut flattened);
+            // The one node that holds the tree, at no offset, wraps it.
+            assert_eq!(
+                flattened.log.first().map(String::as_str),
+                Some("offset Offset { dx: 0.0, dy: 0.0 }"),
+                "case {case}"
+            );
+            assert_eq!(
+                flattened.log.last().map(String::as_str),
+                Some("exit"),
+                "case {case}"
+            );
+            let inside = &flattened.log[1..flattened.log.len() - 1];
+            assert_eq!(walked.log, inside, "case {case}");
         }
     }
 
-    /// Where each chunk of a tree lands on the surface, read from the tree
-    /// walk alone: the transforms it accumulates, each follower at the
+    /// Where each chunk of a tree lands on the surface, read from the uncut
+    /// walk of its one-node version: the transforms it accumulates, each follower at the
     /// transform it resolves, and the clips above, as bounding boxes. `None`
     /// for a chunk nothing of which is shown.
     #[derive(Default)]
@@ -890,7 +816,7 @@ mod tests {
     /// A walk culled by a damage rect enters every chunk the flattened tree
     /// lands in that rect, over random trees of boundaries, transforms,
     /// rotations, clips, leaders and followers and random damage; the
-    /// landings come from the tree walk, not from the version's geometry.
+    /// landings come from the flattened tree's uncut walk, not from the version's geometry.
     #[test]
     fn a_culled_walk_enters_every_chunk_its_damage_meets() {
         let mut skipped = 0_usize;
@@ -901,7 +827,7 @@ mod tests {
             let version = random_version(&mut rng, count);
             let tree = version.flatten();
             let mut landing = Landing::default();
-            walk_scene(SceneContent::Tree(&tree), None, &mut landing);
+            walk_scene(&SceneVersion::from_tree(&tree), None, &mut landing);
             let damage = Rect::from_xywh(
                 rng.signed(150.0) + 150.0,
                 rng.signed(150.0) + 150.0,
@@ -909,7 +835,7 @@ mod tests {
                 1.0 + rng.signed(40.0).abs(),
             );
             let mut culled = Entered::default();
-            walk_scene(SceneContent::Version(&version), Some(damage), &mut culled);
+            walk_scene(&version, Some(damage), &mut culled);
             for &(chunk, landed) in &landing.chunks {
                 let entered = culled.0.contains(&chunk);
                 if let Some(landed) = landed
@@ -934,7 +860,7 @@ mod tests {
     #[test]
     fn a_culled_walk_enters_a_slot_whose_blur_reaches_the_damage() {
         use flui_layer::{
-            BoundaryContent, ImageFilterLayer, Layer, Placement, SceneOp, SceneOwner,
+            BoundaryContent, Effect, ImageFilterLayer, Placement, SceneOp, SceneOwner,
         };
         let mut owner = SceneOwner::new();
         let mut writer = owner.writer();
@@ -954,7 +880,7 @@ mod tests {
         });
         let mut content = BoundaryContent::builder();
         content.push_effect(
-            Layer::from(ImageFilterLayer::new(
+            Effect::from(ImageFilterLayer::new(
                 flui_painting::paint::ImageFilter::blur(4.0),
             )),
             flui_foundation::RenderId::new(2),
@@ -970,7 +896,7 @@ mod tests {
         let version = owner.current();
         let walk = |damage: Rect<f64>| {
             let mut entered = Entered::default();
-            walk_scene(SceneContent::Version(version), Some(damage), &mut entered);
+            walk_scene(version, Some(damage), &mut entered);
             entered.0.len()
         };
         // The square spans 100..110; the blur spreads it a few pixels.
@@ -1030,10 +956,10 @@ mod tests {
                 .expect("a row applies");
             let version = owner.current();
             let (mut whole, mut partial) = (Trace::default(), Trace::default());
-            walk_scene(SceneContent::Version(version), None, &mut whole);
+            walk_scene(version, None, &mut whole);
             // Over the third boundary alone, clear of its neighbours' edges.
             let damage = Rect::from_xywh(25.0, 2.0, 6.0, 6.0);
-            walk_scene(SceneContent::Version(version), Some(damage), &mut partial);
+            walk_scene(version, Some(damage), &mut partial);
             (whole.entered, partial.entered)
         };
         let (ten_whole, ten) = entered(10);
@@ -1059,7 +985,7 @@ mod tests {
     #[test]
     fn a_partial_walk_replays_only_the_chunks_its_damage_reaches() {
         use flui_layer::{
-            BoundaryContent, ImageFilterLayer, Layer, SceneOp, SceneOwner, TransformLayer,
+            BoundaryContent, Effect, ImageFilterLayer, SceneOp, SceneOwner, TransformLayer,
         };
         let replayed = |row: usize, damage: Rect<f64>| {
             let mut owner = SceneOwner::new();
@@ -1072,7 +998,7 @@ mod tests {
             }
             // Drawn at 0..10, moved to 300..310.
             content.push_effect(
-                Layer::from(TransformLayer::new(Matrix4::translation(300.0, 0.0, 0.0))),
+                Effect::from(TransformLayer::new(Matrix4::translation(300.0, 0.0, 0.0))),
                 flui_foundation::RenderId::new(row + 2),
                 0,
             );
@@ -1080,7 +1006,7 @@ mod tests {
             content.pop_effect();
             // Drawn at 400..410, spread a few pixels past that by the blur.
             content.push_effect(
-                Layer::from(ImageFilterLayer::new(
+                Effect::from(ImageFilterLayer::new(
                     flui_painting::paint::ImageFilter::blur(4.0),
                 )),
                 flui_foundation::RenderId::new(row + 4),
@@ -1099,11 +1025,7 @@ mod tests {
                 })
                 .expect("a row applies");
             let mut entered = Entered::default();
-            walk_scene(
-                SceneContent::Version(owner.current()),
-                Some(damage),
-                &mut entered,
-            );
+            walk_scene(owner.current(), Some(damage), &mut entered);
             entered.0.len()
         };
         // Over the third square alone, clear of its neighbours' edges.
@@ -1161,11 +1083,7 @@ mod tests {
             // Over the square in the second row and column, clear of its
             // neighbours' edges.
             let damage = Rect::from_xywh(14.0, 14.0, 6.0, 6.0);
-            let tested = walk_scene(
-                SceneContent::Version(owner.current()),
-                Some(damage),
-                &mut entered,
-            );
+            let tested = walk_scene(owner.current(), Some(damage), &mut entered);
             (entered.0.len(), tested)
         };
         let (small, small_tested) = walked(10);

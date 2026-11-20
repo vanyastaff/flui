@@ -1,14 +1,16 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 129 закрыты и 5 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `4793762dd` и закрытиями LY100 и LY69); открытые — неотмеченные записи раздела «Ход
-  исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
-  `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
-  - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
-  - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
-  - LY102 — модули `flui-platform` по областям (не начата).
+  Из 134 задач серии 131 закрыта и 3 открыты (сверено с отметками записей «Хода исполнения» на
+  `main` @ `bc2f0ec33`, закрытием LY102 и закрытием LY98 трассой драйвера, FD10 спеки
+  flui-driver); открытые — неотмеченные записи раздела «Ход исполнения». Прогоны на устройствах,
+  которых ждут закрытые задачи, — строки `crates/flui-native/platform-parity.toml`. Открытые
+  задачи и код, которого они ждут:
+  - LY96 и LY99 — Windows- и macOS-lane драйвера есть; ждут прогонов на рабочем столе,
+    принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane), и lane
+    остальных ОС спеки flui-driver;
+  - LY97 — запись драйвером есть (трасса держит слои `input` и `native`); ждёт прогонов на
+    Windows, macOS и Linux и lane Android и Web (FD13, FD12 спеки flui-driver).
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -532,7 +534,7 @@ GPU-память простаивающего или невидимого окн
   `unsafe` в модуле `cfg(any(target_os = "macos", test))` с `forbid(unsafe_code)` не компилируется
   в тестовой сборке; `const _: () = assert!(..)` в FFI-модуле `cfg(target_os = "macos")` с неверным
   размером падает (E0080) под `cargo check --target aarch64-apple-darwin` — так, как его проверяет
-  job CI `cross-typecheck` (локальный `xtask cross-typecheck` требует `cargo-zigbuild`), — и не
+  job CI `cross-typecheck` (локально вне macOS — через `cargo-zigbuild clippy`), — и не
   собирается на Windows. AGENTS.md
   «Definition of Done» и `docs/extending.md` (строка «Платформа») дополнены. Проверки на Windows:
   clippy `-p flui-native -p flui-app --all-targets -D warnings`, с `winit-backend,a11y`; nextest
@@ -4961,8 +4963,7 @@ GPU-память простаивающего или невидимого окн
   хост, ему передавать свою (записано в gaps, запись 10). Mac, iPhone, Android-устройство,
   браузер не затронуты; `cross-typecheck` — в CI.
 
-- [ ] **LY98** (код на `main`; открыта одним: чтение записи драйвером заблокировано спекой
-  flui-driver) — схема записи — `flui-protocol::native_recording` (за фичей
+- [x] **LY98** — схема записи — `flui-protocol::native_recording` (за фичей
   `serde`); журнал — `crates/flui-native/src/journal/` (`capture`, `recorder`, `codec`, `lines`)
   под фичей `native-capture` (ADR-0151 §10 и §16); golden-записи читаются схемой без ядра и
   пишутся байт в байт (`native_recordings_write_back_byte_for_byte`,
@@ -5007,13 +5008,18 @@ GPU-память простаивающего или невидимого окн
   `a_writer_admits_a_row_only_while_the_recording_and_its_cut_fit`,
   `a_reader_refuses_the_line_past_either_bound`, `an_overrun_names_its_limit_and_its_cut`; перенос
   счёта держат прежние `native_recording_contracts` (`a_native_recording_past_its_bounds_is_refused`,
-  `a_recording_past_its_bound_is_written_cut`). Заблокировано:
-  чтение записи крейтом `flui-driver` без ребра к ядру ждёт FD6 спеки
-  [flui-driver](../flui-driver/tasks.md); сегодня запись читает `flui record` через
-  `flui-protocol`. Захват на Windows, macOS, iOS и Android не прогонялся — строка качества parity
-  «Recorded native input replays deterministically on the headless host».
+  `a_recording_past_its_bound_is_written_cut`). **Чтение драйвером** (FD10 спеки
+  [flui-driver](../flui-driver/tasks.md)): трасса драйвера просит `record.start{input, native}`,
+  если приложение служит слой `native`, и пишет каждый поток в `native/<n>.jsonl` тем же писателем,
+  что и `flui record --native` (`flui_driver::trace::native::NativeFiles`, перенесён из
+  `flui-cli`); `flui_driver::trace::native::read` читает запись схемой `flui-protocol` без ребра к
+  ядру: версия заголовка, границы строки, строк и байтов (`Budget`), объявленные устройства,
+  `gap` на месте (`trace::a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core`,
+  `trace::a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`; `cli_record` в WSL
+  9 из 9 после переноса). Захват на Windows, macOS, iOS и Android не прогонялся — строка качества
+  parity «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY97** (заблокирована спекой flui-driver: `--record` `os`-lane) — на `main` всё, кроме
+- [ ] **LY97** (ждёт `--record` `os`-lane драйвера на каждой ОС) — на `main` всё, кроме
   `--record`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
   headless (`NativeRecording::replay_into`, отказ — типизированный `ReplayError`), строки IME,
   закрытия и блокировок хранилища pull-модели (`store_focus`, `store_lock`; защищённое хранилище —
@@ -5027,21 +5033,45 @@ GPU-память простаивающего или невидимого окн
   `window_store_and_close_recordings_replay_on_the_headless_host`,
   `captured_streams_replay_to_what_the_session_delivered`,
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Эти потоки пишет `flui record --native`
-  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Android и Web; крейта
-  `flui-driver` нет, задача ждёт FD6 спеки [flui-driver](../flui-driver/tasks.md). Захват
-  настоящего метода ввода на устройствах — строка качества parity «Recorded native input replays
-  deterministically on the headless host».
+  (LY98). Запись драйвером есть (FD10 спеки [flui-driver](../flui-driver/tasks.md)): трасса
+  (`Driver::start_trace`) держит слои `input` и `native` приложения, запущенного или
+  присоединённого через любой lane, — запись идёт от агента приложения, не от lane, поэтому
+  Windows-, macOS-, X11- и Wayland-lane ничего своего для неё не требуют. Остаётся: прогон
+  записи `os`-lane на Windows, macOS и Linux с отладочной сборкой приложения (`native-capture`) —
+  строка parity «Recorded native input replays deterministically on the headless host»;
+  Android и Web — ждут своих lane (запуск и транспорт агента: FD13 и FD12 спеки flui-driver).
+  Захват настоящего метода ввода на устройствах — та же строка parity.
 
-- [ ] **LY96** (заблокирована спекой flui-driver, не начата) — сценарии `os`-lane драйвера
-  (ADR-0238), читающие приложение через Narrator, VoiceOver, Orca и TalkBack, требуют крейта
-  `flui-driver` с его `os`-lane ([спека flui-driver](../flui-driver/tasks.md)); крейта нет. Долг на
-  каждой ОС — строка качества parity «Conformance executed with assistive technology on each OS».
+- [ ] **LY96** (Windows и macOS начаты, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
+  драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
+  приложение через UI Automation, то дерево, что читает Narrator: нормализованная проекция дерева
+  UIA равна дереву приложения, каждая роль таблицы ролей читается своим control type, элемент
+  вызывается через `InvokePattern` (`windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`,
+  `windows_desktop::every_role_reads_back_as_its_control_type_through_ui_automation`, прогон на
+  отдельном рабочем столе nextest, Windows 11, 2026-11-19). macOS-lane (`flui-driver::lane::macos`,
+  FD14) читает окно через accessibility API, то дерево, что читает VoiceOver, и нажимает элемент
+  через `AXPress`; на Mac не прогонялся (`macos_desktop::*` в долгу). X11-lane (FD16) читает
+  приложение через AT-SPI, то дерево, что читает Orca: проекция равна дереву приложения, каждая
+  роль таблицы ролей AT-SPI читается своей ролью, элемент нажимается через действие AT-SPI
+  (`x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does`,
+  `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
+  Долг: сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
+  строка качества parity «Conformance executed with assistive technology on each OS».
 
-- [ ] **LY99** (заблокирована спекой flui-driver, не начата) — строки conformance, которым нужна
-  ОС, становятся сценариями `flui-driver` с отчётом lane и результата, когда появятся крейт и его
-  `os`-lane ([спека flui-driver](../flui-driver/tasks.md)); headless-таблица
-  `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs`) — то, что эти
-  сценарии повторят на headless.
+- [ ] **LY99** (сценарий есть; прогон на Windows через `os`-lane в долгу) — сценарий conformance
+  драйвера `scenarios::conformance` (`crates/flui-driver/tests/scenarios.rs`): имя, роль и
+  идентификатор кнопки, её нажатие и прочитанный эффект, через `os`-lane ещё и дерево UIA. На
+  headless в CI — `scenarios::the_conformance_scenario_passes_on_the_headless_target`; через
+  `os`-lane на Windows — `windows_desktop::the_conformance_scenario_runs_through_the_os_lane`,
+  который на отдельном рабочем столе nextest объявляет OS-ввод и выходит `cannot_verify` (ввод
+  туда не доходит) и проходит только на рабочем столе, принимающем ввод пользователя; этот прогон
+  — долг строки качества parity «Real OS input drives an app through the driver's OS lane». Через
+  `os`-lane на macOS — `macos_desktop::the_conformance_scenario_runs_through_the_os_lane`, тоже в
+  долгу до прогона на Mac. Через X11-lane сценарий проходит в CI на Xvfb
+  (`x11_desktop::the_conformance_scenario_runs_through_the_os_lane`); долг Linux — прогон на X
+  сервере рабочего стола под оконным менеджером.
+  Headless-таблица `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs`) —
+  то, что такие сценарии повторяют на headless.
 
 - [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
   `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей
@@ -6364,14 +6394,50 @@ GPU-память простаивающего или невидимого окн
   `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown`: `-p flui-native --lib` с фичами по умолчанию и без них,
   `-p flui-platform -p flui-system --lib`, `--tests` трёх крейтов под нативные цели и `-p flui-system --lib --tests --features testing` под wasm32 — ни одного предупреждения: каждое `expect(dead_code)` исполнено.
 
-- [ ] **LY102** (открыта, не начата) — `crates/flui-platform/src/lib.rs:113–161`
-  объявляет плоские модули; каталоги есть у `capability/`, `haptics/`, `input_capabilities/`,
-  `keyboard/`, `pointer/`, `preferences/`, `text_store/` и `testing/`. Остаётся код: модули окна
-  (`window*.rs`, `platform_window.rs`, `placement.rs`, `surface_target.rs`, `brightness.rs`) —
-  в `window/`; ввод — в `input/`; текст (`ime.rs`, `text_input.rs`, `text_store/`) — в `text/`;
-  `display.rs` — в `display/`; перенос (`clipboard.rs`, `data_transfer.rs`, `drag.rs`) — в
-  `transfer/`; резерв `menu/`. Корневые реэкспорты, которыми пользуются фасад и `flui-sdk`, не
-  меняются (`api/flui.txt` без разницы), `docs/crates.md` описывает раскладку.
+- [x] **LY102** — #2878. **Что сделано.** `flui-platform` разложен по областям `git mv`
+  (история идёт за файлами): `window` — `options` (бывший `window.rs`: идентичность и опции
+  создания), `platform_window`, `state`, `capabilities`, `placement`, `geometry`, `frame`,
+  `insets`, `handler`, `surface_target`, `cursor`, `brightness`, `frame_request`,
+  `os_options`; `input` — `event` (бывший `input.rs`: `PlatformInput`), `pointer`,
+  `keyboard`, `capabilities` (бывший `input_capabilities/`), `regions` (бывший
+  `input_regions.rs`), `event_time`; `text` — `ime`, `input` (бывший `text_input.rs`), `store`
+  (бывший `text_store/`, его `store.rs` стал `contract.rs`, чтобы модуль не звался как
+  родитель); `transfer` — `clipboard`, `data` (бывший `data_transfer.rs`), `drag`;
+  `preferences` — с `locale` и `regional`; `haptics` — с `feedback` (бывший
+  `haptic_feedback.rs`); `host_notice.rs` стал `notice.rs`. Модуль, имя которого повторяло
+  путь области, стал короче (`window_state` → `window::state`, `input_capabilities` →
+  `input::capabilities`). **Публичные пути.** Области `input`, `text`, `transfer`, `window` —
+  публичные модули, в их `mod.rs` только объявления; восемь публичных модулей переехали в свои
+  области и реэкспорта в корне не имеют: `flui_platform::input::{pointer, keyboard,
+  capabilities, regions}`, `flui_platform::text::store`, `flui_platform::transfer::{data,
+  drag}`, `flui_platform::window::os_options`. Имена, реэкспортированные в корне, остались
+  (`flui_platform::WindowOptions`), и у каждого это единственный путь: они реэкспортируются из
+  приватных модулей областей. Исключения названы в `lib.rs` и `ARCHITECTURE.md`: предметы
+  других крейтов, которые называют подписи контракта, — `PressId`
+  (`input::pointer::PressId`), `FirstPanic` (`capability::FirstPanic`), `MemoryPressureLevel`
+  (в корне) из `flui-foundation` и `CursorIcon` из `cursor-icon` (в корне, ADR-0089).
+  `Utf16Offset`, `Utf16Range` и `OffsetError` имеют один путь, `text::store::utf16`. Пути фасада
+  `flui::platform` и `flui-sdk` не изменились; в их исходниках сменились только пути источника,
+  а в списке `flui-sdk/tests/surface.rs` — те же строки на новом месте сортировки. Все
+  пользователи в 15 крейтах переписаны (ast-grep для групп `use`, sed для прямых путей),
+  ожидающие выпуска фрагменты `changelog.d` называют новые пути, новый фрагмент —
+  `changelog.d/platform-contract-by-area.md`. **Направление импортов.** `window` → `input`,
+  `text`, `transfer`, `haptics`, `display`, `preferences`; `input` → `text`, `transfer`;
+  `haptics` → `input`. Цикл `input` ↔ `transfer` снят: `transfer::drag` берёт `PressId` из
+  `flui-foundation`, где он определён, а не через `input::pointer`. `PreferenceQueryError`,
+  ошибка `PlatformWindow::gesture_geometry`, перенесена к трейту в `window/platform_window.rs`,
+  чтобы `preferences` не называла `window`. Цикл `window` ↔ `capability` (`portal_parent`,
+  `WindowRef`) был до переноса и записан в `docs/gaps.md` («The window and capability areas of
+  flui-platform import each other»). `display` остался одним файлом `display.rs`; `menu/` не
+  заведён: по таблице ADR-0151 §2 модель меню приходит с первой реализацией и потребителем. В
+  корне остались модули вне областей строки: `assets`, `backoff`, `environment`, `executor`,
+  `flag_set`, `http`, `launch`, `launch_key`, `opened`, `owner_wait`, `sandbox`,
+  `system_failure`, `testing`. Ссылки ADR на файлы с номерами строк, которые описывают код на
+  момент решения, названы по предмету и коммиту (ADR-0254, ADR-0151, ADR-0090, ADR-0305), а
+  таблицы улик, привязанные к коммиту (ADR-0305, ADR-0312), сохраняют пути того коммита.
+  **Как проверено.** `cargo public-api -p flui-platform --all-features` до (`origin/main` @ `bc2f0ec33`, 4119 строк) и после (4101 строка): если в списке «до» заменить восемь старых путей модулей новыми и три пути `text_store::{Utf16Offset, Utf16Range, OffsetError}` путями `text::store::utf16`, наборы строк совпадают, кроме четырёх новых `pub mod flui_platform::{input, text, transfer, window}`; под старыми путями было 525 строк списка: `pointer` 164, `keyboard` 44, `input_capabilities` 57, `input_regions` 13, `text_store` 130, `data_transfer` 63, `drag` 47, `os_options` 7. Два trybuild `.stderr` меняют только путь исходника в
+  примечании rustc (`src/window.rs` → `src/window/options.rs`, `src/platform_window.rs` →
+  `src/window/platform_window.rs`). На Windows `cargo heli clippy --workspace --all-targets -- -D warnings` с `--all-features` и без — чисто; rustdoc `-p flui-platform` с `-D warnings`, с фичами и без, — чисто; doctests `flui-platform` (`--all-features`) — зелёные; nextest `flui-platform --features testing` 91/91, `flui-sdk` 14/14 (с `the_public_surface_is_the_measured_list` и `compiler_guards`). В WSL (Ubuntu, cargo без heli) `clippy --workspace --all-targets --features flui-native/native-capture -- -D warnings` — чисто; nightly `check --locked --lib` `flui-platform` и `flui-native` под `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android` и `wasm32-unknown-unknown` и `--lib --tests` с `flui-system` под Android — ни предупреждения; trybuild `flui-platform`: оба изменённых случая проходят, три нетронутых расходятся одинаково на ветке и на `origin/main` (окружение). До переименования четырёх модулей (тот же перенос с путями `input::input_capabilities`, `text::text_store`, …) прогнаны прямые зависимые (`flui-animation`, `flui-app`, `flui-assets`, `flui-cli`, `flui-engine`, `flui-interaction`, `flui-native`, `flui-rendering`, `flui-runtime`, `flui-sdk`, `flui-system`, `flui-testing`, `flui-view`, `flui-widgets`, `flui-devtools`, `flui-hot-reload`) без вложенных наборов — 3085 из 3089 (три `agent::browser` у `flui-cli` и `the_driver_agent_contains_every_failure` у `flui-app` падают так же на `origin/main`), набор фасада `thread_boundary_ui` и doctests `flui-interaction`; переименование меняет только пути, и clippy со всеми целями компилирует каждый их тест. `cargo heli xtask checks` (`key-vocabulary`, `recording-vocabulary` читают новые пути), `typos` и `lychee` по изменённым документам — чисто.
 - [x] **LY113** — #2639 (строки
   LY104–LY113, граф, счёт в шапке) и #2642. **Что запись говорит.** У каждой строки LY20–LY103,
   у которой на `main` есть работа, есть запись со слитыми PR, тестами и остатком; у LY58, LY60,
@@ -6870,9 +6936,9 @@ GPU-память простаивающего или невидимого окн
   `MacOSWindow::try_new` берёт `FollowedDelivery`, `AndroidWindow::new` — `CountedDelivery`, иных
   способов их получить нет (`WindowDelivery::new` на месте вызова не компилируется). Крюк конца
   прогона — `OwnerSlot<Rc<dyn Fn()>>`. `RedrawPoll` не несёт срок, `PostPollRedraw` не подделать.
-  Открыто ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit)):
-  должный кадр закрытого окна рядом с показанным окном AppKit доставляется снова после каждого
-  кадра показанного окна — ответ приложения не называет окно. Тесты:
+  Должный кадр закрытого окна в срок приложения не входит: его просят у самого окна
+  (`PlatformWindow::request_frame_at`, ADR-0389), и кадры показанного окна рядом не доставляют
+  его снова. Тесты:
   `a_second_layout_callback_replaces_the_first` (X11,
   Wayland), `a_panicking_exit_policy_is_terminal`,
   `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one`,
@@ -8978,8 +9044,9 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   приостановленного окна) и сеанс показывает окна (блокировка и сон машины — два флага
   `occluded_frame::Session`, так что блокировка, пережившая сон, остаётся). После
   `OCCLUDED_FRAME_QUIET` без кадров при ждущей работе, не раньше повтора отброшенного кадра, окно
-  рисует один кадр через `FrameClock::grant_hidden_frame`; срок — в `next_wake`, раннеры и
-  headless-хост спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
+  рисует один кадр через `FrameClock::grant_hidden_frame`; срок просится у самого окна
+  (`PlatformWindow::request_frame_at`, ADR-0389), не в `next_wake`; раннеры и headless-хост
+  спрашивают `UiRuntime::runs_frames` (кадры включены или долг наступил). Кадр
   остаётся должным, пока не исполнится, как бы поздно ни пришло пробуждение; удержание (отсрочка,
   подготовка текста) его не снимает, а при полном приёмнике срок не просится (будит
   урегулирование); следующая тишина начинается только с исполненного кадра. Долг пересчитывается

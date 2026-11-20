@@ -12,17 +12,6 @@
 //! | [`FlowDelegate`] | Flow layout algorithm | RenderFlow |
 //! | [`SingleChildLayoutDelegate`] | Custom single-child layout | RenderCustomSingleChildLayoutBox |
 //! | [`MultiChildLayoutDelegate`] | Custom multi-child layout | RenderCustomMultiChildLayoutBox |
-//! | `CustomClipper` | Owner-local custom clipping shapes | experimental only |
-//!
-//! # Feature gating
-//!
-//! `SliverGridDelegate`, `CustomPainter`, `FlowDelegate`,
-//! `SingleChildLayoutDelegate`, and `MultiChildLayoutDelegate` (plus their
-//! concrete implementations) are unconditionally available because their
-//! companion render objects ship in the default build. The remaining delegate
-//! (`CustomClipper`) is still gated behind `experimental-delegates`; production
-//! path-based render effects use ADR-0027 owner-lane targets instead of storing
-//! delegate callbacks in render objects.
 
 // Grid delegate — always available because RenderSliverGrid ships unconditionally.
 mod sliver_grid_delegate;
@@ -49,9 +38,3 @@ pub use single_child_layout_delegate::*;
 // `layout::custom_multi_child_layout`).
 mod multi_child_layout_delegate;
 pub use multi_child_layout_delegate::*;
-
-// Companion-less delegates — gated until their render objects land.
-#[cfg(feature = "experimental-delegates")]
-mod custom_clipper;
-#[cfg(feature = "experimental-delegates")]
-pub use custom_clipper::*;

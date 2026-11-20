@@ -8,6 +8,13 @@
 //! render tree they own and the GPU compositor are the runtime's, not authoring contracts.
 
 pub use flui_foundation::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
+pub use flui_interaction::{
+    events::CursorIcon,
+    pointer::{
+        HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
+        ScrollTarget, SmartZoomTarget,
+    },
+};
 pub use flui_rendering::constraints::{
     BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry,
 };
@@ -16,19 +23,12 @@ pub use flui_rendering::context::{
     BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext, PaintAnchor, PaintContext,
     PaintFragment, SliverHitTestContext, SliverLayoutContext,
 };
-pub use flui_rendering::hit_testing::{
-    CursorIcon, HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
-    ScrollTarget, SmartZoomTarget,
-};
 pub use flui_rendering::input_regions::InputRegionSink;
 pub use flui_rendering::parent_data::{
-    BoxParentData, ContainerBoxParentData, ContainerParentDataMixin, FlexFit, FlexParentData,
-    FlowParentData, HorizontalInsets, ListBodyParentData, ListWheelParentData,
-    MultiChildLayoutParentData, ParentData, SliverCrossAxisAllocation, SliverCrossAxisParentData,
-    SliverLogicalContainerParentData, SliverLogicalParentData, SliverMultiBoxAdaptorParentData,
-    SliverParentData, SliverPhysicalContainerParentData, SliverPhysicalParentData, SliverSlot,
-    StackParentData, TableCellParentData, TableCellVerticalAlignment, TextParentData,
-    TreeSliverNodeParentData, WrapParentData,
+    BoxParentData, FlexFit, FlexParentData, HorizontalInsets, MultiChildLayoutParentData,
+    ParentData, SliverCrossAxisAllocation, SliverCrossAxisParentData,
+    SliverMultiBoxAdaptorParentData, SliverParentData, SliverPhysicalParentData, SliverSlot,
+    StackParentData, TableCellParentData, TableCellVerticalAlignment,
 };
 pub use flui_rendering::pipeline::{
     DirtySendError, RenderInvalidationHandle, TextContextMut, TextSource,
@@ -37,22 +37,21 @@ pub use flui_rendering::pipeline::{
 /// [`crate::view::LifecycleContext::pipeline_owner`] hands a lifecycle hook.
 pub use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 pub use flui_rendering::protocol::{
-    BoxChildSize, BoxHitTest, BoxLayout, BoxProtocol, ChildLayout, ChildState, MainAxisPosition,
-    Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition, SliverChildState,
-    SliverHitTest, SliverLayout, SliverProtocol, UsageByParent,
-};
-pub use flui_rendering::semantics::{
-    NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsRole,
+    BoxChildSize, BoxProtocol, ChildLayout, ChildState, MainAxisPosition, Protocol,
+    SliverChildState, SliverProtocol, UsageByParent,
 };
 pub use flui_rendering::traits::{
     HitTestOutcome, PaintClip, PaintEffects, PaintOpacity, RenderBox, RenderObject, RenderSliver,
     SemanticsClip, TextBaseline,
 };
-pub use flui_rendering::{PoisonPhase, RenderError, RenderResult, RenderUpdateImpact};
+pub use flui_rendering::{
+    PoisonPhase, RenderError, RenderResult, RenderUpdateImpact, SemanticsError,
+};
 pub use flui_rendering::{
     forward_single_child_box_hit_test, forward_single_child_box_layout,
     forward_single_child_box_queries, forward_single_child_intrinsics,
 };
+pub use flui_semantics::{NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsRole};
 
 /// The concrete render objects behind the built-in widgets, such as [`objects::RenderAlign`],
 /// [`objects::RenderFlex`] and [`objects::RenderSliverList`], with the configuration types they

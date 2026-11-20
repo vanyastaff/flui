@@ -16,8 +16,8 @@ use super::owner::SlotMarks;
 use super::table::TableCost;
 use super::version::{Address, VersionInner};
 use crate::damage::closure::{Closure, Closures, close_over};
+use crate::damage::{DamageRect, DamageRegion, FullReason, Region};
 use crate::layer::Layer;
-use crate::scene_snapshot::{DamageRect, DamageRegion, FullReason, Region};
 
 /// What the damage pass reads of the patch.
 pub(crate) struct PatchFacts<'p> {
@@ -686,7 +686,9 @@ fn effects_damage(
     let mut changed: SmallVec<[bool; 32]> = SmallVec::with_capacity(effects.len());
     let mut tops: SmallVec<[EntryIndex; 4]> = SmallVec::new();
     for (position, index) in effects.iter().map(|effect| effect.entry).enumerate() {
-        let own = !old_layers[position].same_effect(&new_layers[position]);
+        let own = !old_layers[position]
+            .as_layer()
+            .same_effect(new_layers[position].as_layer());
         let above = entries[index.get()].parent().is_some_and(|parent| {
             let at = effects[..position]
                 .binary_search_by_key(&parent, |effect| effect.entry)

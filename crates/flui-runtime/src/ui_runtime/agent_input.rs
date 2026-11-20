@@ -19,8 +19,10 @@ use flui_foundation::PresentationId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::ids::InputSurface;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
-use flui_platform::pointer::{
+use flui_platform::input::keyboard::{
+    Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
+};
+use flui_platform::input::pointer::{
     ButtonChange, CancelReason, DeviceId, PenTool, PointerButton, PointerButtons, PointerCancel,
     PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerPress,
     PointerRelease, PointerRole, PointerSample, PointerSource, Pressure, ScrollDelta, ScrollEvent,

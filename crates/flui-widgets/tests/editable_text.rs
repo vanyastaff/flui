@@ -10,7 +10,7 @@ use flui_interaction::focus::FocusNode;
 use flui_objects::RenderEditable;
 use flui_platform::{
     EventTime,
-    keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
+    input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
 };
 use flui_widgets::{EditableText, TextEditingController};
 
@@ -419,7 +419,7 @@ pub(crate) mod native_actions {
     }
 
     pub(crate) fn a_deferred_focus_change_preserves_the_semantic_edit_that_follows_it() {
-        use flui_platform::text_store::{LockOutcome, project_ime_event};
+        use flui_platform::text::store::{LockOutcome, project_ime_event};
         let controller = TextEditingController::new();
         let node = FocusNode::with_debug_label("deferred semantic edit");
         let make_unfocusable = Rc::clone(&node);
@@ -554,7 +554,7 @@ pub(crate) mod native_actions {
     }
 
     pub(crate) fn re_adoption_during_a_deferred_grant_refuses_the_resumed_semantic_edit() {
-        use flui_platform::text_store::{LockOutcome, project_ime_event};
+        use flui_platform::text::store::{LockOutcome, project_ime_event};
         let controller = TextEditingController::new();
         let node = FocusNode::with_debug_label("grant takeover");
         let takeover_node = Rc::clone(&node);
@@ -996,7 +996,7 @@ pub(crate) fn a_tap_on_the_focused_field_asks_for_the_keyboard() {
 /// given: with no text to cover it, and with text that runs past it, which
 /// is clipped there and must not draw a tap beside the field into it.
 pub(crate) fn a_fields_bounds_are_its_box() {
-    use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming};
+    use flui_platform::text::store::{LockGrant, LockOutcome, LockTiming};
     use flui_view::ViewExt;
     use flui_widgets::SizedBox;
     use std::cell::Cell;
@@ -1059,8 +1059,9 @@ pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
         )
     };
     let geometry = |harness: &crate::common::harness::Harness| {
-        use flui_platform::text_store::{
-            LockGrant, LockOutcome, LockTiming, Utf16Offset, Utf16Range,
+        use flui_platform::text::store::{
+            LockGrant, LockOutcome, LockTiming,
+            utf16::{Utf16Offset, Utf16Range},
         };
         use std::cell::RefCell;
 
@@ -1748,9 +1749,9 @@ pub(crate) mod text_store {
     use std::rc::Rc;
 
     use flui_interaction::focus::FocusNode;
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         LockGrant, LockOutcome, LockTiming, Selection, TextStore, TextStoreEdit, TextStoreError,
-        TextStoreRead, Utf16Offset,
+        TextStoreRead, utf16::Utf16Offset,
     };
     use flui_widgets::{EditableText, TextEditingController};
 
@@ -1812,7 +1813,7 @@ pub(crate) mod text_store {
 
     pub(crate) fn rtl_scalar_rect_midpoints_resolve_to_the_source_scalar() {
         use flui_foundation::geometry::Point;
-        use flui_platform::text_store::{PointMode, Utf16Range};
+        use flui_platform::text::store::{PointMode, utf16::Utf16Range};
         let controller = TextEditingController::with_text("אב");
         let (harness, _focus) = focused(&controller);
         let field = store(&harness);
@@ -1893,7 +1894,7 @@ pub(crate) mod text_store {
         harness
             .post_frame_handle()
             .schedule(move |_| {
-                let outcome = flui_platform::text_store::project_ime_event(
+                let outcome = flui_platform::text::store::project_ime_event(
                     &*field,
                     &flui_platform::ImeEvent::Commit("A".to_owned()),
                     drop,
@@ -1939,7 +1940,7 @@ pub(crate) mod text_store {
     /// lock — the nested request is refused; or compare the whole text — the
     /// owner receives the preedit.
     pub(crate) fn on_changed_runs_after_the_lock_is_released() {
-        use flui_platform::text_store::{Composition, Utf16Range};
+        use flui_platform::text::store::{Composition, utf16::Utf16Range};
         type Seen = (
             Result<LockOutcome, TextStoreError>,
             Option<(Utf16Offset, Option<Utf16Range>)>,
@@ -2115,7 +2116,7 @@ pub(crate) mod text_store {
             .with_build_owner_mut(|owner| owner.async_driver().cloned())
             .expect("the runtime installs its async driver");
         let _task = driver.spawn_local(Box::pin(async move {
-            *queued.borrow_mut() = Some(flui_platform::text_store::project_ime_event(
+            *queued.borrow_mut() = Some(flui_platform::text::store::project_ime_event(
                 &*target,
                 &flui_platform::ImeEvent::Commit("東京".to_owned()),
                 drop,
@@ -2318,7 +2319,7 @@ pub(crate) mod text_store {
     /// Red-check: write the session back without comparing the controller's
     /// generation — the text reads "ime" and the observer hears nothing.
     pub(crate) fn an_app_edit_during_a_lock_is_not_overwritten() {
-        use flui_platform::text_store::{TextChange, TextStoreObserver};
+        use flui_platform::text::store::{TextChange, TextStoreObserver};
         struct Changes(Rc<RefCell<Vec<TextChange>>>);
         impl TextStoreObserver for Changes {
             fn text_changed(&self, change: TextChange) {
@@ -2359,10 +2360,10 @@ pub(crate) mod text_store {
     /// Red-check: drop `settle_owed_layout` from `CursorAreaLoop::fire` — the
     /// observer hears nothing after the frame.
     pub(crate) fn a_no_layout_answer_is_followed_by_a_layout_notification() {
-        use flui_platform::text_store::{TextStoreError, TextStoreObserver, Utf16Range};
+        use flui_platform::text::store::{TextStoreError, TextStoreObserver, utf16::Utf16Range};
         struct Layouts(Rc<std::cell::Cell<usize>>);
         impl TextStoreObserver for Layouts {
-            fn text_changed(&self, _: flui_platform::text_store::TextChange) {}
+            fn text_changed(&self, _: flui_platform::text::store::TextChange) {}
             fn selection_changed(&self) {}
             fn layout_changed(&self) {
                 self.0.set(self.0.get() + 1);
@@ -2601,7 +2602,7 @@ pub(crate) mod text_store {
     }
 
     fn the_platform_hears_of_an_owner_edit_before_the_next_grant() {
-        use flui_platform::text_store::{TextChange, TextStoreObserver};
+        use flui_platform::text::store::{TextChange, TextStoreObserver};
         struct Logged(Rc<RefCell<Vec<&'static str>>>);
         impl TextStoreObserver for Logged {
             fn text_changed(&self, _: TextChange) {
@@ -2667,7 +2668,7 @@ pub(crate) mod text_store {
     fn long_input_reports_the_visible_candidate_area() {
         use flui_platform::{
             EventTime,
-            keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
+            input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
         };
         use flui_widgets::SizedBox;
 
@@ -2730,10 +2731,10 @@ pub(crate) mod text_store {
 
     fn long_input(text: &'static str, obscured: bool) {
         use flui_foundation::geometry::Point;
-        use flui_platform::text_store::{PointMode, TextStoreError, Utf16Range};
+        use flui_platform::text::store::{PointMode, TextStoreError, utf16::Utf16Range};
         use flui_platform::{
             EventTime,
-            keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
+            input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
         };
         use flui_widgets::SizedBox;
 
@@ -2756,7 +2757,7 @@ pub(crate) mod text_store {
         let field = store(&harness);
         let assert_visible = |_: &Harness| {
             let caret = controller.caret_byte_offset();
-            let units = flui_platform::text_store::utf16::utf16_offset(&controller.text(), caret)
+            let units = flui_platform::text::store::utf16::utf16_offset(&controller.text(), caret)
                 .expect("controller caret is a scalar boundary");
             let rect = read(&field, move |session| {
                 session
@@ -2795,7 +2796,7 @@ pub(crate) mod text_store {
             rect
         };
         assert_visible(&harness);
-        let units = flui_platform::text_store::utf16::utf16_len(text);
+        let units = flui_platform::text::store::utf16::utf16_len(text);
         let full = read(&field, move |session| {
             session
                 .rect_for_range(Utf16Range::try_new(at(0), units).expect("ordered document range"))
@@ -2884,7 +2885,7 @@ pub(crate) mod text_store {
         harness.swap_root(SizedBox::new(30.0, 30.0).child(
             EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscured),
         ));
-        let units = flui_platform::text_store::utf16::utf16_len(&controller.text());
+        let units = flui_platform::text::store::utf16::utf16_len(&controller.text());
         let rect = read(&field, move |session| {
             session
                 .rect_for_range(Utf16Range::collapsed(units))
@@ -2922,9 +2923,9 @@ pub(crate) mod text_store {
     }
 
     pub(crate) fn editable_paint_places_long_text_under_the_viewport_clip() {
+        use flui_layer::Layer;
         use flui_painting::DrawOp;
         use flui_painting::paint::Clip;
-        use flui_rendering::layer::Layer;
         use flui_widgets::SizedBox;
         let controller = TextEditingController::new();
         let focus = FocusNode::new();
@@ -2957,7 +2958,7 @@ pub(crate) mod text_store {
             let mut parent = tree.parent(id);
             let mut clipped = false;
             while let Some(id) = parent {
-                if let Some(Layer::ClipRect(clip)) = tree.get_layer(id) {
+                if let Some(Layer::ClipRect(clip)) = tree.layer(id) {
                     clipped |=
                         clip.clip_behavior() == Clip::HardEdge && clip.clip_rect().width() == 60.0;
                 }
@@ -3258,7 +3259,7 @@ pub(crate) fn replacing_the_controller_retires_the_old_selection_contact() {
 /// `a_push_platform_is_told_the_focused_fields_status` instead: the platform
 /// is not told of a new Enter key label.
 pub(crate) fn the_store_reports_the_text_input_the_field_was_built_with() {
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         Autofill, Capitalization, Correction, EnterAction, TextInputOptions, TextInputPurpose,
     };
     use flui_widgets::SizedBox;
@@ -3318,7 +3319,7 @@ pub(crate) fn the_store_reports_the_text_input_the_field_was_built_with() {
 /// Red-check: drop the observer `attach_entered` installs — only the
 /// attach-time status arrives.
 pub(crate) fn a_push_platform_is_told_the_focused_fields_status() {
-    use flui_platform::text_store::{
+    use flui_platform::text::store::{
         EnterAction, TextInputOptions, TextInputPurpose, TextStoreStatus,
     };
     use flui_widgets::SizedBox;
@@ -3392,8 +3393,8 @@ pub(crate) fn enter_moves_the_focus_as_the_fields_enter_key_says() {
     use std::time::Duration;
 
     use flui_platform::PlatformInput;
-    use flui_platform::keyboard::NamedKey;
-    use flui_platform::text_store::{EnterAction, TextInputOptions};
+    use flui_platform::input::keyboard::NamedKey;
+    use flui_platform::text::store::{EnterAction, TextInputOptions};
     use flui_testing::{HeadlessHost, HeadlessWindow};
     use flui_view::ViewExt;
     use flui_widgets::{Column, SizedBox};
@@ -3521,8 +3522,8 @@ pub(crate) fn enter_moves_the_focus_as_the_fields_enter_key_says() {
 
 /// The colours of the rectangles the frame paints, in layer order.
 fn painted_rect_colors(laid: &crate::common::LaidOut) -> Vec<flui_painting::styling::Color> {
+    use flui_layer::Layer;
     use flui_painting::DrawOp;
-    use flui_rendering::layer::Layer;
     let tree = laid.layer_tree().expect("a painted frame");
     tree.iter()
         .filter_map(|(_, node)| match node.layer() {

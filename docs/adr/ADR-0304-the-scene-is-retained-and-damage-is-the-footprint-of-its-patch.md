@@ -11,7 +11,10 @@
   (a replay that mints every clean boundary's nodes into a new tree each frame, and that per-frame
   tree with its eviction of boundaries holding a follower);
   [ADR-0068](ADR-0068-frame-disposition-replaces-the-presented-bit.md) §3's repaint half only
-  (`mark_needs_full_repaint_for` as a `NotShown` retry's work; the wake half stands)
+  (`mark_needs_full_repaint_for` as a `NotShown` retry's work; the wake half stands);
+  [ADR-0233](ADR-0233-external-texture-registry.md) for the path of a frame to the screen only (a
+  listener that rebuilds the `Texture` widget with a new revision for `RenderTexture` to repaint);
+  the registry, its ids, its updates and the slot's uploads stand
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask globals` and `xtask send-impls` gates only (Confirmation): the rule stands and its
   reader confirms it.
@@ -262,8 +265,9 @@ the depths below it recomputed, counted as `scene_depth_updates`. The indexes ch
 `Publish` whose link, texture or filter entries differ from the old content's (the old ones leave,
 the new ones enter) and on `Retire`, and on nothing else; an unattached node's links resolve to nothing. Two leaders on one link resolve to the
 one indexed last, and a debug build asserts, as `LayerTree::push` does today
-(`layer_tree.rs:226-234`). `flui_layer::resolve_follower_transform` takes the version and the
-follower's address (node and entry) and keeps ADR-0276's rule.
+(`layer_tree.rs:226-234`). `SceneVersion::follower_transform` takes the follower's address in the version
+(node and entry) and keeps ADR-0276's rule; `resolve_follower_transform` over a hand-built tree
+is its oracle, behind `flui-layer`'s `testing` feature.
 
 A later operation that writes one effect property without republishing content is a new `SceneOp`
 variant: §4 already stores the subtree bounds and §6 the footprints its damage needs.
@@ -510,10 +514,45 @@ every `Place`. A disposed boundary's node is retired. The runtime applies
 the patch where it now freezes the per-frame tree
 (`crates/flui-runtime/src/ui_runtime/frame.rs:625-639`), with its own node for the performance
 overlay, republished when the overlay's numbers change; the overlay-style probe, input regions,
-leader watches (`paint.rs:370`) and follower hit-test placement (`paint.rs:326-352`) read the
-applied version. A device-pixel-ratio change re-records every chunk,
+leader watches and follower hit-test placement read the applied version. The runtime reports it to
+`PipelineOwner::scene_applied`, which reads off it each follower's transform for hit-testing and
+input regions (`SceneVersion::follower_transform`, the resolution the engine draws by) and each
+watched leader's geometry (`leader_size`, `leader_origin`); the runtime then probes the overlay
+style (`SceneVersion::find_annotation`) and collects the input regions. A device-pixel-ratio
+change re-records every chunk,
 as the captures are dropped today (`paint.rs:116-120`), and changes the root placement:
 `Full(SurfaceChanged)`.
+
+A frame whose paint emits nothing applies no patch and publishes nothing: the version the raster
+side holds is what the window shows, so an idle frame costs no submit. Two frames publish the
+current version again with nothing painted, its damage still counted from the acknowledged base:
+the retry of a version the surface withheld (§7), and a frame of an external texture. A texture
+frame or retirement waits in the presentation's `TextureRegistry` and wakes the runtime, as
+Flutter's `markTextureFrameAvailable` schedules a frame. The held version owes a publication for
+it when it was applied for the target the pipeline now lays out for, the window has not refused
+it, and a retirement waits or an attached entry of the version draws a texture with a pending
+frame (`PresentationScene::owes_texture_frame` over `TextureRegistry::has_updates_for` and
+`SceneVersion::draws_texture`). That one answer is what the runner's gate counts as tree work
+(`UiRuntime::has_pending_tree_work`, under the holds tree work has: not hidden, no dropped-frame
+backoff, not saturated, device not given up), what admits the presentation's segment and what the
+frame republishes for. So a frame fed while the previous one renders, after the host took the
+updates and before the frame's end clears the redraw mark, is still seen by the gate. When the
+frame's paint emits nothing it publishes the held version, which carries no scene damage once the
+raster side showed it, for the raster host to take the texture's frames with
+(`RasterHost::submit` into a buffer it keeps, `TextureRegistry::take_updates_into`, §9). A target
+change owes nothing: the repaint it asks for carries the frames, and a repaint that cannot run
+(a layout that waits for input) leaves no texture work for the gate to spin on. A texture no
+attached entry draws (an offstage subtree) owes nothing, and a version the window refused owes
+nothing while it is current, until the raster side shows it or a later version of its lineage,
+since a refused window costs none (ADR-0334 §4); their frames wait in the registry, the newest
+per id, for the next publication. A window whose raster executor died takes its frames into its
+slot's carry, which a replacing executor receives, so none stays owed. The registry keeps a frame
+until a host takes it, so a frame withheld before the host took it is published again by the
+next, several frames fed between two frames go out in one publication with the newest frame of
+each texture, a texture frame fed while the tree has a change goes out with that change's version,
+and a frame after the host took them publishes nothing. The `Texture` widget neither rebuilds nor
+repaints for a frame; its leaf repaints only when it is given another texture
+(`crates/flui-widgets/src/image/texture.rs`, `crates/flui-runtime/src/ui_runtime/frame.rs`).
 
 §9. **The raster side retains recordings and redraws a region rect by rect or under its box,
 whichever costs less.** The engine walks the held version and culls nodes by their subtree
@@ -610,10 +649,14 @@ is inserted only after its recording completed and placed every glyph it asked f
 capture starts its key over as a candidate. Eviction is least recently rastered first under a byte budget (a hypothesis), and a presentation's
 entries go when its slot detaches. Counters: `recording_cache_bytes`, `recording_cache_hits`,
 `recording_cache_evictions`. A chunk has one parent entry, so it never straddles an effect scope,
-so a version's frame skips the renderer's straddle self-heal (`record_passes` in
-`crates/flui-engine/src/renderer.rs`), which only a hand-built tree keeps.
+and a destination-reading chunk across a pass's rect is redrawn whole because the damage is
+closed over it (§6): the renderer keeps no straddle self-heal. The raster side draws one form. A
+scene authored by hand is a `LayerTree` that `Scene::new` converts into a version
+(`SceneVersion::from_tree`: one node, each picture without children a chunk, every other layer an
+effect), so the walk, the damage closure and the cull above are the only ones the engine has.
 
-A texture frame or retirement drained with a publication (`RasterHost::submit`) damages the device
+A texture frame or retirement drained with a publication (`RasterHost::submit`; when nothing else
+changed, the held version §8 publishes for it) damages the device
 footprints of that texture's users in the version it draws, closed under §6
 (`SceneVersion::texture_damage`, which reads the texture-user index and works in a
 `TextureDamageScratch` the host keeps between frames); a texture no entry draws damages nothing.
@@ -624,8 +667,10 @@ damage and its texture updates into the survivor (`raster_executor/sender.rs`), 
 executor does not show (`NotShown`, a render error or panic) leaves the slot owing a full redraw
 (`owe_full(RESET)`), which its next frame draws with the updates it applied. A platform view is damaged on every frame it is drawn, because the platform gives
 no signal when its content changes; a per-view frame signal that damages it the way a texture
-frame does is a follow-up, not part of this decision. A canvas layer's display
-list and the performance overlay are versioned content, and no longer damaged every frame.
+frame does is a follow-up, not part of this decision. The performance overlay is versioned
+content: the runtime publishes its readout as one chunk at a node of its own and records it
+again only when the readout changes (`the_overlay_records_its_readout_only_when_it_changes`), so
+a frame whose numbers hold still damages nothing.
 
 §10. **Failure paths.**
 
@@ -651,8 +696,8 @@ consecutive versions. The patch damage must cover the diff damage.
 
 - Good, because a frame costs O(patch) in paint, damage and recording, plus O(followers × depth)
   for follower resolution and O(filtered × depth) for the closure; nothing walks the whole scene.
-- Good, because two distant changes repaint two rects, and a boundary holding a follower, a canvas
-  layer and the performance overlay stop being repainted or damaged every frame.
+- Good, because two distant changes repaint two rects, and a boundary holding a follower and the
+  performance overlay stop being repainted or damaged every frame.
 - Good, because the pixels redrawn, the damage reported and the filter reads come from one function.
 - Good, because owed damage survives superseded, refused, failed and unshown frames through the
   base, by construction.
@@ -665,7 +710,8 @@ consecutive versions. The patch damage must cover the diff damage.
 - Good, because a retry after an unshown frame republishes the held version and re-records
   nothing (§7), where ADR-0068 §3 repainted the whole tree.
 - Neutral, because the inspector's layer link (`Link::Layer`, `crates/flui-layer/src/scene/inspect.rs`)
-  names a node by its slot, generation and lineage, so a boundary keeps its link across frames
+  is made from the node's `SceneNodeId` (its lineage, slot and generation) and resolves only in a
+  version of that lineage, so a boundary keeps its link across frames
   and a link into an old lineage resolves to nothing.
 
 ### Confirmation
@@ -712,6 +758,28 @@ consecutive versions. The patch damage must cover the diff damage.
   `a_full_frame_reads_no_texture_users` (full damage reads no user) and
   `a_replaced_texture_frame_still_damages_its_users` (a texture frame superseded in a raster
   thread's inbox damages its users through the survivor).
+- Idle and texture frames (§8): `flui-widgets`' perf scenarios
+  `perf_an_idle_frame_leaves_the_retained_scene_alone` and
+  `an_idle_frame_after_a_texture_frame_publishes_nothing` (no submit, no allocation),
+  `perf_a_texture_frame_republishes_the_held_version` (a texture frame builds, lays out and paints
+  nothing, applies no patch, and the sink takes the frame with the held version),
+  `texture_frames_between_two_frames_go_out_in_one_publication` and
+  `a_texture_frame_rides_the_frame_of_a_tree_change` (the change paints what it alone paints);
+  `flui-runtime`'s `external_textures` rows of `frame_pacing_and_pump_matrix`
+  (`a_fed_frame_republishes_the_held_version`: no scene damage;
+  `a_texture_frame_not_taken_is_published_again`; `a_hidden_texture_repaints_nothing`: no submit,
+  no owed work; `a_frame_fed_during_a_submit_is_still_owed`: the gate sees a frame fed after the
+  host took the updates; `a_refused_window_costs_no_texture_frame`;
+  `a_shown_refused_version_takes_texture_frames_again`;
+  `a_texture_frame_while_a_new_size_waits_owes_nothing`); `flui-layer`'s
+  `a_frame_nothing_draws_owes_no_publication`, `taking_into_a_kept_buffer_folds_as_merge` and
+  `a_version_draws_only_the_textures_of_attached_users`; `flui-testing`'s
+  `each_window_takes_its_own_texture_frames` and
+  `a_frame_in_a_lineage_a_reload_renewed_takes_its_texture_frames`; and `flui-app`'s
+  `a_texture_frame_reaches_the_slot_as_its_users_damage` (the slot redraws the texture's user
+  alone), `a_refused_window_costs_no_texture_frame` (a size the device refused, a render that
+  panicked) and `a_window_whose_attach_the_raster_thread_does_not_answer_is_kept` (a dead
+  executor's window owes no texture frame).
 - `flui-engine` (to be added): `a_chunk_drawn_once_is_not_captured`,
   `the_candidate_table_stays_bounded`, `stable_keys_are_admitted_under_churn`,
   `a_cached_chunk_replays_the_command_stream_it_recorded`
@@ -747,9 +815,9 @@ consecutive versions. The patch damage must cover the diff damage.
   after a frame that failed once begun, that frame records no chunk and replays every one from
   the cache, and after a frame that panicked once it recorded, it records every chunk again and
   reports the recordings the panic and a reclaim before it dropped; the pixels are a fresh
-  renderer's each time); and the `cargo xtask perf` scenario `not_shown_retry`
+  renderer's each time); and the perf scenario `not_shown_retry`
   (`nodes_painted = 0`, `scene_ops = 0`).
-- The `cargo xtask perf` scenario `caret_blink_in_10k_list` (`crates/flui-widgets/tests/perf.rs`,
+- The perf scenario `caret_blink_in_10k_list` (`crates/flui-widgets/tests/perf.rs`,
   counts in `crates/flui-widgets/perf/baseline/`), whose `nodes_painted` and `scene_ops` per blink
   are equal at 1,000 and 10,000 items; the engine's half is `flui-engine`'s
   `a_caret_blink_records_as_many_chunks_at_any_list_size` (lavapipe), a version of a caret
