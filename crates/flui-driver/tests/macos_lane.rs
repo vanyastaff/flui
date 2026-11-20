@@ -1627,7 +1627,7 @@ fn the_release_of_everything_keeps_what_it_released_apart_from_what_failed() {
     );
     let expected = format!("{}; protocol: the mouse refused", no_event());
     assert!(
-        matches!(&both, Err(Error::ReleaseFailed { lane, held, message })
+        matches!(&both, Err(Error::ReleaseFailed { lane, held, message, .. })
             if lane == "macos"
                 && held == &["Control", "the left mouse button"]
                 && message == &expected),

@@ -10,7 +10,11 @@
   `native-features`, `build-all-targets`, `facade-combos`, `wasm-imports`, `wasm-test-crates`,
   `locked-version`, `fuzz`, and the local mirrors `lint`, `gate`, `ci`, `ci-full`): a workflow step calls
   the tool. The same §1 for `perf`, which it lists among the tools for working in the repository:
-  the scenarios hold their own baseline, and the other comparisons are steps (§7).
+  the scenarios hold their own baseline, and the other comparisons are steps (§7). The same §1
+  for `worktree` and `doctor`, the other tools it lists there, which are removed (§9).
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  §3 for the three gates it keeps, `toolchain`, `unmounted-tests` and `adr-numbers`: they are steps of the
+  `checks` job (§9).
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   §3 only for the formatters, the linters and the link check it keeps in `cargo xtask checks`:
   `cargo fmt`, typos, taplo and lychee are steps of the `checks` job (§4).
@@ -19,7 +23,8 @@
   itself; §6 and `cross-typecheck` in Supersedes: each native leg lints the whole workspace; §7 and
   `perf` in Supersedes: the perf scenarios hold their baseline, and `perf-gates`, `size` and `deps`
   compare the rest in steps. 2026-11-20 — §8 and `fuzz` in Supersedes: the fuzz workflow builds
-  each target with `cargo +nightly --config .cargo/fuzz.toml run`.
+  each target with `cargo +nightly --config .cargo/fuzz.toml run`; §9: the tools for working in
+  the repository are removed, the source checks are steps, and `test-desktop` is a crate.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
@@ -72,7 +77,8 @@ and macOS) is a shell loop that runs every iteration before it fails.
 `lint`, `gate`, `test`, `platform-test`, `cli-test`, `wayland-optional`, `build-all-targets`, `ci`,
 `ci-full`, `deps`, `native-features`, `gpu-test`, `miri`, `doc-strict`, `feature-matrix`,
 `facade-combos`, `wasm-check`, `docs-links`, `wasm-link`, `wasm-test`, `wasm-imports`,
-`wasm-test-crates`, `locked-version`, `cross-typecheck`, `perf` and `fuzz` leave `tools/xtask`.
+`wasm-test-crates`, `locked-version`, `cross-typecheck`, `perf`, `fuzz`, `worktree`, `doctor`,
+`bench-collect`, `clean-nested`, `toolchain`, `unmounted-tests` and `adr-numbers` leave `tools/xtask`.
 There is no local command that mirrors CI: `docs/testing.md` names, for each job, the commands a
 contributor runs, and the job holds them.
 
@@ -89,7 +95,7 @@ cargo-audit reads, so cargo-audit is not added beside them.
 
 `cargo fmt --all --check`, typos, `taplo fmt --check` and lychee are steps of CI's `checks` job,
 each running even when one before it failed. `cargo xtask checks` keeps only the checks no standard
-tool makes: the toolchain pin, unmounted test files, ADR numbers, the changelog fragments and the
+tool makes: the changelog fragments and the
 generated files against their sources. lychee's command line in the job takes the options
 `docs-links` passed it; the extra pass that caught a link climbing above the repository root goes
 with `docs-links`, so such a link is the reader's to catch.
@@ -129,7 +135,7 @@ configures `run_in_browser`. A target whose run passes no assertion fails the st
 target beside a `wasm32` target, which may hold none; an empty list fails it too. The
 `wasm-bindgen-cli` the job installs is the one version of
 `wasm-bindgen` that `cargo metadata --all-features` lists, which is every package Cargo.lock holds;
-more than one fails the step, and `cargo xtask doctor full` fails its row on the same lock.
+more than one fails the step.
 
 ### §6. `cross-typecheck` lints the whole workspace for four native triples
 
@@ -243,6 +249,27 @@ The options:
   `RUSTFLAGS` replaces them, so the docs say to leave both out of a replay, and to replay a
   finding that depends on codegen with the nightly the run's log names.
 
+### §9. The tools for working in the repository go, the source checks are steps
+
+The owner wants `tools/xtask` gone; what it still held beside the generators and the changelog
+check was either a convenience no job runs or a check a few lines of shell state:
+
+- `worktree`, `doctor`, `bench-collect` and `clean-nested` are removed, with no replacement
+  command. `git worktree` makes a worktree, the job in `ci.yml` that runs a tool is where it is
+  installed, criterion's `--save-baseline` and `critcmp` compare benchmarks, and the nested test
+  caches are directories docs/testing.md names. `.github/workflows/xtask-native.yml`, which
+  existed for their Windows and macOS paths, goes with them.
+- `toolchain`, `unmounted-tests` and `adr-numbers` are steps of the `checks` job: the MSRV a
+  manifest, a template, the README or llms.txt states is rust-toolchain.toml's minor; every
+  `tests/*.rs` of an `autotests = false` crate is a test target `cargo metadata` lists or a
+  file a test file mounts with `mod` or `#[path]`; no ADR number appears twice.
+- `test-desktop`, the program nextest starts each Windows test through (ADR-0355), is the crate
+  `tools/test-desktop`, which `.config/nextest.toml`'s setup script builds.
+
+A step reads its inputs as text, where the Rust read them as TOML and Rust: a `mod` line that sits
+in an unmounted file still counts as mounting, and an MSRV written in a form the patterns do not
+name is not compared. The reader of a change to those steps holds that.
+
 ### Consequences
 
 - Good, because what a job runs is in the job, and `tools/xtask` loses the subcommands and their
@@ -301,7 +328,7 @@ The options:
 
 - `actionlint` (in `checks`) parses the workflows and runs shellcheck over their steps.
 - Each job runs its commands on every run of its lane;
-  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck|perf|fuzz)\b'`
+  `git grep -E 'cargo xtask (test|deps|doc-strict|gpu-test|feature-matrix|facade-combos|wasm-[a-z-]+|locked-version|cross-typecheck|perf|fuzz|worktree|doctor|bench-collect|clean-nested|toolchain|unmounted-tests|adr-numbers)\b'`
   finds none in `.github/`.
 - flui-widgets' perf target tests the counts' rules on every pull request
   (`the_comparison_passes_only_an_equal_counter_or_a_cost_that_fell`,
@@ -321,8 +348,6 @@ The options:
   the author for it; the readers of "Before a merge" read git, not the body, so the author holds
   it. A pull request that changes `fuzz.yml`, `.cargo/fuzz.toml`, a target or its seeds runs
   `gh workflow run Fuzz --ref <branch>` at the head that merges the same way (§8).
-- `cargo test -p xtask` holds doctor's wasm-bindgen row to one locked version
-  (`the_wasm_bindgen_row_needs_one_locked_version_installed`, `this_lock_pins_one_wasm_bindgen`).
 
 ## Pros and cons of the options
 

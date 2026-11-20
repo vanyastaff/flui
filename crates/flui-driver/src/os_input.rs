@@ -4,7 +4,8 @@
 //! - [`InputPolicy::default`](flui_protocol::input::InputPolicy) is synthetic: a session takes
 //!   the OS path only when it asks for it.
 //! - [`admit`] holds the isolation rule: in process there is no OS input at all, and on the
-//!   shared desktop it runs only with a lane that can tell the user's input from its own.
+//!   shared desktop or a device in someone's hands it runs only with a lane that can tell the
+//!   user's input from its own.
 //! - An [`Announcement`] says, before the first OS event, what the run takes and for how long.
 //! - [`OsInputLock`] is the lock two OS-input sessions on one desktop contend for: the second is
 //!   refused `busy` instead of interleaving its events with the first's.
@@ -30,8 +31,8 @@ const ISOLATED: &str = "a sandbox or a second session (Windows), Xvfb or a neste
 /// # Errors
 ///
 /// [`Error::NotSupported`] naming `os_input` in process, where no OS input exists, and naming
-/// `user_activity_guard` on the shared desktop without a guard, with the isolation modes to use
-/// instead.
+/// `user_activity_guard` on the shared desktop or a physical device without a guard, with the
+/// isolation modes to use instead.
 pub fn admit(isolation: Isolation, guarded: bool) -> Result<()> {
     match isolation {
         Isolation::InProcess => Err(Error::not_supported(
@@ -39,11 +40,17 @@ pub fn admit(isolation: Isolation, guarded: bool) -> Result<()> {
             "input that lands in process is no OS input: run the lane on a desktop, a device or a \
              browser",
         )),
-        Isolation::Shared if !guarded => Err(Error::not_supported(
+        // A device is in someone's hands as a desktop is under someone's.
+        Isolation::Shared | Isolation::Device if !guarded => Err(Error::not_supported(
             "user_activity_guard",
             format!(
                 "this lane cannot tell your input from its own, so it takes no OS input on your \
-                 desktop; run it in {ISOLATED}"
+                 {}; run it in {ISOLATED}",
+                if isolation == Isolation::Device {
+                    "device"
+                } else {
+                    "desktop"
+                }
             ),
         )),
         _ => Ok(()),

@@ -33,8 +33,7 @@
 # `wasm-bindgen-test-runner` must be on PATH and its version must match the
 # LOCKED `wasm-bindgen` exactly, or it refuses with "must exactly match".
 # CI's `wasm-check` job reads that version from
-# `cargo metadata --all-features`, and
-# `cargo xtask doctor full` checks the installed one; this line only says which
+# `cargo metadata --all-features`; this line only says which
 # runner to use, so a plain `cargo build --target wasm32-...` is unaffected.
 runner = "wasm-bindgen-test-runner"
 
@@ -42,8 +41,8 @@ runner = "wasm-bindgen-test-runner"
 # (docs/getting-started.md).
 
 [alias]
-# Repository automation (tools/xtask), the only task runner: CI gates, change
-# scoping, device checks and weekly tooling. `cargo xtask --help` lists it all.
+# The repository's generators and the changelog check (tools/xtask);
+# `cargo xtask --help` lists them.
 xtask = "run --package xtask --locked --quiet --"
 
 # Incremental compilation is governed by `[profile.dev] incremental` in the root

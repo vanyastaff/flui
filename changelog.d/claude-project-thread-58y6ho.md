@@ -9,5 +9,4 @@
 
 - **`flui-cli`**, **`flui-native`**: the Android `minSdk` the packager writes and the API level
   the backend assumes when the system will not report one are generated from that file instead of
-  being literals. `cargo xtask doctor` checks the Android compiler against that floor (API 23)
-  instead of API 21.
+  being literals.

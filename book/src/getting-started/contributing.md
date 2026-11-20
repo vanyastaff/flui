@@ -23,7 +23,7 @@ cd flui
 cargo build --workspace
 ```
 
-Work happens in a dedicated `git worktree` per task (`cargo xtask worktree new <area>/<slug>`),
+Work happens in a dedicated `git worktree` per task (`git worktree add`),
 never the shared checkout; AGENTS.md's "Working here" has the commit conventions. The
 local pre-PR checks run one at a time on the crates you changed (AGENTS.md, "Checking a change"):
 

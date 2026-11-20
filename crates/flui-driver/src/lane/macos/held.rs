@@ -262,6 +262,7 @@ impl HeldKeys {
                     .map(|&code| keys::name_of(code))
                     .collect::<Vec<String>>(),
                 message: first.to_string(),
+                first: None,
             }),
         }
     }

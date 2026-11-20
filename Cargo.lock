@@ -1958,6 +1958,7 @@ dependencies = [
  "objc2-core-graphics",
  "png",
  "reis",
+ "roxmltree",
  "rustix 1.1.6",
  "schemars",
  "serde",
@@ -6026,6 +6027,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
+name = "test-desktop"
+version = "0.2.0-dev"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7687,7 +7695,6 @@ dependencies = [
  "tempfile",
  "toml",
  "walkdir",
- "windows 0.62.2",
 ]
 
 [[package]]

@@ -265,7 +265,8 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `FrameProtocol` the windowed renderer runs; `damage::tests::plan_frame_table`; and the
   raster executor test `latest_frame_wins_and_superseded_damage_folds_into_the_survivor`. The windowed swapchain path runs only on a developer machine.
 - Benches: `flui-layer`'s `damage_diff`; `render_throughput`'s `damage_retained_target`,
-  collected with `cargo xtask bench-collect --with-features`.
+  collected with `cargo bench -p flui-engine --bench render_throughput --features testing -- --save-baseline <name>`
+  (and `cargo bench -p flui-layer --bench damage_diff -- --save-baseline <name>`).
 
 Still to do:
 

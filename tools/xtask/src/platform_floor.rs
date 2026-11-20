@@ -101,11 +101,6 @@ pub(crate) fn platform_floor(args: &PlatformFloorArgs) -> anyhow::Result<ExitCod
     Ok(ExitCode::FAILURE)
 }
 
-/// The Android floor, for checks that need it outside the generated files (`doctor`).
-pub(crate) fn android_api() -> anyhow::Result<u32> {
-    Ok(Floors::parse(&read(SOURCE)?)?.android.api)
-}
-
 /// `platform-support.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

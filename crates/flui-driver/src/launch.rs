@@ -144,6 +144,15 @@ impl Launch {
     pub(crate) fn executable_path(&self) -> Result<PathBuf> {
         match &self.target {
             Target::Artifact(Artifact::Executable(path)) => Ok(path.clone()),
+            // An APK needs its package and activity, which the path does not name.
+            Target::Artifact(Artifact::Apk(apk)) => Err(Error::not_supported(
+                "android_launch",
+                format!(
+                    "{} is started by `lane::android::launch`, which names its package and \
+                     activity",
+                    apk.display()
+                ),
+            )),
             Target::Artifact(artifact) => Err(Error::not_supported(
                 format!("{}_lane", artifact.lane()),
                 format!(

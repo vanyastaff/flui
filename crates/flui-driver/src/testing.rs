@@ -7,6 +7,11 @@
 //! - [`ScriptedAgent`]: a stand-in for an app's agent on a real local socket, answering each
 //!   request by a script, so the socket transport's cases (an app that closes mid-call or answers
 //!   slowly, a driver that leaves) run without a FLUI app.
+//! - [`ScriptedAdb`]: a device scripted for the Android lane.
+
+mod adb;
+
+pub use adb::{Responder, ScriptedAdb};
 
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -273,6 +278,7 @@ impl Lane for ScriptedLane {
                 lane: self.name().to_owned(),
                 held: vec!["Control".to_owned()],
                 message: "the scripted OS refused the release".into(),
+                first: None,
             });
         }
         Ok(())

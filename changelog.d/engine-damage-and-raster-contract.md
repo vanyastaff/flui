@@ -17,7 +17,6 @@
   `ColorFilter::modifies_transparent_black`, `ImageFilter::modifies_transparent_black` and
   `ColorMatrix::modifies_transparent_black`, which tell a damage producer when a layer's composite
   reaches pixels its children never inked.
-- **`cargo xtask bench-collect --with-features`** runs the feature-gated bench targets too.
 
 ### Changed
 

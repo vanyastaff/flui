@@ -1,5 +1,5 @@
-//! Helpers shared by the commands: the repository root, files relative to it,
-//! and the workspace metadata.
+//! Helpers shared by the commands: the repository root and files relative to
+//! it.
 
 use std::path::{Path, PathBuf};
 
@@ -57,56 +57,6 @@ pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
 pub(crate) fn read(rel: impl AsRef<Path>) -> anyhow::Result<String> {
     let path = repo_root().join(rel.as_ref());
     std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
-}
-
-/// `cargo metadata --no-deps` for the workspace at `root`: only the workspace's
-/// own manifests are read, so it is fast and needs no network.
-pub(crate) fn metadata(root: &Path) -> anyhow::Result<cargo_metadata::Metadata> {
-    cargo_metadata::MetadataCommand::new()
-        .current_dir(root)
-        .no_deps()
-        .exec()
-        .context("running `cargo metadata`")
-}
-
-/// The file names under `docs/adr` of the repository at `root`; none when the
-/// directory is missing.
-pub(crate) fn adr_files(root: &Path) -> Vec<String> {
-    std::fs::read_dir(root.join("docs").join("adr"))
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect()
-}
-
-/// `bytes` the way `du -sh` prints a size: one decimal below 10 of a unit.
-pub(crate) fn human_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes}B")
-    } else if value < 10.0 {
-        format!("{value:.1}{}", UNITS[unit])
-    } else {
-        format!("{value:.0}{}", UNITS[unit])
-    }
-}
-
-/// The total size of the files under `dir`.
-pub(crate) fn tree_size(dir: &Path) -> u64 {
-    walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.metadata().ok())
-        .filter(std::fs::Metadata::is_file)
-        .map(|metadata| metadata.len())
-        .sum()
 }
 
 /// An exclusively created temporary directory, removed on drop.

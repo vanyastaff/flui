@@ -68,8 +68,8 @@ flui-foundation = { path = ".", features = ["testing"] }
 # third version in the chain, `wasm-bindgen-cli`, must match the locked
 # wasm-bindgen EXACTLY or the runner refuses to start -- CI's `wasm-check` job
 # installs the CLI at the version the lock pins, so a dependabot bump moves all
-# three together there, and `cargo xtask doctor full` reports a local CLI the
-# bump left behind instead of a runner error that reads like a toolchain fault.
+# three together there; a local CLI the bump left behind shows up as a runner
+# error that reads like a toolchain fault.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.77"
 

@@ -4,12 +4,9 @@
 //! runs it, and with `dry_run` only prints it.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, bail};
-
-use crate::util::repo_root;
+use anyhow::bail;
 
 /// Runs a task's steps; with `dry_run` it only prints them.
 #[derive(Debug, Clone, Copy)]
@@ -46,17 +43,6 @@ pub(super) fn parsed<T: clap::Args + clap::FromArgMatches>(
     Ok(T::from_arg_matches(&matches)?)
 }
 
-/// The workspace's target directory as cargo resolves it: `CARGO_TARGET_DIR`
-/// (relative to the repository root), `build.target-dir`, or `target/`.
-pub(super) fn target_dir() -> anyhow::Result<PathBuf> {
-    let metadata = cargo_metadata::MetadataCommand::new()
-        .current_dir(repo_root())
-        .no_deps()
-        .exec()
-        .context("running `cargo metadata`")?;
-    Ok(metadata.target_directory.into_std_path_buf())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,21 +54,21 @@ mod tests {
     fn a_failing_exit_is_an_error_naming_the_step_and_a_dry_run_runs_nothing() {
         let runner = Runner { dry_run: false };
         let failed = runner
-            .in_process("toolchain", || Ok(ExitCode::FAILURE))
+            .in_process("icon-import", || Ok(ExitCode::FAILURE))
             .expect_err("a failing exit code is an error");
-        assert_eq!(failed.to_string(), "`cargo xtask toolchain` failed");
+        assert_eq!(failed.to_string(), "`cargo xtask icon-import` failed");
         let errored = runner
-            .in_process("toolchain", || bail!("no rust-toolchain.toml"))
+            .in_process("icon-import", || bail!("no icon key frames"))
             .expect_err("an error is passed on");
-        assert_eq!(errored.to_string(), "no rust-toolchain.toml");
+        assert_eq!(errored.to_string(), "no icon key frames");
         assert!(
             runner
-                .in_process("toolchain", || Ok(ExitCode::SUCCESS))
+                .in_process("icon-import", || Ok(ExitCode::SUCCESS))
                 .is_ok()
         );
         let dry = Runner { dry_run: true };
         assert!(
-            dry.in_process("toolchain", || panic!("a dry run runs nothing"))
+            dry.in_process("icon-import", || panic!("a dry run runs nothing"))
                 .is_ok()
         );
     }

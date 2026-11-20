@@ -56,11 +56,10 @@
 //! answers; any other failure panics. `WGPU_BACKEND` and `VK_ICD_FILENAMES`
 //! pick the adapter (lavapipe:
 //! `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`). It writes no
-//! Criterion samples: run by `cargo xtask bench-collect` (which passes
-//! `--save-baseline`), it measures nothing and the tool counts it unavailable.
+//! Criterion samples: a run with `--save-baseline` measures nothing.
 
 fn main() {
-    // Cargo passes `--bench`, and `bench-collect` Criterion's flags; this
+    // Cargo passes `--bench`, and a benchmark run passes Criterion's flags; this
     // harness takes none of them, and a baseline run has nothing to save.
     if std::env::args().any(|arg| arg == "--save-baseline") {
         println!("raster_share writes no Criterion samples; run it alone to measure");

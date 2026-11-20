@@ -108,6 +108,11 @@ impl Image {
         &self.rgba
     }
 
+    /// The pixels, given up: a lane cuts its capture in this buffer rather than copy it.
+    pub(crate) fn into_rgba(self) -> Vec<u8> {
+        self.rgba
+    }
+
     /// The pixel at (`x`, `y`) as red, green, blue and alpha; `None` past the image.
     #[must_use]
     pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
