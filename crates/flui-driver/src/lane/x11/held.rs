@@ -202,7 +202,8 @@ impl HeldInput {
     }
 
     /// The strokes `input` takes on `keymap`, against what the lane holds now: see the
-    /// [module docs](self).
+    /// [module docs](self). The release of a key the lane does not hold plans nothing: it is a
+    /// no-op.
     ///
     /// # Errors
     ///
@@ -225,22 +226,28 @@ impl HeldInput {
                     _ => vec![Keystroke::Press(code)],
                 })
             }
+            // A release names the key held for this keysym, or the key the keymap puts it on when
+            // the lane holds that key (pressed for its capital, released by its lower case). A key
+            // the lane does not hold is not released: the server would drop the release, and the
+            // guard would wait for an echo that never comes.
             KeyInput::Up { keysym, name } => {
                 let held = self
                     .keys
                     .iter()
                     .find(|(_, held)| held == keysym)
                     .map(|(code, _)| *code);
-                let code = match held {
-                    Some(code) => code,
-                    None => {
-                        keymap
-                            .place(*keysym)
-                            .ok_or_else(|| Refusal::UnknownKey { name: name.clone() })?
-                            .0
-                    }
+                let code = if held.is_some() {
+                    held
+                } else {
+                    let (code, _) = keymap
+                        .place(*keysym)
+                        .ok_or_else(|| Refusal::UnknownKey { name: name.clone() })?;
+                    self.holds(code).then_some(code)
                 };
-                Ok(vec![Keystroke::Release(code)])
+                Ok(code
+                    .map(Keystroke::Release)
+                    .into_iter()
+                    .collect::<Vec<Keystroke>>())
             }
             KeyInput::Text(text) => self.plan_text(text, keymap, shift),
         }
@@ -473,17 +480,22 @@ impl HeldInput {
             Some(first) if self.keys.is_empty() && self.mapped.is_empty() => Err(first),
             Some(first) => Err(crate::Error::ReleaseFailed {
                 lane: LANE.to_owned(),
-                held: self
-                    .keys
-                    .iter()
-                    .map(|(_, keysym)| keys::name_of(*keysym))
-                    .chain(self.mapped.iter().map(|(code, keysym)| {
-                        format!("keycode {} mapped to {}", code.0, keys::name_of(*keysym))
-                    }))
-                    .collect::<Vec<String>>(),
+                held: self.held_names(),
                 message: first.to_string(),
             }),
         }
+    }
+
+    /// What the lane holds and has mapped, by name, as a release failure names it.
+    #[must_use]
+    pub fn held_names(&self) -> Vec<String> {
+        self.keys
+            .iter()
+            .map(|(_, keysym)| keys::name_of(*keysym))
+            .chain(self.mapped.iter().map(|(code, keysym)| {
+                format!("keycode {} mapped to {}", code.0, keys::name_of(*keysym))
+            }))
+            .collect::<Vec<String>>()
     }
 
     /// Send `stroke` through `send` unless it completes a shortcut of the desktop's from this
@@ -595,14 +607,50 @@ impl HeldButtons {
             None => Ok(()),
             Some(first) => Err(crate::Error::ReleaseFailed {
                 lane: LANE.to_owned(),
-                held: (1..=16_u8)
-                    .filter(|button| self.0 & Self::bit(*button) != 0)
-                    .map(|button| format!("mouse button {button}"))
-                    .collect::<Vec<String>>(),
+                held: self.held_names(),
                 message: first.to_string(),
             }),
         }
     }
+
+    /// The buttons held, by name, as a release failure names them.
+    #[must_use]
+    pub fn held_names(self) -> Vec<String> {
+        (1..=16_u8)
+            .filter(|button| self.0 & Self::bit(*button) != 0)
+            .map(|button| format!("mouse button {button}"))
+            .collect::<Vec<String>>()
+    }
+}
+
+/// The answer of the release of everything from its keys' half and its buttons' half, `held`
+/// naming everything still held after both: the first failure, as a release failure naming all of
+/// `held` when anything stays held, whichever half failed and however.
+///
+/// # Errors
+///
+/// [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming `held` when a half failed and
+/// anything stays held; that half's error when nothing does.
+pub fn release_answer(
+    keys: crate::Result<()>,
+    buttons: crate::Result<()>,
+    held: Vec<String>,
+) -> crate::Result<()> {
+    let Some(first) = keys.err().or_else(|| buttons.err()) else {
+        return Ok(());
+    };
+    if held.is_empty() {
+        return Err(first);
+    }
+    let message = match first {
+        crate::Error::ReleaseFailed { message, .. } => message,
+        other => other.to_string(),
+    };
+    Err(crate::Error::ReleaseFailed {
+        lane: LANE.to_owned(),
+        held,
+        message,
+    })
 }
 
 /// How far one click of an X wheel button scrolls, in device pixels: the clicks a scroll of `n`

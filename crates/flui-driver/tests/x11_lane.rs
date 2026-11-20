@@ -6,6 +6,7 @@ use flui_driver::coordinates::DevicePoint;
 use flui_driver::lane::atspi::roles::{self as atspi, AtspiRole};
 use flui_driver::lane::windows::roles as uia;
 use flui_driver::lane::x11::activity::{EchoCount, Observed, RawKind};
+use flui_driver::lane::x11::held;
 use flui_driver::lane::x11::held::{
     HeldButtons, HeldInput, KeyInput, Keymap, Keystroke, MAX_WHEEL_CLICKS, WHEEL_STEP,
     scroll_within, wheel_clicks,
@@ -717,6 +718,17 @@ fn the_held_records_follow_what_the_server_took() {
         Ok(vec![Keystroke::Release(Keycode(38))]),
         "released by the code it was pressed with"
     );
+    // A key the lane does not hold is not released: the plan is empty, so no lone Shift tap goes
+    // uncounted on a release the server would drop.
+    assert_eq!(HeldInput::new().plan(&up("a"), &keymap), Ok(vec![]));
+    assert_eq!(HeldInput::new().plan(&up("Shift"), &keymap), Ok(vec![]));
+    // A key pressed for its capital is released by its lower case, by the key the lane holds.
+    let mut capital = HeldInput::new();
+    send(&mut capital, &[down("A")]);
+    assert_eq!(
+        capital.plan(&up("a"), &keymap),
+        Ok(vec![Keystroke::Release(Keycode(38))])
+    );
     let map = Keystroke::Map {
         key: Keycode(255),
         keysym: Keysym(0xFC),
@@ -785,6 +797,32 @@ fn the_held_records_follow_what_the_server_took() {
         matches!(&released, Err(Error::ReleaseFailed { held, .. })
             if held == &vec!["mouse button 1".to_owned()]),
         "{released:?}"
+    );
+}
+
+/// The release of everything names everything still held, whichever half failed: a key release
+/// that failed plainly and a button release that failed both leave their keys and buttons named.
+#[test]
+fn a_release_failure_names_every_key_and_button_still_held() {
+    let plain = refuse();
+    let buttons = Err(Error::ReleaseFailed {
+        lane: "x11".to_owned(),
+        held: vec!["mouse button 3".to_owned()],
+        message: "refused".to_owned(),
+    });
+    let held = vec!["Control".to_owned(), "mouse button 3".to_owned()];
+    let answer = held::release_answer(plain, buttons, held.clone());
+    assert!(
+        matches!(&answer, Err(Error::ReleaseFailed { held: named, .. }) if named == &held),
+        "{answer:?}"
+    );
+    assert!(held::release_answer(Ok(()), Ok(()), Vec::new()).is_ok());
+    assert!(
+        matches!(
+            held::release_answer(refuse(), Ok(()), Vec::new()),
+            Err(Error::Lane { .. })
+        ),
+        "nothing stays held: the failure itself"
     );
 }
 

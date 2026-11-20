@@ -88,7 +88,8 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **A launched Linux app dies with its session.** It leads a process group of its own, which the
   session kills when it ends, what the app started included even after the app exited: the app
   is read without being reaped (`waitid` with `WNOWAIT`) until then, so its id names its group and
-  no other process's. It also dies when the thread that started it ends
+  no other process's, and the group is killed only while `waitid` still answers for the app (a
+  driver that ignores `SIGCHLD` has its children reaped by the kernel, and kills no group then). It also dies when the thread that started it ends
   (`PR_SET_PDEATHSIG`): that thread is the session's own (`launch::linux::Starter`), so a driver
   moved to another thread keeps its app.
 - **The Windows lane rechecks the desktop before every event.** It sends nothing off the desktop

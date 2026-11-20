@@ -80,16 +80,26 @@ pub(crate) fn spawn(mut command: Command) -> io::Result<(Child, Starter)> {
     Ok((child, starter))
 }
 
-/// Kill the process group `child` leads: the app and whatever it started. Sound while `child` is
-/// unreaped, which [`state`] keeps it: an unreaped child's id is still its own and its
-/// group's, never another process's.
+/// Kill the process group `child` leads: the app and whatever it started, only while the child is
+/// shown still ours: `waitid` answers for it, running or a zombie this process has not reaped,
+/// whose id is still its own and its group's. Where it does not answer (a process that ignores
+/// `SIGCHLD` has its children reaped by the kernel, and `waitid` fails with `ECHILD`), the id may
+/// name another process's group by now, and nothing is killed.
 pub(crate) fn kill_group(child: &Child) {
-    let _ = rustix::process::kill_process_group(Pid::from_child(child), Signal::KILL);
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+    let held = waitid(
+        WaitId::Pid(Pid::from_child(child)),
+        WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG,
+    )
+    .is_ok();
+    if held {
+        let _ = rustix::process::kill_process_group(Pid::from_child(child), Signal::KILL);
+    }
 }
 
 /// How `child` is, read without reaping it: left unreaped, its id keeps naming its group until the
 /// session kills the group and reaps it. A failed read is an ended process, as std's `try_wait`
-/// failing is.
+/// failing is, and [`kill_group`] then kills nothing.
 pub(crate) fn state(child: &Child) -> ProcessState {
     use rustix::process::{WaitId, WaitIdOptions, waitid};
     match waitid(

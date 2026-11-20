@@ -912,7 +912,8 @@ graph LR
     `a_release_or_emptying_the_server_refused_stays_held`, `a_scroll_turns_the_wheel_in_whole_clicks`,
     `only_the_xtest_events_the_lane_sent_are_its_own`, `an_image_reads_into_rgba_rows_whatever_its_layout`,
     `a_wheel_click_left_down_is_released_with_the_rest`, `a_scroll_past_the_click_limit_is_refused`,
-    `the_release_of_everything_completes_no_sticky_keys_shortcut`;
+    `the_release_of_everything_completes_no_sticky_keys_shortcut`,
+    `a_release_failure_names_every_key_and_button_still_held`;
     `wayland_lane::the_desktop_sessions_portal_is_refused_for_a_compositor_of_the_runs_own`;
     `wayland_lane::a_device_point_lands_in_the_compositors_logical_space_or_is_refused`,
     `a_button_is_its_evdev_code_and_a_scroll_its_logical_distance`,
@@ -933,7 +934,7 @@ graph LR
     wheel and keys and is `cannot_verify` naming `os_input_device` for touch and pen),
     `a_foreign_motion_mid_run_ends_it_and_releases_its_button`,
     `a_launched_app_lives_as_long_as_its_session_whatever_thread_launched_it`;
-    `wayland_lane::eis::the_lanes_events_reach_the_compositor_as_ei_events` (an EIS server the test
+    `wayland_lane::libei::the_lanes_events_reach_the_compositor_as_ei_events` (an EIS server the test
     plays with `reis`'s server half hears an absolute motion, the primary button by its evdev code,
     a scroll, keys as keysyms and UTF-8 text, then the releases),
     `the_shared_session_takes_no_input_from_the_lane`,
@@ -954,7 +955,7 @@ graph LR
     scenarios have not run on WL.
 - **As built:**
   - The lanes are `lane::x11` (`keys`, `held`, `safety`, `activity`, `image` pure; `server`,
-    `guard` and `X11Lane` Linux only), `lane::wayland` (`mapping` pure; `eis`, `portal` and
+    `guard` and `X11Lane` Linux only), `lane::wayland` (`mapping` pure; `libei`, `portal` and
     `WaylandLane` Linux with the `wayland` feature) and `lane::atspi` (`roles` pure, the client
     Linux only), which both read through. The AT-SPI client walks through
     `lane::windows::walk`, the Windows lane's bounded walk, and the lanes map with

@@ -372,19 +372,43 @@ fn the_server_captures_the_apps_window_alone() {
     shown(&mut driver);
     let mut window = driver.main_window().expect("a window");
     let placement = window.placement().expect("a placement");
-    let capture = window.capture_os().expect("the server captures the window");
+    // The semantics tree `shown` waits for is built before the first frame reaches the X server:
+    // on a software GPU (llvmpipe under Xvfb, as in CI) the surface's first present lands a while
+    // after the build, and a capture taken before it reads the window's background alone. So wait
+    // for the app to settle (no frame pending), then for the server's image to show what was drawn,
+    // within a deadline; past it, the last capture is what the assertion judges.
+    let settled = window
+        .wait_until(
+            flui_driver::protocol::wait::Condition::Settled,
+            Duration::from_secs(30),
+        )
+        .expect("the app answers");
+    assert!(settled.satisfied, "the app settled: {settled:?}");
+    let drawn = |capture: &flui_driver::lane::OsCapture| {
+        let first = capture.pixel(0, 0);
+        (0..capture.height)
+            .step_by(4)
+            .flat_map(|y| (0..capture.width).step_by(4).map(move |x| (x, y)))
+            .any(|(x, y)| capture.pixel(x, y) != first)
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let capture = loop {
+        let capture = window.capture_os().expect("the server captures the window");
+        if drawn(&capture) || Instant::now() >= deadline {
+            break capture;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     let device = |logical: f64| (logical * placement.scale).round() as u32;
     assert_eq!(
         (capture.width, capture.height),
         (device(placement.size.width), device(placement.size.height)),
         "the capture is the window's surface, at its scale"
     );
-    let first = capture.pixel(0, 0).expect("a first pixel");
-    let differs = (0..capture.height)
-        .step_by(4)
-        .flat_map(|y| (0..capture.width).step_by(4).map(move |x| (x, y)))
-        .any(|(x, y)| capture.pixel(x, y) != Some(first));
-    assert!(differs, "the app drew its controls, not one flat colour");
+    assert!(
+        drawn(&capture),
+        "the app drew its controls, not one flat colour, within 15 s of settling"
+    );
 }
 
 /// The guard watches XInput 2's raw events: it starts and stops, and input another client fakes

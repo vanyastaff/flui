@@ -40,7 +40,7 @@ pub(super) struct PortalSession {
     /// The connection the session lives as long as.
     _connection: zbus::Connection,
     /// The session's EIS socket.
-    pub(super) eis: OwnedFd,
+    pub(super) socket: OwnedFd,
 }
 
 /// Ask the portal on the session bus at `bus` (the process's own when `None`) for a session with
@@ -66,13 +66,23 @@ pub(super) fn open(bus: Option<&str>) -> Result<PortalSession> {
             .map(|name| name.trim_start_matches(':').replace('.', "_"))
             .ok_or_else(|| unavailable("the session bus gave no name".to_owned()))?;
         // The portal's own connection: a `Response` is the portal's only when it comes from it.
-        let portal = zbus::fdo::DBusProxy::new(&connection)
+        // A portal the bus starts on demand has no owner until something asks for it, so it is
+        // started first (a running one answers that it already runs).
+        let names = zbus::fdo::DBusProxy::new(&connection)
             .await
-            .map_err(|error| unavailable(format!("no bus daemon: {error}")))?
-            .get_name_owner(
-                zbus::names::BusName::try_from(DESTINATION)
-                    .expect("BUG: the portal's well-known name is a bus name"),
-            )
+            .map_err(|error| unavailable(format!("no bus daemon: {error}")))?;
+        let destination = zbus::names::WellKnownName::try_from(DESTINATION)
+            .expect("BUG: the portal's well-known name is a bus name");
+        names
+            .start_service_by_name(destination.clone(), 0)
+            .await
+            .map_err(|error| {
+                unavailable(format!(
+                    "no RemoteDesktop portal on the session bus, and none it can start: {error}"
+                ))
+            })?;
+        let portal = names
+            .get_name_owner(zbus::names::BusName::from(destination))
             .await
             .map_err(|error| {
                 unavailable(format!(
@@ -143,13 +153,13 @@ pub(super) fn open(bus: Option<&str>) -> Result<PortalSession> {
                     "the RemoteDesktop portal gave no EIS socket (version 2 has it): {error}"
                 ))
             })?;
-        let eis: zbus::zvariant::OwnedFd = reply
+        let socket: zbus::zvariant::OwnedFd = reply
             .body()
             .deserialize()
             .map_err(|error| unavailable(format!("the portal's EIS socket: {error}")))?;
         Ok(PortalSession {
             _connection: connection,
-            eis: OwnedFd::from(eis),
+            socket: OwnedFd::from(socket),
         })
     })
 }

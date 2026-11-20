@@ -133,7 +133,7 @@ fn a_portal_that_refuses_or_ends_cannot_be_verified() {
 }
 
 #[cfg(target_os = "linux")]
-mod eis {
+mod libei {
     //! The lane's libei client against an EIS server of the test's own.
 
     use std::os::unix::net::UnixListener;
@@ -296,7 +296,7 @@ mod eis {
     #[test]
     fn the_lanes_events_reach_the_compositor_as_ei_events() {
         let dir = tempfile::tempdir().expect("a temporary directory");
-        let socket = dir.path().join("eis-0");
+        let socket = dir.path().join("ei-0");
         let listener = UnixListener::bind(&socket).expect("the EIS socket");
         let (post, heard) = mpsc::channel();
         let server = std::thread::spawn(move || serve(&listener, &post, Duration::from_secs(10)));
@@ -357,7 +357,7 @@ mod eis {
     #[test]
     fn the_shared_session_takes_no_input_from_the_lane() {
         let dir = tempfile::tempdir().expect("a temporary directory");
-        let socket = dir.path().join("eis-0");
+        let socket = dir.path().join("ei-0");
         let listener = UnixListener::bind(&socket).expect("the EIS socket");
         listener.set_nonblocking(true).expect("non-blocking");
         let mut wayland = WaylandLane::try_new(

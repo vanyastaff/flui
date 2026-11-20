@@ -27,7 +27,7 @@
 pub mod mapping;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
-mod eis;
+mod libei;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 mod portal;
 
@@ -44,7 +44,7 @@ mod lane {
     use flui_protocol::tree::Tree;
     use reis::ei;
 
-    use super::eis::EiSession;
+    use super::libei::EiSession;
     use super::mapping::{self, LANE};
     use super::portal::{self, PortalSession};
     use crate::coordinates::{DevicePoint, WindowGeometry};
@@ -163,13 +163,14 @@ mod lane {
                     ),
                     EisSource::Portal(bus) => {
                         let portal = portal::open(bus.as_deref())?;
-                        let socket = UnixStream::from(portal.eis.try_clone().map_err(|error| {
-                            Error::Lane {
-                                lane: LANE.to_owned(),
-                                unavailable: true,
-                                message: format!("the portal's EIS socket: {error}"),
-                            }
-                        })?);
+                        let socket =
+                            UnixStream::from(portal.socket.try_clone().map_err(|error| {
+                                Error::Lane {
+                                    lane: LANE.to_owned(),
+                                    unavailable: true,
+                                    message: format!("the portal's EIS socket: {error}"),
+                                }
+                            })?);
                         (socket, Some(portal))
                     }
                 };

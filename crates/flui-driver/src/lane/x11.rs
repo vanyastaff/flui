@@ -520,25 +520,9 @@ mod lane {
             let buttons = self
                 .buttons
                 .release_all(|button| server.fake(Fake::ButtonRelease(button)));
-            match (keys, buttons) {
-                (Ok(()), other) | (other, Ok(())) => other,
-                (
-                    Err(Error::ReleaseFailed {
-                        lane,
-                        mut held,
-                        message,
-                    }),
-                    Err(Error::ReleaseFailed { held: more, .. }),
-                ) => {
-                    held.extend(more);
-                    Err(Error::ReleaseFailed {
-                        lane,
-                        held,
-                        message,
-                    })
-                }
-                (Err(first), Err(_)) => Err(first),
-            }
+            let mut still_held = self.keys.held_names();
+            still_held.extend(self.buttons.held_names());
+            held::release_answer(keys, buttons, still_held)
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
