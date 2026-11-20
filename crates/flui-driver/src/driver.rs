@@ -94,7 +94,7 @@ impl Driver {
             #[cfg(feature = "headless")]
             crate::launch::Target::Headless(headless) => {
                 let budget = headless.reply_timeout + Duration::from_secs(1);
-                let connection = crate::connection::in_process::InProcess::start(headless)?;
+                let connection = crate::connection::in_process::InProcess::start(*headless)?;
                 Ok(Self::new(
                     Box::new(connection),
                     None,

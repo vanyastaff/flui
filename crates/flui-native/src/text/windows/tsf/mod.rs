@@ -41,7 +41,10 @@
 // TSF is COM: direct Win32 calls and `#[implement]` objects have no safe
 // wrapper. Every `unsafe` block carries its own `// SAFETY:` comment stating
 // the invariant that makes it sound.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "TSF is COM: direct Win32 calls and `#[implement]` objects have no safe wrapper"
+)]
 
 mod document;
 mod input_scope;

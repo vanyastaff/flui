@@ -7,7 +7,10 @@
 // `--test-threads 1`, which nothing in this repo sets for these tests. Under a
 // plain `cargo test -p flui-native` these calls race the other tests in the
 // same binary.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "`std::env::set_var` and `remove_var` are `unsafe` in edition 2024; nextest's process-per-test isolation keeps other threads off the environment"
+)]
 
 use flui_native::testing::app;
 

@@ -25,7 +25,10 @@
 
 // AppKit's classes are reached through Objective-C messages, which have no
 // safe wrapper; every `unsafe` block states the invariant it relies on.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "AppKit's classes are reached through Objective-C messages, which have no safe wrapper"
+)]
 
 use std::cell::Cell;
 use std::rc::Rc;

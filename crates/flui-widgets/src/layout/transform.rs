@@ -18,10 +18,10 @@ use crate::Directionality;
 /// none, so an [`origin`](Self::origin) set alone acts alone, while
 /// [`scale`](Self::scale) and [`rotation`](Self::rotation) pivot about the
 /// centre.
-// `transform` names the concept the struct wraps (matches
-// `RenderTransform`'s own field of the same name); renaming it to dodge the
-// lint would trade a clear name for a weaker one.
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "`transform` names the concept the struct wraps, like the field of the same name on `RenderTransform`"
+)]
 #[derive(Clone, Debug)]
 pub struct Transform {
     transform: Matrix4,

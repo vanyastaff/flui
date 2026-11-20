@@ -1,7 +1,10 @@
 //! Mounted color resolution: selective dependencies, live contrast and
 //! brightness changes, authored colors and nested media overrides.
 
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic from `unwrap` is the test failure report (docs/PANIC-POLICY.md)"
+)]
 
 use crate::common;
 

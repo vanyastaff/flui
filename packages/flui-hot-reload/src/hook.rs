@@ -313,7 +313,7 @@ impl DevReloadHook for ScenePluginHook {
         // original scene is dropped before this method returns, while the
         // driver holds the image. The unsafe scene_frame caller additionally
         // guarantees render retains no cloned image-dependent payloads.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
         let built = unsafe { self.driver.build_scene(width, height) };
         let Some(scene) = built else {
             return false;

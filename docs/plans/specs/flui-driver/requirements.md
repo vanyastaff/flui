@@ -271,7 +271,8 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   - Android: `adb` input; `uinput` scripts where the device allows them without root, which is
     probed per device and reported as a capability, never assumed; `uiautomator` for system UI
     such as the soft keyboard; `screencap`;
-  - iOS Simulator: the simulator's HID channel for touch, keys and buttons, `simctl` capture;
+  - iOS Simulator: no OS input until a supported channel exists, each input refused as
+    `not_supported` naming `ios_simulator_hid` (D23); `simctl` capture and process;
   - Chrome: WebDriver BiDi `input.performActions`, CDP IME composition, `captureScreenshot`.
 - **R32a.** OS-lane runs are **deterministic by rule**:
   - a scenario fixes its window size (logical size and scale factor), and the run refuses when the
@@ -607,8 +608,7 @@ and each idea was accepted or rejected there with a reason.
   feature.
 - **D4.** Pixels: per-backend baselines with tolerance, masks and artifacts, plus baseline-free
   predicates. Bundled fonts.
-- **D5.** iOS Simulator input goes through the simulator's HID channel from Rust, with a version
-  probe and `not_supported` on mismatch. No Swift.
+- **D5.** No Swift in the iOS Simulator lane. Its rule for input is D23, below.
 - **D6.** Semantics gain an identifier.
 - **D7.** A trace is selector-based JSONL bundling the input and native recordings. The CLI
   replays it and generates Rust tests from it.
@@ -650,6 +650,32 @@ and each idea was accepted or rejected there with a reason.
     `tracing_unstable`; serde as the description trait (it stays the output format);
     Compose-style source strings; a second profiling API; `max_level_*` in framework crates;
     `miette` source-span errors.
+
+## Changed by the session lead (2026-11-20)
+
+- **D23 (session lead, 2026-11-20).** The iOS Simulator lane sends no OS input: every touch, key,
+  text, scroll and button is refused as `not_supported` naming `ios_simulator_hid` until a
+  supported channel exists, and the choice of that channel is the owner's. This replaces the input
+  rule the owner set in D5 (the simulator's HID channel from Rust, with a version probe and
+  `not_supported` on a mismatch), because FD15's spike answered no-go and the review of its pull
+  request chose a stated rule over a split by Xcode version. It is the owner's to confirm or
+  replace. The evidence and its scope, from `idb`'s history (meta/idb):
+  - from CoreSimulator 1155.4 (Xcode 27) `idb` rejects Indigo HID touch, two-finger touch and
+    button sends as `legacyInputSuppressed`, as it already did keyboard input, because there the
+    Simulator drops Indigo button and keyboard events on every runtime and drops touch on some
+    boots and intermittently within one, while a send reports success (commit `b4670b5cb`); DTUHID
+    is `idb`'s default transport from Xcode 27, and Indigo before it (`a67f6e724`); on toolchains
+    that ship `dtuhidd` the guest does not reliably deliver Indigo touch, button or keyboard input
+    whatever order the clients send in (`5fcb9fa83`);
+  - before Xcode 27, Indigo is `idb`'s default and those commits record no loss there; the lane
+    refuses there too, since Indigo is reverse-engineered C whose layout no probe checks;
+  - DTUHID is a private XPC service in each simulator whose daemon can abort while a boot settles
+    and then discard sends in silence (`idb`'s `SimulatorDTUHIDConnection`).
+
+  Still open, for the owner: Quartz events on the Simulator's window through the macOS lane (public
+  calls, but on the shared desktop, guarded as the macOS lane is, with the screen's place in the
+  window published by no API), and an XCUITest runner, Apple's own channel, which D5's "No Swift"
+  forbids.
 
 ## Market survey refinements (2026-10-18)
 

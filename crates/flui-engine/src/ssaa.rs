@@ -246,7 +246,10 @@ fn round_up_to_alignment(value: u32, alignment: u32) -> u32 {
 
 // ─── Replay helper ─────────────────────────────────────────────────────────────
 
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the SSAA replay methods take device, queue, pipelines, resources and encoder as independent borrows of the frame's GPU state that the caller holds as separate locals"
+)]
 impl GpuReplay {
     /// Replay a `DrawItem::SsaaPath`: render the path into a 2× tile,
     /// box-downsample to a premultiplied 1× tile, then composite onto the target.

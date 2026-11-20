@@ -15,7 +15,10 @@ use flui_painting::paint::BlendMode;
 use std::sync::Arc;
 
 impl GpuReplay {
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the sampling, tint and clip of one group composite are independent values, and the GPU handles are separate borrows of the frame state"
+    )]
     pub(crate) fn composite_group_texture(
         &mut self,
         texture: PooledTexture,

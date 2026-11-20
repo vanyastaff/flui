@@ -68,7 +68,10 @@ struct Thresholds {
     peak: f64,
 }
 
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields are named after the callbacks they hold, so each keeps its `on_*` name"
+)]
 #[derive(Default)]
 struct ForcePressCallbacks {
     on_start: Option<ForcePressStartCallback>,

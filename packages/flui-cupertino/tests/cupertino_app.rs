@@ -9,8 +9,10 @@
 //! stateful wrapper through the `RebuildHandle` it captured at mount
 //! (ADR-0018).
 
-// `unwrap` in test code: a panic IS the failure report (docs/PANIC-POLICY.md).
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic from `unwrap` is the test failure report (docs/PANIC-POLICY.md)"
+)]
 
 use crate::common;
 

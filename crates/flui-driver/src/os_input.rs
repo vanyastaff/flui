@@ -208,30 +208,16 @@ impl OsInputLock {
     /// [`Error::Busy`] while another session holds the lock; [`Error::Io`] when the file cannot
     /// be opened, even for reading, or the OS fails the lock for another reason.
     pub fn acquire(path: &Path) -> Result<Self> {
-        let created = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path);
-        let file = match created {
-            Ok(file) => file,
-            // Reading is enough to take an OS file lock.
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                File::open(path).map_err(|_| Error::Io(error))?
-            }
-            Err(error) => return Err(Error::Io(error)),
-        };
-        match file.try_lock() {
-            Ok(()) => Ok(Self {
-                file,
-                path: path.to_owned(),
-            }),
-            Err(std::fs::TryLockError::WouldBlock) => Err(Error::busy(format!(
+        let file = lock_file(path, || {
+            format!(
                 "another session sends OS input on this desktop ({}); one runs at a time",
                 path.display()
-            ))),
-            Err(std::fs::TryLockError::Error(error)) => Err(Error::Io(error)),
-        }
+            )
+        })?;
+        Ok(Self {
+            file,
+            path: path.to_owned(),
+        })
     }
 
     /// The lock file.
@@ -245,6 +231,58 @@ impl Drop for OsInputLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();
     }
+}
+
+/// The file at `path`, locked with the OS's file lock: made when missing, opened for reading when
+/// this user may not write it, which is enough to take the lock (see [`OsInputLock`]).
+///
+/// # Errors
+///
+/// [`Error::Busy`] with `busy`'s message while another handle holds the lock; [`Error::Io`] when
+/// the file cannot be opened, even for reading, or the OS fails the lock for another reason.
+pub(crate) fn lock_file(path: &Path, busy: impl FnOnce() -> String) -> Result<File> {
+    let created = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path);
+    let file = match created {
+        Ok(file) => file,
+        // Reading is enough to take an OS file lock.
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            File::open(path).map_err(|_| Error::Io(error))?
+        }
+        Err(error) => return Err(Error::Io(error)),
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(Error::busy(busy())),
+        Err(std::fs::TryLockError::Error(error)) => Err(Error::Io(error)),
+    }
+}
+
+/// The directory a driver's per-user lock lives in, made where it is the driver's to make: the
+/// directory of [`OsInputLock::default_path`].
+///
+/// # Errors
+///
+/// [`Error::Io`] when the private directory cannot be made, or is not a directory this user owns.
+#[cfg_attr(
+    not(unix),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "only a Unix host makes the private directory, which can fail"
+    )
+)]
+pub(crate) fn private_lock_dir() -> Result<PathBuf> {
+    #[cfg(unix)]
+    if let Some(dir) = runtime_dir() {
+        return Ok(dir);
+    }
+    let dir = private_dir(&std::env::temp_dir());
+    #[cfg(unix)]
+    make_private(&dir)?;
+    Ok(dir)
 }
 
 /// `$XDG_RUNTIME_DIR` when it is an absolute path to an existing directory; unset, empty or
@@ -291,7 +329,7 @@ fn make_private(dir: &Path) -> Result<()> {
         return Err(Error::Io(std::io::Error::new(
             ErrorKind::PermissionDenied,
             format!(
-                "{} is not a directory of this user's, so it cannot hold the OS-input lock; \
+                "{} is not a directory of this user's, so it cannot hold the driver's locks; \
                  remove it or set XDG_RUNTIME_DIR",
                 dir.display()
             ),

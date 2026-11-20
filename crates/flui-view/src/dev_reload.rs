@@ -214,7 +214,7 @@ mod tests {
     fn scene_frame_default_never_calls_render() {
         let mut calls = 0;
         // SAFETY: PollOnly uses the default, which supplies no plugin payload.
-        #[expect(unsafe_code)]
+        #[expect(unsafe_code, reason = "`scene_frame` is an `unsafe fn`")]
         let drew = unsafe {
             PollOnly.scene_frame(10.0, 10.0, &mut |_scene, _reset_fonts| {
                 calls += 1;

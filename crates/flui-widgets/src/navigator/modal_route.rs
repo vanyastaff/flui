@@ -955,7 +955,10 @@ impl fmt::Debug for ModalHandle {
 
 /// `dead_code` in the lib target: `HeroController` is this handle's only production
 /// caller, and it is itself dead until the `Hero` widget uses it. See `hero_controller.rs`.
-#[expect(dead_code)]
+#[expect(
+    dead_code,
+    reason = "`HeroController` is the only production caller of these methods and is not yet reached from the `Hero` widget"
+)]
 impl ModalHandle {
     /// Deliver the pop-invoked callback (`did_pop`, …) to every `PopScope`
     /// registered in this route's page. Called by

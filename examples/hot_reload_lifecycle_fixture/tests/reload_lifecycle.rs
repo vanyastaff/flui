@@ -156,7 +156,7 @@ fn tick(lib: &DynLib) -> u32 {
     // -> u32` (see examples/hot_reload_lifecycle_fixture/src/lib.rs); the
     // symbol name and signature are this test's own contract with that
     // fixture, both compiled from this same workspace/toolchain.
-    #[expect(unsafe_code)]
+    #[expect(unsafe_code, reason = "transmutes the symbol to its signature")]
     let value = unsafe {
         let ptr = lib
             .symbol("fixture_tick")
@@ -182,7 +182,7 @@ fn load_drive_unload(path: &Path) {
     // (the ABI-token handshake `ScenePlugin::load` already performed
     // confirms it), and the returned scene is dropped immediately, before
     // `plugin` (and thus the library) is unloaded below.
-    #[expect(unsafe_code)]
+    #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
     let scene = unsafe { plugin.build_scene(64.0, 64.0) };
     assert!(
         scene.is_some(),

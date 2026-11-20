@@ -182,7 +182,10 @@ pub(crate) fn copy_backdrop_region(
 /// 3. Issue one render pass over `op.device_bounds` with `LoadOp::Load` (preserving
 ///    existing surface content outside the blend region).
 /// 4. Pooled textures (foreground, backdrop copy) are returned to the pool on drop.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "device, encoder, pipeline and resources are independent borrows of the frame's GPU state that the caller holds as separate locals"
+)]
 pub(crate) fn flush_advanced_layer(
     mut op: AdvancedBlendOp,
     surface_texture: &wgpu::Texture,
@@ -416,7 +419,10 @@ mod synthetic_op_tests {
     }
 
     /// Build a w×h surface texture with left-half = `left_pm` and right-half = `right_pm`.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the device, queue and texture description are independent values with no shared owner to bundle them"
+    )]
     fn create_split_texture(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

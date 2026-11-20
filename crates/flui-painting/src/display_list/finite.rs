@@ -127,6 +127,10 @@ impl DrawOp {
     ///
     /// `paint_finite` answers for a paint; the canvas answers from the
     /// verdict it took once, when it interned the paint.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "one arm per `DrawOp` variant family keeps each op's finiteness checks beside its fields"
+    )]
     pub(crate) fn is_finite(&self, paint_finite: impl Fn(&Arc<Paint>) -> bool) -> bool {
         let optional_paint = |paint: &Option<Arc<Paint>>| paint.as_ref().is_none_or(&paint_finite);
         match self {

@@ -344,7 +344,7 @@ pub type CounterBuildFn = fn(WorkerBuildEnv<'_>, &CounterState, &CounterApp) -> 
 /// withdrawn while admitted images remain mapped, and a fingerprint change registers
 /// under a different key. This rejects an unavailable build registration explicitly;
 /// admitted image lifetime remains the independent ADR-0111 contract.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "the build function is read from a loaded image")]
 pub fn counter_build_fn() -> CounterBuildFn {
     let ptr = get_worker_build_ptr(TYPE_FINGERPRINT).expect(
         "counter worker unavailable — build the logic crate, set \

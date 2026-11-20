@@ -28,7 +28,10 @@
 // The adapter holds UIA objects that are not `Send`; the window claims
 // `Send`/`Sync` by hand: the workspace lint `unsafe_code = "warn"` is opted out
 // here, at the module boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the adapter holds UIA objects that are not `Send`, and the window claims `Send`/`Sync` by hand"
+)]
 
 use std::sync::Arc;
 

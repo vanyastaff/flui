@@ -10,11 +10,13 @@
     ввод пользователя: на отдельном рабочем столе nextest он `cannot_verify` (прогон
     2026-11-20 в записи), а на рабочий стол пользователя тесты выходят только с
     `FLUI_TEST_VISIBLE_DESKTOP=1`, и этот прогон делает владелец;
-  - LY96 — сценария VoiceOver на iOS нет в коде: iOS-lane нет (FD15 спеки flui-driver, и агент
-    пока не достигает приложения в Simulator). Android-lane читает дерево TalkBack из
-    `uiautomator dump` без `viewIdResourceName`, сопоставляя его с деревом приложения, и
-    сценарии `android-roles` и `android-a11y` есть в коде с headless-половиной; их прогоны на
-    устройстве и сеансы Narrator, VoiceOver, Orca и TalkBack — долг строки parity;
+  - LY96 — сценария VoiceOver на iOS нет в коде: iOS-Simulator-lane (FD15 спеки flui-driver)
+    запускает приложение и снимает экран, но ввода не шлёт и дерева доступности не читает: спайк
+    HID ответил no-go, и канал ввода — решение владельца, а дерево `accesskit_ios` хосту
+    недоступно. Android-lane читает дерево TalkBack из `uiautomator dump` без
+    `viewIdResourceName`, сопоставляя его с деревом приложения, и сценарии `android-roles` и
+    `android-a11y` есть в коде с headless-половиной; их прогоны на устройстве и сеансы Narrator,
+    VoiceOver, Orca и TalkBack — долг строки parity;
   - LY97 — Web: ADR-0288 §11 решил, что страница пишет только слой `input`, поэтому запись
     драйвером через Chrome-lane не держит lifecycle, дисплеи и снимки окна web-сборки, а строка
     задачи требует их и на Web. Нужно решение владельца: ADR, который заменяет это предложение
@@ -5104,10 +5106,16 @@ GPU-память простаивающего или невидимого окн
   WSL Ubuntu 24.04 2026-11-20 проходят. Семь ролей, чью метку FLUI публикует описанием
   (paragraph, caption, code, emphasis, strong, insertion, deletion), до TalkBack без текста:
   `accesskit_android` описание не передаёт (`docs/gaps.md`, «Accessibility bridge fidelity»).
-  **Чего нет в коде.** iOS-lane нет (FD15 спеки flui-driver), и агент не достигает приложения в
-  Simulator (`docs/gaps.md`, «The driver agent cannot reach an app in the iOS Simulator»):
-  сценария VoiceOver на iOS нет. Chrome-lane (FD12) дерева доступности страницы не читает (в
-  строке задачи Web нет). Сеанс TalkBack находит окно до включения TalkBack и действует его
+  **Чего нет в коде.** iOS-Simulator-lane (FD15, `flui-driver::lane::ios_simulator`) запускает
+  приложение через `simctl` с сокетом агента и токеном в переменных `SIMCTL_CHILD_` и снимает
+  экран через `simctl io screenshot`, но ввода не шлёт (каждое событие — `not_supported` с
+  именем `ios_simulator_hid`: спайк HID ответил no-go, канал Indigo из Xcode 27 теряет кнопки и
+  клавиши, а DTUHID — приватный XPC без подтверждения доставки) и дерева доступности не читает:
+  дерево `accesskit_ios` живёт внутри Simulator, и публичного API хоста к нему нет
+  (`docs/gaps.md`, «The driver's iOS Simulator lane sends no input and reads no accessibility
+  tree»). Прогон на Simulator в долгу, сценария VoiceOver на iOS нет; канал ввода — решение
+  владельца. Chrome-lane (FD12) дерева доступности страницы не читает (в строке задачи Web нет).
+  Сеанс TalkBack находит окно до включения TalkBack и действует его
   жестами; ни сохранённой геометрии, ни жестов нет (`docs/gaps.md`, «The driver's Android lane
   activates nothing through accessibility…»). Долг: прогоны
   `android_device::the_android_roles_scenario_runs_through_the_os_lane` и

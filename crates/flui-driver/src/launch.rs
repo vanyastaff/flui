@@ -43,19 +43,6 @@ pub enum Artifact {
     WasmBundle(PathBuf),
 }
 
-impl Artifact {
-    /// The lane that installs and starts the artifact, which a missing lane names as the missing
-    /// capability.
-    fn lane(&self) -> &'static str {
-        match self {
-            Self::Executable(_) => "desktop",
-            Self::AppBundle(_) => "apple",
-            Self::Apk(_) => "android",
-            Self::WasmBundle(_) => "chrome",
-        }
-    }
-}
-
 /// What to start and how: an app built for this host, an artifact a lane installs, or a view
 /// hosted in process, with the arguments, environment and connect wait it starts with.
 #[must_use]
@@ -77,7 +64,7 @@ pub(crate) enum Target {
         package: Option<String>,
     },
     #[cfg(feature = "headless")]
-    Headless(HeadlessLaunch),
+    Headless(Box<HeadlessLaunch>),
 }
 
 impl Launch {
@@ -161,12 +148,25 @@ impl Launch {
                     apk.display()
                 ),
             )),
-            Target::Artifact(artifact) => Err(Error::not_supported(
-                format!("{}_lane", artifact.lane()),
+            // A simulator's app needs the simulator and its bundle identifier, which the path
+            // does not name; a macOS app is its executable.
+            Target::Artifact(Artifact::AppBundle(app)) => Err(Error::not_supported(
+                "app_bundle_launch",
                 format!(
-                    "{artifact:?} is installed by the {} lane, which this build of the driver has \
-                     not",
-                    artifact.lane()
+                    "{} is started on an iOS Simulator by `lane::ios_simulator::launch`, which \
+                     names the simulator and the bundle identifier, and on macOS by its \
+                     executable (`Launch::executable`)",
+                    app.display()
+                ),
+            )),
+            // With the `chrome` feature, `Driver::launch` serves a web build before it asks for an
+            // executable.
+            Target::Artifact(Artifact::WasmBundle(bundle)) => Err(Error::not_supported(
+                "chrome_lane",
+                format!(
+                    "{} is served by the Chrome lane, which this build of the driver has not \
+                     (feature `chrome`)",
+                    bundle.display()
                 ),
             )),
             Target::CargoExample { example, package } => build_example(example, package.as_deref()),
@@ -501,6 +501,7 @@ pub(crate) struct HeadlessLaunch {
     pub(crate) name: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) insets: flui_platform::WindowInsets,
     pub(crate) reply_timeout: Duration,
     pub(crate) attach: HeadlessAttach,
 }
@@ -521,16 +522,17 @@ impl Launch {
         V: flui_view::View + Clone + 'static,
     {
         Self {
-            target: Target::Headless(HeadlessLaunch {
+            target: Target::Headless(Box::new(HeadlessLaunch {
                 name: "headless".to_owned(),
                 width: 800,
                 height: 600,
+                insets: flui_platform::WindowInsets::ZERO,
                 reply_timeout: Duration::from_secs(5),
                 attach: Box::new(move |host| {
                     host.attach(&root())
                         .map_err(|error| format!("the root did not attach: {error}"))
                 }),
-            }),
+            })),
             ..Self::artifact(Artifact::Executable(PathBuf::new()))
         }
     }
@@ -550,6 +552,25 @@ impl Launch {
             headless.height = height;
         }
         self
+    }
+
+    /// Open the headless window with `insets` covering it (a safe area, a keyboard), as a native
+    /// host reports them: they reach the window's `MediaQuery` as they do on a device. None when
+    /// not named.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a launch of anything but a headless view, whose window's
+    /// insets are its OS's, not the driver's to set.
+    pub fn window_insets(mut self, insets: flui_platform::WindowInsets) -> Result<Self> {
+        let Target::Headless(headless) = &mut self.target else {
+            return Err(Error::invalid_argument(
+                "only a headless window takes its insets from the launch; a native window's come \
+                 from its OS",
+            ));
+        };
+        headless.insets = insets;
+        Ok(self)
     }
 
     /// How long the headless app's agent waits for its window's answer, in virtual time, before

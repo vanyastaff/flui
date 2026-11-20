@@ -61,7 +61,10 @@ mod matcher {
     // This module calls the NDK directly, which has no safe wrapper: the
     // workspace lint `unsafe_code = "warn"` is opted out here, at the module
     // boundary, rather than for the whole crate (see `lib.rs`).
-    #![expect(unsafe_code)]
+    #![expect(
+        unsafe_code,
+        reason = "calls the NDK font matcher through raw pointers, which has no safe wrapper"
+    )]
 
     use std::ffi::{CStr, CString};
     use std::path::PathBuf;

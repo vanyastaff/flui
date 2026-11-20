@@ -51,7 +51,10 @@ use crate::{
     texture_pool::PooledTexture,
 };
 
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the replay methods take device, queue, pipelines, resources and encoder as independent borrows of the frame's GPU state that the caller holds as separate locals"
+)]
 impl GpuReplay {
     /// Replay in a bounded root-space working domain. Each target binding is
     /// immutable, so nested effects can change the attachment without changing
@@ -655,7 +658,10 @@ impl GpuReplay {
     /// call drains and clears `self.texture_batch` before returning, so a
     /// depth-N+1 flush cannot leave instances that appear in the depth-N
     /// composite.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, queue, pipelines, resources and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     pub(crate) fn flush_opacity_layer(
         &mut self,
         mut layer: PendingOpacityLayer,
@@ -792,7 +798,10 @@ impl GpuReplay {
 ///
 /// No `_ =>` catch-all arm: a new `LayerFilter` variant fails to compile until it
 /// has an arm.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pipelines, resources, device and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+)]
 fn fold_layer_filter_chain(
     filters: &LayerFilterChain,
     input_tex: PooledTexture,

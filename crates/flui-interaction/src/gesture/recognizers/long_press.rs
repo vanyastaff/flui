@@ -76,7 +76,10 @@ pub struct LongPressDetails {
 }
 
 #[derive(Default)]
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields are named after the callbacks they hold, so each keeps its `on_*` name"
+)]
 struct LongPressCallbacks {
     on_long_press_down: Option<LongPressDownCallback>,
     on_long_press: Option<LongPressSimpleCallback>,

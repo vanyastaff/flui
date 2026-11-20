@@ -24,7 +24,10 @@
 
 // CoreGraphics, CoreVideo and AppKit are reached through calls that have no
 // safe wrapper; each block states the invariant it relies on.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "CoreGraphics, CoreVideo and AppKit are reached through calls that have no safe wrapper"
+)]
 
 use std::ffi::c_void;
 use std::ptr::NonNull;

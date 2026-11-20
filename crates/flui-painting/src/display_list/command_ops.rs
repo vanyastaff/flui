@@ -360,6 +360,10 @@ impl DrawOp {
 
     /// The op's bounds in its own (pre-transform) coordinate space, with
     /// half the stroke width added where the paint strokes.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "one arm per `DrawOp` variant family keeps each op's bounds rule beside its fields"
+    )]
     pub(crate) fn local_bounds(&self, payloads: &[StoredPayload]) -> Option<Rect<f64>> {
         match self {
             DrawOp::Rect { rect, paint } | DrawOp::Oval { rect, paint } => {

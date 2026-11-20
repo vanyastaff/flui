@@ -39,7 +39,10 @@ const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// offscreen slot, so captures reuse one device, one pipeline set and one
 /// glyph atlas; it is `Send` and not `Sync`, since the context has one
 /// mutator.
-#[expect(missing_debug_implementations)]
+#[expect(
+    missing_debug_implementations,
+    reason = "`Capture` holds a `GpuContext`, which holds a `WgpuPainter` with lyon and atlas state and no `Debug`"
+)]
 pub struct HeadlessRenderer {
     /// Owner-local: a capture borrows it for its length, and a capture that
     /// starts while another is running on the same renderer is refused with

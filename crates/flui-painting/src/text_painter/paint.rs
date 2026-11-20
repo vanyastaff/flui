@@ -146,7 +146,10 @@ impl TextPainter {
     ///
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
-    #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first, text must be set
+    #[expect(
+        clippy::expect_used,
+        reason = "documented precondition: `layout()` has run and the text is set"
+    )]
     pub fn paint_with_decorations(
         &self,
         canvas: &mut Canvas,

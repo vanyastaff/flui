@@ -16,6 +16,11 @@ mod coordinates;
 mod failure_matrix;
 mod fixtures;
 #[cfg(unix)]
+mod ios_simulator;
+#[cfg(unix)]
+mod ios_simulator_host;
+mod ios_simulator_lane;
+#[cfg(unix)]
 mod launch;
 #[cfg(target_os = "macos")]
 mod macos_desktop;

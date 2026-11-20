@@ -1137,7 +1137,10 @@ impl raw_window_handle::HasWindowHandle for AndroidSurface {
         // (`surface_changed(Release)`, delivered before the glue lets the
         // window go). A handle is borrowed to make that surface and is not
         // kept past it, so none is in use when its window is released.
-        #[expect(unsafe_code)]
+        #[expect(
+            unsafe_code,
+            reason = "`borrow_raw` of a window handle that is not in use once its window is released, as the SAFETY comment above states"
+        )]
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }
 }
@@ -1155,7 +1158,10 @@ impl raw_window_handle::HasDisplayHandle for AndroidSurface {
         );
         // SAFETY: an Android display handle carries no fields: there is
         // nothing for `borrow_raw` to keep valid.
-        #[expect(unsafe_code)]
+        #[expect(
+            unsafe_code,
+            reason = "`borrow_raw` of an Android display handle, which carries no fields, as the SAFETY comment above states"
+        )]
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(raw) })
     }
 }

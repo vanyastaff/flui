@@ -17,17 +17,20 @@
 //!
 //! The lanes: [`windows`], [`macos`], [`x11`], [`wayland`] (its OS half with the `wayland`
 //! feature) and `chrome` (feature `chrome`); both Linux lanes read the app through [`atspi`].
-//! [`android`] drives a device or an emulator from any host, through `adb`. An input-method
-//! composition goes only to a lane that says it composes ([`LaneCapabilities::compositions`]), a
-//! rule [`send_guarded`] holds.
+//! [`android`] drives a device or an emulator from any host, through `adb`, and [`ios_simulator`]
+//! an iOS Simulator through `xcrun simctl`, which sends no input. An input-method composition goes
+//! only to a lane that says it composes ([`LaneCapabilities::compositions`]), a rule
+//! [`send_guarded`] holds.
 
 pub mod android;
 pub mod atspi;
 #[cfg(feature = "chrome")]
 pub mod chrome;
+pub mod ios_simulator;
 pub mod macos;
 pub mod pacing;
 pub mod screen;
+mod tool;
 pub mod walk;
 pub mod wayland;
 pub mod windows;

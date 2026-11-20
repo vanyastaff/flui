@@ -1026,6 +1026,10 @@ impl<'ctx> DriverSliverLayoutContext<'ctx> {
     ///
     /// `pub(crate)`: the only constructor caller is the pipeline's sliver
     /// layout walk.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per walk-side seam the constructor's only caller wires; grouping them would only move the list into a struct"
+    )]
     pub(crate) fn new(
         constraints: SliverConstraints,
         children: &'ctx mut Vec<ErasedSliverChildState>,

@@ -61,7 +61,10 @@ pub mod keys {
     /// the keycode itself is layout-independent. Raw `u16` (the width of
     /// `NSEvent.keyCode`) rather than a binding crate's type so this module
     /// compiles on every host.
-    #[expect(missing_docs)]
+    #[expect(
+        missing_docs,
+        reason = "each constant is a `kVK_*` code named by Carbon's `HIToolbox/Events.h`, so the name is its documentation"
+    )]
     pub mod kvk {
         pub const ANSI_A: u16 = 0x00;
         pub const ANSI_S: u16 = 0x01;
@@ -2308,7 +2311,10 @@ pub(crate) mod ios {
 
     // A gesture recognizer's state is read through an Objective-C message,
     // which has no safe wrapper.
-    #![expect(unsafe_code)]
+    #![expect(
+        unsafe_code,
+        reason = "a gesture recognizer's state is read through an Objective-C message, which has no safe wrapper"
+    )]
 
     use std::num::NonZeroU64;
     use std::time::Duration;

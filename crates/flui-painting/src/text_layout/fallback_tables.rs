@@ -121,6 +121,10 @@ impl Han {
     /// language, script and region subtags. A Chinese tag's script subtag
     /// wins over its region: `zh-Hans-TW` is Simplified, `zh-Hant` with no
     /// region is Taiwan's.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "the final `(None, false, false)` arm names the no-hint default instead of hiding it in a wildcard"
+    )]
     fn of(locale: &str) -> Self {
         let tag = locale.split(['.', '@']).next().unwrap_or_default();
         let mut subtags = tag.split(['-', '_']);

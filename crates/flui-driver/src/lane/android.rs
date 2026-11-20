@@ -136,14 +136,25 @@ impl AndroidApp {
     }
 }
 
-/// Where a started app's agent listens, and the token it takes.
+/// Where a started app's agent listens, and the token it takes. Its [`Debug`] form leaves the
+/// token out.
 #[cfg(any(unix, windows))]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Started {
     /// The loopback port forwarded to the app's abstract socket.
     pub endpoint: crate::Endpoint,
     /// The launch token.
     pub token: String,
+}
+
+#[cfg(any(unix, windows))]
+impl std::fmt::Debug for Started {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Started")
+            .field("endpoint", &self.endpoint)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 /// The app's window as the lane last found it.

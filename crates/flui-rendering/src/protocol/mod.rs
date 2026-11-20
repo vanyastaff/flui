@@ -32,7 +32,10 @@
 mod box_protocol;
 mod context_api;
 mod into_render_object;
-#[expect(clippy::module_inception)] // protocol.rs inside protocol/ contains core Protocol trait
+#[expect(
+    clippy::module_inception,
+    reason = "`protocol.rs` inside `protocol/` holds the core `Protocol` trait"
+)]
 mod protocol;
 mod sliver_protocol;
 

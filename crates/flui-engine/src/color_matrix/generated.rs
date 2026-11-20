@@ -56,7 +56,12 @@
     unused_doc_comments,
     unreachable_pub,
     clippy::all,
-    clippy::pedantic
+    clippy::pedantic,
+    reason = "wgsl_bindgen output: which of these lints fire depends on the shader's bindings and the generator version, and the file is regenerated into OUT_DIR on every build"
+)]
+#[expect(
+    clippy::allow_attributes_without_reason,
+    reason = "wgsl_bindgen writes its own bare `#[allow]` attributes into OUT_DIR, which this crate cannot annotate"
 )]
 #[expect(
     clippy::undocumented_unsafe_blocks,

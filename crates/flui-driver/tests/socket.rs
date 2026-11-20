@@ -711,14 +711,20 @@ fn what_an_app_started_ends_with_its_session_after_the_app_exited() {
 
 #[test]
 fn an_artifact_without_its_lane_is_named_as_the_capability_missing() {
+    // An app bundle names no simulator or bundle identifier: the iOS Simulator lane starts it by
+    // them.
     let launched = Driver::launch(Launch::artifact(flui_driver::Artifact::AppBundle(
         "App.app".into(),
     )));
     match launched {
         Err(Error::NotSupported {
             capability: Some(capability),
+            message,
             ..
-        }) => assert_eq!(capability, "apple_lane"),
+        }) => {
+            assert_eq!(capability, "app_bundle_launch");
+            assert!(message.contains("lane::ios_simulator::launch"), "{message}");
+        }
         other => panic!("{other:?}"),
     }
     // An APK names no package or activity: the Android lane starts it by them.

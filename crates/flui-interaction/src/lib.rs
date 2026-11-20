@@ -152,7 +152,10 @@ mod static_assertions {
     };
 
     // Helper trait for static assertions
-    #[expect(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "the trait is only a compile-time bound checked by the impls below"
+    )]
     trait AssertSendSync: Send + Sync {}
 
     // IDs should be Send + Sync (they are Copy)

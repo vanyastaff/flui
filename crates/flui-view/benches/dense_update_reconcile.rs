@@ -4,9 +4,6 @@
 //! measured operation updates the real render parent and drains `BuildOwner`, so
 //! every child crosses the production dense `update_child` path.
 
-// Bench harness, not public API; `criterion_group!` generates the entry point.
-#![allow(missing_docs)]
-
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;

@@ -1,8 +1,8 @@
-//! The scenarios that replace the Windows, macOS and X11 device checks, written once on
-//! `flui-driver` and run on the headless target here: synthetic input by default, so CI holds
-//! them. On Windows, macOS and Linux the same functions run against the same apps in a window,
-//! through the OS lane as their certification variant (`windows_desktop`, `macos_desktop`,
-//! `x11_desktop`).
+//! The scenarios that replace the device checks, written once on `flui-driver` and run on the
+//! headless target here: synthetic input by default, so CI holds them. On Windows, macOS and
+//! Linux the same functions run against the same apps in a window, through the OS lane as their
+//! certification variant (`windows_desktop`, `macos_desktop`, `x11_desktop`), and on an Android
+//! device and an iOS Simulator against the app on it (`android_device`, `ios_simulator`).
 //!
 //! - [`gallery`]: every control of the gallery reached by its identifier and acted on;
 //! - [`accessibility`]: what the app publishes for its controls, an action through the semantic
@@ -11,9 +11,11 @@
 //! - [`roles`]: each role of the role table publishes the wire role UI Automation folds it to,
 //!   and through an OS lane reads back as the native role of the accessibility API the lane reads
 //!   through (UI Automation's control type, the `AXRole`, the AT-SPI role, Android's class name);
-//! - [`input`], [`macos_input`] and [`android_input`]: the pointers, the wheel and keys reach the
-//!   app, read back from its journal, and a press beside a control leaves it alone; on Android a
-//!   touchpad's pinch too (`android_device` runs it through the Android lane);
+//! - [`input`], [`macos_input`], [`android_input`] and [`ios_input`]: the pointers, the wheel and
+//!   keys reach the app, read back from its journal, and a press beside a control leaves it alone;
+//!   on Android a touchpad's pinch too (`android_device` runs it through the Android lane, and
+//!   `ios_simulator` the iOS one through the iOS Simulator lane);
+//! - [`safe_area`]: a `SafeArea`'s child sits inset by the padding the window reports;
 //! - [`notes`] and [`macos_notes`]: text, a select-all chord and an input-method composition in a
 //!   text field;
 //! - [`web_input`]: [`input`] and a composition into a field, through the session's path, which in
@@ -39,11 +41,12 @@ use flui_driver::report::Check;
 use flui_driver::{
     Driver, Error, InputPath, Launch, Locator, Outcome, Report, Result, Verdict, expect,
 };
-use flui_platform::TargetPlatform;
+use flui_foundation::geometry::EdgeInsets;
+use flui_platform::{TargetPlatform, WindowInsets};
 use flui_view::environment::PlatformConvention;
 
 use crate::android_lane;
-use crate::apps::{Controls, Notes, Roles, role_label};
+use crate::apps::{Controls, Insets, Notes, Roles, role_label};
 
 /// The window every scenario app opens.
 pub const WINDOW: (u32, u32) = (800, 600);
@@ -434,6 +437,101 @@ pub fn macos_input(driver: &mut Driver, report: &mut Report) -> Result<()> {
         &[(PointerDevice::Mouse, DeviceClass::Mouse)],
         corner(),
     )
+}
+
+/// `ios_input`: [`input`] with touch, the pointer an iPhone takes, and the press beside the
+/// controls below them, halfway across the window: a phone's window is its screen, whose edges
+/// are the system's gestures. It replaces the tap and the no-target tap of the iOS device check.
+/// Through the iOS Simulator lane, which sends no input, each row is `cannot_verify` naming
+/// `ios_simulator_hid` (`ios_simulator::the_ios_scenarios_run_on_a_simulator`).
+///
+/// # Errors
+///
+/// When the app cannot be reached; each check's failure is recorded in `report`.
+pub fn ios_input(driver: &mut Driver, report: &mut Report) -> Result<()> {
+    let size = driver.main_window()?.placement()?.size;
+    input_with(
+        driver,
+        report,
+        &[(PointerDevice::Touch, DeviceClass::Touch)],
+        LogicalPoint::new(size.width / 2.0, size.height * 0.9),
+    )
+}
+
+/// `safe_area`: the window reports a safe area (a top inset in portrait, where a phone's status
+/// bar or notch takes the top, and some inset in landscape), and the child of a `SafeArea` sits
+/// inset from the window's top left by exactly that padding, where the marker outside it does not
+/// move. On iOS that is UIKit's `safeAreaInsets` reaching the window's `MediaQuery` and
+/// `SafeArea` (the iOS safe-area device check): a window that reports no inset fails, since a
+/// padding that never arrived and a `SafeArea` that ignored it would both read as zero.
+///
+/// # Errors
+///
+/// When the app cannot be reached; the check's failure is recorded in `report`.
+pub fn safe_area(driver: &mut Driver, report: &mut Report) -> Result<()> {
+    driver.main_window()?;
+    let _ = report.check(
+        "a SafeArea insets its child by the padding the window reports",
+        || {
+            let size = driver.main_window()?.placement()?.size;
+            let tree = driver.main_window()?.read()?;
+            let label = find(&tree.roots, "insets")
+                .and_then(|node| node.name.clone())
+                .unwrap_or_default();
+            let padding: Vec<f64> = label
+                .split(' ')
+                .filter_map(|side| side.parse::<f64>().ok())
+                .collect();
+            let &[top, right, bottom, left] = padding.as_slice() else {
+                return Err(Error::Expectation {
+                    expected: "the padding as four numbers".to_owned(),
+                    actual: format!("{label:?}"),
+                });
+            };
+            let portrait = size.height > size.width;
+            let reported = if portrait {
+                top > 0.0
+            } else {
+                [top, right, bottom, left].iter().any(|side| *side > 0.0)
+            };
+            if !reported {
+                return Err(Error::Expectation {
+                    expected: if portrait {
+                        "a top inset in a portrait window".to_owned()
+                    } else {
+                        "an inset on some side".to_owned()
+                    },
+                    actual: format!("the padding {label:?}"),
+                });
+            }
+            let origin = |driver: &mut Driver, identifier: &str| -> Result<(f64, f64)> {
+                let rect = driver
+                    .main_window()?
+                    .locate(Locator::identifier(identifier))
+                    .resolve()?
+                    .actionability()?
+                    .rect
+                    .ok_or_else(|| Error::Expectation {
+                        expected: format!("{identifier} to have bounds"),
+                        actual: "none".to_owned(),
+                    })?;
+                Ok((rect.x, rect.y))
+            };
+            let outside = origin(driver, "outside")?;
+            let inside = origin(driver, "inside")?;
+            let offset = (inside.0 - outside.0, inside.1 - outside.1);
+            if (offset.0 - left).abs() <= 0.5 && (offset.1 - top).abs() <= 0.5 {
+                return Ok(());
+            }
+            Err(Error::Expectation {
+                expected: format!(
+                    "the inside marker {left} right of and {top} below the outside one"
+                ),
+                actual: format!("{} right and {} below", offset.0, offset.1),
+            })
+        },
+    );
+    Ok(())
 }
 
 /// [`input`] with the pointers `devices`, each read back from the journal as its class, and the
@@ -846,6 +944,87 @@ fn the_android_accessibility_scenario_passes_through_the_lane_but_its_activation
             "{check:?}"
         ),
         other => panic!("one activation row: {other:#?}"),
+    }
+}
+
+/// The iOS input scenario on the headless target, synthetic; through the iOS Simulator lane,
+/// which sends no input, its rows are `cannot_verify` (`ios_simulator`).
+#[test]
+fn the_ios_input_scenario_passes_on_the_headless_target() {
+    passed(&run("ios-input", headless(|| Controls), ios_input));
+}
+
+/// A portrait iPhone's window, 393 by 852, with `top` and `bottom` safe-area insets as its host
+/// reports them.
+fn phone(top: f64, bottom: f64) -> Driver {
+    let insets = WindowInsets::ZERO
+        .try_with_safe_area(EdgeInsets::new(top, 0.0, bottom, 0.0))
+        .expect("finite insets");
+    let launch = Launch::headless(|| Insets)
+        .window_size(393, 852)
+        .window_insets(insets)
+        .expect("a headless window takes its insets");
+    Driver::launch(launch).expect("the headless app starts")
+}
+
+/// A native window's insets are its OS's: a launch of anything but a headless view refuses them.
+#[test]
+fn only_a_headless_launch_takes_window_insets() {
+    let refused = Launch::executable("app").window_insets(WindowInsets::ZERO);
+    assert!(
+        matches!(&refused, Err(Error::InvalidArgument { message, .. }) if message.contains("headless")),
+        "{refused:?}"
+    );
+}
+
+/// The safe-area scenario in a window whose host reports an iPhone's notch and home indicator,
+/// so the offset it measures is the padding and not zero; on a simulator it reads the padding
+/// UIKit gives (`ios_simulator`).
+#[test]
+fn the_safe_area_scenario_measures_a_padded_window_on_the_headless_target() {
+    let mut driver = phone(59.0, 34.0);
+    let tree = driver
+        .main_window()
+        .and_then(|mut window| window.read())
+        .expect("the tree");
+    assert_eq!(
+        find(&tree.roots, "insets").and_then(|node| node.name.as_deref()),
+        Some("59 0 34 0"),
+        "the app reads the window's padding"
+    );
+    let report = run("ios-safe-area", driver, safe_area);
+    assert_eq!(report.verdict(), Verdict::Pass, "{:#?}", report.checks());
+    assert!(
+        report
+            .checks()
+            .iter()
+            .any(|check| check.name.contains("SafeArea") && check.outcome == Outcome::Passed),
+        "{:#?}",
+        report.checks()
+    );
+}
+
+/// A portrait window that reports no safe area fails the scenario: a padding that never arrived
+/// reads as zero, as does a `SafeArea` that ignored it.
+#[test]
+fn the_safe_area_scenario_fails_a_portrait_window_that_reports_no_inset() {
+    for (top, bottom) in [(0.0, 34.0), (0.0, 0.0)] {
+        let report = run("ios-safe-area", phone(top, bottom), safe_area);
+        assert_eq!(report.verdict(), Verdict::Fail, "{:#?}", report.checks());
+        let failed: Vec<&Check> = report
+            .checks()
+            .iter()
+            .filter(|check| matches!(check.outcome, Outcome::Failed { .. }))
+            .collect();
+        assert!(
+            matches!(
+                failed.as_slice(),
+                [check] if check.name == "a SafeArea insets its child by the padding the window reports"
+                    && matches!(&check.outcome, Outcome::Failed { reason }
+                        if reason.contains("a top inset in a portrait window"))
+            ),
+            "the safe-area check fails for the missing top inset: {failed:#?}"
+        );
     }
 }
 

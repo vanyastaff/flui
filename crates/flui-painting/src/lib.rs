@@ -74,7 +74,6 @@
 // Every `expect` on a shipped path names its invariant.
 #![warn(clippy::expect_used)]
 #![warn(clippy::panic)]
-#![expect(clippy::match_same_arms)]
 // No FLUI lock on the text path and no SipHash table (clippy.toml `disallowed-types`).
 #![warn(clippy::disallowed_types)]
 
