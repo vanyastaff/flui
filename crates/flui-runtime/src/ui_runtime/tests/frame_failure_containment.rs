@@ -678,4 +678,55 @@ pub(crate) fn a_panicking_semantics_report_schedules_its_retry() {
         primary.take_redraw_pending(),
         "the unreported finding asks for the frame that retries it"
     );
+    assert_ne!(
+        primary
+            .pipeline()
+            .with_mut(flui_rendering::PipelineOwner::take_semantics_diagnostics),
+        [],
+        "what the subscriber left unreported went back to the pipeline"
+    );
+}
+
+/// A button that declares `selected`, which a button does not carry, is left
+/// out of every publication.
+fn selected_button() -> flui_widgets::Semantics {
+    flui_widgets::Semantics::new()
+        .container(true)
+        .label("Send")
+        .role(flui_semantics::SemanticsRole::Button)
+        .selected(true)
+        .child(SizedBox::new(10.0, 10.0))
+}
+
+/// A frame reports the pipeline's semantics diagnostics once its checkout is
+/// released, so none stays queued after the draw; the findings themselves
+/// were recorded by the frame.
+pub(crate) fn a_frame_reports_its_semantics_diagnostics() {
+    let ui_runtime = UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget(&selected_button())
+        .expect("attaches");
+    let primary = ui_runtime.presentations.primary();
+    primary
+        .semantics_host()
+        .set_platform_semantics_enabled(true);
+
+    let scene = ui_runtime.draw_frame(BoxConstraints::tight(flui_foundation::geometry::Size::new(
+        100.0, 100.0,
+    )));
+    assert!(scene.is_some(), "the frame painted");
+    assert_ne!(
+        primary
+            .pipeline()
+            .with_mut(flui_rendering::PipelineOwner::take_unchecked_semantics_diagnostics),
+        [],
+        "the frame left the button's `selected` out"
+    );
+    assert_eq!(
+        primary
+            .pipeline()
+            .with_mut(flui_rendering::PipelineOwner::take_semantics_diagnostics),
+        [],
+        "the frame reported it"
+    );
 }
