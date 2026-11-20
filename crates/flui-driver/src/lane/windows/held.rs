@@ -6,7 +6,7 @@
 
 use crate::error::{Error, Result};
 use crate::lane::windows::keys::{self, Modifier, SHIFT, TextStroke, VirtualKey};
-use crate::lane::windows::safety::{KeyEdge, Refusal, ShellShortcuts};
+use crate::lane::windows::safety::{KeyEdge, LANE, Refusal, ShellShortcuts};
 
 /// `VK_PACKET`, the key a Unicode packet arrives as.
 pub const PACKET: VirtualKey = VirtualKey {
@@ -100,23 +100,27 @@ impl HeldKeys {
         &self.held
     }
 
-    /// The strokes `input` takes from this state.
+    /// The strokes `input` takes from this state. A key event whose strokes would complete a
+    /// shortcut of the shell's that the mask breaks (letting go of Control+Shift or Alt+Shift, the
+    /// fifth lone Shift press or release) is preceded by a press and release of [`MASK`], so the
+    /// app still gets its keys and the shell nothing.
     #[must_use]
     pub fn plan(&self, input: &KeyInput) -> Vec<Keystroke> {
         match input {
             KeyInput::Down { key, shift } => {
-                if *shift && !self.held.contains(&SHIFT.code) {
+                let strokes = if *shift && !self.held.contains(&SHIFT.code) {
                     vec![Keystroke::ShiftFor(key.code), Keystroke::Press(*key)]
                 } else {
                     vec![Keystroke::Press(*key)]
-                }
+                };
+                self.masked(strokes)
             }
             KeyInput::Up { key } => {
                 let mut strokes = vec![Keystroke::Release(*key)];
                 if self.shifted.contains(&key.code) {
                     strokes.push(Keystroke::UnshiftFor(key.code));
                 }
-                strokes
+                self.masked(strokes)
             }
             KeyInput::Text(text) => keys::text_strokes(text)
                 .into_iter()
@@ -126,6 +130,26 @@ impl HeldKeys {
                 })
                 .collect(),
         }
+    }
+
+    /// `strokes` with [`MASK`] pressed and released first when they would complete a shortcut of
+    /// the shell's and the mask keeps them from it; as they are otherwise (a press the shell
+    /// takes whatever comes before it is left for the check to refuse).
+    fn masked(&self, mut strokes: Vec<Keystroke>) -> Vec<Keystroke> {
+        let mask = [Keystroke::Press(MASK), Keystroke::Release(MASK)];
+        if self.completes_shortcut(&strokes) {
+            let with_mask: Vec<Keystroke> = mask.iter().chain(&strokes).copied().collect();
+            if !self.completes_shortcut(&with_mask) {
+                strokes = with_mask;
+            }
+        }
+        strokes
+    }
+
+    /// Whether `strokes`, sent from this state, complete a shortcut of the shell's.
+    fn completes_shortcut(&self, strokes: &[Keystroke]) -> bool {
+        let mut state = self.clone();
+        strokes.iter().any(|stroke| state.apply(*stroke).is_some())
     }
 
     /// Record `stroke`, which Windows took; what of the shell's it completed, if anything.
@@ -178,11 +202,10 @@ impl HeldKeys {
         confirm()
     }
 
-    /// What of the shell's `inputs`, sent from this state, would take: see
-    /// [`safety::press_takes`](crate::lane::windows::safety::press_takes) and [`ShellShortcuts`].
-    /// A sequence that leaves modifiers down whose release, by a later sequence or by an
-    /// interrupted run's release of everything, would complete a shortcut with no other key
-    /// pressed first (a chord of modifiers, the fifth lone Shift) is refused too.
+    /// What of the shell's `inputs`, sent from this state, would take: a press the shell takes
+    /// ([`safety::press_takes`](crate::lane::windows::safety::press_takes)). A release that would
+    /// complete a shortcut is masked by [`Self::plan`], and modifiers a sequence leaves down by
+    /// [`Self::release_all`], so neither is refused.
     #[must_use]
     pub fn shell_hotkey(&self, inputs: &[KeyInput]) -> Option<&'static str> {
         let mut state = self.clone();
@@ -193,7 +216,7 @@ impl HeldKeys {
                 }
             }
         }
-        state.shortcuts.pending()
+        None
     }
 
     /// Release every key held, last pressed first, through `send`, completing no shortcut of the
@@ -204,7 +227,8 @@ impl HeldKeys {
     ///
     /// # Errors
     ///
-    /// The first stroke that failed or was refused, after every key was tried.
+    /// After every key was tried: [`Error::ReleaseFailed`] naming the keys still held and the
+    /// first stroke that failed or was refused, or that stroke's error when nothing stayed held.
     pub fn release_all(&mut self, mut send: impl FnMut(Keystroke) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
         let modifier_held = self.held.iter().any(|&code| {
@@ -231,7 +255,19 @@ impl HeldKeys {
                 first.get_or_insert(error);
             }
         }
-        first.map_or(Ok(()), Err)
+        match first {
+            None => Ok(()),
+            Some(first) if self.held.is_empty() => Err(first),
+            Some(first) => Err(Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held: self
+                    .held
+                    .iter()
+                    .map(|&code| keys::name_of(code))
+                    .collect::<Vec<String>>(),
+                message: first.to_string(),
+            }),
+        }
     }
 
     /// Send `stroke` through `send` unless it completes a shortcut of the shell's from this state,

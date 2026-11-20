@@ -164,13 +164,21 @@ struct Doctor {
 }
 
 impl Doctor {
-    fn check_android_ndk(&mut self, compiler: &OsStr, archiver: &OsStr) {
+    /// `None` for a tool no variable names, which fails its row.
+    fn check_android_ndk(&mut self, compiler: Option<&OsStr>, archiver: Option<&OsStr>) {
         // The floor in platform-support.toml (ADR-0244); an unreadable file fails the row.
         let api = crate::platform_floor::android_api();
-        let compiler_ok = api
-            .as_ref()
-            .is_ok_and(|api| android_compiler_available(compiler, *api));
-        let archiver_ok = android_archiver_available(archiver);
+        let compiler_ok = compiler.is_some_and(|compiler| {
+            api.as_ref()
+                .is_ok_and(|api| android_compiler_available(compiler, *api))
+        });
+        let archiver_ok = archiver.is_some_and(android_archiver_available);
+        let detail = |tool: Option<&OsStr>, variable: &str| {
+            tool.map_or_else(
+                || format!("{variable} not set"),
+                |tool| tool.to_string_lossy().into_owned(),
+            )
+        };
         let hint = match &api {
             Ok(api) => format!(
                 "install the Android NDK; set CC_aarch64_linux_android to its API-{api} clang wrapper and AR_aarch64_linux_android to its llvm-ar"
@@ -181,14 +189,14 @@ impl Doctor {
             Scope::Full,
             "Android NDK compiler",
             compiler_ok,
-            &compiler.to_string_lossy(),
+            &detail(compiler, "CC_aarch64_linux_android"),
             &hint,
         );
         self.row(
             Scope::Full,
             "Android NDK archiver",
             archiver_ok,
-            &archiver.to_string_lossy(),
+            &detail(archiver, "AR_aarch64_linux_android"),
             &hint,
         );
     }
@@ -350,17 +358,26 @@ pub(crate) fn android_archiver_available(archiver: &OsStr) -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-/// Select the same target overrides that cc-rs consumes.
-pub(crate) fn android_tool(prefix: &str, fallback: &str) -> std::ffi::OsString {
+/// The Android compiler or archiver (`prefix` `CC` or `AR`) a cross build takes from the
+/// environment, read from the variables cc-rs reads, in its order. `None` when none is set: cc-rs
+/// then guesses a wrapper name, which doctor does not probe.
+pub(crate) fn android_tool(prefix: &str) -> Option<std::ffi::OsString> {
+    android_tool_in(prefix, |name| std::env::var_os(name))
+}
+
+/// [`android_tool`] over the variables `lookup` reads.
+fn android_tool_in(
+    prefix: &str,
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
     [
         format!("{prefix}_aarch64-linux-android"),
         format!("{prefix}_aarch64_linux_android"),
         format!("TARGET_{prefix}"),
         prefix.to_owned(),
     ]
-    .into_iter()
-    .find_map(std::env::var_os)
-    .unwrap_or_else(|| fallback.into())
+    .iter()
+    .find_map(|name| lookup(name))
 }
 
 fn first_line(bytes: &[u8]) -> String {
@@ -476,7 +493,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
     );
 
     // The heavier jobs.
-    doctor.check_android_ndk(&android_tool("CC", "clang"), &android_tool("AR", "llvm-ar"));
+    doctor.check_android_ndk(android_tool("CC").as_deref(), android_tool("AR").as_deref());
     if os != "windows" {
         doctor.check_cargo_sub(Scope::Full, "xwin", "cargo install --locked cargo-xwin --version 0.23.1 (also needs clang/LLVM and MSVC SDK/CRT provisioning)");
     }
@@ -611,10 +628,47 @@ mod tests {
 
     fn a_version_only_compiler_does_not_supply_android_headers() {
         let mut full = doctor(Mode::Full);
-        full.check_android_ndk(OsStr::new("cargo"), OsStr::new("cargo"));
+        full.check_android_ndk(Some(OsStr::new("cargo")), Some(OsStr::new("cargo")));
         assert!(
             full.summary()
                 .contains("1 missing for the full local checks")
+        );
+        // No variable names a tool: cc-rs would guess one, so neither row passes.
+        let mut unset = doctor(Mode::Full);
+        unset.check_android_ndk(None, None);
+        assert!(
+            unset
+                .summary()
+                .contains("2 missing for the full local checks")
+        );
+    }
+
+    /// The tool is read from the variables cc-rs reads, the target-specific one first, and no
+    /// fallback stands in when none is set.
+    fn the_android_tool_is_the_first_variable_cc_rs_reads() {
+        let set = |names: &'static [&'static str]| {
+            move |name: &str| names.contains(&name).then(|| name.into())
+        };
+        assert_eq!(android_tool_in("CC", set(&[])), None);
+        assert_eq!(
+            android_tool_in("AR", set(&["AR", "TARGET_AR"])),
+            Some("TARGET_AR".into())
+        );
+        assert_eq!(
+            android_tool_in(
+                "CC",
+                set(&[
+                    "CC",
+                    "TARGET_CC",
+                    "CC_aarch64_linux_android",
+                    "CC_aarch64-linux-android"
+                ])
+            ),
+            Some("CC_aarch64-linux-android".into())
+        );
+        assert_eq!(
+            android_tool_in("CC", set(&["CC", "CC_aarch64_linux_android"])),
+            Some("CC_aarch64_linux_android".into())
         );
     }
 
@@ -784,6 +838,10 @@ mod tests {
                 (
                     "a_version_only_compiler_does_not_supply_android_headers",
                     a_version_only_compiler_does_not_supply_android_headers as fn(),
+                ),
+                (
+                    "the_android_tool_is_the_first_variable_cc_rs_reads",
+                    the_android_tool_is_the_first_variable_cc_rs_reads as fn(),
                 ),
                 (
                     "a_failing_binary_probe_is_not_an_available_tool",

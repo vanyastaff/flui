@@ -453,4 +453,4 @@ the capability keeps its type `C`, so `ctx.capability::<C>()` call sites do not 
 | `not_registered_is_reported_before_no_window`, `a_closed_window_answers_no_window` | The lookup order of §3 | No seam |
 | Haptics: `NotOnThisPlatform` on a window without haptics; `FakeHaptics` on `HeadlessHostWindow` observes the call; `NotRegistered` without the plugin | ADR-0031's degradation contract | No seam |
 | `compile_fail` with a compiling twin: a `PlatformWindow` without `text_input`, and a backend extension impl without `accessibility`, do not compile | The core obligation of §5 | The defaults exist |
-| `cargo xtask cross-typecheck` for macOS with default features **and** with `a11y`, shown in the PR | The inert macOS path compiles | The prototype broke it (E0046) |
+| The `cross-typecheck` job's macOS leg, default features **and** `--all-features`, in a branch run the PR links | The inert macOS path compiles | The prototype broke it (E0046) |
