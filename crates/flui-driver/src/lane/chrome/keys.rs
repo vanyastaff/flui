@@ -12,7 +12,7 @@
 //! tab the Tab key, as a person types them; `\r\n` is one Enter. Any other control character
 //! types nothing a person could, and is refused.
 
-use unicode_segmentation::UnicodeSegmentation as _;
+use icu_segmenter::GraphemeClusterSegmenter;
 
 /// The W3C key names WebDriver's keyboard table gives a code point, with it.
 const NAMED: &[(&str, char)] = &[
@@ -61,10 +61,21 @@ pub fn key_value(name: &str) -> Option<String> {
     if let Some(&(_, code)) = NAMED.iter().find(|(named, _)| *named == name) {
         return Some(code.to_string());
     }
-    let mut clusters = name.graphemes(true);
+    let mut clusters = graphemes(name).into_iter();
     let cluster = clusters.next()?;
     let printable = !cluster.chars().any(char::is_control);
     (clusters.next().is_none() && printable).then(|| cluster.to_owned())
+}
+
+/// The extended grapheme clusters of `text`, through ICU4X, FLUI's one Unicode source
+/// (ADR-0092 §6).
+fn graphemes(text: &str) -> Vec<&str> {
+    let segmenter = const { GraphemeClusterSegmenter::new() };
+    let boundaries: Vec<usize> = segmenter.segment_str(text).collect();
+    boundaries
+        .windows(2)
+        .map(|pair| &text[pair[0]..pair[1]])
+        .collect()
 }
 
 /// The key values that type `text`, one a grapheme cluster: a line break is Enter, a tab is Tab.
@@ -74,7 +85,7 @@ pub fn key_value(name: &str) -> Option<String> {
 /// The first control character other than a line break or a tab, which no key types.
 pub fn text_keys(text: &str) -> Result<Vec<String>, char> {
     let mut keys = Vec::new();
-    for cluster in text.graphemes(true) {
+    for cluster in graphemes(text) {
         let key = match cluster {
             "\r\n" | "\n" | "\r" => '\u{E007}'.to_string(),
             "\t" => '\u{E004}'.to_string(),

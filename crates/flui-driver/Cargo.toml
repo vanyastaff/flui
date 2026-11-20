@@ -33,10 +33,10 @@ wayland = ["dep:reis"]
 # canvas's screenshot), with the agent reached through the page's export (ADR-0238 §5, ADR-0239).
 chrome = [
     "dep:base64",
+    "dep:icu_segmenter",
     "dep:png",
     "dep:rustls",
     "dep:tungstenite",
-    "dep:unicode-segmentation",
     "dep:ureq",
     "dep:zip",
 ]
@@ -60,13 +60,14 @@ flui-foundation = { workspace = true }
 web-time = { workspace = true, optional = true }
 # The Chrome lane (`chrome`): the BiDi WebSocket to a ChromeDriver on the loopback, so the client
 # handshake alone and no TLS (the version `flui-cli`'s browser relay speaks); a screenshot's base64
-# and PNG; text typed a grapheme cluster at a time, the unit a WebDriver key action takes.
+# and PNG; text typed a grapheme cluster at a time, the unit a WebDriver key action takes, as ICU4X
+# segments it (FLUI's one Unicode source, ADR-0092 §6).
 tungstenite = { version = "0.30", default-features = false, features = [
     "handshake",
 ], optional = true }
 base64 = { version = "0.23", optional = true }
 png = { version = "0.18", optional = true }
-unicode-segmentation = { version = "1.13", optional = true }
+icu_segmenter = { workspace = true, optional = true }
 # The one ChromeDriver archive fetched from Chrome for Testing when neither `CHROMEDRIVER` nor the
 # cache names one (rustls with the platform's verifier, as `flui-cli` fetches), and the WebDriver
 # session ChromeDriver opens over HTTP on the loopback; the archive's deflated entry.
