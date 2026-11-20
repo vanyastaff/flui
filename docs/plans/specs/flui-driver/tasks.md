@@ -1012,7 +1012,7 @@ graph LR
     `a_lane_that_started_no_app_stops_nothing_when_it_ends` (a forward `adb` refused is removed by
     its port); each fails with its fix taken out by hand;
     `policy::a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send` (a device in
-    someone's hands without a guard is refused); `policy::input_left_held_outranks_why_the_run_ended`
+    someone's hands without a guard is refused); `policy::input_left_held_is_named_whatever_ended_the_run`
     (a run that failed or was interrupted and then left input held answers `ReleaseFailed`, on
     every lane); `socket::an_artifact_without_its_lane_is_named_as_the_capability_missing`.
   - The scenario on the headless target (CI):
@@ -1049,8 +1049,8 @@ graph LR
     be sent.
   - The refusals cover every pointer's press at an edge of the display, the mouse included (the
     three-button bar's Home sits at the bottom), and every key or chord whose fallback in AOSP's
-    `Virtual.kcm` or `Generic.kcm` leaves the app (`safety::FALLBACKS`), with Escape alone, which
-    finishes an Activity that closes on a touch outside.
+    `Virtual.kcm` or `Generic.kcm` leaves the app (`safety::FALLBACKS`). Escape alone and Control
+    and Escape are sent: a `NativeActivity` takes its own input queue, so they reach the app.
   - `send_guarded`'s `ReleaseFailed` keeps the run's own failure as `first`, and `effect` and
     `is_cannot_verify` answer from it.
   - A pen goes only through the lane's `uinput` device (hover, press with pressure, leave), each
@@ -1065,7 +1065,8 @@ graph LR
   - The lane never picks a device: `adb::HostAdb` cannot be built without a serial, and
     `lane::android::host_device` takes the one `FLUI_ANDROID_SERIAL` names and asks `adb` nothing
     without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
-    and its forward from a loopback port the lane picked is removed by that port.
+    and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
+    port tried when one is taken, is removed by that port once `adb` made it or may have.
   - `uiautomator dump` suspends the accessibility services running while it dumps, so a TalkBack
     run locates the window before TalkBack is on (`docs/gaps.md`).
   - `lane::android::launch` installs, starts and attaches; `Artifact::Apk` through `Driver::launch`

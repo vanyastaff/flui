@@ -1400,7 +1400,7 @@ fn starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port() {
         .reply("shell 'am' 'start'", AdbReply::new(0, "Status: ok\n"))
         .reply("install", AdbReply::new(0, "Success\n"))
         .reply("forward --remove", AdbReply::new(0, ""))
-        .reply("forward tcp:", AdbReply::new(0, ""));
+        .reply("forward --no-rebind tcp:", AdbReply::new(0, ""));
     let app = AndroidApp::try_new(PACKAGE, "android.app.NativeActivity")
         .expect("an app")
         .apk("app.apk");
@@ -1423,7 +1423,7 @@ fn starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port() {
     assert!(at("install -r -t app.apk") < at("shell 'am' 'force-stop'"));
     assert!(at("shell 'am' 'force-stop'") < at("shell 'am' 'start'"));
     let start = &log[at("shell 'am' 'start'")];
-    let name = log[at(&format!("forward tcp:{port} localabstract:"))]
+    let name = log[at(&format!("forward --no-rebind tcp:{port} localabstract:"))]
         .rsplit(':')
         .next()
         .expect("a name")

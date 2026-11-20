@@ -3,6 +3,8 @@
 //! the dump each session writes, the backlog the guard forgets, and the first failure a release
 //! after it keeps.
 
+use std::time::Duration;
+
 use flui_driver::Error;
 use flui_driver::coordinates::DevicePoint;
 use flui_driver::lane::android::adb::{AdbCommand, AdbReply, Framing, HostAdb};
@@ -100,8 +102,6 @@ fn every_fallback_that_leaves_the_app_is_refused() {
         (&["Alt"], "Escape", "HOME"),
         (&["Meta"], "Escape", "HOME"),
         (&["Control", "Alt"], "Backspace", "BACK"),
-        (&[], "Escape", "finishes an Activity"),
-        (&["Control"], "Escape", "finishes an Activity"),
     ];
     for &(modifiers, key, becomes) in rows {
         match chord(modifiers, key) {
@@ -112,15 +112,19 @@ fn every_fallback_that_leaves_the_app_is_refused() {
         }
     }
     // Each entry of the table has its row.
-    assert_eq!(safety::FALLBACKS.len(), 7);
+    assert_eq!(safety::FALLBACKS.len(), 6);
     for fallback in safety::FALLBACKS {
         assert_eq!(
             safety::system_chord(fallback.held, fallback.key),
             Some(fallback.becomes)
         );
     }
-    // The fallbacks that stay in the app, and chords that are no fallback, are sent.
+    // The fallbacks that stay in the app, and chords that are no fallback, are sent: Escape alone
+    // reaches a `NativeActivity`, and Control and Escape's fallback is the app's own MENU.
     for (modifiers, key) in [
+        (&[][..], "Escape"),
+        (&["Control"][..], "Escape"),
+        (&["Shift"][..], "Escape"),
         (&["Control"][..], "Backspace"),
         (&["Alt"][..], "Backspace"),
         (&[][..], " "),
@@ -182,6 +186,41 @@ fn arming_forgets_every_line_that_came_while_the_guard_was_disarmed() {
         "/dev/input/event5: EV_ABS       ABS_MT_TRACKING_ID   00000001",
     );
     assert!(guard.foreign_input().is_some());
+}
+
+#[test]
+fn arming_waits_out_a_backlog_the_reader_is_still_refilling() {
+    let adb = ScriptedAdb::new().stream(
+        "shell -tt getevent",
+        GETEVENT.lines().map(str::to_owned).collect(),
+        None,
+    );
+    let stream = adb
+        .device()
+        .open(
+            &AdbCommand::ShellTerminal(getevent::WATCH.to_owned()),
+            Framing::Lines,
+        )
+        .expect("a stream");
+    let mut guard = GeteventGuard::new(stream);
+    guard.arm().expect("watching");
+    guard.disarm();
+    // Touches from between two runs: some waiting, and more the reader hands over a moment after
+    // the channel ran empty.
+    adb.push(
+        "shell -tt getevent",
+        "/dev/input/event5: EV_ABS       ABS_MT_POSITION_X    00000001",
+    );
+    let refilled: Vec<String> = (0..50)
+        .map(|index| format!("/dev/input/event5: EV_ABS       ABS_MT_POSITION_Y    {index:08x}"))
+        .collect();
+    adb.push_after("shell -tt getevent", &refilled, Duration::from_millis(30));
+    guard.arm().expect("armed again");
+    std::thread::sleep(Duration::from_millis(60));
+    assert!(
+        guard.foreign_input().is_none(),
+        "what the reader refilled from before the run is not the run's"
+    );
 }
 
 #[test]

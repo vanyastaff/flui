@@ -337,13 +337,15 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
-/// pressed is released on every exit, a failed send included; input the release leaves held is
-/// what the run answers, whatever ended it.
+/// pressed is released on every exit, a failed send included. When the release leaves input
+/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
+/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
+/// ([`Error::effect`], [`Error::is_cannot_verify`]).
 ///
 /// # Errors
 ///
 /// As [`admit`] and [`Lane::check`], before any event; [`Error::ReleaseFailed`] naming what stays
-/// held, its message naming the run's own failure too when there was one;
+/// held, with the run's own failure as its `first` when there was one;
 /// [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
@@ -358,7 +360,9 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     }
     let released = lane.release_all();
     match (sent, released) {
-        // Input left held outranks why the run ended: the person must be told what stays down.
+        // The error names what stays down whatever ended the run, and keeps that first failure,
+        // which the verdict is read from: a run the person interrupted stays cannot-verify, since
+        // it did not complete because of a person, while the key left down is named all the same.
         (
             Err(failure),
             Err(Error::ReleaseFailed {

@@ -7,8 +7,8 @@
 //!   brightness, the shade, settings, media), and a lone tap of Meta, which opens the app drawer;
 //! - **chords** the window manager takes before the app ([`system_chord`]): any with Meta, Alt and
 //!   Tab, and every key or chord whose fallback in AOSP's key character maps leaves the app or
-//!   changes the device ([`FALLBACKS`]): Escape, Alt and Space, Control and Space, Control, Alt
-//!   and Backspace;
+//!   changes the device ([`FALLBACKS`]): Alt or Meta and Escape, Alt, Meta or Control and Space,
+//!   Control, Alt and Backspace;
 //! - **gestures**: a press of any pointer (a finger, the pen, the mouse) put down within
 //!   [`GESTURE_EDGE_DP`] of an edge of the display ([`gesture_edge`]), where the system takes it
 //!   as its own (the shade and quick settings from the top, home and recents from the bottom or
@@ -225,9 +225,9 @@ pub struct Fallback {
 /// Control and Escape's to `MENU`. The gamepad's to Back, Menu and Home (`BUTTON_B`, `BUTTON_Y`,
 /// `BUTTON_SELECT`, `BUTTON_MODE`) name keys the lane has no name for, so they never reach it.
 ///
-/// Escape alone has no fallback in either map, but an Activity finishes on an Escape it leaves
-/// unhandled when it closes on a touch outside (`Activity.onKeyDown`), so the lane refuses it with
-/// any modifiers.
+/// Escape alone has no fallback in either map, and it reaches the app: a `NativeActivity` takes
+/// its own input queue, so no key passes `Activity.onKeyDown`, whose Escape finishes only a window
+/// that closes on a touch outside, the app closing itself. Escape and Control and Escape are sent.
 pub const FALLBACKS: &[Fallback] = &[
     Fallback {
         held: &[keys::ALT],
@@ -258,11 +258,6 @@ pub const FALLBACKS: &[Fallback] = &[
         held: &[keys::CONTROL, keys::ALT],
         key: keys::BACKSPACE,
         becomes: "BACK, which leaves a root activity (Control, Alt and Backspace)",
-    },
-    Fallback {
-        held: &[],
-        key: keys::ESCAPE,
-        becomes: "an Escape that finishes an Activity closing on a touch outside",
     },
 ];
 

@@ -241,6 +241,11 @@ pub enum Error {
     /// [`Error::InputHeld`], which is someone else's input in the way and worth waiting out; this
     /// is the lane's own failure, which a retry of the call does not cure. A lane gathers it from
     /// its parts with [`lane::release_outcome`](crate::lane::release_outcome).
+    ///
+    /// After a run that failed first ([`lane::send_guarded`](crate::lane::send_guarded)), that
+    /// failure is `first`, and the run's effect and verdict are read from it rather than from the
+    /// release: a run the person interrupted is cannot-verify, since it did not complete because
+    /// of a person, and the input it left down is still named here.
     #[error("the {lane} lane left {} held: {message}", held.join(", "))]
     ReleaseFailed {
         /// The lane.

@@ -276,16 +276,21 @@ fn a_lane_is_admitted_by_its_guard_and_where_its_input_lands_at_every_send() {
 }
 
 /// A run that ends early and then cannot release what it pressed answers with what stays held,
-/// naming why it ended too: the person must hear of a key left down.
+/// keeping why it ended as the first failure its verdict comes from: the person hears of the key
+/// left down, and a run they interrupted stays cannot-verify.
 #[test]
-fn input_left_held_outranks_why_the_run_ended() {
+fn input_left_held_is_named_whatever_ended_the_run() {
     let an_event = || OsEvent::Pause(Duration::from_millis(1));
     let (lane, _log) = ScriptedLane::new(Isolation::Shared);
     let mut lane = lane
         .foreign_input_after(1, "a mouse move")
         .failing_releases(1);
     match lane::send_guarded(&mut lane, &[an_event(), an_event()]) {
-        Err(Error::ReleaseFailed { held, message, .. }) => {
+        Err(error @ Error::ReleaseFailed { .. }) => {
+            assert!(error.is_cannot_verify(), "{error}");
+            let Error::ReleaseFailed { held, message, .. } = error else {
+                unreachable!("matched above");
+            };
             assert_eq!(held, vec!["Control".to_owned()]);
             assert!(message.contains("a mouse move"), "{message}");
         }

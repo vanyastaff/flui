@@ -15,9 +15,12 @@ pub const STOPPED_WATCHING: &str = "the getevent guard stopped watching";
 /// How long arming waits for `getevent` to name its first device.
 pub const ARM_WITHIN: Duration = Duration::from_secs(5);
 
-/// How long arming reads the lines that came while the guard was disarmed, until none is
-/// waiting.
+/// How long arming reads the lines that came while the guard was disarmed, at most.
 pub const BACKLOG_WITHIN: Duration = Duration::from_secs(1);
+
+/// How long the backlog must stay empty before arming takes it as read: the stream's reader
+/// refills the channel from the pipe as it is emptied.
+pub const BACKLOG_QUIET: Duration = Duration::from_millis(75);
 
 /// How long a look for foreign input before an event reads the lines waiting.
 pub const LOOK_WITHIN: Duration = Duration::from_millis(100);
@@ -40,14 +43,25 @@ impl GeteventGuard {
         }
     }
 
-    /// Read the lines that already came until none is waiting, or until `within` has passed: a
-    /// device whose sensors print without pause is read for that long and no longer.
-    fn drain(&mut self, within: Duration) {
+    /// Read the lines that came until none has come for `quiet` (none at all when `quiet` is
+    /// zero), or until `within` has passed: an empty channel may only mean its reader is still
+    /// refilling it from the pipe, and a device whose sensors print without pause is read for
+    /// `within` and no longer.
+    fn drain(&mut self, within: Duration, quiet: Duration) {
         let deadline = Instant::now() + within;
-        while self.stopped.is_none() && Instant::now() < deadline {
+        while self.stopped.is_none() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
             match self.stream.next_record(Duration::ZERO) {
                 Ok(Some(line)) => self.watch.read(&line),
-                Ok(None) => return,
+                Ok(None) if quiet.is_zero() => return,
+                Ok(None) => match self.stream.next_record(quiet.min(left)) {
+                    Ok(Some(line)) => self.watch.read(&line),
+                    Ok(None) => return,
+                    Err(error) => self.stopped = Some(error.to_string()),
+                },
                 Err(error) => self.stopped = Some(error.to_string()),
             }
         }
@@ -56,7 +70,7 @@ impl GeteventGuard {
 
 impl ActivityGuard for GeteventGuard {
     fn arm(&mut self) -> Result<()> {
-        self.drain(BACKLOG_WITHIN);
+        self.drain(BACKLOG_WITHIN, BACKLOG_QUIET);
         let deadline = Instant::now() + ARM_WITHIN;
         while !self.watch.started() && self.stopped.is_none() {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -80,13 +94,13 @@ impl ActivityGuard for GeteventGuard {
         }
         // What came between two runs (the person's touches while the lane was idle) is read and
         // forgotten here: only input after the guard armed ends a run.
-        self.drain(BACKLOG_WITHIN);
+        self.drain(BACKLOG_WITHIN, BACKLOG_QUIET);
         self.watch.arm();
         Ok(())
     }
 
     fn foreign_input(&mut self) -> Option<ForeignInput> {
-        self.drain(LOOK_WITHIN);
+        self.drain(LOOK_WITHIN, Duration::ZERO);
         if let Some(why) = &self.stopped {
             return Some(ForeignInput::new(format!("{STOPPED_WATCHING}: {why}")));
         }

@@ -85,7 +85,8 @@ app's trees, frames and input, and this crate composes that with what only the O
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
   its own: a window dump at a path of the session's, and a forward from a loopback port the lane
-  picked, removed by that port at its end whatever `adb` answered.
+  picked, asked for with `--no-rebind` (a port another session holds is refused and another
+  picked) and removed by that port at its end once `adb` made it or may have.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

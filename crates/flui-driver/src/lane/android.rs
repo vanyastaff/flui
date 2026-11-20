@@ -76,6 +76,9 @@ const LONG: Duration = Duration::from_secs(30);
 /// How long an install may take.
 const INSTALL: Duration = Duration::from_secs(180);
 
+/// How many loopback ports the lane tries for its forward when `adb` finds one taken.
+pub const FORWARD_ATTEMPTS: usize = 3;
+
 /// How long the pen's device may take to answer a sync.
 const SYNC_WITHIN: Duration = Duration::from_secs(5);
 
@@ -274,18 +277,7 @@ impl AndroidLane {
             EXIT_ON_DISCONNECT_EXTRA,
             "1",
         ]))?;
-        // The lane picks the loopback port, so the forward it asks for is the one it removes at
-        // its end whatever `adb` answers: a port the OS just handed out and let go of.
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .and_then(|listener| listener.local_addr())
-            .map(|address| address.port())?;
-        self.forwarded = Some(port);
-        let forward = AdbCommand::Host(vec![
-            "forward".to_owned(),
-            format!("tcp:{port}"),
-            format!("localabstract:{name}"),
-        ]);
-        checked(self.adb.as_mut(), &forward, STATUS)?;
+        let port = self.forward(&name)?;
         Ok(Started {
             endpoint: crate::Endpoint::Forwarded(std::net::SocketAddr::from((
                 [127, 0, 0, 1],
@@ -293,6 +285,50 @@ impl AndroidLane {
             ))),
             token,
         })
+    }
+
+    /// Forward a loopback port to the abstract socket `name`, and record it for removal at the
+    /// lane's end. The lane picks the port (one the OS just handed out and let go of) and asks
+    /// with `--no-rebind`, so it never takes over another session's rule: a port someone took in
+    /// between is refused by `adb` and another is picked, at most [`FORWARD_ATTEMPTS`] times. A
+    /// rule is recorded once `adb` made it, or may have (a timeout), and only then removed.
+    #[cfg(any(unix, windows))]
+    fn forward(&mut self, name: &str) -> Result<u16> {
+        let mut refusals = Vec::new();
+        for _ in 0..FORWARD_ATTEMPTS {
+            let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .and_then(|listener| listener.local_addr())
+                .map(|address| address.port())?;
+            let forward = AdbCommand::Host(vec![
+                "forward".to_owned(),
+                "--no-rebind".to_owned(),
+                format!("tcp:{port}"),
+                format!("localabstract:{name}"),
+            ]);
+            let reply = match self.adb.run(&forward, STATUS.limit, STATUS.timeout) {
+                Ok(reply) => reply,
+                Err(error @ Error::Timeout { .. }) => {
+                    self.forwarded = Some(port);
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(failure) = reply.failure(Printed::Status) else {
+                self.forwarded = Some(port);
+                return Ok(port);
+            };
+            let taken = ["cannot bind", "cannot rebind"]
+                .iter()
+                .any(|said| reply.stderr.contains(said));
+            if !taken {
+                return Err(command_failed(&forward, &reply, &failure));
+            }
+            refusals.push(format!("tcp:{port}: {failure}"));
+        }
+        Err(lane_error(format!(
+            "`adb forward` found {FORWARD_ATTEMPTS} loopback ports taken in turn: {}",
+            refusals.join("; ")
+        )))
     }
 
     /// Run the shell line `line`, which prints a status, failing on the device's failure.

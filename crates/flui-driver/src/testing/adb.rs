@@ -53,8 +53,22 @@ struct Push {
 struct StreamState {
     records: VecDeque<String>,
     late: VecDeque<String>,
+    /// Records that arrive at a time: a reader refilling the channel from a pipe after a pause.
+    timed: VecDeque<(std::time::Instant, String)>,
     ended: Option<String>,
     responder: Option<Responder>,
+}
+
+impl StreamState {
+    /// Move the timed records that are due into the records.
+    fn arrive(&mut self) {
+        let now = std::time::Instant::now();
+        while self.timed.front().is_some_and(|(at, _)| *at <= now) {
+            if let Some((_, record)) = self.timed.pop_front() {
+                self.records.push_back(record);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -191,6 +205,21 @@ impl ScriptedAdb {
         }
     }
 
+    /// Push `records` into every open stream whose command starts with `stream`, arriving `after`
+    /// from now, in order: what a reader hands over once it refilled from the pipe.
+    pub fn push_after(&self, stream: &str, records: &[String], after: Duration) {
+        let at = std::time::Instant::now() + after;
+        let script = lock(&self.script);
+        for (command, state) in &script.open {
+            if command.starts_with(stream) {
+                let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                state
+                    .timed
+                    .extend(records.iter().map(|record| (at, record.clone())));
+            }
+        }
+    }
+
     /// When a command starting with `command` runs, push `record` into the open stream whose
     /// command starts with `stream`, once.
     #[must_use]
@@ -323,6 +352,7 @@ impl Adb for ScriptedAdb {
         let state = Arc::new(Mutex::new(StreamState {
             records: rule.records.into_iter().collect(),
             late: rule.late.into_iter().collect(),
+            timed: VecDeque::new(),
             ended: rule.ends.then(|| format!("`adb {text}` ended")),
             responder: rule.responder,
         }));
@@ -368,7 +398,19 @@ impl AdbStream for ScriptedStream {
     }
 
     fn next_record(&mut self, wait: Duration) -> Result<Option<String>> {
+        let deadline = std::time::Instant::now() + wait;
         let mut state = self.state();
+        state.arrive();
+        // A wait sees the timed records that arrive within it.
+        while state.records.is_empty()
+            && let Some(at) = state.timed.front().map(|(at, _)| *at)
+            && at <= deadline
+        {
+            drop(state);
+            std::thread::sleep(at.saturating_duration_since(std::time::Instant::now()));
+            state = self.state();
+            state.arrive();
+        }
         if let Some(record) = state.records.pop_front() {
             return Ok(Some(record));
         }

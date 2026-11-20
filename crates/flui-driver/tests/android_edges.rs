@@ -1159,34 +1159,97 @@ fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
     drop(connected(&adb));
     assert_eq!(adb.commands("shell 'am'"), Vec::<String>::new());
     assert_eq!(adb.commands("forward"), Vec::<String>::new());
-    // A forward `adb` refused still has its rule removed by the port the lane picked, and the
-    // app it started is still stopped.
+    // A forward `adb` refused for another reason is no rule of the lane's: nothing is removed, and
+    // the app it started is still stopped.
     let adb = scripted(true, true)
         .reply("shell 'am'", AdbReply::new(0, ""))
         .reply("forward --remove", AdbReply::new(0, ""))
         .reply(
-            "forward tcp:",
-            AdbReply::new(1, "").stderr("error: cannot bind listener: Address already in use"),
+            "forward --no-rebind",
+            AdbReply::new(1, "").stderr("error: device offline"),
         );
     let app = AndroidApp::try_new(PACKAGE, "a.B").expect("an app");
     assert_eq!(app.package(), PACKAGE);
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     assert!(lane.start(&app).is_err());
-    let asked = adb.commands("forward tcp:");
-    let [asked] = asked.as_slice() else {
-        panic!("one forward: {asked:?}");
-    };
-    let local = asked
-        .split_whitespace()
-        .nth(1)
-        .expect("the local spec")
-        .to_owned();
+    assert_eq!(adb.commands("forward --no-rebind").len(), 1);
     drop(lane);
     assert_eq!(adb.commands("shell 'am' 'force-stop'").len(), 2);
+    assert_eq!(adb.commands("forward --remove"), Vec::<String>::new());
+    // A forward that timed out may have been made: it is removed.
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .timeout_once("forward --no-rebind");
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    assert!(matches!(lane.start(&app), Err(Error::Timeout { .. })));
+    let local = local_spec(&adb.commands("forward --no-rebind")[0]);
+    drop(lane);
     assert_eq!(
         adb.commands("forward --remove"),
         vec![format!("forward --remove {local}")]
     );
+}
+
+/// The local spec (`tcp:N`) of a logged `forward --no-rebind tcp:N localabstract:…`.
+fn local_spec(forward: &str) -> String {
+    forward
+        .split_whitespace()
+        .nth(2)
+        .expect("the local spec")
+        .to_owned()
+}
+
+#[test]
+fn a_forward_never_takes_over_another_sessions_port() {
+    let taken = |said: &str| AdbReply::new(1, "").stderr(said);
+    // The first two ports are another session's: the lane asks for a fresh one each time and
+    // removes only the rule it made.
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply_once(
+            "forward --no-rebind",
+            taken("error: cannot rebind existing socket"),
+        )
+        .reply_once(
+            "forward --no-rebind",
+            taken("error: cannot bind listener: Address already in use"),
+        )
+        .reply("forward --no-rebind", AdbReply::new(0, ""));
+    let app = AndroidApp::try_new(PACKAGE, "a.B").expect("an app");
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let started = lane.start(&app).expect("the third port is free");
+    let asked = adb.commands("forward --no-rebind");
+    assert_eq!(asked.len(), 3, "{asked:?}");
+    let made = local_spec(&asked[2]);
+    let flui_driver::Endpoint::Forwarded(address) = started.endpoint else {
+        panic!("a forwarded endpoint");
+    };
+    assert_eq!(made, format!("tcp:{}", address.port()));
+    drop(lane);
+    assert_eq!(
+        adb.commands("forward --remove"),
+        vec![format!("forward --remove {made}")],
+        "the refused ports' rules are another session's"
+    );
+    // Every port taken: the lane gives up after its attempts and removes nothing.
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply(
+            "forward --no-rebind",
+            taken("error: cannot rebind existing socket"),
+        );
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let refused = lane.start(&app).expect_err("every port taken");
+    assert!(refused.to_string().contains("taken"), "{refused}");
+    assert_eq!(
+        adb.commands("forward --no-rebind").len(),
+        flui_driver::lane::android::FORWARD_ATTEMPTS
+    );
+    drop(lane);
+    assert_eq!(adb.commands("forward --remove"), Vec::<String>::new());
 }
 
 #[test]
