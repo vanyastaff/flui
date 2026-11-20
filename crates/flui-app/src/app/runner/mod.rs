@@ -625,7 +625,6 @@ pub(crate) use stand_in_renderer::StandInRenderers;
 pub(crate) use {host::loop_turn_deadline, host::loop_wake_deadline, raster_host::RasterFactory};
 
 /// Whether this loop journals its backend, so the agent's hello lists the `native` layer.
-#[cfg(not(target_arch = "wasm32"))]
 fn journals_native() -> bool {
     #[cfg(native_journal)]
     {
@@ -638,7 +637,6 @@ fn journals_native() -> bool {
 }
 
 /// End the loop's native journal unless the driver agent is `served`.
-#[cfg(not(target_arch = "wasm32"))]
 fn keep_native_journal(served: bool) {
     #[cfg(native_journal)]
     native_journal::keep_if(served);

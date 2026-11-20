@@ -10,6 +10,9 @@
   research [trace format](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-followups.md),
   [synthetic-first testing](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-12-interaction-input-best-practices.md),
   [dependency selection](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-13-interaction-dependency-selection.md).
+- **Revised:** 2026-11-20 — §7 gains the recording rows and `replay_recording`: each kind the
+  native journal records beside input is a row of the table, replayed on the headless host
+  ([ADR-0390](ADR-0390-a-page-journals-its-native-layer-as-a-native-host-does.md)).
 
 ## Context
 
@@ -175,6 +178,13 @@ and put `serde` on the Stable contract crate.
    reading decodes into the edits the path makes of the field; one scenario (a preedit that
    grows, a picked candidate, a commit, and a cancelled composition) leaves the same text,
    composing range and caret on every path, each step as one read-write session.
+   The recording rows take what the native journal (§4) records beside input:
+   `fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay` has no default
+   body either. The backend writes the session as its journal records it, reads the recording
+   back and replays it on the headless host, and a row holds when the application there heard
+   every entry as the OS reported it, in order. One row each for the input method's
+   composition, the lifecycle (system notices, a session end's phases, a reopen, the window's
+   snapshots), the reads of the system preferences and the reads of the displays.
 8. **Native injection.** [`cargo xtask device <os>-input`](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs) exists for every OS: `SendInput` and
    `InjectSyntheticPointerInput` on Windows, `CGEvent` on macOS, XCUITest on iOS, the shell's
    `input` and `uinput` commands on Android, uinput/libei on Linux, WebDriver BiDi on the web.
@@ -215,7 +225,10 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
   `flui-native`); each row also fails against a backend broken for it
   (`each_conformance_row_fails_against_a_broken_backend`). The IME rows drive each input method
   path's client through `flui_native::text::conformance`, and every backend either holds them or
-  names its gap (`each_input_method_path_holds_the_ime_rows_or_names_its_gap`). The OS translation in front of the
+  names its gap (`each_input_method_path_holds_the_ime_rows_or_names_its_gap`). The recording
+  rows replay every backend's recordings on the headless host
+  (`each_backend_s_recordings_replay_on_the_headless_host`), each failing against a headless
+  host broken for its kind. The OS translation in front of the
   decoders runs on a native host or device only, as do all [`xtask device` checks](https://github.com/vanyastaff/flui/blob/e8a42673ad23a2e88614940a266cd01224dcb25f/tools/xtask/src/device.rs).
 
 ## Alternatives rejected

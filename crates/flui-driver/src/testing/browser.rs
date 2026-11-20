@@ -106,17 +106,29 @@ impl ScriptedBrowser {
     ///
     /// When no port can be bound.
     pub fn start(methods: &[&str], agent: Script, browser: BrowserScript) -> Result<Self> {
+        let mut capabilities = Capabilities::default();
+        capabilities.methods = methods.iter().map(|method| (*method).to_owned()).collect();
+        Self::start_with(capabilities, agent, browser)
+    }
+
+    /// [`Self::start`], its page's agent's hello listing `capabilities` (the layers it records
+    /// among them).
+    ///
+    /// # Errors
+    ///
+    /// When no port can be bound.
+    pub fn start_with(
+        capabilities: Capabilities,
+        agent: Script,
+        browser: BrowserScript,
+    ) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("ws://{}/session/scripted", listener.local_addr()?);
         let token = crate::launch::launch_token()?;
         let log = BrowserLog::default();
         let mut page = Page {
             token: token.clone(),
-            capabilities: {
-                let mut capabilities = Capabilities::default();
-                capabilities.methods = methods.iter().map(|method| (*method).to_owned()).collect();
-                capabilities
-            },
+            capabilities,
             agent,
             browser,
             greeted: false,

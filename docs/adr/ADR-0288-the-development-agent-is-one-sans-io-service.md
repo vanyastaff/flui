@@ -10,6 +10,9 @@
 - **Amends:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3, the seam: an
   `AgentAnswer`, an `AgentEvents` and an `AgentRecording` tell a waker when they can be read; and
   [ADR-0238](ADR-0238-flui-driver-protocol.md) §3, the error codes: `not_driver` (§8).
+- **Superseded-by:** [ADR-0390](ADR-0390-a-page-journals-its-native-layer-as-a-native-host-does.md)
+  for §11's sentence "A page records the input layer only" and the capture's "debug build of a
+  native host" only: a page's debug build journals its backend for the `native` layer too.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what

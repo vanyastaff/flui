@@ -27,10 +27,16 @@ where
 
     tracing::info!("Starting web platform via flui-native");
 
+    // Before the platform, whose registries and streams report only to a capture already
+    // installed: a page journals its backend as a native host does (ADR-0390).
+    #[cfg(native_journal)]
+    super::native_journal::begin(flui_native::journal::codec::Backend::Web);
     // Platform init is an environment failure (unsupported browser, missing
     // wasm feature, driver problem), not a `BUG:` invariant: the caller gets
     // it as a `LaunchError`.
     let platform = flui_native::current_platform().map_err(|error| {
+        // No agent serves a page that failed to start, so its journal ends.
+        super::keep_native_journal(false);
         tracing::error!(%error, "Failed to initialize platform");
         crate::app::LaunchError::from_platform(error)
     })?;
@@ -38,16 +44,17 @@ where
     // The driver agent (ADR-0239), beside the application's own hooks, when
     // the page's launch object named an export (ADR-0288 §7), which the
     // platform took off the page as it was made. A driver that goes under
-    // `EXIT_ON_DISCONNECT` quits the loop; the driver closes the tab.
+    // `EXIT_ON_DISCONNECT` quits the loop; the driver closes the tab. A page
+    // nobody drives ends its native journal here.
     let disconnect = Arc::new(crate::app::agent::Disconnect::default());
     let mut config = config;
-    crate::app::agent::install_from_launch(
+    let served = crate::app::agent::install_from_launch(
         &mut config,
         |key| platform.launch_value(key),
         &disconnect,
-        // A page records the input layer only.
-        false,
+        super::journals_native(),
     );
+    super::keep_native_journal(served);
 
     /// The actual web bootstrap: canvas window, renderer, UI runtime, and
     /// callback wiring. Runs once, synchronously, inside `on_ready` —

@@ -1205,3 +1205,173 @@ fn a_trace_of_a_page_session_names_the_chrome_lane_and_holds_its_input() {
         "the OS input is a command of the trace: {rows}"
     );
 }
+
+/// A page journals its backend as a native host does (ADR-0390): its agent lists the `native`
+/// layer, so a trace of its session asks for both layers and writes each native stream the page
+/// sends beside the input, read back through the protocol's schema: the application's notices,
+/// the window's input method events and snapshots, and the reads of the preferences and the
+/// displays, each stream's header naming the `web` backend.
+#[test]
+fn a_trace_of_a_page_session_holds_the_pages_native_layer() {
+    use flui_driver::Report;
+    use flui_driver::protocol::native_recording::{Backend, Row as NativeRow, Stream};
+    use flui_driver::protocol::record::RecordLayer;
+    use flui_driver::protocol::session::Capabilities;
+    use flui_driver::testing::AfterLines;
+    use flui_driver::trace::{Trace, TraceOptions};
+
+    let parsed = |text: &str| serde_json::from_str::<Value>(text).expect("a JSON line");
+    let native = |stream: u64, line: &str| {
+        json!({
+            "event": "record_native",
+            "params": { "recording": 1, "window": WINDOW, "stream": stream, "line": parsed(line) },
+        })
+    };
+    let header = |stream: &str| {
+        format!(r#"{{"header":{{"flui_native_recording":4,"backend":"web","stream":"{stream}"}}}}"#)
+    };
+    let lines = vec![
+        native(0, &header("app")),
+        native(0, r#"{"row":{"row":"notice","notice":"sleep"}}"#),
+        native(0, r#"{"row":{"row":"reopen"}}"#),
+        native(1, &header("window")),
+        native(1, r#"{"row":{"row":"ime","ime":{"event":"enabled"}}}"#),
+        native(
+            1,
+            r#"{"row":{"row":"ime","ime":{"event":{"commit":"日本"}}}}"#,
+        ),
+        native(2, &header("platform")),
+        native(
+            2,
+            r#"{"row":{"row":"preferences","read":{"observed":{"motion":"reduce","text_weight":"bold","gestures":{},"wheel_vertical":"page"}}}}"#,
+        ),
+        native(
+            2,
+            r#"{"row":{"row":"displays","read":{"observed":{"revision":1,"displays":[{"label":1,"name":"Screen","origin":[0,0],"extent":[1280.0,800.0],"usable":[0.0,0.0,1280.0,800.0],"scale_factor":2.0,"primary":true,"color":{"known":{"gamut":"srgb","dynamic_range":"standard","headroom":{"multiple":1.0}}}}]}}}}"#,
+        ),
+        native(3, &header("window_state")),
+        native(
+            3,
+            r#"{"row":{"row":"state","state":{"revision":0,"outer":{"size":[800.0,600.0]},"content_size":[800.0,600.0],"mode":"normal","visible":true,"occluded":false,"focused":true,"constraints":{},"resizable":true,"frame":"system","metrics":{"physical":[1600,1200],"scale":2.0},"appearance":"light","safe_area":[0.0,0.0,0.0,0.0],"execution":"running","hovered":false,"active":true,"capabilities":{"sets_title":"native","sets_position":"native","sets_size":"native","sets_constraints":"native","sets_resizable":"native","sets_frame":"native","app_title_bar":"native","minimizes":"native","maximizes":"native","enters_fullscreen":"native","hides":"native","shows":"native","activates":"native","closes":"native","material":"native","reports_presentation":"native","observes_position":"native","observes_minimized":"native","places_at_open":"native","frame_rate_hint":"native"}}}}"#,
+        ),
+    ];
+    let mut capabilities = Capabilities::default();
+    capabilities.methods = METHODS
+        .iter()
+        .copied()
+        .chain([method::RecordStart::NAME, method::RecordStop::NAME])
+        .map(str::to_owned)
+        .collect();
+    capabilities.record = vec![RecordLayer::Input, RecordLayer::Native];
+    let mut page = page_agent();
+    let mut asked_native = false;
+    let browser = ScriptedBrowser::start_with(
+        capabilities,
+        Box::new(move |name, params| match name {
+            "record.start" => {
+                asked_native = params["layers"] == json!(["input", "native"]);
+                Reply::ResultThenLines {
+                    result: json!({
+                        "recording": 1,
+                        "header": { "flui_recording": 6, "clock": "monotonic", "windows": [{ "window": 1, "scale_factor": 1.0 }] },
+                    }),
+                    lines: lines.clone(),
+                    then: AfterLines::Serve,
+                }
+            }
+            // The page's agent sends the recording's `end` row before it answers the stop, as
+            // every agent does (ADR-0288 §11).
+            "record.stop" => Reply::LinesThenResult {
+                lines: vec![json!({
+                    "event": "record",
+                    "params": { "recording": 1, "window": WINDOW, "row": { "end": { "lost_rows": 0 } } },
+                })],
+                result: json!({ "rows": 1, "lost_rows": 0, "native_lost_rows": 0, "complete": asked_native }),
+            },
+            _ => page(name, params),
+        }),
+        Box::new(|_, _| BrowserReply::Played),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("page-native.flui-trace");
+    driver
+        .start_trace(TraceOptions::new(&dir))
+        .expect("the trace starts");
+    let mut report = Report::new();
+    report
+        .check("a press", || {
+            driver
+                .window(window())
+                .perform(press(LogicalPoint::new(100.0, 50.0)))
+        })
+        .expect("the press goes through the lane");
+    let summary = driver
+        .finish_trace(&mut report)
+        .expect("the trace finishes");
+    assert!(
+        summary.recording.is_some_and(|stopped| stopped.complete),
+        "record.start asked the page for the input and native layers"
+    );
+    assert_eq!(summary.native.len(), 4, "{:?}", summary.native);
+
+    let trace = Trace::open(&dir).expect("the trace reads back");
+    assert_eq!(
+        trace.header().layers,
+        [RecordLayer::Input, RecordLayer::Native]
+    );
+    let native = trace
+        .native_recordings()
+        .expect("the native layer reads through the protocol");
+    let streams: Vec<(Backend, Stream, Vec<&NativeRow>)> = native
+        .iter()
+        .map(|recording| {
+            (
+                recording.header.backend,
+                recording.header.stream,
+                recording.rows().collect(),
+            )
+        })
+        .collect();
+    assert!(
+        streams
+            .iter()
+            .all(|(backend, _, _)| *backend == Backend::Web),
+        "{streams:?}"
+    );
+    let rows_of = |stream: Stream| -> Vec<&NativeRow> {
+        let Some((_, _, rows)) = streams.iter().find(|(_, found, _)| *found == stream) else {
+            panic!("the trace holds the page's {stream:?} stream: {streams:?}");
+        };
+        rows.clone()
+    };
+    assert!(
+        matches!(
+            rows_of(Stream::App).as_slice(),
+            [NativeRow::Notice { .. }, NativeRow::Reopen]
+        ),
+        "the lifecycle the page reported: {streams:?}"
+    );
+    assert!(
+        matches!(
+            rows_of(Stream::Window).as_slice(),
+            [NativeRow::Ime { .. }, NativeRow::Ime { .. }]
+        ),
+        "the input method's composition: {streams:?}"
+    );
+    assert!(
+        matches!(
+            rows_of(Stream::Platform).as_slice(),
+            [NativeRow::Preferences { .. }, NativeRow::Displays { .. }]
+        ),
+        "the reads of the preferences and the displays: {streams:?}"
+    );
+    assert!(
+        matches!(
+            rows_of(Stream::WindowState).as_slice(),
+            [NativeRow::State { .. }]
+        ),
+        "the window's snapshot: {streams:?}"
+    );
+}

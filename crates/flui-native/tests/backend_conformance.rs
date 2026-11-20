@@ -12,6 +12,13 @@
 //!
 //! Each row of the table also fails against a deliberately broken backend
 //! ([`Fault`]), so a row that cannot fail is caught.
+//!
+//! The recording rows replay each backend's session, as its journal writes
+//! it, on the headless host (`recordings`); their faults break the headless
+//! host's handling of the kind.
+
+#[path = "backend_conformance/recordings.rs"]
+mod recordings;
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
@@ -78,12 +85,13 @@ use flui_platform::{
 /// has none for it.
 const NO_ACTUATOR: HapticOutcome =
     HapticOutcome::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice));
+use flui_native::journal::codec::Backend;
 use flui_platform::PlatformInput;
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
     BackendUnderTest, ClockProfile, CompositionStep, ContactAction, ContactStep, KeyStep, PanStep,
-    PinchChange, PinchStep, RowOutcome, Stamp, Step, StepKey, StepPhase, TextInputPath,
-    assert_backend_conforms, run_backend_conformance,
+    PinchChange, PinchStep, Recorded, RecordingReplay, RowOutcome, Stamp, Step, StepKey, StepPhase,
+    TextInputPath, assert_backend_conforms, run_backend_conformance,
 };
 
 const PEN: PointerKind = PointerKind::Pen { tool: PenTool::Tip };
@@ -127,6 +135,8 @@ struct Profile {
     keys: Option<KeyDecoder>,
     /// The input method path its IME rows drive.
     ime: Ime,
+    /// The backend its native journal names in each recording's header.
+    journal: Backend,
 }
 
 /// A shared key decoder: Win32's virtual-key table, AppKit's key-code
@@ -452,6 +462,7 @@ fn win32() -> Profile {
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Win32),
         ime: Ime::Tsf,
+        journal: Backend::Win32,
     }
 }
 
@@ -473,6 +484,7 @@ fn appkit() -> Profile {
         drag: None,
         keys: Some(KeyDecoder::AppKit),
         ime: Ime::AppKit,
+        journal: Backend::AppKit,
     }
 }
 
@@ -486,6 +498,7 @@ fn uikit() -> Profile {
         drag: None,
         keys: None,
         ime: Ime::UiKit,
+        journal: Backend::UiKit,
     }
 }
 
@@ -503,6 +516,7 @@ fn android() -> Profile {
         drag: Some(input_availability::DESKTOP_DRAG_START),
         keys: Some(KeyDecoder::Android),
         ime: Ime::Android,
+        journal: Backend::Android,
     }
 }
 
@@ -539,6 +553,7 @@ fn web() -> Profile {
         drag: Some(input_availability::WEB_DRAG_START),
         keys: Some(KeyDecoder::Web),
         ime: Ime::WebEditContext,
+        journal: Backend::Web,
     }
 }
 
@@ -569,6 +584,7 @@ fn wayland() -> Profile {
         drag: None,
         keys: Some(KeyDecoder::Xkb),
         ime: Ime::TextInputV3,
+        journal: Backend::Wayland,
     }
 }
 
@@ -653,6 +669,16 @@ enum Fault {
     ImeStepInTwoEdits,
     /// `compositionend` never reaches the field, so the composition stays.
     ImeEndLost,
+    /// The headless window drops the commit a replayed composition delivers.
+    ReplayedCommitLost,
+    /// The headless host's application never hears a replayed reopen.
+    ReplayedReopenLost,
+    /// The headless window publishes no second snapshot of a replayed lifecycle.
+    ReplayedSnapshotUnpublished,
+    /// The headless preference source keeps what the first replayed read set.
+    ReplayedPreferencesStale,
+    /// The headless display source lists a replayed read's displays backwards.
+    ReplayedDisplaysReversed,
 }
 
 /// The degradation table a backend's window actuator plays by.
@@ -1255,6 +1281,10 @@ impl BackendUnderTest for SharedAssembly {
     fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
         self.ime.focus(store)
     }
+
+    fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay {
+        recordings::replay_on_headless(self.profile.journal, self.fault, session)
+    }
 }
 
 /// A drag source that only declares when it starts: the decoders have no OS behind them.
@@ -1317,6 +1347,7 @@ impl Headless {
             drag: None,
             keys: None,
             ime: Ime::None("the headless backend has no input method"),
+            journal: Backend::Headless,
         };
         Self {
             assembly: SharedAssembly::new(profile),
@@ -1384,6 +1415,10 @@ impl BackendUnderTest for Headless {
 
     fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
         self.assembly.focus_text_store(store)
+    }
+
+    fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay {
+        self.assembly.replay_recording(session)
     }
 }
 
@@ -1468,6 +1503,10 @@ impl BackendUnderTest for Win32Window {
 
     fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
         self.assembly.focus_text_store(store)
+    }
+
+    fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay {
+        self.assembly.replay_recording(session)
     }
 }
 
@@ -1703,6 +1742,10 @@ impl BackendUnderTest for X11Decoder {
 
     fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath {
         self.ime.focus(store)
+    }
+
+    fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay {
+        recordings::replay_on_headless(Backend::X11, None, session)
     }
 
     fn clock(&self) -> ClockProfile {
@@ -1968,6 +2011,52 @@ fn each_input_method_path_holds_the_ime_rows_or_names_its_gap() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// Every backend's recordings of each kind replay on the headless host: the recording rows
+/// hold for each, never pass as not applicable, the headless backend's own included.
+#[test]
+fn each_backend_s_recordings_replay_on_the_headless_host() {
+    const ROWS: [&str; 4] = [
+        "a_recorded_composition_replays_as_it_was_delivered",
+        "a_recorded_lifecycle_replays_as_it_was_reported",
+        "recorded_preference_reads_replay_as_they_were_answered",
+        "recorded_display_reads_replay_as_they_were_answered",
+    ];
+    let reports = [
+        ("headless", run_backend_conformance(&mut Headless::new())),
+        (
+            "native x11",
+            run_backend_conformance(&mut X11Decoder::new()),
+        ),
+    ]
+    .into_iter()
+    .chain(
+        [
+            ("win32", win32()),
+            ("appkit", appkit()),
+            ("uikit", uikit()),
+            ("android", android()),
+            ("web", web()),
+            ("wayland", wayland()),
+        ]
+        .map(|(name, profile)| {
+            (
+                name,
+                run_backend_conformance(&mut SharedAssembly::new(profile)),
+            )
+        }),
+    );
+    let mut wrong = Vec::new();
+    for (name, report) in reports {
+        for row in ROWS {
+            let outcome = report.outcome(row);
+            if outcome != Some(&RowOutcome::Held) {
+                wrong.push(format!("{name}: {row} is {outcome:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// A row, the fault that breaks it and the backend profile it applies to.
 type BrokenRow = (&'static str, Fault, fn() -> Profile);
 
@@ -2165,6 +2254,32 @@ const BROKEN: &[BrokenRow] = &[
         "a_leaving_backend_escalates_when_the_pointer_leaves_the_window",
         Fault::WrongDragTiming,
         android,
+    ),
+    (
+        "a_recorded_composition_replays_as_it_was_delivered",
+        Fault::ReplayedCommitLost,
+        web,
+    ),
+    (
+        "a_recorded_lifecycle_replays_as_it_was_reported",
+        Fault::ReplayedReopenLost,
+        appkit,
+    ),
+    // The window's snapshots are the same row's second session.
+    (
+        "a_recorded_lifecycle_replays_as_it_was_reported",
+        Fault::ReplayedSnapshotUnpublished,
+        win32,
+    ),
+    (
+        "recorded_preference_reads_replay_as_they_were_answered",
+        Fault::ReplayedPreferencesStale,
+        android,
+    ),
+    (
+        "recorded_display_reads_replay_as_they_were_answered",
+        Fault::ReplayedDisplaysReversed,
+        wayland,
     ),
 ];
 

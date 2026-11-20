@@ -21,7 +21,8 @@ use flui_platform::input::pointer::PointerKind;
 use flui_platform::text::store::TextStore;
 use flui_testing::backend_conformance::{
     BackendUnderTest, ClockProfile, ConformanceReport, ContactAction, ContactStep, FailureKind,
-    HostInput, RowOutcome, Step, StepKey, TextInputPath, run_backend_conformance,
+    HostInput, Recorded, RecordingReplay, RowOutcome, Step, StepKey, TextInputPath,
+    run_backend_conformance,
 };
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_conformance::WindowFixture as _;
@@ -50,6 +51,11 @@ pub(crate) const CASES: &[(&str, fn())] = &[(
 const NO_INPUT_METHOD: &str = "no input method runs on the harness's X server (no IBus or Fcitx5 \
      daemon, no XIM server); the X11 host's contexts run against stand-ins in \
      `text::linux::x11`, and the text-input events they become run through the table as `native x11`";
+
+/// Why the recording rows replay nothing for the window: a recording replays on the headless
+/// host whichever window journaled it.
+const REPLAYED_ON_HEADLESS: &str = "a recording replays on the headless host whichever window \
+     journaled it; the X11 host's recordings run through the table there as `native x11`";
 
 /// What a row the real window does not exercise reports.
 #[derive(Debug, Clone, Copy)]
@@ -221,6 +227,26 @@ const UNEXERCISED: &[(&str, Unexercised, &str)] = &[
         "each_composition_step_is_one_edit_of_the_field",
         Unexercised::NotApplicable(NO_INPUT_METHOD),
         NO_INPUT_METHOD,
+    ),
+    (
+        "a_recorded_composition_replays_as_it_was_delivered",
+        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
+        REPLAYED_ON_HEADLESS,
+    ),
+    (
+        "a_recorded_lifecycle_replays_as_it_was_reported",
+        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
+        REPLAYED_ON_HEADLESS,
+    ),
+    (
+        "recorded_preference_reads_replay_as_they_were_answered",
+        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
+        REPLAYED_ON_HEADLESS,
+    ),
+    (
+        "recorded_display_reads_replay_as_they_were_answered",
+        Unexercised::NotApplicable(REPLAYED_ON_HEADLESS),
+        REPLAYED_ON_HEADLESS,
     ),
 ];
 
@@ -647,6 +673,10 @@ impl BackendUnderTest for X11Window {
 
     fn focus_text_store(&mut self, _store: Rc<dyn TextStore>) -> TextInputPath {
         TextInputPath::None(NO_INPUT_METHOD)
+    }
+
+    fn replay_recording(&mut self, _session: &[Recorded]) -> RecordingReplay {
+        RecordingReplay::None(REPLAYED_ON_HEADLESS)
     }
 }
 
