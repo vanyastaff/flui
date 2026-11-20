@@ -1414,6 +1414,11 @@ fn starting_the_app_hands_it_its_endpoint_and_token_and_forwards_a_port() {
     let port = address.port();
     assert_ne!(port, 0);
     assert!(started.token.len() >= 32);
+    let shown = format!("{started:?}");
+    assert!(
+        !shown.contains(&started.token) && shown.contains(&port.to_string()),
+        "the token stays out of the debug form: {shown}"
+    );
     let log = adb.log();
     let at = |prefix: &str| {
         log.iter()

@@ -277,6 +277,7 @@ fn serve(
         name,
         width,
         height,
+        insets,
         reply_timeout,
         attach,
     } = launch;
@@ -285,7 +286,9 @@ fn serve(
     let mut agent = service.dev_agent();
     // A native window offers text input, so a focused field takes a composition's commit here as
     // it does there.
-    let window = HeadlessWindow::new(width, height).with_text_input();
+    let window = HeadlessWindow::new(width, height)
+        .with_text_input()
+        .with_insets(insets);
     let mut host = HeadlessHost::new(window).with_dev_agent(&mut agent);
     attach(&host)?;
     for _ in 0..STARTUP_FRAMES {
