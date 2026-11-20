@@ -966,28 +966,15 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     // Pipeline Integration
     // ========================================================================
     //
-    // Historical note: the trait
-    // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
-    // It was a leaky abstraction -- framework bookkeeping that only existed
-    // on the trait because a flat object model has nowhere else to put it. The bit now lives
+    // The trait has no `set_was_repaint_boundary` and no `insert_into_pipeline`.
+    // Whether a node was a repaint boundary is framework bookkeeping: it lives
     // on `RenderState<P>::flags` as `WAS_REPAINT_BOUNDARY` (see
-    // `crates/flui-rendering/src/storage/flags.rs`) and is flipped by the
-    // paint phase via an atomic store, without acquiring a lock on the
-    // trait object. Removing the method also removes the only paint-phase
-    // `&mut` access to the trait surface.
-
-    // The `insert_into_pipeline` convenience method has been removed.
-    // It was a default trait method gated by `Self: Sized` (so unusable
-    // through `dyn RenderObject<P>`) that wrapped a single line:
-    // `owner.insert(self)`. A workspace grep showed zero production
-    // callsites -- the trait was paying compile-time and API-stability
-    // cost for a convenience that earned nothing.
-    //
-    // Direct equivalent: `owner.insert(Box::new(render_object))`,
-    // see [`crate::pipeline::PipelineOwner::insert`]. The real
-    // load-bearing piece is the `From<Box<dyn RenderObject<P>>> for
-    // RenderNode` impl in `storage/node.rs`, which the `insert`
-    // method exercises via `.into()`.
+    // `crates/flui-rendering/src/storage/flags.rs`) and the paint phase writes
+    // it without borrowing the trait object. A render object is inserted with
+    // `owner.insert(Box::new(render_object))`, see
+    // [`crate::pipeline::PipelineOwner::insert`]; it reaches the tree through
+    // the `From<Box<dyn RenderObject<P>>> for RenderNode` impl in
+    // `storage/node.rs`.
 }
 
 impl_downcast!(RenderObject<P> where P: Protocol);

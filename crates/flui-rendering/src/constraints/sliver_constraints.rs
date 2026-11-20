@@ -25,9 +25,14 @@ use crate::view::ScrollDirection;
 /// Implements `Hash` and `Eq` for use as cache keys. Use `round_for_cache()` before
 /// caching to ensure consistent floating-point comparisons:
 ///
-/// ```ignore
-/// let key = constraints.round_for_cache();
-/// cache.insert(key, geometry);
+/// ```
+/// use std::collections::HashMap;
+/// use flui_rendering::constraints::{SliverConstraints, SliverGeometry};
+///
+/// let mut cache = HashMap::new();
+/// let key = SliverConstraints::default().round_for_cache();
+/// cache.insert(key, SliverGeometry::ZERO);
+/// assert!(cache.contains_key(&key));
 /// ```
 ///
 /// # Cache Rounding

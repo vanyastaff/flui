@@ -1,10 +1,8 @@
 //! PipelineOwner manages the rendering pipeline.
 //!
-//! As finalized on 2026-05-20, the four pipeline phases own their work
-//! as `run_*` methods on the phase-specific impls. The
-//! legacy `flush_*` aliases on `PipelineOwner<Idle>` are gone. Calling
-//! `run_paint` on `<Idle>` is a compile error -- see the `compile_fail`
-//! doctest at the end of `pipeline/phase.rs`.
+//! The four pipeline phases own their work as `run_*` methods on the
+//! phase-specific impls. Calling `run_paint` on `<Idle>` is a compile error --
+//! see the `compile_fail` doctest at the end of `pipeline/phase.rs`.
 
 mod subtree_arena;
 

@@ -10,15 +10,14 @@
 //! The render object is owned by plain value (`Box<dyn RenderObject<P>>`),
 //! not wrapped in a lock. Mutable access goes through `&mut self`, which the
 //! pipeline obtains via `&mut RenderTree` at phase boundaries (Build / Layout
-//! / Paint). The previous shape `RwLock<Box<dyn RenderObject<P>>>` is
-//! deliberately gone. Single-writer-per-frame discipline is enforced by Rust's
+//! / Paint). There is no `RwLock<Box<dyn RenderObject<P>>>`:
+//! single-writer-per-frame discipline is enforced by Rust's
 //! borrow checker on `&mut RenderTree`, which is the single-threaded
 //! pipeline invariant.
 //!
-//! Pipeline bookkeeping bits that previously required a write lock on the
-//! trait object (specifically `set_was_repaint_boundary`) now live on
-//! `RenderState<P>::flags` (`crates/flui-rendering/src/storage/flags.rs`) and
-//! are flipped through atomic stores without touching the trait surface.
+//! Pipeline bookkeeping bits (for example `WAS_REPAINT_BOUNDARY`) live on
+//! `RenderState<P>::flags` (`crates/flui-rendering/src/storage/flags.rs`), a
+//! `Cell`, and are flipped without touching the trait surface.
 
 use std::fmt::Debug;
 
@@ -131,18 +130,8 @@ impl AttachmentState {
 /// the phase. Re-entrant access from a parent to a child during layout goes
 /// through the pipeline's `SubtreeArena`. State bits that
 /// only need to be flipped (e.g. `WAS_REPAINT_BOUNDARY` written by the paint
-/// phase) live on `RenderState<P>::flags` and are mutated through atomic
-/// stores -- no lock acquisition required.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::storage::{RenderEntry, NodeLinks};
-/// use flui_rendering::protocol::BoxProtocol;
-///
-/// let entry = RenderEntry::<BoxProtocol>::new(Box::new(MyRenderBox::new()));
-/// assert!(entry.state().needs_layout());
-/// ```
+/// phase) live on `RenderState<P>::flags`, a `Cell`, so flipping one takes
+/// no lock.
 pub struct RenderEntry<P: Protocol> {
     /// The render object. Owned by value; mutation via `&mut self`.
     render_object: Option<Box<dyn RenderObject<P>>>,

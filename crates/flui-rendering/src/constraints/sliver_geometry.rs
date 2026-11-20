@@ -24,8 +24,13 @@ const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_ERRO
 ///
 /// Implements `Hash` and `Eq` for caching layout results:
 ///
-/// ```ignore
-/// cache.insert(sliver_id, geometry);
+/// ```
+/// use std::collections::HashMap;
+/// use flui_rendering::constraints::SliverGeometry;
+///
+/// let mut cache = HashMap::new();
+/// cache.insert(SliverGeometry::new(100.0, 50.0, 0.0), "measured");
+/// assert_eq!(cache.get(&SliverGeometry::new(100.0, 50.0, 0.0)), Some(&"measured"));
 /// ```
 #[derive(Clone, Copy, PartialEq)]
 pub struct SliverGeometry {
