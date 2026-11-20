@@ -77,7 +77,8 @@ pub fn desktop_takes_input() -> bool {
 ///
 /// # Panics
 ///
-/// The first part's panic, resumed once every part was tried.
+/// The first part's panic, resumed once every part was tried and what the others leave held is
+/// logged at error level; discarded instead when the thread is already unwinding.
 pub fn release_held(
     keys: &mut held::HeldKeys,
     buttons: &mut held::HeldButtons,
@@ -90,8 +91,7 @@ pub fn release_held(
     let keys = panicked.contain(|| keys.release_all(send_stroke));
     let buttons = panicked.contain(|| buttons.release_all(release_button));
     let lifted = panicked.contain(|| contacts.release_all(inject));
-    panicked.resume();
-    crate::lane::release_outcome([keys, buttons, lifted].into_iter().flatten())
+    crate::lane::release_settled(panicked, [keys, buttons, lifted])
 }
 
 #[cfg(windows)]

@@ -827,8 +827,8 @@ fn names(list: &[&str]) -> Vec<String> {
 }
 
 /// The lane's release of everything tries every part whatever the one before came to, and names
-/// what each still holds with every part's failure, first first: a refused key does not hide the
-/// buttons and contacts left down, nor why they stayed.
+/// what each still holds with each failed part's first failure, in order: a refused key does not
+/// hide the buttons and contacts left down, nor why they stayed.
 #[test]
 fn the_release_of_everything_names_what_every_part_still_holds() {
     let mut keys = HeldKeys::new();
@@ -975,48 +975,106 @@ fn the_release_of_everything_names_what_every_part_still_holds() {
     assert!(release_outcome([Ok(()), Ok(()), Ok(())]).is_ok());
 }
 
-/// A part whose release panics does not keep the parts after it held: they are released, and
-/// the panic is resumed once every part was tried.
+/// The parts that panic, the part the OS refuses, the panic resumed, what the log names.
+type ReleaseRow<'a> = (&'a [&'a str], Option<&'a str>, &'a str, Option<&'a str>);
+
+/// A part whose release panics keeps no other part held: every part is tried, the first panic is
+/// resumed, and what a part that was refused leaves held is logged at error level first, since
+/// the panic is all the caller gets.
 #[test]
 fn a_panicking_part_of_the_release_still_lets_the_others_go() {
-    let mut keys = HeldKeys::new();
-    keys.apply(Keystroke::Press(keys::TAB));
-    let mut buttons = HeldButtons::default();
-    buttons.apply(0, true);
-    let mut contacts = Contacts::new();
-    let mut os = Injected::default();
-    contacts
-        .move_to("a", PointerKind::Touch, point(10, 10), |f| os.take(f))
-        .expect("a placement");
-    contacts
-        .down("a", PointerKind::Touch, |f| os.take(f))
-        .expect("a press");
-    let mut lifted = Injected::default();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the test catches the resumed panic to assert on what was released before it"
-    )]
-    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        windows::release_held(
-            &mut keys,
-            &mut buttons,
-            &mut contacts,
-            |_| -> flui_driver::Result<()> { panic!("the keys' release panics") },
-            |_| Ok(()),
-            |f| lifted.take(f),
-        )
-    }));
-    let payload = resumed.expect_err("the keys' panic is resumed");
-    assert_eq!(
-        payload.downcast_ref::<&str>().copied(),
-        Some("the keys' release panics")
-    );
-    assert_eq!(buttons.bits(), 0, "the button was released after the panic");
-    assert_eq!(
-        lifted.last_contacts(),
-        [(0, Phase::Up, true)],
-        "the touch contact was lifted after the panic"
-    );
+    let rows: [ReleaseRow<'_>; 4] = [
+        (&["keys"], None, "the keys panic", None),
+        (&["buttons"], None, "the buttons panic", None),
+        (
+            &["contacts"],
+            Some("buttons"),
+            "the contacts panic",
+            Some("the left mouse button"),
+        ),
+        (
+            &["keys", "buttons"],
+            Some("contacts"),
+            "the keys panic",
+            Some("the touch contact a"),
+        ),
+    ];
+    for (panicking, refusing, resumed_text, logged) in rows {
+        let act = |part: &str| -> flui_driver::Result<()> {
+            assert!(!panicking.contains(&part), "the {part} panic");
+            if refusing == Some(part) {
+                return refused(part);
+            }
+            Ok(())
+        };
+        let mut keys = HeldKeys::new();
+        keys.apply(Keystroke::Press(keys::TAB));
+        let mut buttons = HeldButtons::default();
+        buttons.apply(0, true);
+        let mut contacts = Contacts::new();
+        let mut os = Injected::default();
+        contacts
+            .move_to("a", PointerKind::Touch, point(10, 10), |f| os.take(f))
+            .expect("a placement");
+        contacts
+            .down("a", PointerKind::Touch, |f| os.take(f))
+            .expect("a press");
+        let mut lifted = Injected::default();
+        let (resumed, captured) = flui_testing::log_capture::capture(|| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the test catches the resumed panic to assert on what ran before it"
+            )]
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                windows::release_held(
+                    &mut keys,
+                    &mut buttons,
+                    &mut contacts,
+                    |_| act("keys"),
+                    |_| act("buttons"),
+                    |f| {
+                        act("contacts")?;
+                        lifted.take(f)
+                    },
+                )
+            }))
+        });
+        let payload = resumed.expect_err("the first panic is resumed");
+        assert_eq!(
+            payload.downcast_ref::<String>().map(String::as_str),
+            Some(resumed_text),
+            "{panicking:?}"
+        );
+        let tried = |part: &str| !panicking.contains(&part) && refusing != Some(part);
+        if tried("keys") {
+            assert_eq!(
+                keys.held(),
+                [] as [u16; 0],
+                "{panicking:?}: the key was released"
+            );
+        }
+        if tried("buttons") {
+            assert_eq!(buttons.bits(), 0, "{panicking:?}: the button was released");
+        }
+        if tried("contacts") {
+            assert_eq!(
+                lifted.last_contacts(),
+                [(0, Phase::Up, true)],
+                "{panicking:?}: the touch contact was lifted"
+            );
+        }
+        let errors = captured
+            .at_level(tracing::Level::ERROR)
+            .filter(|record| record.contains("input stays held after a release that panicked"))
+            .collect::<Vec<_>>();
+        match logged {
+            None => assert!(errors.is_empty(), "{panicking:?}: {captured}"),
+            Some(name) => assert!(
+                errors.len() == 1 && errors[0].contains(name),
+                "{panicking:?}: {name} is logged: {captured}"
+            ),
+        }
+    }
 }
 
 /// A pause is waited out whole, in slices short enough to look at the guard between them.

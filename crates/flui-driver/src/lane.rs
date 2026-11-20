@@ -227,10 +227,12 @@ pub trait Lane: Send {
 ///
 /// # Errors
 ///
-/// [`Error::ReleaseFailed`] naming what every part that answered one still holds, its message
-/// each failed part's first failure in order, joined by `; `; the first failure when no part
-/// holds anything (a part answers [`Error::ReleaseFailed`] whenever it still holds something, so
-/// only a failure that left nothing held, such as the Windows keys' mask, arrives bare).
+/// [`Error::ReleaseFailed`] naming what every part that answered one still holds; its message is
+/// each failed part's first failure in the order the parts ran, joined by `; `: a part's
+/// [`Error::ReleaseFailed`] gives its own message, any other error its whole text. When no part
+/// holds anything, the first failure itself (a part answers [`Error::ReleaseFailed`] whenever it
+/// still holds something, so only a failure that left nothing held, such as the Windows keys'
+/// mask, arrives bare).
 pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()> {
     let mut failures: Vec<Error> = Vec::new();
     let mut stuck: Option<(String, Vec<String>)> = None;
@@ -259,6 +261,31 @@ pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()
         held,
         message,
     })
+}
+
+/// The end of a lane's release whose parts each ran contained in `panicked`: what
+/// [`release_outcome`] makes of the parts that returned. When a part panicked, the panic is all
+/// the caller gets, so what the others leave held is logged at error level first, never dropped.
+///
+/// # Panics
+///
+/// The first part's panic, resumed; discarded instead when the thread is already unwinding, as
+/// [`FirstPanic::resume`] does.
+pub(crate) fn release_settled<const N: usize>(
+    mut panicked: FirstPanic,
+    parts: [Option<Result<()>>; N],
+) -> Result<()> {
+    let outcome = release_outcome(parts.into_iter().flatten());
+    if panicked.is_held()
+        && let Err(error) = &outcome
+    {
+        // A subscriber is user code: its panic stays behind the part's.
+        panicked.contain(|| {
+            tracing::error!("input stays held after a release that panicked: {error}");
+        });
+    }
+    panicked.resume();
+    outcome
 }
 
 /// The OS's capture of a window's surface: tightly packed RGBA rows, top row first.
