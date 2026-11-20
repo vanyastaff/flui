@@ -234,20 +234,9 @@ impl RenderSliverPadding {
         let paint_extent = Self::paint_offset(parent, 0.0, main).min(parent.remaining_paint_extent);
         let cache_extent = Self::cache_offset(parent, 0.0, main);
 
-        SliverGeometry {
-            scroll_extent: main,
-            paint_extent,
-            paint_origin: 0.0,
-            layout_extent: paint_extent,
-            max_paint_extent: main,
-            max_scroll_obstruction_extent: 0.0,
-            cross_axis_extent: None,
-            hit_test_extent: paint_extent,
-            visible: paint_extent > 0.0,
-            has_visual_overflow: false,
-            scroll_offset_correction: None,
-            cache_extent,
-        }
+        SliverGeometry::new(main, paint_extent, 0.0)
+            .with_max_paint_extent(main)
+            .with_cache_extent(cache_extent)
     }
 
     /// Composes the parent's final geometry given the child sliver's
@@ -289,20 +278,16 @@ impl RenderSliverPadding {
         let hit_test_extent = (main_pad_paint + child_geometry.paint_extent)
             .max(before_pad_paint + child_geometry.hit_test_extent);
 
-        let geometry = SliverGeometry {
-            paint_origin: child_geometry.paint_origin,
-            scroll_extent: main + child_geometry.scroll_extent,
+        let geometry = SliverGeometry::with_extents(
+            main + child_geometry.scroll_extent,
             paint_extent,
             layout_extent,
-            max_paint_extent: main + child_geometry.max_paint_extent,
             cache_extent,
-            hit_test_extent,
-            has_visual_overflow: child_geometry.has_visual_overflow,
-            visible: paint_extent > 0.0,
-            max_scroll_obstruction_extent: 0.0,
-            cross_axis_extent: None,
-            scroll_offset_correction: None,
-        };
+        )
+        .with_paint_origin(child_geometry.paint_origin)
+        .with_max_paint_extent(main + child_geometry.max_paint_extent)
+        .with_hit_test_extent(hit_test_extent)
+        .with_visual_overflow(child_geometry.has_visual_overflow);
 
         let effective_axis_direction = parent
             .growth_direction

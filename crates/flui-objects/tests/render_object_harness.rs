@@ -10636,16 +10636,11 @@ impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
         );
         let constraints = *ctx.constraints();
         let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
-        Ok(flui_rendering::constraints::SliverGeometry {
-            scroll_extent: self.extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: self.extent,
-            cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
-            hit_test_extent: paint_extent,
-            visible: paint_extent > 0.0,
-            ..flui_rendering::constraints::SliverGeometry::ZERO
-        })
+        Ok(
+            flui_rendering::constraints::SliverGeometry::new(self.extent, paint_extent, 0.0)
+                .with_max_paint_extent(self.extent)
+                .with_cache_extent(self.calculate_cache_offset(&constraints, 0.0, self.extent)),
+        )
     }
 }
 

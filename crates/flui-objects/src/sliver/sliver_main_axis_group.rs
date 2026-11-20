@@ -222,23 +222,13 @@ impl RenderSliver for RenderSliverMainAxisGroup {
             ctx.position_child(index, offset);
         }
 
-        // `..ZERO` struct-update drops the constructor's derived defaults
-        // (`layout_extent`, `visible`, `hit_test_extent`) — all restated
-        // explicitly here, the exact omission class that produced three real header bugs in
-        // this workspace (and, unstated, made this group unhittable in its
-        // first cut).
-        Ok(SliverGeometry {
-            scroll_extent: scroll_offset,
-            paint_extent,
-            max_paint_extent,
-            cache_extent,
-            layout_extent: paint_extent,
-            hit_test_extent: paint_extent,
-            has_visual_overflow: scroll_offset > constraints.remaining_paint_extent
-                || constraints.scroll_offset > 0.0,
-            visible: paint_extent > 0.0,
-            ..SliverGeometry::ZERO
-        })
+        Ok(SliverGeometry::new(scroll_offset, paint_extent, 0.0)
+            .with_max_paint_extent(max_paint_extent)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow(
+                scroll_offset > constraints.remaining_paint_extent
+                    || constraints.scroll_offset > 0.0,
+            ))
     }
 
     /// Paint LAST child first so earlier children draw on top — a pinned
