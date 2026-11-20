@@ -16,8 +16,8 @@
 Every environment FLUI runs on has versions, and nothing in the repository says which ones FLUI
 supports. Where a minimum exists it was set in passing, and the values disagree:
 
-- Android: `flui-cli` packages with `minSdk` 23 (`android_package.rs`), `xtask doctor` accepts a
-  compiler for API 21, and the backend renders only through wgpu's Vulkan backend, which Android
+- Android: `flui-cli` packages with `minSdk` 23 (`android_package.rs`), the Android compiler can
+  target API 21, and the backend renders only through wgpu's Vulkan backend, which Android
   provides from API 24. An application installs on an API 23 device and has nothing to draw with.
 - iOS: the bundle's `MinimumOSVersion` is copied from the Mach-O `minos`, which is whatever deployment
   target the build environment set (rustc's default is 10.0), while the backend needs `UIScene`
@@ -86,7 +86,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    repository-root file, so `cargo xtask platform-floor --write` generates a committed Rust source in
    each (the floor constant of each version type; the packaging values: Android `minSdk`, the iOS and
    macOS deployment targets passed to rustc, the Windows manifest's `supportedOS`), and the check mode
-   fails when a generated file differs from the root. `xtask doctor` reads the root file for
+   fails when a generated file differs from the root. CI reads the root file for
    toolchain checks; the Linux release build targets the floor glibc rather than the runner's.
 
 3. **Below the floor, FLUI refuses to start, loudly.** Where the system honours the packaged
@@ -225,7 +225,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
 - The linear, radial and sweep gradient shaders stop reading their stops from a storage buffer, which
   GLES 3.0, WebGL2 and many GLES 3.1 drivers do not offer in a fragment shader.
 - The Android `minSdk` stays 23 and becomes a decision instead of a template literal; an API 23 device
-  without Vulkan renders through GLES instead of failing. `doctor`'s API 21 check follows the file.
+  without Vulkan renders through GLES instead of failing.
   Today the value is stated twice (`MIN_SDK` in `android_package.rs` for the Gradle-less packager,
   `minSdk = 23` in the Gradle template); both become readers of the one value.
 - The macOS bundle the CLI writes gains `LSMinimumSystemVersion`, which it does not carry today, and
@@ -257,7 +257,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
   floor is paid once per feature.
 - **No floor, feature detection only.** Nothing tells a user which systems are supported, and an old
   system fails somewhere in the middle of a frame instead of at start.
-- **Floors as Rust constants in `flui-native`.** `flui-cli`'s templates, `doctor` and the release
+- **Floors as Rust constants in `flui-native`.** `flui-cli`'s templates, and the release
   workflow need the same numbers outside the crate graph; a constant per consumer drifts, as `minSdk`
   23 and API 21 already have.
 - **objc2's `available!` on Apple and `if api >= N` on Android.** A boolean is easy to forget, cannot

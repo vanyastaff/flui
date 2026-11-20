@@ -9,5 +9,5 @@
 
 - CI: the `standalone` and `bench-compile` jobs, `cargo xtask bench-compile` (the `test` job's
   all-targets build links the benches), the `signals` run of `test-features` (the features are
-  empty), the Linux leg of `xtask-native.yml` (`checks` and `clippy` cover it) and the weekly
+  empty), the Linux leg of the native-host workflow (`checks` and `clippy` cover it) and the weekly
   `bench` job.

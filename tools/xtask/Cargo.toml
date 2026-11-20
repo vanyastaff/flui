@@ -5,10 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Repository automation for FLUI: CI gates, change scoping and benchmark collection (`cargo xtask`)"
-# `cargo xtask` runs the task runner; `test-desktop` is the program nextest
-# starts each Windows test through (src/bin/test-desktop.rs).
-default-run = "xtask"
+description = "Repository automation for FLUI: generators and the changelog check (`cargo xtask`)"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -28,25 +25,9 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
 
-# `test-desktop`: the desktop a Windows test runs on, and the process started there.
-[target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_Security",
-    "Win32_System_Console",
-    "Win32_System_StationsAndDesktops",
-    "Win32_System_Threading",
-] }
-
 [dev-dependencies]
 # Authoritative source for the generated owned key vocabulary.
 keyboard-types.workspace = true
-
-# tests/test_desktop.rs shows a window from a process `test-desktop` started
-# and lists the windows of each desktop.
-[target.'cfg(windows)'.dev-dependencies]
-windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
 
 [lints]
 workspace = true

@@ -41,7 +41,7 @@ __pycache__/
 /TASKS.md
 # The text of a pull request an agent drafted before it opened it.
 /pr_body.md
-# Task worktrees, created and pruned by `cargo xtask worktree`.
+# Task worktrees, made with `git worktree add`.
 /.worktrees/
 # Claude Code, the runtime CLAUDE.md is written for, keeps per-user settings
 # and whole worktree checkouts under .claude/. Two things there are shared: the

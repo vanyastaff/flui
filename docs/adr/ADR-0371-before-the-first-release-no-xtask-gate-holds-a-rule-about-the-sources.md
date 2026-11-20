@@ -12,7 +12,8 @@
   ADR-0304, ADR-0305, ADR-0306, ADR-0307, ADR-0311, ADR-0323, ADR-0325, ADR-0327, ADR-0340,
   ADR-0341, ADR-0369.
 - **Superseded-by:** [ADR-0383](ADR-0383-ci-runs-the-standard-tools-directly-and-xtask-does-not-wrap-them.md)
-  for §3 only for the formatters, linters and link check: they are steps of the `checks` job.
+  for §3 only for the formatters, linters and link check, and for `unmounted-tests`, `adr-numbers`
+  and the toolchain pin: they are steps of the `checks` job (ADR-0383 §9).
 - **Related:** [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md)
   (the pull-request gate this shortens); [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)
   (the tiers, which stay written in each manifest).
