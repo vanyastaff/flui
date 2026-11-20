@@ -8,7 +8,7 @@
 //!   value from outside the lane is checked before it becomes one ([`super::device`]).
 //! - **Screenshots** ([`Xcrun::screenshot`]): `simctl io <udid> screenshot` writes a PNG file,
 //!   which is read only once its length is within
-//!   [`MAX_SCREENSHOT_BYTES`](super::screenshot::MAX_SCREENSHOT_BYTES).
+//!   [`MAX_SCREENSHOT_BYTES`].
 //! - **Launch values** go to the app as `SIMCTL_CHILD_` variables in `simctl launch`'s own
 //!   environment ([`XcrunCommand::env`]), never on its command line, and never into a message: a
 //!   command's [`Display`](std::fmt::Display) names their keys alone.
@@ -241,7 +241,7 @@ pub trait Xcrun: Send {
     ) -> Result<XcrunReply>;
 
     /// The PNG bytes of the screen of the simulator `udid`, at most
-    /// [`MAX_SCREENSHOT_BYTES`](super::screenshot::MAX_SCREENSHOT_BYTES).
+    /// [`MAX_SCREENSHOT_BYTES`].
     ///
     /// # Errors
     ///
