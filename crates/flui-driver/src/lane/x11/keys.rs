@@ -111,6 +111,24 @@ pub fn of_char(c: char) -> Option<Keysym> {
     }
 }
 
+/// `keysym` for people, as [`resolve`] names it: its W3C name, the character it types, or its
+/// number.
+#[must_use]
+pub fn name_of(keysym: Keysym) -> String {
+    if let Some((name, _)) = NAMED.iter().find(|(_, known)| *known == keysym) {
+        return (*name).to_owned();
+    }
+    let code = if keysym.0 & 0xFF00_0000 == 0x0100_0000 {
+        keysym.0 & 0x00FF_FFFF
+    } else {
+        keysym.0
+    };
+    match char::from_u32(code).filter(|c| of_char(*c) == Some(keysym)) {
+        Some(c) => c.to_string(),
+        None => format!("keysym {:#x}", keysym.0),
+    }
+}
+
 /// The keysym the protocol's key name `name` names: a W3C name the lane sends, or a single
 /// character; `None` for anything else, an empty name included.
 #[must_use]

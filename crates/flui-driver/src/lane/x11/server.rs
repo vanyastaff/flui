@@ -194,7 +194,8 @@ impl Server {
             .is_some_and(|attributes| attributes.map_state == MapState::VIEWABLE)
     }
 
-    /// The viewable windows of the process `pid` (by `_NET_WM_PID`), each with its width and
+    /// The viewable windows of the process `pid` (by `pid_of`: X-Resource's client process, else
+    /// `_NET_WM_PID`), each with its width and
     /// height in device pixels, searched under the root within [`MAX_DEPTH`] levels and
     /// [`MAX_WINDOWS`] windows.
     pub(super) fn windows_of(&self, pid: u32) -> Result<Vec<(Window, u32, u32)>> {

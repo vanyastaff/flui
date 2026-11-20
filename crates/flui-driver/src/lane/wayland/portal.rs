@@ -61,10 +61,29 @@ pub(super) fn open(bus: Option<&str>) -> Result<PortalSession> {
             .build()
             .await
             .map_err(|error| unavailable(format!("no session bus: {error}")))?;
-        let sender = connection
+        let client = connection
             .unique_name()
             .map(|name| name.trim_start_matches(':').replace('.', "_"))
             .ok_or_else(|| unavailable("the session bus gave no name".to_owned()))?;
+        // The portal's own connection: a `Response` is the portal's only when it comes from it.
+        let portal = zbus::fdo::DBusProxy::new(&connection)
+            .await
+            .map_err(|error| unavailable(format!("no bus daemon: {error}")))?
+            .get_name_owner(
+                zbus::names::BusName::try_from(DESTINATION)
+                    .expect("BUG: the portal's well-known name is a bus name"),
+            )
+            .await
+            .map_err(|error| {
+                unavailable(format!(
+                    "no RemoteDesktop portal on the session bus: {error}"
+                ))
+            })?
+            .to_string();
+        let sender = Requester {
+            client: &client,
+            portal: &portal,
+        };
         let mut tokens = 0_u32;
         let mut token = || {
             tokens += 1;
@@ -74,7 +93,7 @@ pub(super) fn open(bus: Option<&str>) -> Result<PortalSession> {
         let create = token();
         let results = request(
             &connection,
-            &sender,
+            sender,
             &create,
             "creating a session",
             |options| {
@@ -93,7 +112,7 @@ pub(super) fn open(bus: Option<&str>) -> Result<PortalSession> {
         let select = token();
         request(
             &connection,
-            &sender,
+            sender,
             &select,
             "choosing devices",
             |options| {
@@ -104,7 +123,7 @@ pub(super) fn open(bus: Option<&str>) -> Result<PortalSession> {
         .await?;
 
         let start = token();
-        request(&connection, &sender, &start, "start", |_| {
+        request(&connection, sender, &start, "start", |_| {
             ("Start", Some(session.clone()))
         })
         .await?;
@@ -135,22 +154,31 @@ pub(super) fn open(bus: Option<&str>) -> Result<PortalSession> {
     })
 }
 
+/// Who a request's `Response` is between: this connection, by the escaped unique name its
+/// request objects are named after, and the portal's connection, which alone sends the answer.
+#[derive(Clone, Copy)]
+struct Requester<'a> {
+    client: &'a str,
+    portal: &'a str,
+}
+
 /// Make the request `call` names (its method, and the session it is for), with `handle_token`
-/// set to `token` and the options `call` adds, and wait for its `Response`: the results, or why
-/// the step `step` did not go through.
+/// set to `token` and the options `call` adds, and wait for its `Response` from the portal: the
+/// results, or why the step `step` did not go through.
 async fn request(
     connection: &zbus::Connection,
-    sender: &str,
+    sender: Requester<'_>,
     token: &str,
     step: &str,
     call: impl FnOnce(
         &mut HashMap<&'static str, Value<'static>>,
     ) -> (&'static str, Option<OwnedObjectPath>),
 ) -> Result<HashMap<String, OwnedValue>> {
-    let handle = format!("{PATH}/request/{sender}/{token}");
+    let handle = format!("{PATH}/request/{}/{token}", sender.client);
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .interface("org.freedesktop.portal.Request")
+        .sender(sender.portal)
+        .and_then(|rule| rule.interface("org.freedesktop.portal.Request"))
         .and_then(|rule| rule.member("Response"))
         .and_then(|rule| rule.path(handle.as_str()))
         .map_err(|error| unavailable(format!("a portal request: {error}")))?

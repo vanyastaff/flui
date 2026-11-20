@@ -910,7 +910,10 @@ graph LR
     `only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut`,
     `a_key_the_server_took_is_held_even_when_its_echo_never_comes`,
     `a_release_or_emptying_the_server_refused_stays_held`, `a_scroll_turns_the_wheel_in_whole_clicks`,
-    `only_the_xtest_events_the_lane_sent_are_its_own`, `an_image_reads_into_rgba_rows_whatever_its_layout`;
+    `only_the_xtest_events_the_lane_sent_are_its_own`, `an_image_reads_into_rgba_rows_whatever_its_layout`,
+    `a_wheel_click_left_down_is_released_with_the_rest`, `a_scroll_past_the_click_limit_is_refused`,
+    `the_release_of_everything_completes_no_sticky_keys_shortcut`;
+    `wayland_lane::the_desktop_sessions_portal_is_refused_for_a_compositor_of_the_runs_own`;
     `wayland_lane::a_device_point_lands_in_the_compositors_logical_space_or_is_refused`,
     `a_button_is_its_evdev_code_and_a_scroll_its_logical_distance`,
     `the_lane_sends_only_into_a_compositor_of_its_own_and_reads_a_shared_session`,
@@ -934,11 +937,15 @@ graph LR
     plays with `reis`'s server half hears an absolute motion, the primary button by its evdev code,
     a scroll, keys as keysyms and UTF-8 text, then the releases),
     `the_shared_session_takes_no_input_from_the_lane`,
-    `a_compositor_that_does_not_answer_cannot_be_verified`.
+    `a_compositor_that_does_not_answer_cannot_be_verified`,
+    `the_lane_refuses_the_desktop_sessions_portal_for_its_own_compositor`;
+    `socket::what_an_app_started_ends_with_its_session_after_the_app_exited`.
   - Taken out one at a time, each fails a test above: the count of the lane's own XTEST events
     (the table, the guard and the foreign-motion tests), the session's starter thread (the app
     dies with the thread that launched it), an EI frame after each event (the EIS server hears
-    nothing), and X-Resource's process of a window's client (in WSL, whose apps write no
+    nothing), a wheel click held as a button's press is, the mask key before the release of
+    everything, the group killed after the app exited (its child outlives the session), and
+    X-Resource's process of a window's client (in WSL, whose apps write no
     `_NET_WM_PID` outside the first PID namespace, every desktop test finds no window).
   - Owed, needing a real session: the X11 lane on a desktop's own X server under a window manager
     (GNOME, KDE); an Orca session over the scenario app; the Wayland lane through the RemoteDesktop
@@ -974,8 +981,16 @@ graph LR
     tests point at their private bus.
   - A launched app on Linux leads its own process group and dies when its starter thread ends
     (`PR_SET_PDEATHSIG`); that thread is the session's own, so a driver moved to another thread
-    keeps its app. The group is killed only while the app is unreaped, whose id may otherwise be
-    another process's.
+    keeps its app. The session kills the group when it ends, what the app started included after
+    the app exited: the app is read without being reaped (`waitid` with `WNOWAIT`) until then, so
+    its id names its group and no other process's.
+  - The release of everything completes no desktop shortcut (a spare key with nothing on it
+    pressed and released first while a modifier is held, and a release that would still complete
+    StickyKeys not sent), and a release the server refused is `release_failed` naming what stays
+    held, in both Linux lanes. A wheel click is held as a button's press is; a scroll of more than
+    `MAX_WHEEL_CLICKS` clicks is refused. The Wayland lane refuses the portal of the driver's own
+    session bus for a compositor of the run's own, and takes a portal `Response` only from the
+    portal's connection.
   - `live-smoke`'s checks are not ported: its launch and its drag and wheel scrolls are the input
     scenario's press and wheel rows; its occlusion gating and its clean and programmatic closes need
     driver operations (occluding, closing a window) that do not exist yet.

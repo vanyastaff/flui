@@ -177,13 +177,22 @@ impl A11yBus {
                 if owner.ok() != Some(target.pid) {
                     continue;
                 }
-                let Ok(application) = self.proxy(&application).await else {
-                    continue;
-                };
-                for window in application.get_children().await.unwrap_or_default() {
-                    if self.has_size(&window, target.size).await {
-                        windows.push(window);
+                // The app's own answers: one that times out fails the read with a typed timeout,
+                // and an app that went away is left out.
+                let windows_of = async {
+                    let application = self.proxy(&application).await.map_err(|e| classify(&e))?;
+                    let mut found = Vec::new();
+                    for window in application.get_children().await.map_err(|e| classify(&e))? {
+                        if self.has_size(&window, target.size).await? {
+                            found.push(window);
+                        }
                     }
+                    Ok::<Vec<ObjectRefOwned>, ProviderError>(found)
+                };
+                match windows_of.await {
+                    Ok(found) => windows.extend(found),
+                    Err(ProviderError::Gone) => {}
+                    Err(error) => return Err(provider_error(error, "the app's windows")),
                 }
             }
             match windows.len() {
@@ -213,22 +222,39 @@ impl A11yBus {
         }
     }
 
-    /// Whether `window` is `size` device pixels, within the pixel a server rounds to.
-    async fn has_size(&self, window: &ObjectRefOwned, size: (u32, u32)) -> bool {
-        let Ok(proxy) = self.proxy(window).await else {
-            return false;
-        };
-        let Ok(proxies) = atspi::proxy::proxy_ext::ProxyExt::proxies(&proxy).await else {
-            return false;
-        };
-        let Ok(component) = proxies.component().await else {
-            return false;
-        };
-        let Ok((_, _, width, height)) = component.get_extents(CoordType::Screen).await else {
-            return false;
-        };
+    /// Whether `window` is `size` device pixels, within the pixel a server rounds to; false for a
+    /// window that offers no Component interface, which places nothing on the screen.
+    ///
+    /// # Errors
+    ///
+    /// The app's failure to answer, classified: a timeout, a window gone, any other.
+    async fn has_size(
+        &self,
+        window: &ObjectRefOwned,
+        size: (u32, u32),
+    ) -> std::result::Result<bool, ProviderError> {
+        let proxy = self.proxy(window).await.map_err(|e| classify(&e))?;
+        if !proxy
+            .get_interfaces()
+            .await
+            .map_err(|e| classify(&e))?
+            .contains(Interface::Component)
+        {
+            return Ok(false);
+        }
+        let proxies = atspi::proxy::proxy_ext::ProxyExt::proxies(&proxy)
+            .await
+            .map_err(|e| ProviderError::Failed(e.to_string()))?;
+        let component = proxies
+            .component()
+            .await
+            .map_err(|e| ProviderError::Failed(e.to_string()))?;
+        let (_, _, width, height) = component
+            .get_extents(CoordType::Screen)
+            .await
+            .map_err(|e| classify(&e))?;
         let near = |found: i32, wanted: u32| (i64::from(found) - i64::from(wanted)).abs() <= 1;
-        near(width, size.0) && near(height, size.1)
+        Ok(near(width, size.0) && near(height, size.1))
     }
 
     /// The tree of the window `target` names, projected: see the [parent module](super).

@@ -48,6 +48,17 @@ pub enum PositionFidelity {
     OrderOnly,
 }
 
+/// The OS accessibility API a lane reads an app through ([`Lane::read_tree`]), which decides the
+/// vocabulary of the native roles it reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AccessibilityApi {
+    /// UI Automation, on Windows: native roles are control types.
+    UiAutomation,
+    /// AT-SPI, on Linux: native roles are AT-SPI role names.
+    AtSpi,
+}
+
 /// What a lane can do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -60,6 +71,8 @@ pub struct LaneCapabilities {
     pub isolation: Isolation,
     /// What replay compares of its runs.
     pub fidelity: PositionFidelity,
+    /// The accessibility API it reads the app through; `None` for a lane that reads none.
+    pub accessibility: Option<AccessibilityApi>,
 }
 
 impl LaneCapabilities {
@@ -77,7 +90,15 @@ impl LaneCapabilities {
             keys,
             isolation,
             fidelity,
+            accessibility: None,
         }
+    }
+
+    /// The lane reads the app through `api`.
+    #[must_use]
+    pub fn accessibility(mut self, api: AccessibilityApi) -> Self {
+        self.accessibility = Some(api);
+        self
     }
 }
 

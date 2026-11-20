@@ -83,6 +83,16 @@ fn the_lane_sends_only_into_a_compositor_of_its_own_and_reads_a_shared_session()
     );
 }
 
+/// The driver's own session bus is the person's desktop session: its portal is refused for a
+/// compositor of the run's own, and taken for reading the shared session or a bus the run names.
+#[test]
+fn the_desktop_sessions_portal_is_refused_for_a_compositor_of_the_runs_own() {
+    let refused = mapping::admit_portal(true, Isolation::Seat).expect_err("refused");
+    assert_eq!(refused.code(), Some(ErrorCode::InvalidArgument));
+    assert!(mapping::admit_portal(false, Isolation::Seat).is_ok());
+    assert!(mapping::admit_portal(true, Isolation::Shared).is_ok());
+}
+
 #[test]
 fn a_portal_that_refuses_or_ends_cannot_be_verified() {
     assert!(mapping::portal_response(0, "start").is_ok());
@@ -133,7 +143,24 @@ mod eis {
     /// event it sends is posted, until it leaves or `within` runs out.
     fn serve(listener: &UnixListener, heard: &mpsc::Sender<Heard>, within: Duration) {
         let deadline = Instant::now() + within;
-        let (stream, _) = listener.accept().expect("the lane connects");
+        // Accepted within the deadline, so a lane that never connects fails the test, never hangs
+        // it.
+        listener
+            .set_nonblocking(true)
+            .expect("a non-blocking listener");
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "the lane connected in time");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("accepting the lane: {error}"),
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .expect("the accepted stream blocks");
         let context = eis::Context::new(stream).expect("an EIS context");
         let mut handshaker = EisHandshaker::new(&context, 1);
         // Whether the client is still there, after reading what it sent within 20 ms.
@@ -324,6 +351,25 @@ mod eis {
             listener.accept().is_err(),
             "the lane never connected to the compositor"
         );
+    }
+
+    /// The lane refuses the portal of the driver's own session bus for a compositor of the run's
+    /// own, before it asks anything.
+    #[test]
+    fn the_lane_refuses_the_desktop_sessions_portal_for_its_own_compositor() {
+        let refused =
+            WaylandLane::try_new(std::process::id(), EisSource::Portal(None), Isolation::Seat)
+                .expect_err("the desktop session's portal");
+        assert!(
+            matches!(refused, Error::InvalidArgument { .. }),
+            "{refused:?}"
+        );
+        WaylandLane::try_new(
+            std::process::id(),
+            EisSource::Portal(Some("unix:path=/nowhere".to_owned())),
+            Isolation::Seat,
+        )
+        .expect("a bus the run names");
     }
 
     /// A compositor that does not answer is a lane the host cannot run, never a run that passed.

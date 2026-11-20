@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 use crate::lane::x11::keys::{self, Keysym, Modifier, NO_SYMBOL, SHIFT_L};
-use crate::lane::x11::safety::{Keycode, Refusal, ShellShortcuts};
+use crate::lane::x11::safety::{Keycode, LANE, Refusal, ShellShortcuts};
 
 /// How long the lane waits after it maps or empties a key before the next stroke.
 pub const MAP_SETTLE: Duration = Duration::from_millis(50);
@@ -414,18 +414,47 @@ impl HeldInput {
         Ok(())
     }
 
+    /// The key the release of everything presses and releases first while a modifier is held: a
+    /// spare key the lane neither holds nor has mapped, which types nothing and, as any other key
+    /// does, ends a run of lone Shift taps; `None` when the keymap has no such key.
+    #[must_use]
+    pub fn mask(&self, keymap: &Keymap) -> Option<Keycode> {
+        keymap.spare().into_iter().find(|code| {
+            !self.holds(*code) && !self.mapped.iter().any(|(mapped, _)| mapped == code)
+        })
+    }
+
     /// Release every key held, the newest first, then empty every mapped key, each through
-    /// `send`; a release or mapping the server refused stays held, to be sent again.
+    /// `send`, completing no shortcut of the desktop's: while a modifier is held, [`Self::mask`]
+    /// is pressed and released first. A release that would still complete one (no mask key was
+    /// free, or it was refused) is not sent, and that key stays held; so does a key whose release
+    /// or emptying the server refused, to be sent again.
     ///
     /// # Errors
     ///
-    /// The first refusal.
+    /// After every key was tried: [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming
+    /// what stays held and mapped and the first stroke that failed or was refused, or that
+    /// stroke's error when nothing stayed.
     pub fn release_all(
         &mut self,
         keymap: &Keymap,
         mut send: impl FnMut(Keystroke) -> crate::Result<()>,
     ) -> crate::Result<()> {
-        let mut first = Ok(());
+        let mut first: Option<crate::Error> = None;
+        let modifier_held = self
+            .keys
+            .iter()
+            .any(|(_, keysym)| Modifier::of(*keysym).is_some());
+        if modifier_held && let Some(mask) = self.mask(keymap) {
+            let masked = self
+                .send_unless_shortcut(Keystroke::Press(mask), keymap, &mut send)
+                .and_then(|()| {
+                    self.send_unless_shortcut(Keystroke::Release(mask), keymap, &mut send)
+                });
+            if let Err(error) = masked {
+                first.get_or_insert(error);
+            }
+        }
         // Taken apart from what they release, which each release changes.
         let strokes: Vec<Keystroke> = self
             .keys
@@ -435,18 +464,42 @@ impl HeldInput {
             .chain(self.mapped.iter().map(|(code, _)| Keystroke::Unmap(*code)))
             .collect();
         for stroke in strokes {
-            match send(stroke) {
-                Ok(()) => {
-                    self.record(stroke, keymap);
-                }
-                Err(error) => {
-                    if first.is_ok() {
-                        first = Err(error);
-                    }
-                }
+            if let Err(error) = self.send_unless_shortcut(stroke, keymap, &mut send) {
+                first.get_or_insert(error);
             }
         }
-        first
+        match first {
+            None => Ok(()),
+            Some(first) if self.keys.is_empty() && self.mapped.is_empty() => Err(first),
+            Some(first) => Err(crate::Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held: self
+                    .keys
+                    .iter()
+                    .map(|(_, keysym)| keys::name_of(*keysym))
+                    .chain(self.mapped.iter().map(|(code, keysym)| {
+                        format!("keycode {} mapped to {}", code.0, keys::name_of(*keysym))
+                    }))
+                    .collect::<Vec<String>>(),
+                message: first.to_string(),
+            }),
+        }
+    }
+
+    /// Send `stroke` through `send` unless it completes a shortcut of the desktop's from this
+    /// state, and record it once the server took it.
+    fn send_unless_shortcut(
+        &mut self,
+        stroke: Keystroke,
+        keymap: &Keymap,
+        send: &mut impl FnMut(Keystroke) -> crate::Result<()>,
+    ) -> crate::Result<()> {
+        if let Some(handler) = self.clone().record(stroke, keymap) {
+            return Err(Refusal::ShellHotkey { handler }.into_error());
+        }
+        send(stroke)?;
+        self.record(stroke, keymap);
+        Ok(())
     }
 }
 
@@ -489,16 +542,44 @@ impl HeldButtons {
         echo()
     }
 
+    /// Turn the wheel for a scroll of `delta_x` and `delta_y` device pixels ([`wheel_clicks`]),
+    /// each click a press and a release of its button delivered as [`Self::deliver`] does, so a
+    /// click whose release never went out, or whose echo never came, stays held to be released.
+    ///
+    /// # Errors
+    ///
+    /// What the first failing `send` or `echo` failed with; the clicks after it are not sent.
+    pub fn scroll(
+        &mut self,
+        delta_x: i32,
+        delta_y: i32,
+        mut send: impl FnMut(u8, bool) -> crate::Result<()>,
+        mut echo: impl FnMut() -> crate::Result<()>,
+    ) -> crate::Result<()> {
+        for (delta, vertical) in [(delta_y, true), (delta_x, false)] {
+            let Some((button, clicks)) = wheel_clicks(delta, vertical) else {
+                continue;
+            };
+            for _ in 0..clicks {
+                for pressed in [true, false] {
+                    self.deliver(button, pressed, || send(button, pressed), &mut echo)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Release every button held through `send`; one the server refused stays held.
     ///
     /// # Errors
     ///
-    /// The first refusal.
+    /// After every button was tried: [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming
+    /// the buttons still held and the first release that failed.
     pub fn release_all(
         &mut self,
         mut send: impl FnMut(u8) -> crate::Result<()>,
     ) -> crate::Result<()> {
-        let mut first = Ok(());
+        let mut first: Option<crate::Error> = None;
         for button in 1..=16_u8 {
             if self.0 & Self::bit(button) == 0 {
                 continue;
@@ -506,19 +587,53 @@ impl HeldButtons {
             match send(button) {
                 Ok(()) => self.0 &= !Self::bit(button),
                 Err(error) => {
-                    if first.is_ok() {
-                        first = Err(error);
-                    }
+                    first.get_or_insert(error);
                 }
             }
         }
-        first
+        match first {
+            None => Ok(()),
+            Some(first) => Err(crate::Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held: (1..=16_u8)
+                    .filter(|button| self.0 & Self::bit(*button) != 0)
+                    .map(|button| format!("mouse button {button}"))
+                    .collect::<Vec<String>>(),
+                message: first.to_string(),
+            }),
+        }
     }
 }
 
 /// How far one click of an X wheel button scrolls, in device pixels: the clicks a scroll of `n`
 /// device pixels turns are `n` over this, at least one.
 pub const WHEEL_STEP: i32 = 40;
+
+/// The most clicks one scroll turns on one axis, [`WHEEL_STEP`] device pixels each: a longer
+/// scroll is refused before any event (`Lane::check`), never sent as millions of clicks.
+pub const MAX_WHEEL_CLICKS: u32 = 1024;
+
+/// Whether a scroll of `delta_x` and `delta_y` device pixels turns at most
+/// [`MAX_WHEEL_CLICKS`] on each axis.
+///
+/// # Errors
+///
+/// [`Refusal::UnsentInput`] naming the scroll when it turns more.
+pub fn scroll_within(delta_x: i32, delta_y: i32) -> Result<(), Refusal> {
+    for (delta, vertical) in [(delta_y, true), (delta_x, false)] {
+        if let Some((_, clicks)) = wheel_clicks(delta, vertical)
+            && clicks > MAX_WHEEL_CLICKS
+        {
+            return Err(Refusal::UnsentInput {
+                what: format!(
+                    "a scroll of {delta} device pixels, {clicks} wheel clicks where one scroll \
+                     turns at most {MAX_WHEEL_CLICKS}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
 
 /// The wheel button and the clicks a scroll of `delta` device pixels on one axis turns: buttons 4
 /// (up) and 5 (down) vertically, 6 (left) and 7 (right) horizontally; `None` for no scroll.

@@ -445,6 +445,20 @@ fn the_lanes_check_refuses_what_xtest_cannot_send_or_the_desktop_takes() {
         ),
         "{refused:?}"
     );
+    let endless_scroll = [OsEvent::Scroll {
+        at: flui_driver::coordinates::DevicePoint::new(10, 10),
+        delta_x: 0,
+        delta_y: i32::MAX,
+    }];
+    let refused = lane.check(&endless_scroll);
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::NotSupported { capability: Some(capability), .. })
+                if capability == "os_input_device"
+        ),
+        "a scroll of millions of clicks: {refused:?}"
+    );
     let switch_terminal = [
         OsEvent::KeyDown("Control".into()),
         OsEvent::KeyDown("Alt".into()),

@@ -255,9 +255,24 @@ impl AppProcess {
         self.child.id()
     }
 
+    /// How the process is. On Linux it is left unreaped until [`Self::end`], so its id names its
+    /// group until the group is killed.
+    fn state(&mut self) -> ProcessState {
+        #[cfg(target_os = "linux")]
+        {
+            linux::state(&self.child)
+        }
+        #[cfg(not(target_os = "linux"))]
+        match self.child.try_wait() {
+            Ok(Some(status)) => ProcessState::Ended(status.code()),
+            Ok(None) => ProcessState::Running,
+            Err(_) => ProcessState::Ended(None),
+        }
+    }
+
     /// Whether the process still runs.
     pub(crate) fn is_running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        self.state() == ProcessState::Running
     }
 
     /// The exit code, waiting a little for a process whose connection just broke to finish
@@ -265,27 +280,36 @@ impl AppProcess {
     pub(crate) fn exit_code(&mut self) -> Option<i32> {
         let deadline = Instant::now() + EXIT_WAIT;
         loop {
-            match self.child.try_wait() {
-                Ok(Some(status)) => return status.code(),
-                Ok(None) if Instant::now() < deadline => {
+            match self.state() {
+                ProcessState::Ended(code) => return code,
+                ProcessState::Running if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Ok(None) | Err(_) => return None,
+                ProcessState::Running => return None,
             }
         }
     }
 
-    /// End the process if it still runs, with its process group on Linux, and reap it.
+    /// End the process if it still runs, with everything left in its process group on Linux
+    /// (whether or not the app itself is still running), and reap it.
     pub(crate) fn end(&mut self) {
-        if matches!(self.child.try_wait(), Ok(None)) {
-            // Only while the app is unreaped does its id surely name its group: a reaped id may
-            // be another process's by now.
-            #[cfg(target_os = "linux")]
-            linux::kill_group(&self.child);
+        // Before the app is reaped, while its id still names its group.
+        #[cfg(target_os = "linux")]
+        linux::kill_group(&self.child);
+        if self.state() == ProcessState::Running {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
     }
+}
+
+/// How a launched process is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProcessState {
+    /// It runs.
+    Running,
+    /// It ended, with its exit code, or none when a signal ended it.
+    Ended(Option<i32>),
 }
 
 impl Drop for AppProcess {

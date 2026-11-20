@@ -14,6 +14,8 @@ use std::thread::{self, JoinHandle};
 
 use rustix::process::{Pid, Signal};
 
+use super::ProcessState;
+
 /// The thread a child was started from, kept until the session ends: see the
 /// [module docs](self).
 pub(crate) struct Starter {
@@ -78,7 +80,24 @@ pub(crate) fn spawn(mut command: Command) -> io::Result<(Child, Starter)> {
     Ok((child, starter))
 }
 
-/// Kill the process group `child` leads: the app and whatever it started.
+/// Kill the process group `child` leads: the app and whatever it started. Sound while `child` is
+/// unreaped, which [`state`] keeps it: an unreaped child's id is still its own and its
+/// group's, never another process's.
 pub(crate) fn kill_group(child: &Child) {
     let _ = rustix::process::kill_process_group(Pid::from_child(child), Signal::KILL);
+}
+
+/// How `child` is, read without reaping it: left unreaped, its id keeps naming its group until the
+/// session kills the group and reaps it. A failed read is an ended process, as std's `try_wait`
+/// failing is.
+pub(crate) fn state(child: &Child) -> ProcessState {
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+    match waitid(
+        WaitId::Pid(Pid::from_child(child)),
+        WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG,
+    ) {
+        Ok(None) => ProcessState::Running,
+        Ok(Some(status)) => ProcessState::Ended(status.exit_status()),
+        Err(_) => ProcessState::Ended(None),
+    }
 }

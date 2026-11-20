@@ -7,7 +7,8 @@ use flui_driver::lane::atspi::roles::{self as atspi, AtspiRole};
 use flui_driver::lane::windows::roles as uia;
 use flui_driver::lane::x11::activity::{EchoCount, Observed, RawKind};
 use flui_driver::lane::x11::held::{
-    HeldButtons, HeldInput, KeyInput, Keymap, Keystroke, WHEEL_STEP, wheel_clicks,
+    HeldButtons, HeldInput, KeyInput, Keymap, Keystroke, MAX_WHEEL_CLICKS, WHEEL_STEP,
+    scroll_within, wheel_clicks,
 };
 use flui_driver::lane::x11::image::{self, PixmapFormat};
 use flui_driver::lane::x11::keys::{self, Keysym, Modifier, TextStroke};
@@ -53,6 +54,16 @@ fn a_key_name_maps_to_its_keysym_and_a_character_to_its_own() {
     ];
     for (name, keysym) in rows {
         assert_eq!(keys::resolve(name), keysym.map(Keysym), "{name:?}");
+    }
+    for (keysym, name) in [
+        (0xFFE1, "Shift"),
+        (0xFF0D, "Enter"),
+        (0x61, "a"),
+        (0xFC, "ü"),
+        (0x0100_65E5, "日"),
+        (0x1008_FF99, "keysym 0x1008ff99"),
+    ] {
+        assert_eq!(keys::name_of(Keysym(keysym)), name);
     }
     assert_eq!(Modifier::of(Keysym(0xFFE2)), Some(Modifier::Shift));
     assert_eq!(Modifier::of(Keysym(0xFFE8)), Some(Modifier::Alt));
@@ -497,15 +508,22 @@ fn a_release_or_emptying_the_server_refused_stays_held() {
             Ok(())
         }
     });
-    assert!(released.is_err());
+    assert!(
+        matches!(&released, Err(Error::ReleaseFailed { lane, held, .. })
+            if lane == "x11" && held == &vec!["Control".to_owned()]),
+        "{released:?}"
+    );
     assert_eq!(
         sent,
         vec![
+            // Control is held: the mask key (the highest spare key not mapped) goes first.
+            Keystroke::Press(Keycode(254)),
+            Keystroke::Release(Keycode(254)),
             Keystroke::Release(Keycode(38)),
             Keystroke::Release(Keycode(37)),
             Keystroke::Unmap(Keycode(255)),
         ],
-        "the newest key first, the mapped keys last"
+        "the mask, then the newest key first, the mapped keys last"
     );
     assert_eq!(held.keys(), vec![Keycode(37)]);
     assert!(held.mapped().is_empty(), "every mapped key was emptied");
@@ -521,8 +539,151 @@ fn a_release_or_emptying_the_server_refused_stays_held() {
         .expect_err("no echo");
     assert_eq!(buttons.bits(), 0b101);
     let released = buttons.release_all(|button| if button == 3 { refuse() } else { Ok(()) });
-    assert!(released.is_err());
+    assert!(
+        matches!(&released, Err(Error::ReleaseFailed { held, .. })
+            if held == &vec!["mouse button 3".to_owned()]),
+        "{released:?}"
+    );
     assert_eq!(buttons.bits(), 0b100);
+}
+
+/// A wheel click is a press and a release held as a button's are: a click whose echo never came
+/// is held, and the release of everything releases it, so no wheel button stays down on the
+/// server.
+#[test]
+fn a_wheel_click_left_down_is_released_with_the_rest() {
+    let mut buttons = HeldButtons::default();
+    let mut sent = Vec::new();
+    let scrolled = buttons.scroll(
+        0,
+        1,
+        |button, pressed| {
+            sent.push((button, pressed));
+            Ok(())
+        },
+        refuse,
+    );
+    assert!(scrolled.is_err(), "the press's echo never came");
+    assert_eq!(sent, vec![(5, true)], "nothing after the click left down");
+    assert_eq!(buttons.bits(), 1 << 4, "wheel button 5 is held");
+    let mut released = Vec::new();
+    buttons
+        .release_all(|button| {
+            released.push(button);
+            Ok(())
+        })
+        .expect("released");
+    assert_eq!(released, vec![5]);
+    assert_eq!(buttons.bits(), 0);
+    // A scroll that goes through turns whole clicks, each released.
+    let mut clicks = Vec::new();
+    buttons
+        .scroll(
+            -1,
+            2 * WHEEL_STEP,
+            |button, pressed| {
+                clicks.push((button, pressed));
+                Ok(())
+            },
+            || Ok(()),
+        )
+        .expect("scrolled");
+    assert_eq!(
+        clicks,
+        vec![
+            (5, true),
+            (5, false),
+            (5, true),
+            (5, false),
+            (6, true),
+            (6, false)
+        ]
+    );
+    assert_eq!(buttons.bits(), 0);
+}
+
+#[test]
+fn a_scroll_past_the_click_limit_is_refused() {
+    let limit = i32::try_from(MAX_WHEEL_CLICKS).expect("small") * WHEEL_STEP;
+    assert_eq!(scroll_within(0, limit), Ok(()));
+    assert_eq!(scroll_within(-limit, 0), Ok(()));
+    for (delta_x, delta_y) in [
+        (0, limit + 1),
+        (-limit - 1, 0),
+        (0, i32::MAX),
+        (i32::MIN, 0),
+    ] {
+        let refused = scroll_within(delta_x, delta_y).expect_err("refused");
+        assert!(
+            matches!(refused, Refusal::UnsentInput { .. }),
+            "({delta_x}, {delta_y}): {refused:?}"
+        );
+        assert_eq!(code(refused), Some(ErrorCode::NotSupported));
+    }
+}
+
+/// The release of everything completes no StickyKeys shortcut: with four lone Shift taps counted
+/// and Shift held, it presses and releases the mask key first, which ends the run of taps; with no
+/// key free for the mask, the release of Shift is not sent, and Shift stays held.
+#[test]
+fn the_release_of_everything_completes_no_sticky_keys_shortcut() {
+    let keymap = keymap();
+    let tap = [down("Shift"), up("Shift")];
+    let mut held = HeldInput::new();
+    for _ in 0..4 {
+        send(&mut held, &tap);
+    }
+    send(&mut held, &[down("Shift")]);
+    let mut sent = Vec::new();
+    held.release_all(&keymap, |stroke| {
+        sent.push(stroke);
+        Ok(())
+    })
+    .expect("released");
+    assert_eq!(
+        sent,
+        vec![
+            Keystroke::Press(Keycode(255)),
+            Keystroke::Release(Keycode(255)),
+            Keystroke::Release(Keycode(50)),
+        ]
+    );
+    assert_eq!(
+        held.shell_hotkey(&tap, &keymap),
+        Ok(None),
+        "the mask ended the run of taps"
+    );
+
+    // No key free for the mask: the fifth lone release would complete StickyKeys, so it is not
+    // sent, and Shift stays held, named.
+    let full = Keymap::new(49, 1, vec![Keysym(0x61), keys::SHIFT_L]);
+    let mut cornered = HeldInput::new();
+    let mut sent = Vec::new();
+    for _ in 0..4 {
+        for input in &tap {
+            for stroke in cornered.plan(input, &full).expect("planned") {
+                cornered
+                    .deliver(stroke, &full, || Ok(()), || Ok(()))
+                    .expect("sent");
+            }
+        }
+    }
+    for stroke in cornered.plan(&down("Shift"), &full).expect("planned") {
+        cornered
+            .deliver(stroke, &full, || Ok(()), || Ok(()))
+            .expect("sent");
+    }
+    let released = cornered.release_all(&full, |stroke| {
+        sent.push(stroke);
+        Ok(())
+    });
+    assert!(sent.is_empty(), "nothing went out: {sent:?}");
+    assert!(
+        matches!(&released, Err(Error::ReleaseFailed { held, .. })
+            if held == &vec!["Shift".to_owned()]),
+        "{released:?}"
+    );
+    assert_eq!(cornered.keys(), vec![Keycode(50)]);
 }
 
 #[test]

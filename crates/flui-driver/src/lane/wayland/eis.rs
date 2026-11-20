@@ -185,13 +185,14 @@ impl EiSession {
                         offset_x,
                         offset_y,
                         width,
-                        hight,
+                        // libei's own spelling of the region's height field.
+                        hight: height,
                         ..
                     } => offer.regions.push(EiRegion {
                         x: offset_x,
                         y: offset_y,
                         width,
-                        height: hight,
+                        height,
                     }),
                     ei::device::Event::Done => offer.done = true,
                     ei::device::Event::Resumed { serial } => {

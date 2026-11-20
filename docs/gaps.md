@@ -632,6 +632,22 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - A Wayland client is told nothing of where its window is, so the lane maps OS input from the origin its owner gives it (`WaylandLane::window_origin`, a kiosk shell's fullscreen window at the origin) and otherwise refuses naming `window_position`.
 - The capture closes with a PipeWire consumer the Linux CI image builds (the `pipewire` crate and `libpipewire-0.3-dev`) and a run against a GNOME session's portal; the position closes with a compositor protocol that tells a client where its toplevel is (none is in wide use) or a portal that maps a window to its stream's region.
 
+### The driver's X11 lane leaves three keyboard behaviours unmodelled
+
+> **Environments:** Linux (X11) · **Who it hurts:** Tests and agents that type long text or hold keys through the X11 lane · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- **Text with many distinct characters off the keymap.** Each character the server's keymap carries on no key takes a spare keycode of its own for the text (`lane::x11::held::HeldInput::plan`); a text with more distinct such characters than spare keys (a paragraph of CJK text on a US keymap) is refused before any event as `not_supported` naming `os_key`, not typed in pieces.
+- **SlowKeys.** Where the server's AccessX keyboard controls are on, holding Shift for eight seconds turns SlowKeys on; the lane counts the five-tap StickyKeys shortcut and masks it on the release of everything, but does not refuse or break a Shift held that long.
+- **Autorepeat.** XTEST presses go through the server's own key handling, so a key the lane holds past the autorepeat delay repeats, as a held key does on the person's keyboard, where Windows' `SendInput` does not repeat. Whether the repeats reach the guard as raw events (which would count past the lane's own and end the run) is not measured; the lane neither turns autorepeat off (a setting of the whole server) nor holds a key that long in any scenario.
+- Each closes with its behaviour modelled and a row of `x11_lane` or `x11_desktop` holding it: text typed in pieces as spare keys free up, the Shift hold refused or broken, autorepeat turned off for the lane's keys and restored.
+
+### The driver's Linux lanes reach platform-neutral pieces through the Windows lane's module
+
+> **Environments:** Linux · **Who it hurts:** Contributors, who find the Linux lanes importing `lane::windows` · **Parity:** none (module graph)
+
+- `flui-driver`'s AT-SPI client walks through `lane::windows::walk`, and the X11 and Wayland lanes map with `lane::windows::screen::window_geometry` and wait in `lane::windows::activity`'s slices: platform-neutral code still under the Windows lane's module, and each Linux lane computes its window's device size (`window_target`) for itself.
+- The entry closes when those pieces move to lane-level modules and no lane imports another's (`rg 'lane::windows::(walk|screen|activity)' crates/flui-driver/src/lane/{x11,wayland,atspi}` finds nothing).
+
 ### The CLI speaks to the driver agent through a client of its own
 
 > **Environments:** all · **Who it hurts:** Contributors, who keep two clients of one conversation in step · **Parity:** none (a tool's internals)

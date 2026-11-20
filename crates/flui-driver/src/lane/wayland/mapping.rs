@@ -97,6 +97,25 @@ pub fn admit_isolation(isolation: Isolation) -> Result<(), Error> {
     }
 }
 
+/// Whether a lane in `isolation` may take its EIS socket from the RemoteDesktop portal of the
+/// driver's own session bus (`own_session_bus`): no for a compositor of the run's own (`Seat`),
+/// since the driver's session bus is the person's desktop session, whose portal hands over the
+/// person's own seat; a compositor of the run's own names its bus, or its EIS socket.
+///
+/// # Errors
+///
+/// [`Error::InvalidArgument`] for the driver's own session bus in `Seat`.
+pub fn admit_portal(own_session_bus: bool, isolation: Isolation) -> Result<(), Error> {
+    if own_session_bus && isolation == Isolation::Seat {
+        return Err(Error::invalid_argument(
+            "the driver's own session bus is the desktop session's, whose portal hands over the \
+             person's seat: name the session bus of the compositor the run started, or its EIS \
+             socket",
+        ));
+    }
+    Ok(())
+}
+
 /// What a portal's `Response` with code `response` to its step `step` means: `Ok` for success;
 /// a lane the host cannot run (cannot verify) when the user cancelled the dialog (1) or the
 /// portal ended the interaction otherwise (2 and anything else).

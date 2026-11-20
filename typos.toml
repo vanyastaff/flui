@@ -35,6 +35,12 @@ extend-ignore-identifiers-re = [
     # which flui-system's Windows trash sets: Win32's names, not a typo of "for".
     "FOF_[A-Z_]+",
 ]
+# Text ignored where it stands, not the word everywhere.
+extend-ignore-re = [
+    # libei spells an EI region's height `hight` (`ei_device.region`, reis's
+    # `Event::Region`); the Wayland lane binds that field to `height` where it destructures it.
+    "hight: height",
+]
 
 [default.extend-words]
 # Project-specific spelling overrides + third-party identifiers typos
@@ -71,3 +77,6 @@ loca = "loca"
 wdth = "wdth"
 # CLDR numbering system identifier for Bengali digits (`nu-beng`, UTS #35).
 beng = "beng"
+# libei's Emulated Input Server, the compositor half of the protocol (`eis_*` in libei,
+# `reis::eis`, `LIBEI_SOCKET`'s server): flui-driver's Wayland lane names it, not a typo of "is".
+eis = "eis"

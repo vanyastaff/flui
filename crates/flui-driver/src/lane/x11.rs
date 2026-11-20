@@ -64,7 +64,9 @@ mod lane {
     use crate::lane::atspi::client::{A11yBus, WindowTarget};
     use crate::lane::windows::activity;
     use crate::lane::windows::screen;
-    use crate::lane::{ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// How far a window's device size may be from the app's logical size times its scale: the
@@ -327,18 +329,30 @@ mod lane {
             )
         }
 
+        /// Move to `at` and turn the wheel, each click's press and release held by
+        /// [`HeldButtons`] as a button's are, so a click left down is released with the rest.
         fn scroll(&mut self, at: DevicePoint, delta_x: i32, delta_y: i32) -> Result<()> {
             self.fake(Fake::Motion(at))?;
-            for (delta, vertical) in [(delta_y, true), (delta_x, false)] {
-                let Some((button, clicks)) = held::wheel_clicks(delta, vertical) else {
-                    continue;
-                };
-                for _ in 0..clicks {
-                    self.fake(Fake::ButtonPress(button))?;
-                    self.fake(Fake::ButtonRelease(button))?;
-                }
-            }
-            Ok(())
+            let server = self
+                .server
+                .as_ref()
+                .ok_or_else(|| lane_error("the lane is not connected to the X server"))?;
+            // The guard is told of each click before it goes out and waited on after: two uses
+            // of one guard by the two steps of each click, on this thread.
+            let guard = std::cell::RefCell::new(&mut self.guard);
+            self.buttons.scroll(
+                delta_x,
+                delta_y,
+                |button, pressed| {
+                    guard.borrow_mut().will_send();
+                    server.fake(if pressed {
+                        Fake::ButtonPress(button)
+                    } else {
+                        Fake::ButtonRelease(button)
+                    })
+                },
+                || guard.borrow_mut().await_echo(),
+            )
         }
 
         /// Wait out `pause` whole, looking at the guard between slices.
@@ -403,6 +417,7 @@ mod lane {
                 self.isolation,
                 PositionFidelity::Exact,
             )
+            .accessibility(AccessibilityApi::AtSpi)
         }
 
         fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {
@@ -435,6 +450,9 @@ mod lane {
                         }
                         .into_error());
                     }
+                    OsEvent::Scroll {
+                        delta_x, delta_y, ..
+                    } => held::scroll_within(*delta_x, *delta_y).map_err(Refusal::into_error)?,
                     _ => inputs.extend(Self::key_input(event)?),
                 }
             }
@@ -502,7 +520,25 @@ mod lane {
             let buttons = self
                 .buttons
                 .release_all(|button| server.fake(Fake::ButtonRelease(button)));
-            keys.and(buttons)
+            match (keys, buttons) {
+                (Ok(()), other) | (other, Ok(())) => other,
+                (
+                    Err(Error::ReleaseFailed {
+                        lane,
+                        mut held,
+                        message,
+                    }),
+                    Err(Error::ReleaseFailed { held: more, .. }),
+                ) => {
+                    held.extend(more);
+                    Err(Error::ReleaseFailed {
+                        lane,
+                        held,
+                        message,
+                    })
+                }
+                (Err(first), Err(_)) => Err(first),
+            }
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {

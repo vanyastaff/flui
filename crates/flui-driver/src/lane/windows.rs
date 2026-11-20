@@ -84,7 +84,9 @@ mod lane {
     use super::{capture, screen, uia};
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
-    use crate::lane::{ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// The Windows lane for the app whose process is `pid`: see the
@@ -464,6 +466,7 @@ mod lane {
                 Isolation::Shared,
                 PositionFidelity::Exact,
             )
+            .accessibility(AccessibilityApi::UiAutomation)
         }
 
         fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {

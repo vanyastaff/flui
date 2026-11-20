@@ -64,7 +64,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   took it, and owns the StickyKeys count across sends; a character on no key is typed through a
   spare key mapped for the text, with a pause after mapping and before emptying, since an app
   reads its keymap again only when told it changed. The release of everything empties every
-  mapped key too.
+  mapped key too, and completes no desktop shortcut: while a modifier is held it presses and
+  releases a spare key with nothing on it first (`HeldInput::mask`), which ends a run of lone
+  Shift taps, and a release that would still complete StickyKeys is not sent. A wheel click is a
+  press and a release held as a button's are, so a click left down is released with the rest, and
+  a scroll of more than `held::MAX_WHEEL_CLICKS` clicks is refused before any event.
 - **The X11 guard tells the lane's XTEST input from anyone else's by counting.** It reads XInput
   2's raw events on its own connection; an event from a device other than the XTEST devices is the
   person's, and one from them past the count of events the lane faked is another program's, which
@@ -74,14 +78,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   no input it did not send, so the lane has no guard: on the shared session `lane::admit` refuses
   its input, and it only reads. Keys and text go through EI's text interface as keysyms and UTF-8,
   so no keymap is read; a portal that refuses or a compositor that does not answer is a lane the
-  host cannot run. A Wayland client is told nothing of where its window is: the lane maps from the
+  host cannot run, and the portal of the driver's own session bus, the person's desktop, is
+  refused for a compositor of the run's own. A Wayland client is told nothing of where its window is: the lane maps from the
   origin its owner gives it, or refuses naming `window_position`.
 - **AT-SPI is read, never switched on.** Both Linux lanes read the app through
   `lane::atspi::client` on the accessibility bus the session bus names, finding the app by the
   process owning its bus connection; AT-SPI off in the session is a lane the host cannot run, and
   the lane leaves the person's setting alone.
 - **A launched Linux app dies with its session.** It leads a process group of its own, which the
-  session kills while the app is unreaped, and dies when the thread that started it ends
+  session kills when it ends, what the app started included even after the app exited: the app
+  is read without being reaped (`waitid` with `WNOWAIT`) until then, so its id names its group and
+  no other process's. It also dies when the thread that started it ends
   (`PR_SET_PDEATHSIG`): that thread is the session's own (`launch::linux::Starter`), so a driver
   moved to another thread keeps its app.
 - **The Windows lane rechecks the desktop before every event.** It sends nothing off the desktop

@@ -52,7 +52,9 @@ mod lane {
     use crate::lane::atspi::client::{A11yBus, WindowTarget};
     use crate::lane::windows::screen;
     use crate::lane::x11::keys::{self, Keysym};
-    use crate::lane::{ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, OsCapture, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// Where the lane's EIS socket comes from.
@@ -110,9 +112,13 @@ mod lane {
         ///
         /// # Errors
         ///
-        /// [`Error::InvalidArgument`] for an isolation mode that is no compositor's.
+        /// [`Error::InvalidArgument`] for an isolation mode that is no compositor's, and for the
+        /// portal of the driver's own session bus in a compositor of the run's own
+        /// ([`mapping::admit_portal`]). A socket or bus the caller names is taken to be the
+        /// compositor it started, as an `Xvfb` display is for the X11 lane.
         pub fn try_new(pid: u32, source: EisSource, isolation: Isolation) -> Result<Self> {
             mapping::admit_isolation(isolation)?;
+            mapping::admit_portal(source == EisSource::Portal(None), isolation)?;
             Ok(Self {
                 pid,
                 isolation,
@@ -307,6 +313,7 @@ mod lane {
                 self.isolation,
                 PositionFidelity::OrderOnly,
             )
+            .accessibility(AccessibilityApi::AtSpi)
         }
 
         fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {
@@ -384,22 +391,35 @@ mod lane {
             if self.connected.is_none() {
                 return Ok(());
             }
-            let mut first = Ok(());
+            let mut first: Option<Error> = None;
             for keysym in self.keys.clone().into_iter().rev() {
-                if let Err(error) = self.key(keysym, false)
-                    && first.is_ok()
-                {
-                    first = Err(error);
+                if let Err(error) = self.key(keysym, false) {
+                    first.get_or_insert(error);
                 }
             }
             for code in self.buttons.clone() {
-                if let Err(error) = self.button_code(code, false)
-                    && first.is_ok()
-                {
-                    first = Err(error);
+                if let Err(error) = self.button_code(code, false) {
+                    first.get_or_insert(error);
                 }
             }
-            first
+            match first {
+                None => Ok(()),
+                Some(first) if self.keys.is_empty() && self.buttons.is_empty() => Err(first),
+                Some(first) => Err(Error::ReleaseFailed {
+                    lane: LANE.to_owned(),
+                    held: self
+                        .keys
+                        .iter()
+                        .map(|keysym| keys::name_of(*keysym))
+                        .chain(
+                            self.buttons
+                                .iter()
+                                .map(|code| format!("the button of evdev code {code:#x}")),
+                        )
+                        .collect::<Vec<String>>(),
+                    message: first.to_string(),
+                }),
+            }
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {

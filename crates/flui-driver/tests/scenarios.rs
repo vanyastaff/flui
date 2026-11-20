@@ -15,6 +15,7 @@
 //! - [`conformance`]: a button's name, role and identifier, its activation and the effect read
 //!   back: the conformance row a platform's run reports.
 
+use flui_driver::lane::AccessibilityApi;
 use flui_driver::lane::atspi::roles as atspi;
 use flui_driver::lane::windows::roles::{ROLES, expected_wire_role};
 use flui_driver::protocol::geometry::LogicalPoint;
@@ -234,15 +235,30 @@ pub fn roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
             },
         );
     }
-    let Some(lane) = driver.lane_name().map(str::to_owned) else {
+    let Some(api) = driver
+        .lane_capabilities()
+        .and_then(|capabilities| capabilities.accessibility)
+    else {
         return Ok(());
     };
     let os = driver.main_window()?.os_tree()?;
     let mut os_nodes = Vec::new();
     collect_nodes(&os.roots, &mut os_nodes);
-    if lane != "windows" {
-        atspi_roles(report, &os_nodes);
-        return Ok(());
+    match api {
+        AccessibilityApi::UiAutomation => {}
+        AccessibilityApi::AtSpi => {
+            atspi_roles(report, &os_nodes);
+            return Ok(());
+        }
+        other => {
+            let _ = report.check("the OS reads each role", || -> Result<()> {
+                Err(Error::Expectation {
+                    expected: "a role table for the lane's accessibility API".to_owned(),
+                    actual: format!("{other:?}"),
+                })
+            });
+            return Ok(());
+        }
     }
     for row in ROLES {
         let label = role_label(row.role);
