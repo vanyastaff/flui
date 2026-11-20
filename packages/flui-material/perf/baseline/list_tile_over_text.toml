@@ -6,7 +6,7 @@
 
 [list_tile_over_text]
 allocations = 183
-bytes = 25158
+bytes = 25094
 elements = 17
 reallocations = 7
 render_nodes = 8

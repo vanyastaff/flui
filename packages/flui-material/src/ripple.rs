@@ -523,6 +523,15 @@ impl Indication {
                 .map_or(true, |waves| waves.iter().any(|wave| !wave.finished()))
     }
 
+    /// When something has become visible on a well whose last build attached
+    /// no painter, rebuild so the painter attaches. A well that has it
+    /// repaints through its listenable and does not rebuild.
+    pub(crate) fn attach_when_active(&self) {
+        if !self.painted.get() && self.is_active() {
+            self.schedule_rebuild();
+        }
+    }
+
     /// Once the last run is at rest, rebuild so the painter detaches.
     fn detach_when_idle(&self) {
         if self.painted.get() && !self.is_active() {
