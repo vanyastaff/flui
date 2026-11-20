@@ -8,7 +8,7 @@
 //! # Keys
 //!
 //! An entry is keyed by the path itself and the paint's geometry parameters
-//! ([`TessellationKey`]), compared bit for bit on every hit. The 64-bit hash
+//! (`TessellationKey`), compared bit for bit on every hit. The 64-bit hash
 //! only picks the bucket: two paths that hash alike are two entries, never
 //! one path drawn with the other's triangles. Paths come from the
 //! application and its content (an SVG), so the hash is std's SipHash under a
