@@ -362,6 +362,8 @@ mod lane {
                 OsEvent::KeyDown(name) => self.key(Self::keysym(name)?, true),
                 OsEvent::KeyUp(name) => self.key(Self::keysym(name)?, false),
                 OsEvent::Text(text) => self.text(text),
+                // `send_guarded` refuses it first: the lane does not compose.
+                OsEvent::Composition(_) => Err(crate::lane::no_composition(LANE)),
             }
         }
 

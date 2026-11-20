@@ -15,12 +15,16 @@
 //! tree assistive technology reads, projected onto the wire's nodes, and the OS's own capture of
 //! the window ([`Lane::capture_window`]).
 //!
-//! The lanes: [`windows`], [`macos`], [`x11`] and [`wayland`] (its OS half with the `wayland`
-//! feature); both Linux lanes read the app through [`atspi`]. [`android`] drives a device or an
-//! emulator from any host, through `adb`.
+//! The lanes: [`windows`], [`macos`], [`x11`], [`wayland`] (its OS half with the `wayland`
+//! feature) and `chrome` (feature `chrome`); both Linux lanes read the app through [`atspi`].
+//! [`android`] drives a device or an emulator from any host, through `adb`. An input-method
+//! composition goes only to a lane that says it composes ([`LaneCapabilities::compositions`]), a
+//! rule [`send_guarded`] holds.
 
 pub mod android;
 pub mod atspi;
+#[cfg(feature = "chrome")]
+pub mod chrome;
 pub mod macos;
 pub mod pacing;
 pub mod screen;
@@ -82,6 +86,10 @@ pub struct LaneCapabilities {
     pub fidelity: PositionFidelity,
     /// The accessibility API it reads the app through; `None` for a lane that reads none.
     pub accessibility: Option<AccessibilityApi>,
+    /// Whether it sends an input method's composition ([`OsEvent::Composition`]) through the
+    /// platform's own input-method path; every other lane leaves a composition to the app's own
+    /// input path (`input.inject`).
+    pub compositions: bool,
 }
 
 impl LaneCapabilities {
@@ -100,6 +108,7 @@ impl LaneCapabilities {
             isolation,
             fidelity,
             accessibility: None,
+            compositions: false,
         }
     }
 
@@ -107,6 +116,13 @@ impl LaneCapabilities {
     #[must_use]
     pub fn accessibility(mut self, api: AccessibilityApi) -> Self {
         self.accessibility = Some(api);
+        self
+    }
+
+    /// The lane sends input-method compositions.
+    #[must_use]
+    pub fn compositions(mut self) -> Self {
+        self.compositions = true;
         self
     }
 }
@@ -344,11 +360,20 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 ///
 /// # Errors
 ///
-/// As [`admit`] and [`Lane::check`], before any event; [`Error::ReleaseFailed`] naming what stays
-/// held, with the run's own failure as its `first` when there was one;
-/// [`Error::InterruptedByUser`]; the lane's own failure.
+/// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
+/// `os_ime_composition` for a composition a lane that does not compose was handed;
+/// [`Error::ReleaseFailed`] naming what stays held, with the run's own failure as its `first`
+/// when there was one; [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     admit(lane)?;
+    let composes = lane.capabilities().compositions;
+    if !composes
+        && events
+            .iter()
+            .any(|event| matches!(event, OsEvent::Composition(_)))
+    {
+        return Err(no_composition(lane.name()));
+    }
     lane.check(events)?;
     let name = lane.name().to_owned();
     if let Some(guard) = lane.guard() {
@@ -379,6 +404,15 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
         }),
         (sent, released) => sent.and(released),
     }
+}
+
+/// What a lane that does not compose answers for an input-method composition: refused at
+/// [`send_guarded`] before any event, and by the lane's own `send` when it is called directly.
+pub(crate) fn no_composition(lane: &str) -> Error {
+    Error::not_supported(
+        "os_ime_composition",
+        format!("the {lane} lane sends no input-method composition; use the synthetic path"),
+    )
 }
 
 fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {

@@ -308,6 +308,9 @@ impl HeldInput {
             }
             // The lane waits a pause out itself (`AndroidLane::send`).
             OsEvent::Pause(_) => Ok(Vec::new()),
+            // `send_guarded` refuses it first; a caller that plans or sends directly hears the
+            // same.
+            OsEvent::Composition(_) => Err(Refusal::Composition),
         }
     }
 

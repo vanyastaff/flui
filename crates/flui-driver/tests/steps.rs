@@ -4,13 +4,16 @@
 use std::time::Duration;
 
 use flui_driver::Error;
+use flui_driver::Isolation;
 use flui_driver::coordinates::{DevicePoint, WindowGeometry};
+use flui_driver::lane::send_guarded;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::input::{
     ActionSequence, ImeAction, InputSource, PointerAction, PointerButton, PointerDevice,
     ScrollUnit, WheelAction,
 };
 use flui_driver::steps::{MAX_STEPS, OsEvent, STEP, os_events};
+use flui_driver::testing::ScriptedLane;
 
 fn geometry() -> WindowGeometry {
     WindowGeometry::new(
@@ -325,8 +328,11 @@ fn a_very_long_move_takes_longer_steps_not_more_of_them() {
     );
 }
 
+/// A composition becomes its steps, one a tick, beside the other sources' events; a lane that
+/// does not compose is refused it before any event is sent, at `send_guarded`, whatever the lane's
+/// own check says.
 #[test]
-fn input_no_lane_sends_is_refused_before_any_event() {
+fn a_composition_reaches_only_a_lane_that_composes() {
     let ime = ActionSequence::new(vec![
         InputSource::Pointer {
             id: "p".into(),
@@ -334,14 +340,90 @@ fn input_no_lane_sends_is_refused_before_any_event() {
             actions: vec![move_to(1.0, 1.0, 0)],
         },
         InputSource::Ime {
-            actions: vec![ImeAction::Commit { text: "あ".into() }],
+            actions: vec![
+                ImeAction::SetComposition {
+                    text: "あ".into(),
+                    cursor: None,
+                    caret_hidden: false,
+                },
+                ImeAction::Commit { text: "亜".into() },
+            ],
         },
     ]);
-    let refused = os_events(&ime, &geometry());
+    let events = os_events(&ime, &geometry()).expect("a composition's steps");
+    let steps: Vec<&OsEvent> = events
+        .iter()
+        .filter(|event| matches!(event, OsEvent::Composition(_)))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            &OsEvent::Composition(ImeAction::SetComposition {
+                text: "あ".into(),
+                cursor: None,
+                caret_hidden: false,
+            }),
+            &OsEvent::Composition(ImeAction::Commit { text: "亜".into() }),
+        ]
+    );
+    let (mut lane, log) = ScriptedLane::new(Isolation::HeadlessBrowser);
+    let refused = send_guarded(&mut lane, &events);
     assert!(
         matches!(refused, Err(Error::NotSupported { capability: Some(ref capability), .. }) if capability == "os_ime_composition"),
         "{refused:?}"
     );
+    assert!(log.sent().is_empty(), "nothing was sent: {:?}", log.sent());
+}
+
+/// A lane that does not compose, called directly rather than through `send_guarded`, refuses a
+/// composition with a typed error instead of reporting it sent.
+#[test]
+fn a_lane_sent_a_composition_directly_refuses_it() {
+    use flui_driver::Lane;
+
+    let composition = OsEvent::Composition(ImeAction::Commit { text: "亜".into() });
+    let refused = |lane: &mut dyn Lane| {
+        let sent = lane.send(&composition);
+        assert!(
+            matches!(&sent, Err(Error::NotSupported { capability: Some(capability), .. }) if capability == "os_ime_composition"),
+            "the {} lane: {sent:?}",
+            lane.name()
+        );
+    };
+    // The Android lane runs on every host, against a scripted device: refused before any command.
+    let adb = crate::android_lane::scripted(true, true);
+    let mut android = flui_driver::lane::android::AndroidLane::connect(
+        adb.device(),
+        crate::android_lane::PACKAGE,
+    )
+    .expect("the Android lane connects to the scripted device");
+    refused(&mut android);
+    let (mut scripted, log) = ScriptedLane::new(Isolation::Xvfb);
+    refused(&mut scripted);
+    assert!(log.sent().is_empty(), "the scripted lane recorded nothing");
+    #[cfg(windows)]
+    refused(
+        &mut flui_driver::lane::windows::WindowsLane::try_new(
+            std::process::id(),
+            Isolation::Shared,
+        )
+        .expect("a Windows lane"),
+    );
+    #[cfg(target_os = "linux")]
+    refused(
+        &mut flui_driver::lane::x11::X11Lane::try_new(std::process::id(), None, Isolation::Xvfb)
+            .expect("an X11 lane"),
+    );
+    #[cfg(target_os = "macos")]
+    refused(
+        &mut flui_driver::lane::macos::MacosLane::try_new(std::process::id(), Isolation::Shared)
+            .expect("a macOS lane"),
+    );
+}
+
+/// What no OS lane sends is refused before any event: a point outside the window.
+#[test]
+fn input_no_lane_sends_is_refused_before_any_event() {
     let outside = os_events(
         &pointer(vec![move_to(0.0, 0.0, 0), move_to(900.0, 0.0, 32)]),
         &geometry(),

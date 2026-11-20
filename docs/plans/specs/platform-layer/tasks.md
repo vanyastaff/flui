@@ -11,7 +11,8 @@
     сеанса TalkBack и идентификатора узла в `accesskit_android`, и lane остальных ОС спеки
     flui-driver;
   - LY97 — запись драйвером есть (трасса держит слои `input` и `native`); ждёт прогонов на
-    Windows, macOS и Linux и lane Android и Web (FD13, FD12 спеки flui-driver).
+    Windows, macOS и Linux, lane Android (FD13) и прогона Chrome-lane (FD12, есть, с настоящим
+    браузером не прогонялся) спеки flui-driver.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -5039,10 +5040,11 @@ GPU-память простаивающего или невидимого окн
   присоединённого через любой lane, — запись идёт от агента приложения, не от lane, поэтому
   Windows-, macOS-, X11-, Wayland- и Android-lane ничего своего для неё не требуют; Android-lane
   (FD13) запускает приложение и присоединяет драйвер через проброшенный порт
-  (`lane::android::launch`). Остаётся: прогон записи `os`-lane на Windows, macOS, Linux и
-  Android с отладочной сборкой приложения (`native-capture`) — строка parity «Recorded native
-  input replays deterministically on the headless host»; Web — ждёт своего lane (FD12 спеки
-  flui-driver). Захват настоящего метода ввода на устройствах — та же строка parity.
+  (`lane::android::launch`), Chrome-lane (FD12) — через экспорт страницы в headless Chrome.
+  Остаётся: прогон записи `os`-lane на Windows, macOS, Linux и Android с отладочной сборкой
+  приложения (`native-capture`) и в настоящем браузере — строка parity «Recorded native input
+  replays deterministically on the headless host». Захват настоящего метода ввода на
+  устройствах — та же строка parity.
 
 - [ ] **LY96** (Windows и macOS начаты, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
   драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
@@ -5057,6 +5059,8 @@ GPU-память простаивающего или невидимого окн
   роль таблицы ролей AT-SPI читается своей ролью, элемент нажимается через действие AT-SPI
   (`x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does`,
   `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
+  Chrome-lane (FD12) вводит в web-сборку через WebDriver BiDi, но дерева доступности не читает:
+  ARIA-зеркало канваса есть, его чтение через дерево доступности Chrome не построено.
   Android-lane (FD13) вводит через `adb`, но дерево TalkBack не читает: `accesskit_android` не
   ставит `viewIdResourceName`, и идентификатор узла до UI Automator не доходит (`docs/gaps.md`);
   проекция и нажатие через accessibility на Android ждут этого поля в AccessKit. `uiautomator

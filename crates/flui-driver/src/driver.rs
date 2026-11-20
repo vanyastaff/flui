@@ -56,6 +56,9 @@ pub struct Driver {
     connection: Box<dyn Connection>,
     /// The process a launch started, ended with the session.
     process: Option<AppProcess>,
+    /// Whether the session launched the page it drives (a web build in a browser of its own),
+    /// which ends with it as a launched process does.
+    launched_page: bool,
     /// Where the target's own input lands: in process, or the desktop of a launched app.
     target_isolation: Isolation,
     policy: InputPolicy,
@@ -99,8 +102,57 @@ impl Driver {
                     budget,
                 ))
             }
+            #[cfg(feature = "chrome")]
+            crate::launch::Target::Artifact(crate::launch::Artifact::WasmBundle(ref bundle)) => {
+                let token = crate::launch::launch_token()?;
+                let (session, lines) = crate::lane::chrome::launch(
+                    bundle,
+                    launch.viewport_size(),
+                    &token,
+                    launch.chromedriver_source(),
+                )?;
+                let mut driver = Self::page(session, lines, &token, launch.connect_timeout())?;
+                driver.launched_page = true;
+                Ok(driver)
+            }
             _ => Self::launch_process(&launch),
         }
+    }
+
+    /// Connect to a web app's agent through the WebDriver BiDi session at `websocket_url` (a
+    /// ChromeDriver session's `webSocketUrl`, on the loopback), whose first tab shows the app with
+    /// `token` in its launch object, and drive it through the Chrome lane on that tab
+    /// ([`crate::lane::chrome`]). The page's export may take until `wait` to appear. The browser
+    /// is never ended by the session.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a URL off the loopback; the session's failure; the page
+    /// defining no export within `wait`, or refusing the hello.
+    #[cfg(feature = "chrome")]
+    pub fn attach_page(websocket_url: &str, token: &str, wait: Duration) -> Result<Self> {
+        let (session, lines) = crate::lane::chrome::bidi::Session::connect(websocket_url, None)?;
+        Self::page(session, lines, token, wait)
+    }
+
+    /// The session of a page's agent over `session`, with the Chrome lane on its tab.
+    #[cfg(feature = "chrome")]
+    fn page(
+        session: crate::lane::chrome::bidi::Session,
+        lines: crate::lane::chrome::bidi::PageLines,
+        token: &str,
+        wait: Duration,
+    ) -> Result<Self> {
+        let lane = crate::lane::chrome::ChromeLane::new(session.clone());
+        let connection =
+            crate::connection::bidi::BidiConnection::connect(session, lines, token, wait)?;
+        Self::new(
+            Box::new(connection),
+            None,
+            Isolation::HeadlessBrowser,
+            AGENT_REPLY + SOCKET_MARGIN,
+        )
+        .with_lane(lane)
     }
 
     #[cfg(any(unix, windows))]
@@ -180,6 +232,7 @@ impl Driver {
         Self {
             connection,
             process,
+            launched_page: false,
             target_isolation,
             policy: InputPolicy::default(),
             lane: None,
@@ -623,7 +676,7 @@ impl Driver {
     ) -> trace::Header {
         let kind = if self.target_isolation == Isolation::InProcess {
             "headless"
-        } else if self.process.is_some() {
+        } else if self.process.is_some() || self.launched_page {
             "launched"
         } else {
             "attached"
@@ -778,7 +831,9 @@ impl Driver {
     /// Whether the session launched its app, which therefore ends with it.
     #[must_use]
     pub fn launched_app(&self) -> bool {
-        self.process.is_some() || self.target_isolation == Isolation::InProcess
+        self.process.is_some()
+            || self.launched_page
+            || self.target_isolation == Isolation::InProcess
     }
 
     /// How long the session has run on the clock its waits are counted in.

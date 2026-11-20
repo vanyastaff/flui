@@ -1937,6 +1937,7 @@ version = "0.1.0-dev"
 dependencies = [
  "async-io",
  "atspi",
+ "base64",
  "block2 0.6.2",
  "enumflags2",
  "flui-app",
@@ -1950,6 +1951,7 @@ dependencies = [
  "flui-widgets",
  "futures-lite",
  "getrandom 0.4.3",
+ "icu_segmenter",
  "interprocess",
  "libc",
  "objc2 0.6.5",
@@ -1960,6 +1962,7 @@ dependencies = [
  "reis",
  "roxmltree",
  "rustix 1.1.6",
+ "rustls",
  "schemars",
  "serde",
  "serde_json",
@@ -1967,9 +1970,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "tungstenite",
+ "ureq",
  "web-time",
  "windows 0.62.2",
  "x11rb",
+ "zip",
 ]
 
 [[package]]
@@ -7955,6 +7961,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
 dependencies = [
  "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "indexmap",
  "memchr",

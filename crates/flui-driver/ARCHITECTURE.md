@@ -8,10 +8,13 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **A client, never linked into an app.** The crate reaches neither `flui-native` nor `flui-app`
   (`reach-forbid`), and only `flui-cli` takes a normal edge to it. Its OS code (the lanes) is a
   client's, which is why ADR-0082's rule for framework crates does not bind it.
-- **One conversation, two transports.** `connection::socket` and `connection::in_process` carry the
-  same lines (`flui_protocol::envelope`): the headless target runs the agent's own
-  `flui_runtime::agent::Session` through `flui_testing::HeadlessAgentService`, so the in-process
-  answers are the ones a socket carries. The `Connection` trait is private.
+- **One conversation, three transports.** `connection::socket`, `connection::bidi` (feature
+  `chrome`) and `connection::in_process` carry the same lines (`flui_protocol::envelope`): a web
+  app's page export is reached through the Chrome lane's BiDi session (`connect` with a channel as
+  `onLine`, each line a `script.message`, each request a `send` through `script.callFunction`),
+  and the headless target runs the agent's own `flui_runtime::agent::Session` through
+  `flui_testing::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
+  The `Connection` trait is private.
 - **Virtual time on the headless target.** The headless app's host runs on a thread of its own and
   pumps no frame by itself: a call that waits asks for one frame at a time, each 16 ms of the
   host's clock, and the call's budget is counted in that time. A run is the same on every host.
@@ -38,14 +41,26 @@ app's trees, frames and input, and this crate composes that with what only the O
   asks the guard before every event and releases everything on every exit, answering
   `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
   failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
-  `Error::is_cannot_verify`); `OsInputLock` holds one session per user's
-  desktop, its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
+  `Error::is_cannot_verify`); an input-method composition reaches only a lane whose capabilities
+  say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused before the
+  desktop is locked or the run announced, at `send_guarded`, and by every other lane's own `send`;
+  `OsInputLock` holds one session per user's desktop (a headless browser, the session's own,
+  takes none), its file in a directory only that user can write (`$XDG_RUNTIME_DIR` where it names an
   existing directory, trusted as the XDG specification requires, or else a `flui-driver-<uid>`
   of mode 0700 in the temporary directory on Unix), `busy` only while another
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
   `may_have_run`, never not run.
+- **A person's interruption followed by a failed release is cannot-verify, the held input
+  named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
+  that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
+  be read from it. A release that then fails does not turn that into a failure of the app, which
+  did nothing wrong; nor may it go unsaid, since input stays down on the person's desktop.
+  `send_guarded` answers `Error::ReleaseFailed` with the keys, buttons and contacts still held in
+  `held` and the interruption as `first`, from which `Error::is_cannot_verify` and
+  `Error::effect` answer: the report says cannot-verify, and the error says what to release by
+  hand. The same holds for any first failure: a timed-out act stays `may_have_run`.
 - **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
   `Lane::check` over the whole sequence before it arms the guard: a key a lane has no code for, a
   device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
@@ -63,7 +78,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   pure, `lane::atspi::roles` and `lane::wayland::mapping` are pure, and the parts that reach an X
   server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
   host code that drives `adb`, so all of it builds on every host, and its tests script the device
-  (`testing::ScriptedAdb`).
+  (`testing::ScriptedAdb`). `lane::chrome` (feature `chrome`) is host code on every desktop: its
+  keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
+  browser goes through its session.
 - **The Android lane reaches the device through one door.** Every `adb` command runs through
   `lane::android::adb::Adb` with a deadline and a bound on its output, a timed-out command being
   `timeout` with `may_have_run`; a stream (`getevent`, `uinput`) hands over bounded records, at
@@ -193,6 +210,27 @@ app's trees, frames and input, and this crate composes that with what only the O
   job before its first instruction, and the job's handle closes with the session or with the
   driver's process, however that ends. On Unix a launched app leads a process group of its own,
   which the session ends whole while its leader runs unreaped.
+- **The Chrome lane's browser is one session's, headless, behind one socket owner.**
+  `lane::chrome::bidi::Session` is the only owner of the BiDi WebSocket: a thread of its own writes
+  each command with a fresh id and hands each answer to the caller whose id it carries, so a late
+  answer is dropped and an error with no id answers nobody; a message past `MAX_MESSAGE` is
+  refused from its frame header, at most `MAX_PENDING` commands wait, every command has a deadline
+  and one past it is answered `timeout`, and the page's lines wait for its connection within
+  `PAGE_ROOM` lines and `PAGE_BYTES`, past which the page's connection breaks with why rather than
+  the socket going unread, which would starve the lane. The first break is recorded once and
+  answers every later command. The session owns the browser it runs in (the page's loopback
+  server, the ChromeDriver), ended after the socket once its last handle went; Chrome always starts
+  `--headless=new`, so its input lands on no desktop and the lane needs no guard. The lane records
+  a key, button, contact or composition as held once the browser answered the command that made
+  it, an unanswered one (a text's included) as possibly held, and its release cancels a
+  composition and sends `input.releaseActions` whatever it recorded, naming what stays held when
+  the browser refuses it. What the browser sends is untrusted: a screenshot's base64 length is checked
+  before it is decoded and its PNG goes through `pixels::codec` (`lane::chrome::screenshot`), ChromeDriver's and
+  the archives' answers are read within bounds, and the page's server answers only `GET` and
+  `HEAD` of plain names under its root, for the `Host` it bound, each connection within one
+  deadline. A launch reaches no network unless its `ChromeDriverSource` allows a fetch, which is
+  HTTPS alone and records the SHA-256 a cached ChromeDriver is checked against before it runs;
+  the cache's files are linked into place, never replaced, so parallel fetches cannot tear them.
 - **The OS tree is read against the app's through one projection.** A lane projects its OS tree
   onto the wire's nodes, and `projection::Projection` compares the two through
   `flui_protocol::tree::normalized_outline` (ADR-0095 §4), the one definition of what only one

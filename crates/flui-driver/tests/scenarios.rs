@@ -16,6 +16,8 @@
 //!   touchpad's pinch too (`android_device` runs it through the Android lane);
 //! - [`notes`] and [`macos_notes`]: text, a select-all chord and an input-method composition in a
 //!   text field;
+//! - [`web_input`]: [`input`] and a composition into a field, through the session's path, which in
+//!   headless Chrome is the Chrome lane (`chrome_browser`);
 //! - [`conformance`]: a button's name, role and identifier, its activation and the effect read
 //!   back: the conformance row a platform's run reports.
 
@@ -569,6 +571,35 @@ fn notes_with(driver: &mut Driver, report: &mut Report, select_all: &str) -> Res
     Ok(())
 }
 
+/// `web_input`: [`input`]'s pointers, wheel and keys, then an input method's composition into the
+/// comment field, every action through the session's path: on the Chrome lane, trusted BiDi input
+/// and the DevTools input method; on the headless target, synthetic input.
+///
+/// # Errors
+///
+/// When the app cannot be reached; each check's failure is recorded in `report`.
+pub fn web_input(driver: &mut Driver, report: &mut Report) -> Result<()> {
+    input(driver, report)?;
+    let _ = report.check("a composition into comment commits its conversion", || {
+        let mut window = driver.main_window()?;
+        window.locate(Locator::identifier("comment")).tap()?;
+        window.perform(ActionSequence::new(vec![InputSource::Ime {
+            actions: vec![
+                ImeAction::SetComposition {
+                    text: "にほん".to_owned(),
+                    cursor: None,
+                    caret_hidden: false,
+                },
+                ImeAction::Commit {
+                    text: "日本".to_owned(),
+                },
+            ],
+        }]))?;
+        expect(window.locate(Locator::identifier("comment"))).to_have_value("日本")
+    });
+    Ok(())
+}
+
 /// `conformance`: see the [module docs](self).
 ///
 /// # Errors
@@ -674,6 +705,12 @@ fn the_macos_notes_scenario_passes_with_the_macos_conventions_on_the_headless_ta
     ));
 }
 
+/// The web input scenario on the headless target, synthetic; in headless Chrome through the Chrome
+/// lane in `chrome_browser`.
+#[test]
+fn the_web_input_scenario_passes_on_the_headless_target() {
+    passed(&run("web-input", headless(|| Controls), web_input));
+}
 /// The Android input scenario on the headless target, whose windows take no injected touchpad
 /// gesture yet: that row alone is `cannot_verify`, naming what is missing. Through the Android
 /// lane it runs on a device or an emulator

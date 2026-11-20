@@ -8,6 +8,18 @@
 //!   request by a script, so the socket transport's cases (an app that closes mid-call or answers
 //!   slowly, a driver that leaves) run without a FLUI app.
 //! - [`ScriptedAdb`]: a device scripted for the Android lane.
+//! - [`ScriptedBrowser`] (with `chrome`): a stand-in for a ChromeDriver's WebDriver BiDi session on
+//!   a loopback WebSocket, playing a page whose agent a [`Script`] answers, so the Chrome lane and
+//!   the page's connection run without a browser, and [`chrome`], the lane's host side (the page's
+//!   server, the ChromeDriver kept or fetched from stand-in hosts on the loopback).
+
+#[cfg(feature = "chrome")]
+mod browser;
+#[cfg(feature = "chrome")]
+pub mod chrome;
+
+#[cfg(feature = "chrome")]
+pub use browser::{BrowserLog, BrowserReply, BrowserScript, ScriptedBrowser};
 
 mod adb;
 
@@ -248,6 +260,10 @@ impl Lane for ScriptedLane {
     }
 
     fn send(&mut self, event: &OsEvent) -> Result<()> {
+        // A scripted lane composes nothing, as `capabilities` says.
+        if matches!(event, OsEvent::Composition(_)) {
+            return Err(crate::lane::no_composition(self.name()));
+        }
         self.log
             .sent
             .lock()
@@ -552,11 +568,7 @@ fn serve_one(
                 return Ok(());
             }
             greeted = true;
-            ServerLine::hello(
-                HelloReply::new(PROTOCOL_VERSION)
-                    .app(AppDescription::new("scripted", "scripted").with_pid(std::process::id()))
-                    .capabilities(capabilities.clone()),
-            )
+            scripted_hello(capabilities.clone())
         };
         let answer = serde_json::to_value(&answer).map_err(io::Error::other)?;
         // Handed to the OS, never flushed: flushing a Windows pipe waits until the driver has read
@@ -581,4 +593,13 @@ fn serve_one(
             }
         }
     }
+}
+
+/// The hello a stand-in agent answers with, introducing itself with `capabilities`.
+fn scripted_hello(capabilities: Capabilities) -> ServerLine<Value> {
+    ServerLine::hello(
+        HelloReply::new(PROTOCOL_VERSION)
+            .app(AppDescription::new("scripted", "scripted").with_pid(std::process::id()))
+            .capabilities(capabilities),
+    )
 }

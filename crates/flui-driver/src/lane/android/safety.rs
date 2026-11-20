@@ -96,6 +96,9 @@ pub enum Refusal {
         /// What needed it.
         what: String,
     },
+    /// An input method's composition, which the lane does not compose: it goes through the app's
+    /// own input path.
+    Composition,
     /// An isolation mode that is no Android device's.
     ForeignIsolation {
         /// The mode.
@@ -167,6 +170,7 @@ impl Refusal {
                      no {character:?}; only printable ASCII, line breaks and tabs are typed"
                 ),
             ),
+            Self::Composition => crate::lane::no_composition(LANE),
             Self::UnsentInput { what } => Error::not_supported(
                 "os_input_device",
                 format!("the {LANE} lane does not send {what}"),

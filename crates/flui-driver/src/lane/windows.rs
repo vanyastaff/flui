@@ -533,6 +533,10 @@ mod lane {
         }
 
         fn send(&mut self, event: &OsEvent) -> Result<()> {
+            // `send_guarded` refuses it first; a caller that sends directly hears the same.
+            if matches!(event, OsEvent::Composition(_)) {
+                return Err(crate::lane::no_composition(self.name()));
+            }
             if let OsEvent::Pause(duration) = event {
                 return self.pause(*duration);
             }
