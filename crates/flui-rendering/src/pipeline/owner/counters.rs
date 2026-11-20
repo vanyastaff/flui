@@ -1,6 +1,6 @@
 //! Monotonic per-owner work counters for the four pipeline phases.
 //!
-//! A frame is not one call on [`PipelineOwner`](super::PipelineOwner): the
+//! A frame is not one call on [`PipelineOwner`]: the
 //! layout↔build fixpoint runs `run_layout` several times before the final
 //! `run_frame`, and the owner has no frame-begin hook. So the counters are
 //! totals since the owner was constructed, and a frame driver takes the
