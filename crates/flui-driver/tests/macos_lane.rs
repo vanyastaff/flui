@@ -18,7 +18,7 @@ use flui_driver::lane::macos::safety::{
 };
 use flui_driver::lane::macos::screen::{self, PointRect, WindowInfo};
 use flui_driver::lane::macos::version::MacosVersion;
-use flui_driver::lane::macos::{callback, frame};
+use flui_driver::lane::macos::{self, callback, frame};
 use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows;
 use flui_driver::projection::Projection;
@@ -1595,29 +1595,50 @@ fn the_release_of_everything_keeps_what_it_released_apart_from_what_failed() {
     );
     assert_eq!(keys.held(), [keys::CONTROL.0]);
 
-    // The lane's outcome names what the keys and the mouse both still hold, the keys' failure
+    // The lane's release of everything tries the mouse after the keys failed, posts its releases
+    // with the flags the keys still hold, and names what both hold with both failures, the keys'
     // first.
-    let stuck = |held: &str, message: &str| -> Result<()> {
-        Err(Error::ReleaseFailed {
-            lane: "macos".into(),
-            held: vec![held.to_owned()],
-            message: message.to_owned(),
-        })
-    };
-    let both = release_outcome([
-        stuck("Control", "keys"),
-        stuck("the left mouse button", "mouse"),
-    ]);
+    let device = PointerDevice::Mouse;
+    let mut pointer = Pointer::new();
+    for step in [
+        Step::Move {
+            device,
+            to: at(5.5, 6.5),
+        },
+        Step::Down {
+            device,
+            button: PointerButton::Primary,
+        },
+    ] {
+        let events = pointer.plan(step).expect("a plan");
+        pointer.deliver(&events, |_| Ok(())).expect("posted");
+    }
+    let mut mouse_flags = Vec::new();
+    let both = macos::release_held(
+        &mut keys,
+        &mut pointer,
+        |_, _| Err(no_event()),
+        |_, flags| {
+            mouse_flags.push(flags);
+            Err(Error::Protocol {
+                message: "the mouse refused".into(),
+            })
+        },
+    );
+    let expected = format!("{}; protocol: the mouse refused", no_event());
     assert!(
-        matches!(&both, Err(Error::ReleaseFailed { held, message, .. })
-            if held == &["Control", "the left mouse button"] && message == "keys"),
+        matches!(&both, Err(Error::ReleaseFailed { lane, held, message })
+            if lane == "macos"
+                && held == &["Control", "the left mouse button"]
+                && message == &expected),
         "{both:?}"
     );
-    let mouse = release_outcome([Ok(()), stuck("the left mouse button", "mouse")]);
-    assert!(
-        matches!(&mouse, Err(Error::ReleaseFailed { message, .. }) if message == "mouse"),
-        "{mouse:?}"
+    assert_eq!(
+        mouse_flags,
+        [keys.flags()],
+        "posted with Control still held"
     );
+    assert_ne!(keys.flags(), HeldKeys::new().flags());
     assert!(release_outcome([Ok(()), Ok(())]).is_ok());
 }
 

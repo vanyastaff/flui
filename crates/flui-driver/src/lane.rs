@@ -222,15 +222,17 @@ pub trait Lane: Send {
 }
 
 /// What releasing everything came to, from the releases of a lane's parts (its keys, its mouse,
-/// its contacts) in the order they ran: the first failure's message, with everything each part
-/// still holds named, so one part's failure never hides what another left held.
+/// its contacts) in the order they ran: everything each part still holds, named, with every
+/// part's failure, so one part's failure never hides what another left held or why.
 ///
 /// # Errors
 ///
-/// [`Error::ReleaseFailed`] naming what every part that answered one still holds, with the first
-/// failure's message; the first failure itself when no part holds anything.
+/// [`Error::ReleaseFailed`] naming what every part that answered one still holds, its message
+/// every part's failure in order, joined by `; `; the first failure when no part holds anything
+/// (a part answers [`Error::ReleaseFailed`] whenever it still holds something, so only a failure
+/// that left nothing held, such as the Windows keys' mask, arrives bare).
 pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()> {
-    let mut first: Option<Error> = None;
+    let mut failures: Vec<Error> = Vec::new();
     let mut stuck: Option<(String, Vec<String>)> = None;
     for mut error in parts.into_iter().filter_map(Result::err) {
         if let Error::ReleaseFailed { lane, held, .. } = &mut error {
@@ -239,20 +241,24 @@ pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()
                 .1
                 .append(held);
         }
-        first.get_or_insert(error);
+        failures.push(error);
     }
-    match (first, stuck) {
-        (None, _) => Ok(()),
-        (Some(first), None) => Err(first),
-        (Some(first), Some((lane, held))) => Err(Error::ReleaseFailed {
-            lane,
-            held,
-            message: match first {
-                Error::ReleaseFailed { message, .. } => message,
-                other => other.to_string(),
-            },
-        }),
-    }
+    let Some((lane, held)) = stuck else {
+        return failures.into_iter().next().map_or(Ok(()), Err);
+    };
+    let message = failures
+        .into_iter()
+        .map(|failure| match failure {
+            Error::ReleaseFailed { message, .. } => message,
+            other => other.to_string(),
+        })
+        .collect::<Vec<String>>()
+        .join("; ");
+    Err(Error::ReleaseFailed {
+        lane,
+        held,
+        message,
+    })
 }
 
 /// The OS's capture of a window's surface: tightly packed RGBA rows, top row first.
