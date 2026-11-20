@@ -1369,7 +1369,7 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
     let mut clock = ManualClock::new();
     let (mut runtime, window) = manual_runtime(clock.clone());
     runtime
-        .attach_root_widget_with_size(&flui_widgets::SizedBox::square(10.0), 800.0, 600.0)
+        .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
         .expect("first root");
     let _ = runtime.pump(&mut clock, &mut SamplingSink);
     assert!(
@@ -1379,7 +1379,7 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
     let retired = mounted_root_invalidation(&runtime);
     runtime.enter(|runtime| runtime.widgets().detach_root_widget());
     runtime
-        .attach_root_widget_with_size(&flui_widgets::SizedBox::square(20.0), 800.0, 600.0)
+        .attach_root_widget(&flui_widgets::SizedBox::square(20.0))
         .expect("replacement root");
     clock.advance(Duration::from_millis(20));
     let _ = runtime.pump(&mut clock, &mut SamplingSink);

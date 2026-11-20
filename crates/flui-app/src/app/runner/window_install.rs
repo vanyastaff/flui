@@ -21,9 +21,9 @@ use super::native_bindings::PreparedNativeWindow;
 use super::owner_dispatch::{PresentationDispatcher, RuntimeTask, dispatch_platform_ui_runtime};
 use super::window_routes::WindowRoutes;
 
-/// What a runner sizes a window's surface and root layout from: the
-/// drawable area the window's snapshot reports, in device and logical pixels,
-/// and the scale between them.
+/// What a runner sizes a window's surface from: the
+/// drawable area the window's snapshot reports, in device pixels,
+/// and the scale to logical pixels.
 ///
 /// A window that has reported no drawable area yet (it opened minimized)
 /// gives its content size at scale 1; the metrics it reports once it has one
@@ -31,7 +31,6 @@ use super::window_routes::WindowRoutes;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SurfaceGeometry {
     pub(super) physical: flui_foundation::geometry::Size<i32>,
-    pub(super) logical: flui_foundation::geometry::Size<f64>,
     pub(super) scale: f64,
 }
 
@@ -41,7 +40,6 @@ impl SurfaceGeometry {
         if let Some(metrics) = state.metrics {
             return Self {
                 physical: metrics.physical(),
-                logical: metrics.logical(),
                 scale: metrics.scale().get(),
             };
         }
@@ -56,7 +54,6 @@ impl SurfaceGeometry {
         );
         Self {
             physical,
-            logical,
             scale: 1.0,
         }
     }

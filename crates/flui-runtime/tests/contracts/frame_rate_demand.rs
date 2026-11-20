@@ -140,7 +140,7 @@ impl Rig {
         );
         runtime.update_host_lifecycle(flui_scheduler::AppLifecycleState::Resumed);
         runtime
-            .attach_root_widget_with_size(&flui_widgets::SizedBox::new(100.0, 100.0), 100.0, 100.0)
+            .attach_root_widget(&flui_widgets::SizedBox::new(100.0, 100.0))
             .expect("root");
         let controller =
             AnimationController::builder(Duration::from_secs(10)).build_on(Some(&runtime.vsync()));

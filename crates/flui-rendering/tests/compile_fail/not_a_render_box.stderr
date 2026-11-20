@@ -12,11 +12,11 @@ help: the trait `RenderBox` is not implemented for `NotABox`
  6 | struct NotABox;
    | ^^^^^^^^^^^^^^
    = note: render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::inspect::Inspect`; `RenderObject<P>` then follows from a blanket impl
-help: the trait `RenderObject<BoxProtocol>` is implemented for `RenderViewAdapter`
+help: the trait `RenderObject<BoxProtocol>` is implemented for `RenderView`
   --> src/view/render_view.rs
    |
-   | impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | impl RenderObject<BoxProtocol> for RenderView {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: required for `NotABox` to implement `RenderObject<BoxProtocol>`
 note: required by a bound in `requires_box`
   --> tests/compile_fail/not_a_render_box.rs:8:20

@@ -562,8 +562,7 @@ impl RenderNode {
     // `RenderTransform`'s corner-mapped bounds. A future culling consumer
     // must reintroduce it transform-aware (apply `paint_effects().transform`
     // to the committed `RenderState` geometry), not resurrect a half-correct
-    // producer. Root paint bounds for the engine live on
-    // `RenderView::physical_paint_bounds`.
+    // producer.
 
     /// Where the view that made this node was created; unknown for a node no view made.
     #[inline]

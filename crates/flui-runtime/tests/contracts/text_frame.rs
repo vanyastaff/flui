@@ -70,14 +70,10 @@ fn rejected_text_recovers(recovery: Recovery) {
     let font_size = Arc::new(AtomicU64::new(f64::MAX.to_bits()));
     let rebuild = Arc::new(parking_lot::Mutex::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &AuthoredText {
-                font_size: Arc::clone(&font_size),
-                rebuild: Arc::clone(&rebuild),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&AuthoredText {
+            font_size: Arc::clone(&font_size),
+            rebuild: Arc::clone(&rebuild),
+        })
         .expect("mount authored text");
     let reports = Arc::clone(&failures);
     let corrected_size = Arc::clone(&font_size);
@@ -195,14 +191,10 @@ fn a_competing_text_loan_waits_for_an_explicit_input_change() {
     let font_size = Arc::new(AtomicU64::new(16.0_f64.to_bits()));
     let rebuild = Arc::new(parking_lot::Mutex::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &AuthoredText {
-                font_size: Arc::clone(&font_size),
-                rebuild: Arc::clone(&rebuild),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&AuthoredText {
+            font_size: Arc::clone(&font_size),
+            rebuild: Arc::clone(&rebuild),
+        })
         .expect("mount real text before its competing measurement");
     let text = runtime.text_context_for_test().clone();
     let mut sink = Sink::default();
@@ -320,19 +312,15 @@ fn text_frame_completion_waits_for_measurement(pending: bool) {
         },
     )));
     runtime
-        .attach_root_widget_with_size(
-            &TextFrameCompletion {
-                sizing: std::rc::Rc::new(std::cell::RefCell::new(if pending {
-                    flui_painting::TextSizing::exact([]).expect("sealed empty capture")
-                } else {
-                    flui_painting::TextSizing::fixed()
-                })),
-                completed: Arc::clone(&completed),
-                rebuild: Arc::new(parking_lot::Mutex::new(None)),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&TextFrameCompletion {
+            sizing: std::rc::Rc::new(std::cell::RefCell::new(if pending {
+                flui_painting::TextSizing::exact([]).expect("sealed empty capture")
+            } else {
+                flui_painting::TextSizing::fixed()
+            })),
+            completed: Arc::clone(&completed),
+            rebuild: Arc::new(parking_lot::Mutex::new(None)),
+        })
         .expect("mount text with lifecycle completion callback");
     let mut sink = Sink::default();
     let outcome = runtime.pump(
@@ -388,15 +376,11 @@ fn an_unregistered_capture_parks_until_its_provider_changes() {
     ));
     let rebuild = Arc::new(parking_lot::Mutex::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &TextFrameCompletion {
-                sizing: std::rc::Rc::clone(&sizing),
-                completed: Arc::clone(&completed),
-                rebuild: Arc::clone(&rebuild),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&TextFrameCompletion {
+            sizing: std::rc::Rc::clone(&sizing),
+            completed: Arc::clone(&completed),
+            rebuild: Arc::clone(&rebuild),
+        })
         .expect("mount explicit provider and lifecycle completion callback");
     let mut sink = Sink::default();
     let mut now = web_time::Instant::now();
@@ -481,14 +465,10 @@ fn a_clean_presentation_delivers_successor_callbacks_without_rebuilding() {
     let handle = Rc::new(RefCell::new(None));
     let builds = Arc::new(AtomicUsize::new(0));
     runtime
-        .attach_root_widget_with_size(
-            &CompletionScopeProbe {
-                handle: Rc::clone(&handle),
-                builds: Arc::clone(&builds),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&CompletionScopeProbe {
+            handle: Rc::clone(&handle),
+            builds: Arc::clone(&builds),
+        })
         .expect("mount real text and retain its lifecycle capability");
     let mut sink = Sink::default();
     let mut now = web_time::Instant::now();
@@ -705,28 +685,24 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let lock_outcome = Rc::new(RefCell::new(None));
     let focus = flui_interaction::focus::FocusNode::new();
     runtime
-        .attach_root_widget_with_size(
-            &PartialTextFrame {
-                pending: Rc::clone(&pending),
-                hit_test: Rc::clone(&hit_test),
-                pending_sizing: flui_painting::TextSizing::exact([(
-                    TextSizeRequest {
-                        size: TextSize::try_new(16.0).expect("authored editable size"),
-                        profile: TextScaleProfile::Body,
-                    },
-                    TextSize::try_new(32.0).expect("resolved editable size"),
-                )])
-                .expect("sealed capture intentionally omits the later sibling"),
-                controller: flui_widgets::TextEditingController::with_text("abcd"),
-                focus: Rc::clone(&focus),
-                rebuild: Rc::clone(&rebuild),
-                store: Rc::clone(&store),
-                grant: Rc::clone(&grant),
-                lock_outcome: Rc::clone(&lock_outcome),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&PartialTextFrame {
+            pending: Rc::clone(&pending),
+            hit_test: Rc::clone(&hit_test),
+            pending_sizing: flui_painting::TextSizing::exact([(
+                TextSizeRequest {
+                    size: TextSize::try_new(16.0).expect("authored editable size"),
+                    profile: TextScaleProfile::Body,
+                },
+                TextSize::try_new(32.0).expect("resolved editable size"),
+            )])
+            .expect("sealed capture intentionally omits the later sibling"),
+            controller: flui_widgets::TextEditingController::with_text("abcd"),
+            focus: Rc::clone(&focus),
+            rebuild: Rc::clone(&rebuild),
+            store: Rc::clone(&store),
+            grant: Rc::clone(&grant),
+            lock_outcome: Rc::clone(&lock_outcome),
+        })
         .expect("mount ordered editable and sibling text");
     let mut sink = Sink::default();
     let mut now = web_time::Instant::now();
@@ -1148,15 +1124,11 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
         )
     });
     runtime
-        .attach_root_widget_with_size(
-            &PreparedTextProbe {
-                child: child.boxed(),
-                rebuild: Rc::new(RefCell::new(None)),
-                post_frame: Rc::clone(&post_frame),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&PreparedTextProbe {
+            child: child.boxed(),
+            rebuild: Rc::new(RefCell::new(None)),
+            post_frame: Rc::clone(&post_frame),
+        })
         .expect("mount actual animated editable and mixed role text");
     let mut sink = PreparedTextSink::default();
     finish_prepared_text(
@@ -1429,15 +1401,11 @@ fn a_same_queued_rebuild_admission_cancels_the_old_preparation_premise() {
     let reschedule = Rc::new(Cell::new(false));
     let rebuild = Rc::new(RefCell::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &ReentrantPreparedText {
-                size: Rc::clone(&size),
-                reschedule: Rc::clone(&reschedule),
-                rebuild: Rc::clone(&rebuild),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&ReentrantPreparedText {
+            size: Rc::clone(&size),
+            reschedule: Rc::clone(&reschedule),
+            rebuild: Rc::clone(&rebuild),
+        })
         .expect("mount real reentrant text producer");
     let mut sink = PreparedTextSink::default();
     assert!(runtime.pump(&mut clock, &mut sink).presented());
@@ -1515,20 +1483,16 @@ fn pending_editable() -> PendingEditable {
     let focus = flui_interaction::focus::FocusNode::new();
     let post_frame = Rc::new(RefCell::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &PreparedTextProbe {
-                child: flui_widgets::EditableText::new(
-                    flui_widgets::TextEditingController::with_text("receipt"),
-                    Rc::clone(&focus),
-                )
-                .text_style(flui_painting::typography::TextStyle::default().with_font_size(16.0))
-                .boxed(),
-                rebuild: Rc::new(RefCell::new(None)),
-                post_frame: Rc::clone(&post_frame),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&PreparedTextProbe {
+            child: flui_widgets::EditableText::new(
+                flui_widgets::TextEditingController::with_text("receipt"),
+                Rc::clone(&focus),
+            )
+            .text_style(flui_painting::typography::TextStyle::default().with_font_size(16.0))
+            .boxed(),
+            rebuild: Rc::new(RefCell::new(None)),
+            post_frame: Rc::clone(&post_frame),
+        })
         .expect("mount real receipt field");
     let mut sink = PreparedTextSink::default();
     assert!(runtime.pump(&mut clock, &mut sink).presented());
@@ -2034,14 +1998,10 @@ fn a_lazy_child_adds_a_frontier_without_reentering_the_root_or_partial_paint() {
     let entries = Rc::new(Cell::new(0));
     let lazy_entries = Arc::new(AtomicUsize::new(0));
     runtime
-        .attach_root_widget_with_size(
-            &LazyPreparedText {
-                entries: Rc::clone(&entries),
-                lazy_entries: Arc::clone(&lazy_entries),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&LazyPreparedText {
+            entries: Rc::clone(&entries),
+            lazy_entries: Arc::clone(&lazy_entries),
+        })
         .expect("mount actual layout-built text");
     let mut sink = PreparedTextSink::default();
     assert!(!runtime.pump(&mut clock, &mut sink).presented());
@@ -2174,20 +2134,16 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
     let rebuild = Rc::new(RefCell::new(None));
     let post_frame = Rc::new(RefCell::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &PreparedTextProbe {
-                child: ReentrantPreparedText {
-                    size: Rc::clone(&size),
-                    reschedule: Rc::new(Cell::new(false)),
-                    rebuild: Rc::clone(&rebuild),
-                }
-                .boxed(),
-                rebuild: Rc::new(RefCell::new(None)),
-                post_frame: Rc::clone(&post_frame),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&PreparedTextProbe {
+            child: ReentrantPreparedText {
+                size: Rc::clone(&size),
+                reschedule: Rc::new(Cell::new(false)),
+                rebuild: Rc::clone(&rebuild),
+            }
+            .boxed(),
+            rebuild: Rc::new(RefCell::new(None)),
+            post_frame: Rc::clone(&post_frame),
+        })
         .expect("mount target text with its lifecycle rebuild handle");
     let mut sink = PreparedTextSink::default();
     assert!(runtime.pump(&mut clock, &mut sink).presented());
@@ -2195,15 +2151,13 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
     let id = runtime.install_presentation(sibling);
     let animation_slot = Rc::new(RefCell::new(None));
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             id,
             &PreparedSibling {
                 animation: Rc::clone(&animation_slot),
                 post_frame: Rc::new(RefCell::new(None)),
                 focus: flui_interaction::focus::FocusNode::new(),
             },
-            400.0,
-            400.0,
         )
         .expect("mount sibling with its actual presentation animation registry");
     assert!(runtime.pump(&mut clock, &mut sink).presented());
@@ -2468,29 +2422,23 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
     let (mut runtime, _) = prepared_runtime(&clock);
     let primary_animation = Rc::new(RefCell::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &PreparedSibling {
-                animation: Rc::clone(&primary_animation),
-                post_frame: Rc::new(RefCell::new(None)),
-                focus: flui_interaction::focus::FocusNode::new(),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&PreparedSibling {
+            animation: Rc::clone(&primary_animation),
+            post_frame: Rc::new(RefCell::new(None)),
+            focus: flui_interaction::focus::FocusNode::new(),
+        })
         .expect("mount actual reporting presentation");
     let target = runtime.assemble_presentation(crate::owner_publication::window());
     let target_id = runtime.install_presentation(target);
     let mounted = Rc::new(RefCell::new(None));
     let samples = Rc::new(RefCell::new(Vec::new()));
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             target_id,
             &AuthorityAnimatedText {
                 mounted: Rc::clone(&mounted),
                 samples: Rc::clone(&samples),
             },
-            400.0,
-            400.0,
         )
         .expect("mount actual authority target");
     let runtime = Rc::new(runtime);
@@ -2741,19 +2689,15 @@ fn sampling_report_replacement_case(late_preparation: bool) {
     let rebuild = Arc::new(parking_lot::Mutex::new(None));
     let post_frame = Rc::new(RefCell::new(None));
     runtime
-        .attach_root_widget_with_size(
-            &PreparedTextProbe {
-                child: AuthoredText {
-                    font_size: Arc::clone(&size),
-                    rebuild: Arc::clone(&rebuild),
-                }
-                .boxed(),
-                rebuild: Rc::new(RefCell::new(None)),
-                post_frame: Rc::clone(&post_frame),
-            },
-            400.0,
-            400.0,
-        )
+        .attach_root_widget(&PreparedTextProbe {
+            child: AuthoredText {
+                font_size: Arc::clone(&size),
+                rebuild: Arc::clone(&rebuild),
+            }
+            .boxed(),
+            rebuild: Rc::new(RefCell::new(None)),
+            post_frame: Rc::clone(&post_frame),
+        })
         .expect("mount target text with its ordinary cross-thread rebuild handle");
     let mut sink = PreparedTextSink::default();
     assert!(runtime.pump(&mut clock, &mut sink).presented());
@@ -2761,15 +2705,13 @@ fn sampling_report_replacement_case(late_preparation: bool) {
     let sibling_id = runtime.install_presentation(sibling);
     let animation_slot = Rc::new(RefCell::new(None));
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             sibling_id,
             &PreparedSibling {
                 animation: Rc::clone(&animation_slot),
                 post_frame: Rc::new(RefCell::new(None)),
                 focus: flui_interaction::focus::FocusNode::new(),
             },
-            400.0,
-            400.0,
         )
         .expect("mount actual sibling animation");
     assert!(runtime.pump(&mut clock, &mut sink).presented());
@@ -2978,15 +2920,13 @@ fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime()
     let post_frame = Rc::new(RefCell::new(None));
     let focus = flui_interaction::focus::FocusNode::new();
     runtime
-        .attach_root_widget_with_size_to(
+        .attach_root_widget_to(
             id,
             &PreparedSibling {
                 animation: Rc::clone(&animation_slot),
                 post_frame: Rc::clone(&post_frame),
                 focus: Rc::clone(&focus),
             },
-            400.0,
-            400.0,
         )
         .expect("mount actual sibling animated field once");
     assert!(runtime.pump(&mut clock, &mut sink).presented());
