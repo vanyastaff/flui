@@ -235,6 +235,18 @@ pub enum Error {
         /// For people.
         message: String,
     },
+    /// The lane could not release input it pressed itself: the keys in `held` are still down. Not
+    /// [`Error::InputHeld`], which is someone else's input in the way and worth waiting out; this
+    /// is the lane's own failure, which a retry of the call does not cure.
+    #[error("the {lane} lane left {} held: {message}", held.join(", "))]
+    ReleaseFailed {
+        /// The lane.
+        lane: String,
+        /// What it still holds, by name.
+        held: Vec<String>,
+        /// The first release that failed or was refused, for people.
+        message: String,
+    },
     /// The conversation with the app broke its protocol: a line that is not one, an answer to
     /// nothing asked.
     #[error("protocol: {message}")]
@@ -436,6 +448,7 @@ impl Error {
             Self::Platform { .. } => ErrorCode::Platform,
             Self::InterruptedByUser { .. }
             | Self::Lane { .. }
+            | Self::ReleaseFailed { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
             | Self::Io(_) => return None,
@@ -469,6 +482,7 @@ impl Error {
             | Self::Platform { retry, .. } => *retry,
             Self::InterruptedByUser { .. }
             | Self::Lane { .. }
+            | Self::ReleaseFailed { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
             | Self::Io(_) => Retry::Never,

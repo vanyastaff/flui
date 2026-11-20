@@ -726,7 +726,8 @@ graph LR
     `a_pattern_request_and_an_invoke_tell_their_failures_apart`;
     `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`;
     `steps::small_scrolls_add_up_and_a_part_of_a_pixel_is_carried`;
-    `socket::a_lane_worker_tries_once_more_to_release_when_it_ends`.
+    `socket::a_lane_worker_tries_once_more_to_release_when_it_ends`,
+    `a_panicking_release_after_a_panicking_job_keeps_the_jobs_panic`.
   - The scenarios on the headless target (CI): `scenarios::the_gallery_scenario_passes_on_the_headless_target`,
     `the_accessibility_scenario_passes_on_the_headless_target`,
     `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
@@ -764,7 +765,11 @@ graph LR
     OS lane, a foreign mouse move ending a run `cannot_verify` with its contact released
     (`a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input`), the guard's hook seeing the
     lane's own input come back, the foreground read again before each typed stroke, the mask key
-    keeping the release of a held Control+Shift or Alt+Shift from switching the input language,
+    keeping the release of a held Control+Shift or Alt+Shift from switching the input language
+    and the fifth Shift press or release from turning on Sticky Keys (the app sees the mask as a
+    key event of virtual key `0xE8`: a scenario that compares the exact keys the app received
+    leaves it out; the driver's journal check compares only the kinds of input, so it needs
+    nothing),
     Windows
     Graphics Capture of the app's window, a Narrator session over the scenario app, and the
     isolation spikes below.

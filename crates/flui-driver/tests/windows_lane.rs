@@ -529,11 +529,26 @@ fn a_release_that_would_complete_a_shell_shortcut_is_masked() {
             Keystroke::Release(key("Shift")),
         ]
     );
-    // Four taps sent before, then one more: the OS counts on, and so does the mask.
+    // Four taps sent before, then a fifth press: the OS counts on, and Windows may take the
+    // shortcut at the press, so the mask goes before the press; the press is then the run's
+    // first, and its release needs no mask.
     let mut keys = HeldKeys::new();
     send(&mut keys, &taps(4));
+    let press = keys.plan(&down("Shift"));
+    assert_eq!(
+        press,
+        [
+            Keystroke::Press(MASK),
+            Keystroke::Release(MASK),
+            Keystroke::Press(key("Shift")),
+        ]
+    );
+    assert!(
+        completed_by(&taps(4), &press).iter().all(Option::is_none),
+        "the fifth press completes nothing once masked"
+    );
     send(&mut keys, &[down("Shift")]);
-    assert_eq!(masks(&keys.plan(&up("Shift"))), 1);
+    assert_eq!(masks(&keys.plan(&up("Shift"))), 0);
 }
 
 /// Release everything `keys` holds, recording each stroke sent, every one taken.
@@ -611,8 +626,8 @@ fn the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_inclu
         Ok(())
     });
     assert!(
-        matches!(&refused, Err(flui_driver::Error::InputHeld { message, .. })
-            if message.starts_with("Control, Shift still held")),
+        matches!(&refused, Err(flui_driver::Error::ReleaseFailed { held, .. })
+            if held == &["Control", "Shift"]),
         "the keys left held are named: {refused:?}"
     );
     assert_eq!(

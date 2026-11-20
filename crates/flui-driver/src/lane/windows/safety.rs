@@ -381,9 +381,11 @@ pub struct ShellShortcuts {
 }
 
 impl ShellShortcuts {
-    /// A press of `key`, the keys `held` down before it; what it completes, if anything.
+    /// A press of `key`, the keys `held` down before it; what it completes, if anything. The
+    /// fifth lone Shift press counts as completing Sticky Keys already: Microsoft documents five
+    /// presses, not whether the shortcut fires on the fifth press or its release.
     pub(crate) fn press(&mut self, key: VirtualKey, held: &[u16]) -> Option<&'static str> {
-        let refused = press_takes(key, held);
+        let mut refused = press_takes(key, held);
         let (shift, control, alt) = (
             has(held, Modifier::Shift),
             has(held, Modifier::Control),
@@ -393,6 +395,9 @@ impl ShellShortcuts {
             Some(Modifier::Shift) => {
                 self.lone_shift = held.iter().all(|code| *code == key.code);
                 self.modifier_chord |= alt || control;
+                if self.lone_shift && self.shift_taps.saturating_add(1) >= STICKY_KEYS_TAPS {
+                    refused = refused.or(Some(STICKY_KEYS));
+                }
             }
             Some(Modifier::Alt | Modifier::Control) => {
                 self.lone_shift = false;

@@ -66,15 +66,18 @@ app's trees, frames and input, and this crate composes that with what only the O
   of lone Shift taps): every key edge Windows took goes through it, a release of everything
   included. Only another key restarts the run or breaks a chord: Windows documents five presses
   of Shift and nothing about a pause or pointer input between them, so neither resets the count.
-  The lane never completes a shortcut the shell takes on a release: a release that would (letting
-  go of Control+Shift or Alt+Shift, the fifth lone Shift) is preceded by a press and release of
+  The lane never completes a shortcut the shell takes on a release: a key event that would
+  (letting go of Control+Shift or Alt+Shift, the fifth lone Shift press or its release, since
+  Microsoft does not say which one turns Sticky Keys on) is preceded by a press and release of
   the unassigned virtual key `0xE8` (`held::MASK`), as AutoHotkey masks one, so the app still gets
-  its chord. The release of everything masks whenever a modifier is held, and a release that
+  its keys, the mask among them. The release of everything masks whenever a modifier is held, and a release that
   would still complete a shortcut (the mask not sent) is not sent. Only a press the shell takes
   (the Windows key, Alt+Tab, Ctrl+Shift+Esc, a lock key) is refused before a sequence.
 - **Nothing stays pressed without a word.** Where no caller is left to retry (the lane's worker
   ending, a job that panicked), the worker releases once more after a failed release and logs
-  what is still held at error level; the error names the keys. It never waits.
+  what is still held at error level; the error (`Error::ReleaseFailed`, the lane's own failure,
+  apart from `input_held`) names the keys. It never waits, and a panic in that release (the
+  lane's, a log subscriber's) is held behind the job's panic (`FirstPanic`), never in its place.
 - **An accessibility provider's answers stay apart.** A UI Automation read or invoke tells a
   provider that timed out (`timeout`), an element that went away (`gone`) and a pattern the
   element does not offer (`action_unsupported`) from each other; a timeout or a gone element

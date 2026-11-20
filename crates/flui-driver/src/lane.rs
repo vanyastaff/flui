@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
+use flui_foundation::panic::{FirstPanic, discard_payload};
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
@@ -383,8 +384,12 @@ impl LaneWorker {
                         job(&mut lane);
                     }
                 }
-                // The worker is ending: nothing may stay pressed.
-                release_at_end(&mut lane);
+                // The worker is ending: nothing may stay pressed. A panic of the lane or of a log
+                // subscriber here has no one left to be raised to, so it is destroyed under
+                // containment as the collector drops.
+                let mut ending = FirstPanic::new();
+                ending.contain(|| release_at_end(&mut lane));
+                drop(ending);
             })?;
         Ok(Self {
             jobs: Some(jobs),
@@ -420,16 +425,22 @@ impl LaneWorker {
         let job: Job = Box::new(move |lane| {
             // A lane is code the driver does not own: its panic is resumed on the thread that
             // waits for the job, after the lane released what it held, and the worker serves on.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a lane's panic is resumed on the thread waiting for the job"
-            )]
-            let outcome =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut *lane)));
-            if outcome.is_err() {
-                release_at_end(lane);
+            // The release after it runs code the driver does not own either (the lane's, a log
+            // subscriber's): a panic there is held behind the job's, never in its place.
+            let mut first = FirstPanic::new();
+            let value = first.contain(|| job(&mut *lane));
+            if first.is_held() {
+                first.contain(|| release_at_end(&mut *lane));
             }
-            let _ = answer.send(outcome);
+            let outcome = value.ok_or_else(|| {
+                first
+                    .into_payload()
+                    .expect("BUG: a job that returned no value held its panic")
+            });
+            if let Err(mpsc::SendError(Err(payload))) = answer.send(outcome) {
+                // The caller stopped waiting: nobody resumes the job's panic.
+                discard_payload(payload);
+            }
         });
         let sent = self
             .jobs

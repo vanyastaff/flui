@@ -105,6 +105,8 @@ pub struct ScriptedLane {
     refuses: Option<String>,
     /// How many of its next releases fail, as an OS that refuses them does.
     failing_releases: usize,
+    /// Whether its releases panic, as a lane's code or a log subscriber can.
+    panicking_releases: bool,
 }
 
 impl ScriptedLane {
@@ -119,9 +121,17 @@ impl ScriptedLane {
                 log: log.clone(),
                 refuses: None,
                 failing_releases: 0,
+                panicking_releases: false,
             },
             log,
         )
+    }
+
+    /// Whose releases panic, each still counted in the log.
+    #[must_use]
+    pub fn panicking_releases(mut self) -> Self {
+        self.panicking_releases = true;
+        self
     }
 
     /// Whose next `count` releases fail, each still counted in the log.
@@ -214,11 +224,16 @@ impl Lane for ScriptedLane {
 
     fn release_all(&mut self) -> Result<()> {
         self.log.releases.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            !self.panicking_releases,
+            "the scripted lane's release panics"
+        );
         if self.failing_releases > 0 {
             self.failing_releases -= 1;
-            return Err(Error::InputHeld {
-                message: "Control still held after the release of everything".into(),
-                retry: flui_protocol::error::ErrorCode::InputHeld.default_retry(),
+            return Err(Error::ReleaseFailed {
+                lane: self.name().to_owned(),
+                held: vec!["Control".to_owned()],
+                message: "the scripted OS refused the release".into(),
             });
         }
         Ok(())
