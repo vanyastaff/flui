@@ -165,7 +165,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     root_id: Option<RenderId>,
 
     /// The visual-update callback
-    /// ([`crate::pipeline::VisualUpdateNotifier`]), shared through
+    /// ([`VisualUpdateNotifier`](crate::pipeline::notifier::VisualUpdateNotifier)), shared through
     /// [`SharedNotifier`]: callers take owned snapshots and deliver them with
     /// no guard held.
     ///
