@@ -48,7 +48,7 @@ use flui_view::prelude::*;
 use flui_view::{Provided, ProvidedValue, RebuildHandle};
 
 use super::actions::{EnclosingActions, FocusRecord};
-use super::focus_host::{FocusConfig, FocusHost, FocusNodeOwnership};
+use super::focus_host::{FocusConfig, FocusHost};
 
 /// Reports whether this widget's node gained or lost the primary focus, with
 /// the dispatch's [`EventContext`] (ADR-0086).
@@ -204,7 +204,7 @@ impl Focus {
     /// the source of truth for all of its attributes.
     #[must_use]
     pub fn focus_node(mut self, node: Rc<FocusNode>) -> Self {
-        self.config.node_ownership = FocusNodeOwnership::ManagedExternal(node);
+        self.config.host_managed(node);
         self
     }
 
@@ -218,7 +218,7 @@ impl Focus {
     #[must_use]
     pub fn with_external_node(node: Rc<FocusNode>, child: impl IntoView) -> Self {
         let mut focus = Self::new(child);
-        focus.config.node_ownership = FocusNodeOwnership::ExternalSource(node);
+        focus.config.host_source(node);
         focus
     }
 

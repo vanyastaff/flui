@@ -48,7 +48,7 @@ use super::actions::{
     shared_action,
 };
 use super::focus::{FocusChangeHandler, render_box_rect_provider};
-use super::focus_host::{FocusConfig, FocusEdges, FocusHost, FocusNodeOwnership};
+use super::focus_host::{FocusConfig, FocusEdges, FocusHost};
 use super::focus_ring::DefaultFocusRingStyle;
 use super::gesture_detector::{PressCallbacks, PressShape, PressSource, TapSlot};
 use super::listener::{ContactCallbacks, pointer_callback, release_targets};
@@ -445,9 +445,11 @@ impl InteractiveNode {
     /// The focus part's configuration: the control's own, conjoined with
     /// whether the control can be operated.
     fn focus_config(&self) -> Option<FocusConfig> {
-        self.focus.as_ref().map(|config| FocusConfig {
-            can_request_focus: Some(config.can_request_focus.unwrap_or(true) && self.operable()),
-            ..config.clone()
+        self.focus.as_ref().map(|config| {
+            let mut config = config.clone();
+            config.can_request_focus =
+                Some(config.can_request_focus.unwrap_or(true) && self.operable());
+            config
         })
     }
 
@@ -508,10 +510,7 @@ impl InteractiveNode {
     /// [`Focus`](crate::Focus) does.
     #[must_use]
     pub fn focusable(self, debug_label: &'static str) -> Self {
-        self.focus(FocusConfig {
-            debug_label: Some(debug_label),
-            ..FocusConfig::new()
-        })
+        self.focus(FocusConfig::labelled(debug_label))
     }
 
     /// Host `node` instead of a focus node of its own, as
@@ -520,10 +519,9 @@ impl InteractiveNode {
     /// switch.
     #[must_use]
     pub fn focus_node(self, node: Rc<FocusNode>) -> Self {
-        self.focus(FocusConfig {
-            node_ownership: FocusNodeOwnership::ManagedExternal(node),
-            ..FocusConfig::new()
-        })
+        let mut config = FocusConfig::new();
+        config.host_managed(node);
+        self.focus(config)
     }
 
     /// Host a focus node configured by `config`, as [`Focus`](crate::Focus)

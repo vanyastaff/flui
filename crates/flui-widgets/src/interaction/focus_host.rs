@@ -115,17 +115,23 @@ fn key_handler(handler: &FocusKeyHandler, shared: &Rc<Shared>) -> KeyEventHandle
 /// managed external node lets the widget manage explicitly supplied
 /// attributes. An external source leaves every node attribute under the
 /// caller's control.
-#[derive(Clone)]
-pub(crate) enum FocusNodeOwnership {
+#[derive(Clone, Copy)]
+pub(crate) enum FocusNodeOwnership<'config> {
     Internal,
-    ManagedExternal(Rc<FocusNode>),
-    ExternalSource(Rc<FocusNode>),
+    ManagedExternal(&'config Rc<FocusNode>),
+    ExternalSource(&'config Rc<FocusNode>),
 }
 
 /// What a widget asks of the focus node its element hosts.
 #[derive(Clone)]
 pub(crate) struct FocusConfig {
-    pub(crate) node_ownership: FocusNodeOwnership,
+    /// The external node to host, `None` for a node of the host's own;
+    /// read through [`node_ownership`](Self::node_ownership).
+    external_node: Option<Rc<FocusNode>>,
+    /// Whether `external_node` is the source of truth for its attributes.
+    /// Held beside the node rather than in an enum with it, so the flag
+    /// shares a word with the others and a control's view stays smaller.
+    external_source: bool,
     pub(crate) autofocus: bool,
     pub(crate) can_request_focus: Option<bool>,
     pub(crate) skip_traversal: Option<bool>,
@@ -161,7 +167,8 @@ impl FocusConfig {
     /// A widget-owned node with every attribute at its default.
     pub(crate) fn new() -> Self {
         Self {
-            node_ownership: FocusNodeOwnership::Internal,
+            external_node: None,
+            external_source: false,
             autofocus: false,
             can_request_focus: None,
             skip_traversal: None,
@@ -169,6 +176,35 @@ impl FocusConfig {
             debug_label: None,
             rare: None,
         }
+    }
+
+    /// A widget-owned node labelled `debug_label`.
+    pub(crate) fn labelled(debug_label: &'static str) -> Self {
+        Self {
+            debug_label: Some(debug_label),
+            ..Self::new()
+        }
+    }
+
+    /// Which side is authoritative for the hosted node's configuration.
+    pub(crate) fn node_ownership(&self) -> FocusNodeOwnership<'_> {
+        match (&self.external_node, self.external_source) {
+            (None, _) => FocusNodeOwnership::Internal,
+            (Some(node), false) => FocusNodeOwnership::ManagedExternal(node),
+            (Some(node), true) => FocusNodeOwnership::ExternalSource(node),
+        }
+    }
+
+    /// Host `node`, managing the attributes the widget supplies.
+    pub(crate) fn host_managed(&mut self, node: Rc<FocusNode>) {
+        self.external_node = Some(node);
+        self.external_source = false;
+    }
+
+    /// Host `node` as the source of truth for all of its attributes.
+    pub(crate) fn host_source(&mut self, node: Rc<FocusNode>) {
+        self.external_node = Some(node);
+        self.external_source = true;
     }
 
     /// The rare parts to write, allocated on the first one a widget sets.
@@ -199,7 +235,7 @@ impl FocusConfig {
         node: &Rc<FocusNode>,
         registrations: &mut RareHostRegistrations,
     ) {
-        if matches!(self.node_ownership, FocusNodeOwnership::ExternalSource(_)) {
+        if matches!(self.node_ownership(), FocusNodeOwnership::ExternalSource(_)) {
             if let Some(previous) = registrations.take_traversal() {
                 previous.relinquish();
             }
@@ -221,7 +257,7 @@ impl FocusConfig {
     /// [`Stale`](flui_interaction::focus::FocusRequestOutcome::Stale) rather than
     /// waiting for an attachment that will never come.
     fn make_node(&self) -> Rc<FocusNode> {
-        match &self.node_ownership {
+        match self.node_ownership() {
             FocusNodeOwnership::Internal => {
                 let node = FocusNode::with_debug_label(self.debug_label.unwrap_or("Focus"));
                 flui_interaction::__runtime::mark_widget_owned(&node);
@@ -247,7 +283,7 @@ impl FocusConfig {
         registrations: &mut RareHostRegistrations,
         shared: &Rc<Shared>,
     ) {
-        match &self.node_ownership {
+        match self.node_ownership() {
             FocusNodeOwnership::Internal => {
                 node.set_can_request_focus(self.can_request_focus.unwrap_or(true));
                 node.set_skip_traversal(self.skip_traversal.unwrap_or(false));
@@ -429,7 +465,7 @@ impl FocusHost {
         Self {
             shared,
             node,
-            owns_node: matches!(config.node_ownership, FocusNodeOwnership::Internal),
+            owns_node: matches!(config.node_ownership(), FocusNodeOwnership::Internal),
             rare,
             focus_manager: ctx.focus_manager(),
             parent: None,
@@ -630,7 +666,7 @@ impl FocusHost {
         // Against the hosted node, not the previous configuration: a
         // replacement refused earlier left the node behind the one it was
         // asked for.
-        let node_changed = match &config.node_ownership {
+        let node_changed = match config.node_ownership() {
             FocusNodeOwnership::Internal => !self.owns_node,
             FocusNodeOwnership::ManagedExternal(node)
             | FocusNodeOwnership::ExternalSource(node) => !Rc::ptr_eq(node, &self.node),
@@ -703,7 +739,7 @@ impl FocusHost {
                 .focus_subscription
                 .replace(replacement_focus_subscription);
             self.node = replacement;
-            self.owns_node = matches!(config.node_ownership, FocusNodeOwnership::Internal);
+            self.owns_node = matches!(config.node_ownership(), FocusNodeOwnership::Internal);
             self.rare = replacement_rare;
             self.rect_provider_registration = replacement_rect_provider_registration;
             self.context_registration = replacement_context_registration;
