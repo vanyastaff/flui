@@ -67,8 +67,9 @@ pub(crate) struct MenuHost {
     policy: Cell<Option<SelectionMenuPolicy>>,
     items: RefCell<Option<Rc<[MenuItem]>>>,
     warned: Cell<bool>,
-    /// The reading direction at the owner, which its toolbar keeps though
-    /// it is built in the overlay.
+    /// The reading direction at the owner, which its toolbar, and an
+    /// editable field's handles and magnifier, keep though they are built in
+    /// the overlay.
     direction: Cell<TextDirection>,
     /// The platform whose conventions the owner followed as of its last
     /// build, which picks the toolbar policy when none is given.
@@ -207,7 +208,9 @@ impl MenuHost {
         self.secondary.take()
     }
 
-    /// The reading direction at the owner.
+    /// The reading direction at the owner as of its last
+    /// [`configure`](Self::configure): what the toolbar, and an editable
+    /// field's handles and magnifier, are built for.
     pub(crate) fn direction(&self) -> TextDirection {
         self.direction.get()
     }

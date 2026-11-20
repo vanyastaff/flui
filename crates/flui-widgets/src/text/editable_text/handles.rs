@@ -12,7 +12,6 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
-use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable};
@@ -350,7 +349,8 @@ impl FieldHandles {
     /// Resolves the field's menu in its build, its items performing
     /// through `chain`, the field's actions: a retired popup closes after
     /// the frame, and a shown toolbar shows the new items, follows their
-    /// enablement, or goes with the look.
+    /// enablement, or goes with the look. A change of the field's direction
+    /// builds the shown handles and magnifier again for the new one.
     pub(super) fn menu_configured(
         self: &Rc<Self>,
         ctx: &dyn BuildContext,
@@ -360,16 +360,23 @@ impl FieldHandles {
     ) {
         let editing = editing_commands(ctx);
         let owner = "an EditableText";
+        let direction = self.menu.direction();
         (self.menu).configure(ctx, settings, &editing, chain, origin, owner);
+        let mut failure = FirstPanic::new();
+        // The handles and the magnifier are built for the field's direction:
+        // a shown one is built again for the new one.
+        if self.menu.direction() != direction {
+            self.refresh(&mut failure);
+        }
         let post_frame = self
             .parts
             .borrow()
             .as_ref()
             .and_then(|parts| parts.post_frame.clone());
         if !self.menu.configured(post_frame.as_ref()) {
+            failure.resume();
             return;
         }
-        let mut failure = FirstPanic::new();
         // Taken away first, so a menu turned off leaves no toolbar.
         self.hide_toolbar(&mut failure);
         self.show_toolbar(&mut failure);
@@ -1291,7 +1298,9 @@ fn handle(
     let (_, line_height) = handles.end_line(side)?;
     let info = HandleInfo {
         side,
-        text_direction: TextDirection::Ltr,
+        // The direction the field lays its line out in, read at the field:
+        // the overlay these handles are built in may have another.
+        text_direction: handles.menu.direction(),
         line_height,
     };
     let (start, update, end) = (
@@ -1379,7 +1388,7 @@ fn drag_magnifier(handles: &Rc<FieldHandles>, ctx: &dyn BuildContext) -> Option<
         HandleSide::End => handles.links[1],
         HandleSide::Start | HandleSide::Collapsed => handles.links[0],
     };
-    let info = MagnifierInfo::new(side, TextDirection::Ltr, line_height);
+    let info = MagnifierInfo::new(side, handles.menu.direction(), line_height);
     let along = handles.magnifier_along.get();
     Some(crate::text::magnifier(
         look.as_ref(),

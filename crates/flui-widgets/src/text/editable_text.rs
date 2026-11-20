@@ -947,6 +947,10 @@ pub struct EditableTextState {
     /// build, which the key handler reads at dispatch: the word-jump
     /// modifier and the chords left to the route.
     platform: Rc<Cell<TargetPlatform>>,
+    /// The direction the field laid its line out in as of its last build,
+    /// which the key handler reads at dispatch: Left and Right step toward
+    /// the side of the line they name.
+    direction: Rc<Cell<TextDirection>>,
     /// The touch long press that selects a word and shows its handles.
     long_press: FieldLongPress,
     /// Whether the host serving the field draws its selection UI, which the
@@ -995,6 +999,7 @@ impl StatefulView for EditableText {
             writer: ctx.writer_source(),
             touch_handles: FieldHandles::new(),
             platform: Rc::new(Cell::new(TargetPlatform::Unknown)),
+            direction: Rc::new(Cell::new(TextDirection::Ltr)),
             long_press: FieldLongPress::new(),
             platform_selection: Rc::new(PlatformSelection::new(ctx.rebuild_handle())),
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
@@ -1398,6 +1403,7 @@ impl EditableTextState {
             Rc::clone(&self.text_input),
             self.writer.clone(),
             Rc::clone(&self.platform),
+            Rc::clone(&self.direction),
         );
         let edits = self.edit_observer();
         let store = self.text_store.clone();
@@ -2265,6 +2271,8 @@ impl ViewState<EditableText> for EditableTextState {
             );
         let platform = flui_view::environment::PlatformConvention::of(ctx);
         self.platform.set(platform);
+        self.direction
+            .set(crate::Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
         let caret_handle = view
             .caret_handle
             .or_else(|| DefaultSelectionControls::caret_handle_of(ctx))
@@ -2596,6 +2604,7 @@ fn build_key_handler(
     text_input: Rc<Cell<TextInputOptions>>,
     writer: WriterSource,
     platform: Rc<Cell<TargetPlatform>>,
+    direction: Rc<Cell<TextDirection>>,
 ) -> KeyEventHandler {
     Rc::new(move |event| {
         // Cloned out, so no borrow of the cell is held while the edit's
@@ -2603,6 +2612,7 @@ fn build_key_handler(
         let controller = controller.borrow().clone();
         // The platform the field followed at its last build.
         let platform = platform.get();
+        let direction = direction.get();
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }
@@ -2679,25 +2689,26 @@ fn build_key_handler(
             // and leaves the anchor. Ctrl/Alt raises
             // the granularity from character to WORD without changing that
             // axis — the two modifiers compose independently.
-            Key::Named(NamedKey::ArrowLeft) => {
+            //
+            // The controller steps by offset: its `left` is toward the text's
+            // start. Left and Right name sides of the line, so under a
+            // right-to-left line, whose start is on the right, Left steps
+            // toward the end. Inside a run against the line's direction the
+            // step stays by offset.
+            Key::Named(arrow @ (NamedKey::ArrowLeft | NamedKey::ArrowRight)) => {
+                let toward_start =
+                    (*arrow == NamedKey::ArrowLeft) == (direction == TextDirection::Ltr);
                 let extend = modifiers.contains(Modifiers::SHIFT);
                 let by_word = is_word_jump_modifier(modifiers, platform);
-                match (by_word, extend) {
-                    (true, true) => controller.extend_selection_word_left(),
-                    (true, false) => controller.move_caret_word_left(),
-                    (false, true) => controller.extend_selection_left(),
-                    (false, false) => controller.move_caret_left(),
-                }
-                KeyEventResult::Handled
-            }
-            Key::Named(NamedKey::ArrowRight) => {
-                let extend = modifiers.contains(Modifiers::SHIFT);
-                let by_word = is_word_jump_modifier(modifiers, platform);
-                match (by_word, extend) {
-                    (true, true) => controller.extend_selection_word_right(),
-                    (true, false) => controller.move_caret_word_right(),
-                    (false, true) => controller.extend_selection_right(),
-                    (false, false) => controller.move_caret_right(),
+                match (toward_start, by_word, extend) {
+                    (true, true, true) => controller.extend_selection_word_left(),
+                    (true, true, false) => controller.move_caret_word_left(),
+                    (true, false, true) => controller.extend_selection_left(),
+                    (true, false, false) => controller.move_caret_left(),
+                    (false, true, true) => controller.extend_selection_word_right(),
+                    (false, true, false) => controller.move_caret_word_right(),
+                    (false, false, true) => controller.extend_selection_right(),
+                    (false, false, false) => controller.move_caret_right(),
                 }
                 KeyEventResult::Handled
             }
@@ -2829,12 +2840,12 @@ struct FieldMount {
 }
 
 impl EditableTextRenderView {
-    fn build_render_object(&self) -> RenderEditable {
+    fn build_render_object(&self, direction: TextDirection) -> RenderEditable {
         let mut span = TextSpan::new(self.text.clone());
         if let Some(style) = self.text_style.clone() {
             span = span.with_style(style);
         }
-        let mut editable = RenderEditable::new(span, TextDirection::Ltr)
+        let mut editable = RenderEditable::new(span, direction)
             .with_text_sizing(self.text_sizing.clone())
             .with_font_weight_adjustment(self.font_weight_adjustment)
             .with_caret_byte_offset(self.caret_byte_offset)
@@ -2857,7 +2868,9 @@ impl RenderView for EditableTextRenderView {
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         self.press_probe.set(ctx.press_probe());
-        self.build_render_object()
+        // The ambient reading direction is the line's base direction, as it
+        // is for `Text` without one; a dependency, so a flip relays out.
+        self.build_render_object(crate::Directionality::of_render_object(ctx))
     }
 
     fn update_render_object(
@@ -2871,6 +2884,7 @@ impl RenderView for EditableTextRenderView {
             span = span.with_style(style);
         }
         let mut impact = render_object.set_text(span);
+        impact |= render_object.set_text_direction(crate::Directionality::of_render_object(ctx));
         impact |= render_object.set_text_sizing(self.text_sizing.clone());
         impact |= render_object.set_font_weight_adjustment(self.font_weight_adjustment);
         impact |= render_object.set_caret_byte_offset(self.caret_byte_offset);
