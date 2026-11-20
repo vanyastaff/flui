@@ -835,12 +835,8 @@ impl CustomPainter for PauseGlyph {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any()
+        (old as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old.paused != self.paused)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

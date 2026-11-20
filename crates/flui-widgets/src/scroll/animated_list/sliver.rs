@@ -478,7 +478,7 @@ where
             Some(item.build(&keys[position], shown))
         });
         let find = move |key: &dyn ViewKey| {
-            key.as_any()
+            (key as &dyn std::any::Any)
                 .downcast_ref::<ValueKey<K>>()
                 .and_then(|key| index.get(key.value()).copied())
         };

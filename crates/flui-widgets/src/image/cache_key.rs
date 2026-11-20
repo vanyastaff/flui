@@ -112,8 +112,7 @@ impl fmt::Debug for MemoryKey {
 #[derive(Clone)]
 struct CustomKey(Rc<dyn DynKey>);
 
-trait DynKey: fmt::Debug {
-    fn as_any(&self) -> &dyn Any;
+trait DynKey: Any + fmt::Debug {
     fn dyn_eq(&self, other: &dyn DynKey) -> bool;
     fn dyn_hash(&self, state: &mut dyn Hasher);
 }
@@ -122,13 +121,8 @@ impl<K> DynKey for K
 where
     K: Hash + Eq + fmt::Debug + 'static,
 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn dyn_eq(&self, other: &dyn DynKey) -> bool {
-        other
-            .as_any()
+        (other as &dyn Any)
             .downcast_ref::<K>()
             .is_some_and(|other| other == self)
     }

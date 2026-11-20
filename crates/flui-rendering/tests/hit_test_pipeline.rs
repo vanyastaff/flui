@@ -250,9 +250,6 @@ impl flui_rendering::delegates::FlowDelegate for TiltedPlaneFlow {
     fn should_repaint(&self, _old: &dyn flui_rendering::delegates::FlowDelegate) -> bool {
         false
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 pub(crate) fn perspective_flow_hits_its_actual_child_plane() {

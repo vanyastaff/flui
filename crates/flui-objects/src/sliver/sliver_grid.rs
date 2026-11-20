@@ -292,7 +292,8 @@ impl RenderSliverGrid {
         &mut self,
         new_delegate: Rc<dyn SliverGridDelegate>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let type_changed = new_delegate.as_any().type_id() != self.grid_delegate.as_any().type_id();
+        let type_changed =
+            !crate::dynamic_type::same_concrete_type(&*new_delegate, &*self.grid_delegate);
         let impact = if type_changed || new_delegate.should_relayout(&*self.grid_delegate) {
             flui_rendering::RenderUpdateImpact::LAYOUT
         } else {

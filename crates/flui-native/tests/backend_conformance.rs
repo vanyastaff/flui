@@ -765,10 +765,6 @@ impl PlatformHaptics for TableHaptics {
             }
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// One reading of the shared decoder: a pointer reading, or a scroll, which
