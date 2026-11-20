@@ -1,5 +1,5 @@
-//! Helpers shared by the commands: the repository root, files relative to it,
-//! and the workspace metadata.
+//! Helpers shared by the commands: the repository root and files relative to
+//! it.
 
 use std::path::{Path, PathBuf};
 

@@ -39,7 +39,7 @@
 
 ## Execution rules
 
-- One task is one worktree (`cargo xtask worktree new driver/<slug>`) and one PR, with
+- One task is one worktree (`git worktree add`) and one PR, with
   `cargo xtask check-changed` green.
 - Each behaviour test fails with its production hunk reverted, run in an isolated checkout.
 - Test names carry no task or requirement IDs.

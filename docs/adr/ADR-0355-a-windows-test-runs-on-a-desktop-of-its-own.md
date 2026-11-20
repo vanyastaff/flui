@@ -145,8 +145,8 @@ leaves its windows open (`no_case_leaves_a_window_shown` in `drag::windows::test
   and the CI jobs install the newest 0.9 release.
 - Bad, because the setup script runs a `cargo build` at the start of every Windows run (a no-op
   once built), and a run started while another uses `test-desktop.exe` cannot replace it after its
-  source changes. A run whose tests build into another target directory builds xtask's
-  dependencies once more in `target/`, unless a shared build directory (heli's) holds them.
+  source changes. A run whose tests build into another target directory builds `test-desktop`
+  once more in `target/` (it depends on `windows` alone), unless a shared build directory (heli's) holds it.
 - Bad, because a case that cannot verify off the input desktop is reported as passed; only
   `FLUI_REQUIRE_INPUT_DESKTOP` and its `CANNOT_VERIFY` line tell it apart.
 - Bad, because plain `cargo test` still starts its tests on the caller's desktop.
@@ -161,7 +161,7 @@ leaves its windows open (`no_case_leaves_a_window_shown` in `drag::windows::test
   `platform_it`) reads, under nextest, its own thread's desktop: `flui-test-<run id>`, taking no
   input, or not that desktop under `FLUI_TEST_VISIBLE_DESKTOP=1`. Without the scripts of §1 it
   fails.
-- `a_command_line_parses_back_into_its_arguments` (in `test-desktop.rs`) pins the quoting that
+- `a_command_line_parses_back_into_its_arguments` (in `tools/test-desktop/src/main.rs`) pins the quoting that
   hands the test its arguments.
 - The nightly Windows run (`nightly-platforms.yml`) runs flui-native's suite and the GPU readbacks
   on the run's desktop and the interactive cases with `FLUI_TEST_VISIBLE_DESKTOP=1` and

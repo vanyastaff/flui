@@ -13,7 +13,7 @@
   the scenarios hold their own baseline, and the other comparisons are steps (§7). The same §1
   for `worktree` and `doctor`, the other tools it lists there, which are removed (§9).
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
-  §3 for the two gates it keeps, `unmounted-tests` and `adr-numbers`: they are steps of the
+  §3 for the three gates it keeps, `toolchain`, `unmounted-tests` and `adr-numbers`: they are steps of the
   `checks` job (§9).
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   §3 only for the formatters, the linters and the link check it keeps in `cargo xtask checks`:
@@ -95,7 +95,7 @@ cargo-audit reads, so cargo-audit is not added beside them.
 
 `cargo fmt --all --check`, typos, `taplo fmt --check` and lychee are steps of CI's `checks` job,
 each running even when one before it failed. `cargo xtask checks` keeps only the checks no standard
-tool makes: the toolchain pin, unmounted test files, ADR numbers, the changelog fragments and the
+tool makes: the changelog fragments and the
 generated files against their sources. lychee's command line in the job takes the options
 `docs-links` passed it; the extra pass that caught a link climbing above the repository root goes
 with `docs-links`, so such a link is the reader's to catch.
@@ -135,7 +135,7 @@ configures `run_in_browser`. A target whose run passes no assertion fails the st
 target beside a `wasm32` target, which may hold none; an empty list fails it too. The
 `wasm-bindgen-cli` the job installs is the one version of
 `wasm-bindgen` that `cargo metadata --all-features` lists, which is every package Cargo.lock holds;
-more than one fails the step, and `cargo xtask doctor full` fails its row on the same lock.
+more than one fails the step.
 
 ### §6. `cross-typecheck` lints the whole workspace for four native triples
 
@@ -348,8 +348,6 @@ name is not compared. The reader of a change to those steps holds that.
   the author for it; the readers of "Before a merge" read git, not the body, so the author holds
   it. A pull request that changes `fuzz.yml`, `.cargo/fuzz.toml`, a target or its seeds runs
   `gh workflow run Fuzz --ref <branch>` at the head that merges the same way (§8).
-- `cargo test -p xtask` holds doctor's wasm-bindgen row to one locked version
-  (`the_wasm_bindgen_row_needs_one_locked_version_installed`, `this_lock_pins_one_wasm_bindgen`).
 
 ## Pros and cons of the options
 
