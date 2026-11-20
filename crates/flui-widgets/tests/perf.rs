@@ -39,6 +39,10 @@
 //! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
 //! widening every change's CI scope.
 
+// A scenario's `baseline::Held` writes a bless when it drops; `let _ =` would
+// drop it before the scenario's budget assertions run.
+#![deny(let_underscore_drop)]
+
 use std::time::Duration;
 
 use flui_layer::TextureRegistration;
@@ -214,7 +218,7 @@ fn mount() -> Mounted {
 /// scenario's baseline file ([`baseline::hold`]). Called before a scenario
 /// asserts, so a failing budget still reports its numbers; the scenario keeps
 /// the returned hold to its end, so a bless waits for its assertions.
-fn record(scenario: &str, report: &FrameReport, heap: HeapCounts) -> baseline::Held {
+fn hold_report(scenario: &str, report: &FrameReport, heap: HeapCounts) -> baseline::Held {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
     counts.extend(heap_counts(heap));
     baseline::hold(scenario, &counts)
@@ -241,7 +245,7 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     app.laid.perform_reassemble();
     app.laid.reassemble_render_tree();
     let (report, allocations) = perf_measured(|| app.laid.pump_report(FRAME));
-    let _baseline = record("full_reassemble", &report, allocations);
+    let _baseline = hold_report("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
         if matches!(
@@ -273,7 +277,7 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     // Two frames: a lazy band that first appears is built after that frame's
     // paint and lands on the next (the ListView first-frame divergence).
     let (report, allocations) = perf_measured(|| app.pump_many(2));
-    let _baseline = record("list_10k_scroll_one_screen", &report, allocations);
+    let _baseline = hold_report("list_10k_scroll_one_screen", &report, allocations);
 
     assert!(
         band < 400,
@@ -455,7 +459,7 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         controller.set_value(0.5).expect("no build is running");
         laid.pump_report(FRAME)
     });
-    let _baseline = record("slide_transition_tick", &report, allocations);
+    let _baseline = hold_report("slide_transition_tick", &report, allocations);
     assert_eq!(
         allocations,
         HeapCounts::default(),
@@ -708,7 +712,7 @@ fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
 fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
     let (small, small_heap) = caret_blinks(1_000);
     let (large, large_heap) = caret_blinks(10_000);
-    let _baseline = record("caret_blink_in_10k_list", &large, large_heap);
+    let _baseline = hold_report("caret_blink_in_10k_list", &large, large_heap);
 
     for name in [
         "nodes_painted",
@@ -820,7 +824,7 @@ fn perf_a_not_shown_retry_republishes_the_held_version() {
     let shown = laid.painted_frame_count();
 
     let (retry, heap) = perf_measured(|| laid.pump_report(FRAME));
-    let _baseline = record("not_shown_retry", &retry, heap);
+    let _baseline = hold_report("not_shown_retry", &retry, heap);
     assert_eq!(
         laid.painted_frame_count(),
         shown + 1,
@@ -971,7 +975,7 @@ fn perf_a_texture_frame_republishes_the_held_version() {
 
     feed(&feeds, 0, 9);
     let (report, heap) = perf_measured(|| laid.pump_report(FRAME));
-    let _baseline = record("texture_frame", &report, heap);
+    let _baseline = hold_report("texture_frame", &report, heap);
     assert_eq!(
         heap,
         HeapCounts::default(),

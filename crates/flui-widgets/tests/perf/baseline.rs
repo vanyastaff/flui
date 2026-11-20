@@ -9,17 +9,18 @@
 //!   flui-widgets' default features, which is where the files were blessed: the
 //!   heap counters move with the allocator's platform and with the features
 //!   that change what a frame builds.
-//! - `bless`: a scenario rewrites its file from this run once its test has
-//!   passed. [`hold`] returns a [`Held`] the scenario keeps to its end, and a
-//!   panic before then (a broken budget) writes nothing.
+//! - `bless`: a scenario rewrites its file from this run once its body has
+//!   run to its end. [`hold`] returns a [`Held`] the scenario keeps to the end
+//!   of its body, and a panic before then (a broken budget) writes nothing; a
+//!   panic in the teardown of what the body declared before the hold comes
+//!   after the write ([`Held`]).
 //!
 //! When `FLUI_PERF_OUT` names a directory, a `check` or `bless` run first
 //! writes each scenario's counts there as `<scenario>.toml`, in the baseline
-//! file's form. CI's
-//! `perf-gates` job compares that directory with the baseline afterwards, so a
-//! scenario that held nothing (it stopped running, or no longer reaches
-//! [`hold`]) fails there, and a cost that fell, which passes here, shows in the
-//! job's log.
+//! file's form. CI's `perf-gates` job compares that directory with the baseline
+//! afterwards, so a scenario that held nothing (it stopped running, or no
+//! longer reaches [`hold`]) fails there, and a cost that fell, which passes
+//! here, shows in the job's log.
 //!
 //! The comparison depends on the kind of counter:
 //!
@@ -93,9 +94,12 @@ impl Mode {
     }
 }
 
-/// A scenario's hold on its file, kept to the end of its test. Under `bless`
-/// it rewrites the file when it drops, unless the thread is panicking: a
-/// scenario whose budget broke after it held its counts blesses nothing.
+/// A scenario's hold on its file, kept to the end of its test body. Under
+/// `bless` it rewrites the file when it drops, unless the thread is panicking:
+/// a scenario whose budget broke after it held its counts blesses nothing. A
+/// value the body declared before the hold drops after it, so a panic in that
+/// teardown (a runtime unmounting its tree) fails the test after the file is
+/// written.
 #[must_use = "a bless writes the file when this drops without a panic; bind it to the end of the test"]
 pub(crate) struct Held {
     /// The file and the text a bless writes to it.
@@ -133,14 +137,8 @@ pub(crate) fn hold(scenario: &str, counts: &[(&str, u64)]) -> Held {
     );
     let mode = Mode::parse(std::env::var(MODE_VARIABLE).ok().as_deref())
         .unwrap_or_else(|error| panic!("{error}"));
-    // Only a run with a mode records, so a step whose mode variable is
-    // misspelled finds no records rather than a run that compared nothing.
-    if mode.is_some()
-        && let Some(records) = std::env::var_os(RECORD_VARIABLE)
-    {
-        record(Path::new(&records), scenario, &current);
-    }
-    hold_in(&directory(), mode, scenario, &current)
+    let records = std::env::var_os(RECORD_VARIABLE).map(PathBuf::from);
+    hold_in(&directory(), mode, records.as_deref(), scenario, &current)
 }
 
 /// Writes `current` as `<records>/<scenario>.toml`, in the baseline file's form.
@@ -152,8 +150,21 @@ fn record(records: &Path, scenario: &str, current: &Counts) {
         .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
 }
 
-/// [`hold`] against the files of `dir`.
-fn hold_in(dir: &Path, mode: Option<Mode>, scenario: &str, current: &Counts) -> Held {
+/// [`hold`] against the files of `dir`, recording into `records` when given.
+fn hold_in(
+    dir: &Path,
+    mode: Option<Mode>,
+    records: Option<&Path>,
+    scenario: &str,
+    current: &Counts,
+) -> Held {
+    // Only a run with a mode records, so a step whose mode variable is
+    // misspelled finds no records rather than a run that compared nothing.
+    if mode.is_some()
+        && let Some(records) = records
+    {
+        record(records, scenario, current);
+    }
     let path = dir.join(format!("{scenario}.toml"));
     match mode {
         None => Held { bless: None },
@@ -506,12 +517,19 @@ fn a_check_fails_on_a_difference_that_fails_and_on_a_missing_file() {
         ("no file", "idle", held, true),
     ] {
         let dir = dir.clone();
-        let panicked = panics(move || drop(hold_in(&dir, Some(Mode::Check), scenario, &current)));
+        let panicked =
+            panics(move || drop(hold_in(&dir, Some(Mode::Check), None, scenario, &current)));
         assert_eq!(panicked, fails, "{case}");
     }
     let dir_for_unset = dir.clone();
     assert!(
-        !panics(move || drop(hold_in(&dir_for_unset, None, "idle", &BTreeMap::new()))),
+        !panics(move || drop(hold_in(
+            &dir_for_unset,
+            None,
+            None,
+            "idle",
+            &BTreeMap::new()
+        ))),
         "no mode reads no file"
     );
     std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
@@ -525,20 +543,47 @@ fn a_bless_writes_the_file_only_when_the_test_ends_without_a_panic() {
     let current = counts(&[("allocations", 7)]);
     let (passing, passed_counts) = (dir.clone(), current.clone());
     assert!(!panics(move || {
-        let _held = hold_in(&passing, Some(Mode::Bless), "scroll", &passed_counts);
+        let _held = hold_in(&passing, Some(Mode::Bless), None, "scroll", &passed_counts);
     }));
     let written = std::fs::read_to_string(dir.join("scroll.toml")).expect("a passing bless writes");
     assert_eq!(parse("scroll", &written), Ok(current.clone()));
 
     let failing = dir.clone();
     assert!(panics(move || {
-        let _held = hold_in(&failing, Some(Mode::Bless), "idle", &current);
+        let _held = hold_in(&failing, Some(Mode::Bless), None, "idle", &current);
         panic!("the scenario's budget broke after it held its counts");
     }));
     assert!(
         !dir.join("idle.toml").exists(),
         "a failed test blesses nothing"
     );
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
+}
+
+/// A run with a mode writes each scenario's counts to the records directory in
+/// the baseline file's form; a run with no mode writes nothing there, so a
+/// misspelled mode variable leaves the records step with missing files.
+#[test]
+fn only_a_run_with_a_mode_records_its_counts() {
+    let dir = scratch("records-baseline");
+    let current = counts(&[("allocations", 7), ("nodes_laid_out", 3)]);
+    std::fs::write(dir.join("scroll.toml"), render("scroll", &current)).expect("plant a file");
+    for (case, mode, records_written) in [
+        ("no mode", None, false),
+        ("check", Some(Mode::Check), true),
+        ("bless", Some(Mode::Bless), true),
+    ] {
+        let records = scratch(&format!("records-{}", records_written as u8));
+        std::fs::remove_dir_all(&records).expect("start with no records directory");
+        drop(hold_in(&dir, mode, Some(&records), "scroll", &current));
+        let record = records.join("scroll.toml");
+        assert_eq!(record.exists(), records_written, "{case}");
+        if records_written {
+            let text = std::fs::read_to_string(&record).expect("the record reads");
+            assert_eq!(text, render("scroll", &current), "{case}");
+            std::fs::remove_dir_all(&records).expect("remove the records directory");
+        }
+    }
     std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
 }
 

@@ -772,7 +772,8 @@ baseline: a fall passes, so a PR that makes a scenario cheaper does not touch
 the baseline. After it merges, a bless on a fresh `main`, committed alone,
 ratchets the files down, and any thread may do it; from then on a rise back to
 the old value fails. A counter on one side only fails. A bless writes a
-scenario's file only when its test passed, so a broken budget blesses nothing.
+scenario's file only when its body runs to its end, so a broken budget blesses
+nothing; a panic while the runtime the body mounted drops comes after the write.
 Each scenario has its own file, so changes to different scenarios never
 conflict, and `every_baseline_file_is_a_scenario` fails on a file whose name is
 not in the module's list of scenarios. With a mode set and `FLUI_PERF_OUT`
@@ -839,9 +840,11 @@ links the logic crate and installs no reload hook. A binary grows with every
 change to the code it links, so a size fails only past 2% over its line, and
 warns past 2% under it so the line follows a fall; the job's summary lists
 each size beside its line, and a line is moved by hand from it, with the
-reason in the PR. A change to a manifest, `Cargo.lock`, the
-toolchain, `.cargo/` or the `flui create` templates runs the `full` lane on its
-branch (`gh workflow run CI --ref <branch>`) before it merges.
+reason in the PR. A change that can move a size runs the `full` lane on its
+branch (`gh workflow run CI --ref <branch>`) before it merges: a manifest,
+`Cargo.lock`, the toolchain or the `flui create` templates. The checkout's `.cargo/` is not among them: the projects are
+generated outside the checkout, so it does not apply to their builds. Other
+code moves a size too, inside the 2%, which is what the tolerance is for.
 
 ## Linting
 

@@ -164,9 +164,10 @@ conversation:
   backends and runs the nested, compile-fail and feature-gated suites, the sizes, perf and miri,
   and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`). So a change to a native backend, a shader or a trybuild case is run
-  locally before the PR, and a change to a size (a manifest, `Cargo.lock`, the toolchain, the
-  `flui create` templates) or to the steps of a job only main runs is run on its branch with
-  `gh workflow run CI --ref <branch>` ("Before each push" item 14). A red
+  locally before the PR, and a change that can move a size (the changes
+  [testing](docs/testing.md) lists beside the `size` job) or that changes the steps of a job only
+  main runs ("Before each push" item 14) is run on its branch with
+  `gh workflow run CI --ref <branch>`. A red
   `main` is fixed forward within the hour or reverted.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs

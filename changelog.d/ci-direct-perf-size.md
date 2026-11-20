@@ -1,7 +1,8 @@
 ### Removed
 
-- `cargo xtask perf` and its `--check`, `--bless`, `--instructions`, `--size`, `--graph` and
-  `--self-test` modes. flui-widgets' perf scenarios hold their baseline themselves:
+- `cargo xtask perf`, added earlier in this unreleased cycle ("Phase counters and
+  `cargo xtask perf`" above), and its `--check`, `--bless`, `--instructions`, `--size`, `--graph`
+  and `--self-test` modes. flui-widgets' perf scenarios hold their baseline themselves:
   `FLUI_PERF_BASELINE=check` (or `bless`) with
   `cargo nextest run -p flui-widgets --test perf -E 'test(/^perf_/)'`. CI's `perf-gates` job runs
   the callgrind comparison of the `perf_scaling_` scenarios as a step, the `deps` job counts the

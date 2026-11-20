@@ -1013,10 +1013,10 @@ jobs:
           for file in crates/flui-widgets/perf/baseline/*.toml; do
             record="$RECORDS/$(basename "$file")"
             if [ ! -f "$record" ]; then
-              echo "::error::no scenario held $file in this run"
+              echo "::error::no scenario reached baseline::hold for $file in this run: it stopped running, failed before holding, or the mode variable is unset"
               failed=1
             elif ! diff -u --label "$file" --label "this run" <(counts "$file") <(counts "$record"); then
-              echo "::notice::$(basename "$file" .toml) moved; a cost that fell is lowered by a bless on main"
+              echo "::notice::$(basename "$file" .toml) moved: the check step judged it (a cost that fell passes there and is lowered by a bless on main)"
             fi
           done
           exit "$failed"

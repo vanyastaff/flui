@@ -185,8 +185,10 @@ a rule loses when it leaves the Rust that tested it:
 - *The counts in the scenarios, the rest as steps* (chosen): the counts' rules live beside the
   scenarios that produce them, in the perf target's `baseline` module, with its own tests.
   `FLUI_PERF_BASELINE=check` holds each scenario's counts to its file before the scenario asserts
-  its budget; `bless` rewrites the file when the scenario's test ends without a panic, through a
-  guard the scenario keeps, so a run whose budget broke blesses nothing. Unset, the scenarios run
+  its budget; `bless` rewrites the file when the scenario's body ends without a panic, through a
+  guard the scenario keeps (`let _ =` on it is a denied lint), so a run whose budget broke
+  blesses nothing; a panic in the teardown of what the body mounted comes after the write.
+  Unset, the scenarios run
   as before on every host and feature set. With a mode set, each scenario also writes its counts
   to `FLUI_PERF_OUT`. `perf-gates` sets `check` and runs `-p flui-widgets` alone, with its
   default features, where the files are blessed, then compares the records with the directory: a
@@ -274,6 +276,7 @@ brought it. The options for that driver:
   `the_mode_variable_is_check_bless_or_unset`,
   `a_check_fails_on_a_difference_that_fails_and_on_a_missing_file`,
   `a_bless_writes_the_file_only_when_the_test_ends_without_a_panic`,
+  `only_a_run_with_a_mode_records_its_counts`,
   `every_baseline_file_is_a_scenario`), and `perf-gates` holds the files, and requires a record
   for each, on every main run.
 - `cross-typecheck` runs its four legs on every main run. Its scope (`--workspace`, `--all-targets`,
