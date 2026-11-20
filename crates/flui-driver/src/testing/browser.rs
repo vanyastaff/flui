@@ -47,6 +47,8 @@ pub enum BrowserReply {
     StaleFirst,
     /// With a message one byte past what the driver reads.
     Oversized,
+    /// With this message (an event) first, then as the stand-in plays it.
+    EventFirst(Value),
 }
 
 /// The answer to each BiDi command, by its method and parameters.
@@ -234,6 +236,10 @@ impl Page {
             BrowserReply::StaleFirst => {
                 let stale = if id > 1 { id - 1 } else { u64::MAX };
                 send(ws, &success(stale, json!({ "stale": true })))?;
+                self.play(ws, id, &method, &params)
+            }
+            BrowserReply::EventFirst(event) => {
+                send(ws, &event)?;
                 self.play(ws, id, &method, &params)
             }
             BrowserReply::Oversized => {

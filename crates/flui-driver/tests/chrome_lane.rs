@@ -364,6 +364,8 @@ fn chromedriver_versions_ports_archives_and_arguments() {
         "157.0..79",
         "157.0.8103.79.1",
         "1.2.3.x",
+        "1234567890.0.0.0",
+        "1a.2.3.4",
     ] {
         assert!(!is_version(not), "{not}");
     }
@@ -713,6 +715,13 @@ fn a_composition_goes_through_the_devtools_input_method() {
         .perform(composition)
         .expect("the composition goes out");
     assert_eq!(outcome.via, InputPath::Os);
+    // The journal shows a composition, so the input ran; the run announced the keyboard.
+    assert_eq!(outcome.effect.kind, EffectKind::Ran, "{outcome:?}");
+    let announced = driver.take_announcements();
+    assert!(
+        announced.iter().any(|line| line.contains("keyboard")),
+        "{announced:?}"
+    );
     let log = browser.log();
     assert_eq!(
         log.of("goog:cdp.getSession").len(),
@@ -1077,4 +1086,163 @@ fn a_canvas_of_another_size_or_ratio_is_refused_before_any_input() {
             "nothing was sent"
         );
     }
+}
+
+/// A canvas laid out in fractions of a pixel, or at a ratio the OS rounded, is still the window.
+#[test]
+fn a_canvas_within_a_pixel_and_a_rounded_ratio_is_the_window() {
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, params| {
+            if method == "script.callFunction"
+                && params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("getBoundingClientRect"))
+            {
+                return BrowserReply::Result(ScriptedBrowser::canvas(
+                    0.0, 0.0, 800.75, 599.25, 1.0005,
+                ));
+            }
+            BrowserReply::Played
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    driver
+        .window(window())
+        .perform(press(LogicalPoint::new(10.0, 10.0)))
+        .expect("the canvas is the window");
+    assert_eq!(browser.log().of("input.performActions").len(), 4);
+}
+
+/// What the lane holds follows what it pressed and released, button by button and key by key:
+/// a refused release names exactly what is still down.
+#[test]
+fn a_refused_release_names_the_buttons_and_keys_still_down() {
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, _| match method {
+            "input.releaseActions" => BrowserReply::Error {
+                error: "unknown error".into(),
+                message: "refused".into(),
+            },
+            _ => BrowserReply::Played,
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    let sequence = ActionSequence::new(vec![
+        InputSource::Pointer {
+            id: "scenario.mouse".into(),
+            device: PointerDevice::Mouse,
+            actions: vec![
+                PointerAction::Down {
+                    button: PointerButton::Secondary,
+                    pressure: None,
+                },
+                PointerAction::Down {
+                    button: PointerButton::Primary,
+                    pressure: None,
+                },
+                PointerAction::Up {
+                    button: PointerButton::Primary,
+                },
+            ],
+        },
+        InputSource::Keys {
+            id: "keys".into(),
+            actions: vec![
+                KeyAction::Down { key: "a".into() },
+                KeyAction::Up { key: "a".into() },
+                KeyAction::Down {
+                    key: "Shift".into(),
+                },
+            ],
+        },
+    ]);
+    let refused = driver.window(window()).perform(sequence);
+    match &refused {
+        Err(Error::ReleaseFailed { held, .. }) => assert_eq!(
+            held,
+            &["Shift".to_owned(), "scenario.mouse secondary".to_owned()]
+        ),
+        other => panic!("the release names what is still down: {other:?}"),
+    }
+}
+
+/// The driver leaving closes the page's connection and lets go of its handle.
+#[test]
+fn a_driver_that_leaves_closes_the_pages_connection() {
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|_, _| BrowserReply::Played),
+    )
+    .expect("the stand-in binds");
+    let driver = attach(&browser);
+    drop(driver);
+    let log = browser.log();
+    assert!(
+        log.of("script.callFunction").iter().any(|params| {
+            params["functionDeclaration"]
+                .as_str()
+                .is_some_and(|f| f.contains("this.close()"))
+                && params["this"]["handle"] == "page-connection"
+        }),
+        "the page's connection was closed"
+    );
+    assert_eq!(
+        log.of("script.disown")
+            .first()
+            .map(|params| params["handles"].clone()),
+        Some(json!(["page-connection"]))
+    );
+}
+
+/// Another tab closing leaves the conversation alone; the page's own tab closing ends it.
+#[test]
+fn only_the_pages_own_tab_closing_ends_the_conversation() {
+    let destroyed = |context: &str| {
+        json!({
+            "type": "event",
+            "method": "browsingContext.contextDestroyed",
+            "params": { "context": context, "url": "about:blank", "children": [] },
+        })
+    };
+    let sends = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&sends);
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(move |method, params| {
+            let send = method == "script.callFunction"
+                && params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("this.send(line)"));
+            if !send {
+                return BrowserReply::Played;
+            }
+            // The hello, then the first request with another tab gone, then the page's own.
+            match counted.fetch_add(1, Ordering::SeqCst) {
+                1 => BrowserReply::EventFirst(destroyed("tab-2")),
+                2 => BrowserReply::EventFirst(destroyed("tab-1")),
+                _ => BrowserReply::Played,
+            }
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    assert_eq!(
+        driver
+            .windows()
+            .expect("another tab closing changes nothing"),
+        [window()]
+    );
+    let gone = driver.windows();
+    assert!(
+        matches!(&gone, Err(Error::Gone { message, .. }) if message.contains("tab closed")),
+        "{gone:?}"
+    );
 }
