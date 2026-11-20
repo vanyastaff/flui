@@ -39,14 +39,9 @@ fn sliver_state_keeps_geometry_and_constraints_apart() {
     assert_eq!(state.constraints(), Some(&constraints));
     assert!(state.geometry().is_none());
 
-    let geometry = SliverGeometry {
-        scroll_extent: 500.0,
-        paint_extent: 300.0,
-        layout_extent: 300.0,
-        max_paint_extent: 500.0,
-        visible: true,
-        ..SliverGeometry::default()
-    };
+    let geometry = SliverGeometry::with_extents(500.0, 300.0, 300.0, 0.0)
+        .with_max_paint_extent(500.0)
+        .with_hit_test_extent(0.0);
     state.set_geometry(geometry);
     assert_eq!(state.geometry(), Some(geometry));
 

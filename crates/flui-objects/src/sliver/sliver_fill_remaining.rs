@@ -77,18 +77,11 @@ impl RenderSliver for RenderSliverFillRemaining {
 
         let painted_child_size = self.calculate_paint_offset(&constraints, 0.0, extent);
         let cache_extent = self.calculate_cache_offset(&constraints, 0.0, extent);
-        let geometry = SliverGeometry {
-            scroll_extent: extent,
-            paint_extent: painted_child_size,
-            layout_extent: painted_child_size,
-            max_paint_extent: painted_child_size,
-            cache_extent,
-            hit_test_extent: painted_child_size,
-            visible: painted_child_size > 0.0,
-            has_visual_overflow: extent > constraints.remaining_paint_extent
-                || constraints.scroll_offset > 0.0,
-            ..SliverGeometry::ZERO
-        };
+        let geometry = SliverGeometry::new(extent, painted_child_size, 0.0)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow(
+                extent > constraints.remaining_paint_extent || constraints.scroll_offset > 0.0,
+            );
         if ctx.child_count() > 0 {
             ctx.position_child(0, child_paint_offset(&constraints, &geometry));
         }
@@ -166,18 +159,12 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
 
         let painted_child_size = max_extent.min(constraints.remaining_paint_extent);
         let cache_extent = self.calculate_cache_offset(&constraints, 0.0, extent);
-        let geometry = SliverGeometry {
-            scroll_extent: extent,
-            paint_extent: painted_child_size,
-            layout_extent: painted_child_size,
-            max_paint_extent: max_extent,
-            cache_extent,
-            hit_test_extent: painted_child_size,
-            visible: painted_child_size > 0.0,
-            has_visual_overflow: extent > constraints.remaining_paint_extent
-                || constraints.scroll_offset > 0.0,
-            ..SliverGeometry::ZERO
-        };
+        let geometry = SliverGeometry::new(extent, painted_child_size, 0.0)
+            .with_max_paint_extent(max_extent)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow(
+                extent > constraints.remaining_paint_extent || constraints.scroll_offset > 0.0,
+            );
         if ctx.child_count() > 0 {
             // Position via geometry.scroll_extent, NOT the measured child extent.
             // The reverse axis uses paint extent + scroll offset - scroll
@@ -257,18 +244,15 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
         }
 
         let painted_child_size = self.calculate_paint_offset(&constraints, 0.0, extent);
-        let geometry = SliverGeometry {
-            scroll_extent: constraints.viewport_main_axis_extent,
-            paint_extent: painted_child_size,
-            layout_extent: painted_child_size,
-            max_paint_extent: painted_child_size,
-            cache_extent,
-            hit_test_extent: painted_child_size,
-            visible: painted_child_size > 0.0,
-            has_visual_overflow: extent > constraints.remaining_paint_extent
-                || constraints.scroll_offset > 0.0,
-            ..SliverGeometry::ZERO
-        };
+        let geometry = SliverGeometry::new(
+            constraints.viewport_main_axis_extent,
+            painted_child_size,
+            0.0,
+        )
+        .with_cache_extent(cache_extent)
+        .with_visual_overflow(
+            extent > constraints.remaining_paint_extent || constraints.scroll_offset > 0.0,
+        );
         if ctx.child_count() > 0 {
             ctx.position_child(0, child_paint_offset(&constraints, &geometry));
         }

@@ -118,18 +118,13 @@ impl RenderSliver for RenderSliverFillViewport {
         let scroll_extent = item_extent * self.child_count as f64;
         let paint_extent = self.calculate_paint_offset(&constraints, 0.0, scroll_extent);
         let cache_extent = self.calculate_cache_offset(&constraints, 0.0, scroll_extent);
-        let geometry = SliverGeometry {
-            scroll_extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: scroll_extent,
-            cache_extent,
-            hit_test_extent: paint_extent,
-            visible: paint_extent > 0.0,
-            has_visual_overflow: scroll_extent > constraints.remaining_paint_extent
-                || constraints.scroll_offset > 0.0,
-            ..SliverGeometry::ZERO
-        };
+        let geometry = SliverGeometry::new(scroll_extent, paint_extent, 0.0)
+            .with_max_paint_extent(scroll_extent)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow(
+                scroll_extent > constraints.remaining_paint_extent
+                    || constraints.scroll_offset > 0.0,
+            );
 
         for index in 0..self.child_count {
             let layout_offset = item_extent * index as f64;
