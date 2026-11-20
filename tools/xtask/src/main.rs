@@ -48,8 +48,6 @@ struct Cli {
 enum Command {
     /// Run the source checks that need no workspace build (the CI `checks` job).
     Checks(tasks::ChecksArgs),
-    /// Clippy the Win32, AppKit, Android and iOS backends without linking.
-    CrossTypecheck(tasks::CrossTypecheckArgs),
     /// Run the fuzz targets under libFuzzer.
     Fuzz(tasks::FuzzArgs),
     /// Remove the nested-cargo test caches under the target directory.
@@ -92,7 +90,6 @@ fn main() -> ExitCode {
     }
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
-        Command::CrossTypecheck(args) => tasks::cross_typecheck(&args),
         Command::Fuzz(args) => tasks::fuzz(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),

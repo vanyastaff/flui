@@ -1,9 +1,8 @@
 //! Running a task's commands.
 //!
-//! A command line is data ([`Cmd`]): a plan is a list of them ([`Step`]), so it
-//! can be printed (`--dry-run`), compared with the CI job it mirrors in a unit
-//! test, or run. [`Runner`] prints each command before it runs it and stops at
-//! the first failure. Every command runs from the repository
+//! A command line is data ([`Cmd`]), so a plan of them can be printed
+//! (`--dry-run`) or run. [`Runner`] prints each command before it runs it.
+//! Every command runs from the repository
 //! root with this process's environment, so `CARGO_TARGET_DIR`,
 //! `CARGO_BUILD_JOBS`, `CARGO_MAKEFLAGS` and the rest reach the nested cargo
 //! unchanged.
@@ -16,28 +15,6 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, bail};
 
 use crate::util::repo_root;
-
-/// The OS a task runs on: some steps exist on one host only (`xvfb-run` is
-/// Linux's, the iOS SDK behind `xcrun` is macOS').
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Host {
-    Linux,
-    Windows,
-    MacOs,
-    Other,
-}
-
-impl Host {
-    /// The host this process runs on.
-    pub(super) fn current() -> Self {
-        match std::env::consts::OS {
-            "linux" => Self::Linux,
-            "windows" => Self::Windows,
-            "macos" => Self::MacOs,
-            _ => Self::Other,
-        }
-    }
-}
 
 /// One command line: a program, its arguments and the variables it adds to
 /// the inherited environment.
@@ -123,30 +100,8 @@ impl fmt::Display for Cmd {
     }
 }
 
-/// One step of a plan: a command, or a line saying why one does not run here.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Step {
-    Run(Cmd),
-    Note(String),
-}
-
-impl From<Cmd> for Step {
-    fn from(cmd: Cmd) -> Self {
-        Self::Run(cmd)
-    }
-}
-
-impl fmt::Display for Step {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Run(cmd) => write!(f, "$ {cmd}"),
-            Self::Note(note) => f.write_str(note),
-        }
-    }
-}
-
-/// Runs a task's steps in order (`steps` stops at the first failure, `every`
-/// runs them all); with `dry_run` it only prints them.
+/// Runs a task's commands (`every` runs them all, even after one fails); with
+/// `dry_run` it only prints them.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Runner {
     pub(super) dry_run: bool,
@@ -162,30 +117,14 @@ impl Runner {
         cmd.status()
     }
 
-    /// Runs every step in order.
-    pub(super) fn steps(self, steps: &[Step]) -> anyhow::Result<()> {
-        for step in steps {
-            match step {
-                Step::Run(cmd) => self.run(cmd)?,
-                Step::Note(note) => println!("{note}"),
-            }
-        }
-        Ok(())
-    }
-
-    /// Runs every step even after one fails; an error naming each failed
+    /// Runs every command even after one fails; an error naming each failed
     /// command if any did.
-    pub(super) fn every(self, steps: &[Step]) -> anyhow::Result<()> {
+    pub(super) fn every(self, cmds: &[Cmd]) -> anyhow::Result<()> {
         let mut failed = Vec::new();
-        for step in steps {
-            match step {
-                Step::Run(cmd) => {
-                    if let Err(error) = self.run(cmd) {
-                        eprintln!("{error:#}");
-                        failed.push(cmd.to_string());
-                    }
-                }
-                Step::Note(note) => println!("{note}"),
+        for cmd in cmds {
+            if let Err(error) = self.run(cmd) {
+                eprintln!("{error:#}");
+                failed.push(cmd.to_string());
             }
         }
         if failed.is_empty() {
@@ -264,33 +203,16 @@ mod tests {
         assert!(missing.is_err());
     }
 
-    /// A failing step fails the task: `steps` stops there with an error naming
-    /// it (a second failure after it would have replaced that error), and
-    /// `every` runs the rest but still fails, naming each failed step. A task
-    /// returns this error from its `run`, which `main` turns into exit 1.
+    /// A failing command fails the task: `every` runs the rest but still
+    /// fails, naming each failed command. A task returns this error from its
+    /// `run`, which `main` turns into exit 1.
     fn a_failing_step_fails_the_task() {
         let runner = Runner { dry_run: false };
-        let failing = Cmd::cargo(["--no-such-flag-xtask"]);
-        let missing = Cmd::new("flui-xtask-no-such-program");
-        let error = runner
-            .steps(&[
-                Step::Note("before".to_owned()),
-                failing.clone().into(),
-                missing.clone().into(),
-            ])
-            .expect_err("a failing step fails the plan");
-        assert!(
-            error
-                .to_string()
-                .starts_with("`cargo --no-such-flag-xtask` failed"),
-            "{error}"
-        );
-
         let error = runner
             .every(&[
-                failing.into(),
-                Cmd::cargo(["--version"]).into(),
-                missing.into(),
+                Cmd::cargo(["--no-such-flag-xtask"]),
+                Cmd::cargo(["--version"]),
+                Cmd::new("flui-xtask-no-such-program"),
             ])
             .expect_err("`every` still fails when a step did");
         let message = error.to_string();
@@ -301,7 +223,7 @@ mod tests {
         // a dry run executes nothing, so nothing fails
         assert!(
             Runner { dry_run: true }
-                .steps(&[Cmd::cargo(["--no-such-flag-xtask"]).into()])
+                .every(&[Cmd::cargo(["--no-such-flag-xtask"])])
                 .is_ok()
         );
     }
