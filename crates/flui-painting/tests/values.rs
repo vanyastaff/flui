@@ -1643,3 +1643,72 @@ pub(crate) fn a_lerp_serializes_its_gradient_fallback_but_not_its_image_blend() 
         "the gradient fallback is written and the blend is not: {retained}"
     );
 }
+
+/// A lerp endpoint keeps what its decoration retains: the exact endpoints keep
+/// a bounded gradient fallback, and an extrapolated endpoint that rebuilds the
+/// gradient fallback keeps the image blend beside it.
+pub(crate) fn lerp_endpoints_keep_a_gradient_fallback_and_an_image_blend() {
+    use flui_painting::paint::Image;
+    use flui_painting::styling::DecorationImage;
+
+    let mut begin = LinearGradient::horizontal(vec![Color::RED, Color::BLUE]);
+    begin.begin = Alignment::CENTER;
+    begin.end = Alignment::new(0.0, 1.0);
+    let mut end = begin.clone();
+    end.end.y = 2.0;
+    let extrapolated = |image: Option<Color>| {
+        let mut decoration = BoxDecoration::<f64>::lerp(
+            &BoxDecoration::with_gradient(Gradient::Linear(begin.clone())),
+            &BoxDecoration::with_gradient(Gradient::Linear(end.clone())),
+            1e10,
+        );
+        decoration.image = image.map(|color| DecorationImage::new(Image::solid_color(4, 4, color)));
+        decoration
+    };
+
+    let fallback = extrapolated(None);
+    let plain = BoxDecoration::<f64>::new();
+    assert_eq!(
+        BoxDecoration::lerp(&fallback, &plain, 0.0),
+        fallback,
+        "t = 0 keeps a's gradient fallback"
+    );
+    assert_eq!(
+        BoxDecoration::lerp(&plain, &fallback, 1.0),
+        fallback,
+        "t = 1 keeps b's gradient fallback"
+    );
+
+    let blended = BoxDecoration::lerp(
+        &extrapolated(Some(Color::RED)),
+        &extrapolated(Some(Color::BLUE)),
+        0.5,
+    );
+    // A different gradient on the other side, so the overshoot rebuilds the
+    // fallback.
+    let other = BoxDecoration::<f64>::with_gradient(Gradient::Linear(begin.clone()));
+    let overshoot = BoxDecoration::lerp(&other, &blended, 2.0);
+    assert!(
+        overshoot != blended,
+        "premise: the overshoot rebuilds the gradient fallback"
+    );
+    let mut canvas = flui_painting::Canvas::new();
+    overshoot.paint(
+        &mut canvas,
+        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        flui_painting::styling::DecorationPaintOptions::default(),
+    );
+    let images = canvas
+        .finish()
+        .iter()
+        .filter(|command| {
+            matches!(
+                command.op,
+                flui_painting::DrawOp::Image { .. }
+                    | flui_painting::DrawOp::ImageRegion { .. }
+                    | flui_painting::DrawOp::ImageRepeat { .. }
+            )
+        })
+        .count();
+    assert_eq!(images, 2, "an overshooting endpoint keeps its image blend");
+}

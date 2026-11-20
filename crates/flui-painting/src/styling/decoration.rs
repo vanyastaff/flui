@@ -291,17 +291,23 @@ impl<T: Unit> BoxDecoration<T> {
         self
     }
 
+    /// The image layers a lerp blends, while [`image`](Self::image) equals the
+    /// value the lerp published; any other value leaves the blend unused.
+    fn image_blend(&self) -> Option<&ImageBlend> {
+        self.lerp_retained
+            .as_deref()?
+            .image
+            .as_ref()
+            .filter(|blend| self.image.as_ref() == Some(&blend.published))
+    }
+
     /// Creates a copy of this decoration with the given gradient.
     #[inline]
     pub fn set_gradient(mut self, gradient: Option<Gradient>) -> Self {
         self.gradient = gradient;
         // The gradient fallback goes with the gradient; a stale image blend
         // goes too, so the new decoration does not carry it on.
-        let live = self
-            .lerp_retained
-            .take()
-            .and_then(|kept| kept.image)
-            .filter(|blend| self.image.as_ref() == Some(&blend.published));
+        let live = self.image_blend().cloned();
         self.lerp_retained = LerpRetained::boxed(None, live);
         self
     }
@@ -335,8 +341,8 @@ where
     /// past four layers the weakest go and the kept ones take up their shares.
     /// `image` holds `b`'s own image as the blend paints it, or, when `b`'s image
     /// is in no layer (none, invisible or of NaN opacity), the strongest
-    /// layer; with no layer at all (a NaN `t` between different images) it holds
-    /// no image. The same image and live blend on both sides are kept as they
+    /// layer; with no layer at all (every image absent, invisible or of NaN
+    /// opacity, or a NaN `t` between different images) it holds no image. The same image and live blend on both sides are kept as they
     /// are, whatever `t`. A layer's opacity is clamped to one before its share
     /// is taken. The shape is not interpolated and switches at `t = 0.5`.
     #[inline]
@@ -479,16 +485,6 @@ where
     /// The raw gradient a lerp published and its bounded endpoint.
     pub(crate) fn gradient_fallback(&self) -> Option<&(Gradient, Gradient)> {
         self.lerp_retained.as_deref()?.gradient.as_ref()
-    }
-
-    /// The image layers a lerp blends, while [`image`](Self::image) equals the
-    /// value the lerp published; any other value leaves the blend unused.
-    fn image_blend(&self) -> Option<&ImageBlend> {
-        self.lerp_retained
-            .as_deref()?
-            .image
-            .as_ref()
-            .filter(|blend| self.image.as_ref() == Some(&blend.published))
     }
 
     /// Ignore retained state after direct replacement of the public gradient.
