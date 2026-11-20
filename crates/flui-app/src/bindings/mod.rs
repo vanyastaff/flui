@@ -27,10 +27,7 @@
 
 // Re-export bindings from their respective crates
 pub use flui_interaction::binding::GestureBinding;
-pub use flui_rendering::{
-    binding::RendererBinding,
-    pipeline::{PipelineCell, PipelineOwner},
-};
+pub use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 pub use flui_scheduler::UpdateScheduler;
 pub use flui_view::WidgetsBinding;
 // The per-presentation rendering binding lives with the ui_runtime in the frame

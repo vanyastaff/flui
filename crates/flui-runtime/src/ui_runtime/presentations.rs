@@ -353,7 +353,9 @@ impl UiRuntime {
     #[must_use]
     pub fn presentation_device_pixel_ratio_for_test(&self, id: PresentationId) -> Option<f64> {
         self.presentations.get(id).map(|presentation| {
-            flui_rendering::binding::RendererBinding::root_pipeline_owner(presentation.renderer())
+            presentation
+                .renderer()
+                .root_pipeline_owner()
                 .with(flui_rendering::PipelineOwner::device_pixel_ratio)
                 .get()
         })

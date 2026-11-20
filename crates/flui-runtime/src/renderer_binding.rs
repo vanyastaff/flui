@@ -1,18 +1,13 @@
-//! RenderingBinding - Concrete implementation of RendererBinding.
+//! RenderingBinding - the glue between the render trees and the FLUI engine.
 //!
-//! This is the glue between the render trees and the FLUI engine.
-//! It manages multiple independent render trees, each rooted in a RenderView.
+//! It holds a presentation's root pipeline owner and its first-frame gate.
 //!
 //! # Architecture
 //!
 //! ```text
 //! RenderingBinding
 //!   ├── root_pipeline_owner   - Root of PipelineOwner tree
-//!   ├── render_views          - Map<ViewId, RenderView>
-//!   └── semantics enablement  - fan-out via add_semantics_enabled_listener;
-//!                               per-presentation announce/event delivery
-//!                               lives on that presentation's SemanticsHost
-//!                               (crate::semantics_host), not here
+//!   └── first-frame gate      - defer_first_frame / allow_first_frame
 //! ```
 //!
 //! # Usage
@@ -22,40 +17,13 @@
 //! `RenderingBinding` directly only when working with the rendering
 //! layer without widgets.
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-    },
-};
+use std::cell::Cell;
 
 use flui_foundation::geometry::Offset;
 use flui_rendering::{
-    binding::{RendererBinding, ViewHitTest},
     hit_testing::HitTestResult,
     pipeline::{PipelineCell, PipelineOwner, TextContextHandle},
-    view::{RenderView, ViewConfiguration},
 };
-use parking_lot::RwLock;
-
-use flui_scheduler::{UpdateScheduler, WeakUpdateScheduler};
-
-/// A subscriber to [`RenderingBinding::set_semantics_enabled`] changes.
-///
-/// Named alias for `Arc<dyn Fn(bool) + Send + Sync>` so the field and impl
-/// signatures below read as intent rather than nested generics (kills the
-/// `clippy::type_complexity` lint that fired on the inline form). Identical
-/// to the type spelled out in `RendererBinding::add_semantics_enabled_listener`
-/// (flui-rendering) — a type alias is transparent, so this satisfies the
-/// trait without repeating the trait's own long-hand spelling here.
-type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
-
-/// Physical listener custody, separate from the binding's other owned fields.
-struct SemanticsListenerStorage {
-    entries: RwLock<Vec<SemanticsEnabledListener>>,
-}
 
 /// Shared body for [`RenderingBinding::redirty_root_for_represent`]:
 /// operates on the bare [`PipelineCell`] (rather than requiring a full
@@ -79,10 +47,33 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
     }
 }
 
+/// How the render tree answered [`RenderingBinding::hit_test`].
+#[derive(Debug)]
+#[must_use = "a busy tree or a contained panic is lost if the answer is dropped"]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a caller acts on each answer, and a `_` arm would lose a busy tree or a contained panic"
+)]
+pub enum ViewHitTest {
+    /// The walk ran; the result holds its path.
+    ///
+    /// A render object whose hit test panicked counted as a miss, and the
+    /// first such payload is here for the caller to resume once the event
+    /// has been delivered to the path.
+    Answered {
+        /// The first contained render-object panic, if any.
+        panic: Option<Box<dyn std::any::Any + Send>>,
+    },
+    /// The tree cannot answer now — its layout is withdrawn (before the
+    /// first complete frame, or after a failed one) or a frame phase has it
+    /// checked out. The result is untouched: an empty path here would claim
+    /// that nothing is under the position.
+    TreeBusy,
+}
+
 // ============================================================================
 // RenderingBinding
 // ============================================================================
-
 /// Concrete binding for applications using the Rendering framework directly.
 ///
 /// This is the glue that binds the framework to the FLUI engine.
@@ -90,21 +81,20 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 ///
 /// # Responsibilities
 ///
-/// - Managing the root [`PipelineOwner`] tree
-/// - Managing [`RenderView`]s (add/remove)
-/// - Creating [`ViewConfiguration`]s for views
-/// - Coordinating frame production
-/// - Fanning out semantics-enabled changes to listeners (per-presentation
-///   announce/event delivery lives on that presentation's `SemanticsHost`
-///   instead — see `crate::semantics_host`)
+/// - Holding the root [`PipelineOwner`] tree
+/// - Hit testing that tree for input and the agent
+/// - The first-frame deferral gate
+///
+/// Whether semantics are enabled belongs to each presentation's
+/// `SemanticsHost` (`crate::semantics_host`), which the platform's
+/// accessibility bridge sets; the pipeline owner's own switch is
+/// `PipelineOwner::set_semantics_enabled`.
 ///
 /// # Thread Safety
 ///
-/// Owner-thread-confined (`!Send + !Sync`, transitively via
-/// `PipelineCell`'s `Rc<RefCell<_>>`): a `PipelineOwner` belongs to exactly
-/// one presentation on exactly one thread. Non-pipeline internal state
-/// still uses `RwLock`/`Arc` for the same-thread checkout discipline
-/// this binding shares with the rest of the UI runtime.
+/// Owner-thread-confined (`!Send + !Sync`): its state is `Cell`s,
+/// and a `PipelineOwner` belongs to exactly one presentation on exactly one
+/// thread (ADR-0323 §1).
 ///
 /// This is enforced at compile time, not by convention -- pinned by
 /// `assert_not_impl_any!(PipelineCell: Send, Sync)` and
@@ -115,7 +105,6 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 ///
 /// ```compile_fail
 /// use flui_runtime::renderer_binding::RenderingBinding;
-/// use flui_rendering::binding::RendererBinding;
 ///
 /// let binding =
 ///     RenderingBinding::new(flui_rendering::TextContextHandle::standalone());
@@ -129,164 +118,51 @@ pub struct RenderingBinding {
     /// presentation).
     root_pipeline_owner: PipelineCell,
 
-    /// Render views managed by this binding (viewId → RenderView).
-    render_views: RefCell<HashMap<u64, RenderView>>,
-
-    /// Whether semantics are enabled.
-    semantics_enabled: AtomicBool,
-
-    /// Listeners for semantics enabled changes.
-    semantics_listeners: SemanticsListenerStorage,
-
-    /// Counter for deferred first frame.
-    first_frame_deferred_count: AtomicU32,
+    /// Outstanding [`RenderingBinding::defer_first_frame`] calls.
+    first_frame_deferred_count: Cell<u32>,
 
     /// Whether the first frame has been sent.
-    first_frame_sent: AtomicBool,
-
-    /// The owning UI runtime's scheduler, weak: `request_visual_update`'s
-    /// device-metrics force-frame path needs to schedule a frame, but this
-    /// binding must not keep a dead UI runtime's scheduler alive (it is a plain
-    /// field on `UiRuntime`, not the other way around).
-    scheduler: WeakUpdateScheduler,
-
-    /// Keeps `scheduler`'s backing `UpdateScheduler` alive — but ONLY for the
-    /// standalone constructor path ([`Self::new`]), which owns
-    /// no external scheduler for anything else to keep alive. `None` for
-    /// every [`Self::new_with_pipeline`] caller (production: the owning
-    /// `UiRuntime` holds the real strong root, per `scheduler`'s own doc).
-    ///
-    /// Without this field, `Self::new` passed a bare `&UpdateScheduler::new()`
-    /// into `new_with_pipeline`, which only stores the *downgraded*
-    /// `WeakUpdateScheduler` — the temporary `UpdateScheduler` had no other strong
-    /// owner, so it dropped at the end of `new()`'s constructing statement,
-    /// and `request_visual_update`'s upgrade silently, permanently failed
-    /// from the moment construction returned. That made the device-metrics
-    /// force-frame path a dead no-op for every standalone binding, with
-    /// nothing in the constructor's signature hinting at it.
-    standalone_scheduler: Option<UpdateScheduler>,
+    first_frame_sent: Cell<bool>,
 }
 
 impl std::fmt::Debug for RenderingBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderingBinding")
-            .field("render_views_count", &self.render_views.borrow().len())
             .field(
-                "semantics_enabled",
-                &self.semantics_enabled.load(Ordering::Relaxed),
+                "first_frame_deferred_count",
+                &self.first_frame_deferred_count.get(),
             )
-            .field(
-                "first_frame_sent",
-                &self.first_frame_sent.load(Ordering::Relaxed),
-            )
+            .field("first_frame_sent", &self.first_frame_sent.get())
             .finish_non_exhaustive()
     }
 }
 
 impl RenderingBinding {
-    /// Creates a new rendering binding with its own PipelineOwner, measuring
-    /// text through `text`, and a fresh `UpdateScheduler` it owns for its own
-    /// lifetime — test/standalone use only. Production always goes through
-    /// [`new_with_pipeline`](Self::new_with_pipeline) with the owning
-    /// UI runtime's own scheduler.
-    ///
-    /// The constructed `UpdateScheduler` is kept alive internally (in this crate's
-    /// private `standalone_scheduler` field) for exactly as long as this
-    /// binding lives, so `request_visual_update`
-    /// genuinely schedules a frame on it rather than silently failing an
-    /// upgrade against an already-dead weak (see that field's doc for the
-    /// bug this fixes). Nothing pumps this scheduler's frame loop
-    /// automatically — there is no UI runtime behind a standalone binding — so a
-    /// scheduled callback sits queued, harmlessly, until the binding drops;
-    /// a caller that wants it to actually fire must drive the scheduler
-    /// itself.
+    /// Creates a rendering binding with its own [`PipelineOwner`], measuring
+    /// text through `text`.
     pub fn new(text: TextContextHandle) -> Self {
-        let scheduler = UpdateScheduler::new();
-        let mut binding =
-            Self::new_with_pipeline(PipelineCell::new(PipelineOwner::new(text)), &scheduler);
-        binding.standalone_scheduler = Some(scheduler);
-        binding
+        Self::new_with_pipeline(PipelineCell::new(PipelineOwner::new(text)))
     }
 
-    /// Test/standalone construction sharing a CALLER-supplied
-    /// [`PipelineCell`] rather than building a fresh one.
-    ///
-    /// Same self-owned-scheduler shape as [`Self::new`] (see
-    /// `standalone_scheduler`'s field doc for the dead-weak-reference bug
-    /// this avoids) — for `PresentationState::new_for_test`, which must
-    /// share its exact caller-supplied pipeline with its renderer but has no
-    /// UI runtime above it to supply a live `&UpdateScheduler`.
-    #[cfg(test)]
-    pub(crate) fn new_for_test_with_pipeline(pipeline_owner: PipelineCell) -> Self {
-        let scheduler = UpdateScheduler::new();
-        let mut binding = Self::new_with_pipeline(pipeline_owner, &scheduler);
-        binding.standalone_scheduler = Some(scheduler);
-        binding
-    }
-
-    /// Creates a new rendering binding with a shared PipelineOwner, wired to
-    /// `scheduler` for its (rare) device-metrics force-frame path.
-    ///
-    /// This allows the owning `UiRuntime` to pass in the same
-    /// [`PipelineCell`] that elements use, ensuring a single PipelineOwner
-    /// instance at runtime, and its OWN scheduler — never a process-global
-    /// one.
-    pub fn new_with_pipeline(pipeline_owner: PipelineCell, scheduler: &UpdateScheduler) -> Self {
-        Self::init_instances();
+    /// Creates a rendering binding over `pipeline_owner`, the same
+    /// [`PipelineCell`] the owning presentation's elements use, so one
+    /// `PipelineOwner` serves both.
+    pub fn new_with_pipeline(pipeline_owner: PipelineCell) -> Self {
         Self {
             root_pipeline_owner: pipeline_owner,
-            render_views: RefCell::new(HashMap::new()),
-            semantics_enabled: AtomicBool::new(false),
-            semantics_listeners: SemanticsListenerStorage {
-                entries: RwLock::new(Vec::new()),
-            },
-            first_frame_deferred_count: AtomicU32::new(0),
-            first_frame_sent: AtomicBool::new(false),
-            scheduler: scheduler.downgrade(),
-            standalone_scheduler: None,
+            first_frame_deferred_count: Cell::new(0),
+            first_frame_sent: Cell::new(false),
         }
-    }
-
-    /// One-time construction-side setup.
-    ///
-    /// Not a `BindingBase`/singleton-macro hook any more (the singleton
-    /// pattern this binding used to implement is retired) — a plain
-    /// associated function [`new_with_pipeline`](Self::new_with_pipeline)
-    /// calls once, right before building the value (there is nothing yet to
-    /// take `&self` of).
-    fn init_instances() {
-        // Gesture state is owned by the entered `UiRuntime`, which is the
-        // authoritative instance driving input and frame-time coalescing for
-        // its current presentation. This rendering binding deliberately does
-        // not initialize a second gesture singleton with a disconnected arena.
-        //
-        // Painting has no binding at all: the app's font collection, fed from
-        // one host scan, is built by `AppRuntime`'s `SharedEngineServices`
-        // at ui_runtime install (`app/runtime.rs`), and nothing about painting is
-        // process-wide.
-        //
-        // Semantics enablement is per-presentation now (`SemanticsHost`,
-        // `crate::semantics_host`) -- there is no process-wide semantics
-        // binding for this method to touch.
-        tracing::info!("RenderingBinding initialized");
     }
 
     // ========================================================================
     // First Frame Deferral
     //
     // This is the ONE canonical implementation of the first-frame deferral
-    // gate. It used to be duplicated: `WidgetsBinding` (flui-view) carried
-    // its own independent counter that neither matched this one's semantics
-    // (no `first_frame_sent` latch, no panic on an unmatched `allow`) nor
-    // was reachable from the production frame path; `RendererBinding`
-    // (flui-rendering) declared a default `send_frames_to_engine() -> true`
-    // plus a default `draw_frame()` gate that no real embedder overrode.
-    // Both were deleted — see AGENTS.md's port-methodology note against
-    // reintroducing a second copy of this state. Every consumer (the
-    // `RendererBinding` trait impl below and `UiRuntime::defer_first_frame`
-    // / `allow_first_frame` / `send_frames_to_engine` in
-    // `crates/flui-runtime/src/ui_runtime/`, which the production
-    // `render_frame` path actually calls) forwards to this struct.
+    // gate. Every consumer (`send_frames_to_engine` below and
+    // `UiRuntime::defer_first_frame` / `allow_first_frame` /
+    // `send_frames_to_engine` in `crates/flui-runtime/src/ui_runtime/`, which
+    // the production `render_frame` path actually calls) forwards to this struct.
     //
     // # First-frame gate
     //
@@ -316,11 +192,12 @@ impl RenderingBinding {
     ///
     /// Panics when the deferral count is exhausted, preserving all existing deferrals.
     pub fn defer_first_frame(&self) {
-        self.first_frame_deferred_count
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                count.checked_add(1)
-            })
+        let count = self
+            .first_frame_deferred_count
+            .get()
+            .checked_add(1)
             .expect("first-frame deferral count exhausted");
+        self.first_frame_deferred_count.set(count);
     }
 
     /// Called after [`defer_first_frame`](Self::defer_first_frame) to tell
@@ -339,11 +216,12 @@ impl RenderingBinding {
     /// count is already zero) — a caller-contract violation, mirroring the
     /// oracle's `assert(_firstFrameDeferredCount > 0)`.
     pub fn allow_first_frame(&self) {
-        self.first_frame_deferred_count
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                count.checked_sub(1)
-            })
+        let count = self
+            .first_frame_deferred_count
+            .get()
+            .checked_sub(1)
             .expect("allow_first_frame called without matching defer_first_frame");
+        self.first_frame_deferred_count.set(count);
 
         // Schedule a warm-up frame even if the count is not down to zero
         // yet: removing one deferral may uncover a NEW one further down the
@@ -362,7 +240,7 @@ impl RenderingBinding {
         // to do and the withheld content would sit blank until some
         // UNRELATED input dirtied the tree. See
         // [`redirty_root_for_represent`](Self::redirty_root_for_represent).
-        if !self.first_frame_sent.load(Ordering::Relaxed) {
+        if !self.first_frame_sent.get() {
             self.redirty_root_for_represent();
         }
     }
@@ -396,7 +274,7 @@ impl RenderingBinding {
     /// [`Self::allow_first_frame`] since those methods only have an effect if no
     /// frames have been sent to the engine yet.
     pub fn reset_first_frame_sent(&self) {
-        self.first_frame_sent.store(false, Ordering::Relaxed);
+        self.first_frame_sent.set(false);
     }
 
     /// Latch that the first frame has been sent to the engine.
@@ -408,7 +286,7 @@ impl RenderingBinding {
     /// `true` forever (barring [`Self::reset_first_frame_sent`], a test-only
     /// escape hatch), so calling this again is a harmless no-op.
     pub fn mark_first_frame_sent(&self) {
-        self.first_frame_sent.store(true, Ordering::Relaxed);
+        self.first_frame_sent.set(true);
     }
 
     /// Pump the rendering pipeline once into the patch `writer` buffers,
@@ -456,85 +334,23 @@ impl RenderingBinding {
             false
         }
     }
-
-    // ========================================================================
-    // Semantics Integration
-    // ========================================================================
-
-    /// Sets whether semantics are enabled, fanning the change out to every
-    /// registered listener.
-    ///
-    /// When enabled, the framework will maintain the semantics tree. This no
-    /// longer forwards to a process-wide semantics binding (retired —
-    /// enablement is per-presentation now, via `SemanticsHost`
-    /// (`crate::semantics_host`)): a caller that owns a presentation's
-    /// `SemanticsHost` and wants it to track this toggle registers
-    /// [`Self::add_semantics_enabled_listener`] and calls
-    /// `SemanticsHost::set_platform_semantics_enabled` from that listener.
-    ///
-    /// A callback panic propagates unchanged. The owned snapshot is dropped
-    /// in registration order, during that unwind too; a capture destructor
-    /// that panics while the thread unwinds aborts, as in std (ADR-0281).
-    pub fn set_semantics_enabled(&self, enabled: bool) {
-        let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
-        if was_enabled != enabled {
-            // Snapshot the listeners into an owned `Vec` and drop the read
-            // guard before invoking any of them — a listener that calls
-            // `add_semantics_enabled_listener`/`remove_semantics_enabled_listener`
-            // from inside its own callback would otherwise try to acquire the
-            // write lock while this thread still held the read guard and
-            // deadlock (same read-then-write reentrancy `PaintingBinding`'s
-            // `notify_listeners` guards against).
-            let listeners: Vec<SemanticsEnabledListener> =
-                self.semantics_listeners.entries.read().clone();
-            for listener in &listeners {
-                listener(enabled);
-            }
-            drop(listeners);
-        }
-    }
 }
 
 // ============================================================================
-// RendererBinding Implementation
+// Hit testing and the frame gate
 // ============================================================================
 
-impl RendererBinding for RenderingBinding {
-    // ---- formerly PipelineManifold ----
-
-    fn request_visual_update(&self) {
-        // Upgrade-or-skip: if the owning ui_runtime's scheduler is already gone,
-        // there is no frame left to schedule.
-        //
-        // `ensure_visual_update` requests a frame only while frames are
-        // enabled (the lifecycle state decides), instead of unconditionally
-        // requesting one.
-        if let Some(scheduler) = self.scheduler.upgrade() {
-            scheduler.ensure_visual_update();
-        }
-    }
-
-    fn semantics_enabled(&self) -> bool {
-        self.semantics_enabled.load(Ordering::Relaxed)
-    }
-
-    fn add_semantics_enabled_listener(&self, listener: SemanticsEnabledListener) {
-        self.semantics_listeners.entries.write().push(listener);
-    }
-
-    fn remove_semantics_enabled_listener(&self, listener: &SemanticsEnabledListener) {
-        let mut listeners = self.semantics_listeners.entries.write();
-        listeners.retain(|l| !Arc::ptr_eq(l, listener));
-    }
-
-    // ---- formerly ViewHitTestable ----
-
-    fn hit_test_in_view(
+impl RenderingBinding {
+    /// Hit tests at `position` in this binding's render tree.
+    ///
+    /// `kind` is the pointer asking, whose minimum target expanded hit areas
+    /// follow. The answer says whether the tree could be asked at all; see
+    /// [`ViewHitTest`].
+    pub fn hit_test(
         &self,
         result: &mut HitTestResult,
         position: Offset,
         kind: flui_interaction::events::PointerKind,
-        _view_id: u64,
     ) -> ViewHitTest {
         // Hits route through the REAL render tree (the pipeline
         // owner's), not the per-view registry — the registry views
@@ -570,72 +386,18 @@ impl RendererBinding for RenderingBinding {
         }
     }
 
-    // ---- RendererBinding proper ----
-
-    fn root_pipeline_owner(&self) -> &PipelineCell {
+    /// The root pipeline owner of this binding's render tree.
+    pub fn root_pipeline_owner(&self) -> &PipelineCell {
         &self.root_pipeline_owner
     }
 
-    fn with_render_view(&self, view_id: u64, visit: &mut dyn FnMut(&mut RenderView)) -> bool {
-        let Some(view) = self.render_views.borrow_mut().remove(&view_id) else {
-            return false;
-        };
-        // The view goes back when `visit` returns or unwinds, so no borrow of
-        // the map is held while it runs.
-        let mut lent = LentRenderView {
-            views: &self.render_views,
-            view_id,
-            view: Some(view),
-        };
-        visit(
-            lent.view
-                .as_mut()
-                .expect("BUG: the lent view stays lent until dropped"),
-        );
-        true
-    }
-
-    fn render_view_ids(&self) -> Vec<u64> {
-        self.render_views.borrow().keys().copied().collect()
-    }
-
-    fn insert_render_view(&self, view_id: u64, view: RenderView) {
-        self.render_views.borrow_mut().insert(view_id, view);
-    }
-
-    fn remove_render_view_by_id(&self, view_id: u64) -> Option<RenderView> {
-        self.render_views.borrow_mut().remove(&view_id)
-    }
-
-    fn send_frames_to_engine(&self) -> bool {
-        self.first_frame_sent.load(Ordering::Relaxed)
-            || self.first_frame_deferred_count.load(Ordering::Relaxed) == 0
-    }
-
-    fn create_view_configuration_for(&self, render_view: &RenderView) -> ViewConfiguration {
-        if render_view.has_configuration() {
-            render_view.configuration().clone()
-        } else {
-            // Default configuration for testing
-            ViewConfiguration::default()
-        }
-    }
-}
-
-/// A render view lent out of [`RenderingBinding`]'s map for one
-/// [`RendererBinding::with_render_view`] call.
-struct LentRenderView<'a> {
-    views: &'a RefCell<HashMap<u64, RenderView>>,
-    view_id: u64,
-    view: Option<RenderView>,
-}
-
-impl Drop for LentRenderView<'_> {
-    fn drop(&mut self) {
-        if let Some(view) = self.view.take() {
-            // A view inserted under this id while it was lent is the newer one.
-            self.views.borrow_mut().entry(self.view_id).or_insert(view);
-        }
+    /// Whether frames should be sent to the engine.
+    ///
+    /// If false, the framework does all frame work but doesn't render; the
+    /// first frame is deferred this way. Answers `true` once the first frame
+    /// has been sent, or while no first-frame deferral is outstanding.
+    pub fn send_frames_to_engine(&self) -> bool {
+        self.first_frame_sent.get() || self.first_frame_deferred_count.get() == 0
     }
 }
 
@@ -645,6 +407,8 @@ impl Drop for LentRenderView<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, atomic::Ordering};
+
     use super::*;
 
     // `RenderingBinding` is no longer singleton-backed — each test
@@ -673,15 +437,7 @@ mod tests {
             o.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
             id
         });
-        // Bound to a local, not passed as a bare temporary: `new_with_pipeline`
-        // only stores a downgraded `WeakUpdateScheduler`, so a temporary here would
-        // drop at the end of THIS statement and leave the binding holding a
-        // permanently-dead weak (the exact bug `standalone_scheduler` fixes
-        // for `Self::new` — this test's binding takes the explicit-scheduler
-        // path instead, so it must keep its own scheduler alive the ordinary
-        // way, via a local binding that outlives the statement).
-        let scheduler = flui_scheduler::UpdateScheduler::new();
-        let binding = RenderingBinding::new_with_pipeline(owner, &scheduler);
+        let binding = RenderingBinding::new_with_pipeline(owner);
 
         // Deferred: the pipeline still runs (warm-up) but the output
         // is withheld.
@@ -713,9 +469,7 @@ mod tests {
         let binding = RenderingBinding::new(TextContextHandle::standalone());
         // Exhausting the public counter would require billions of calls. Seed
         // this failure boundary, then exercise only the public gate operations.
-        binding
-            .first_frame_deferred_count
-            .store(u32::MAX, Ordering::Relaxed);
+        binding.first_frame_deferred_count.set(u32::MAX);
         for _ in 0..2 {
             assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -760,8 +514,7 @@ mod tests {
             o.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
             o.set_semantics_enabled(true);
         });
-        let scheduler = flui_scheduler::UpdateScheduler::new();
-        let binding = RenderingBinding::new_with_pipeline(owner.clone(), &scheduler);
+        let binding = RenderingBinding::new_with_pipeline(owner.clone());
         (owner, binding)
     }
 

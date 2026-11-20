@@ -907,8 +907,8 @@ impl flui_rendering::traits::RenderBox for PanicOnHit {
 /// object's panic: the path to every other target is complete, and the panic
 /// is the caller's to report once the event reached it.
 fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
-    use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
     use flui_rendering::traits::RenderObject;
+    use flui_runtime::renderer_binding::ViewHitTest;
 
     let binding = flui_runtime::renderer_binding::RenderingBinding::new(
         flui_rendering::TextContextHandle::standalone(),
@@ -940,14 +940,13 @@ fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
     pipeline.withdraw_layout();
     let mut result = flui_interaction::pointer::HitTestResult::new();
     assert!(matches!(
-        binding.hit_test_in_view(&mut result, position, kind, 0),
+        binding.hit_test(&mut result, position, kind),
         ViewHitTest::TreeBusy
     ));
     assert!(result.is_empty(), "a busy tree leaves the result untouched");
 
     pipeline.publish_layout();
-    let ViewHitTest::Answered { panic } = binding.hit_test_in_view(&mut result, position, kind, 0)
-    else {
+    let ViewHitTest::Answered { panic } = binding.hit_test(&mut result, position, kind) else {
         panic!("a published layout answers");
     };
     assert_eq!(

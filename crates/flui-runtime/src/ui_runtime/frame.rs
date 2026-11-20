@@ -5,10 +5,10 @@ use crate::epoch::FrameCommitState;
 use crate::frame_failure::{FrameFailureKind, SegmentPhase};
 use crate::held_input::HeldPointerReplay;
 use crate::presentation::PresentationState;
+use crate::renderer_binding::ViewHitTest;
 use flui_foundation::PresentationId;
 use flui_foundation::geometry::Size;
 use flui_foundation::panic::FirstPanic;
-use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::__runtime::DriveFrame as _;
@@ -1337,9 +1337,10 @@ impl UiRuntime {
                     // A committed frame has published its layout, so the
                     // tree answers; a render object's panic is a miss and
                     // reported after the refresh.
-                    if let ViewHitTest::Answered { panic } = presentation
-                        .renderer()
-                        .hit_test_in_view(&mut result, position, kind, 0)
+                    if let ViewHitTest::Answered { panic } =
+                        presentation
+                            .renderer()
+                            .hit_test(&mut result, position, kind)
                     {
                         let mut held = hit_panic.take();
                         if let Some(payload) = panic {

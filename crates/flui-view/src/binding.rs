@@ -1125,9 +1125,9 @@ impl WidgetsBinding {
     /// 1. **Build phase**: All dirty `Element`s in the widget tree are rebuilt.
     ///    See `State.setState` for details on marking a widget dirty.
     ///
-    /// 2. **Layout phase**: (handled by RendererBinding.drawFrame)
+    /// 2. **Layout phase**: (run by `UiRuntime` on the presentation's `PipelineOwner` after this build pass)
     ///
-    /// 3. **Paint phase**: (handled by RendererBinding.drawFrame)
+    /// 3. **Paint phase**: (run by `UiRuntime` on the presentation's `PipelineOwner` after this build pass)
     ///
     /// 4. **Finalization phase**: Inactive elements are unmounted. This causes
     ///    [State.dispose] to be invoked on removed widgets.
@@ -1217,8 +1217,8 @@ impl WidgetsBinding {
             inner.build_owner.clear_frame_build_report();
         }
 
-        // Note: Layout and paint phases would be called here via super.draw_frame()
-        // in a full implementation with RendererBinding
+        // Layout and paint run after this build pass, from the owning
+        // `UiRuntime`, not here.
 
         before_finalize();
 

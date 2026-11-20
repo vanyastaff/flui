@@ -4,13 +4,13 @@ use super::UiRuntime;
 use super::presentation_lifecycle::HostLifecycle;
 use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
+use crate::renderer_binding::ViewHitTest;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{events::PointerEvent, ids::InputSurface};
 use flui_platform::input::keyboard::KeyState;
 use flui_platform::input::pointer::{ButtonChange, PointerButton};
 use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
-use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -760,7 +760,7 @@ impl UiRuntime {
         let mut result = flui_interaction::pointer::HitTestResult::new();
         match presentation
             .renderer()
-            .hit_test_in_view(&mut result, position, kind, 0)
+            .hit_test(&mut result, position, kind)
         {
             ViewHitTest::Answered { panic } => {
                 if let Some(payload) = panic {
@@ -882,10 +882,7 @@ impl UiRuntime {
                         let mut result = flui_interaction::pointer::HitTestResult::new();
                         let offset =
                             flui_foundation::geometry::Offset::new(position.dx, position.dy);
-                        match presentation
-                            .renderer()
-                            .hit_test_in_view(&mut result, offset, kind, 0)
-                        {
+                        match presentation.renderer().hit_test(&mut result, offset, kind) {
                             ViewHitTest::Answered { panic } => hit_panic = panic,
                             ViewHitTest::TreeBusy => {
                                 tracing::debug!("pointer hit test found the render tree busy");

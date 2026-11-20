@@ -73,7 +73,6 @@
 #[doc(hidden)]
 pub use flui_foundation::geometry::Size as __MacroSize;
 
-pub mod binding;
 pub mod constraints;
 pub mod context;
 pub mod delegates;
@@ -152,10 +151,6 @@ pub mod prelude {
     pub use crate::storage::{RenderNode, RenderTree};
     pub use crate::{
         RenderUpdateImpact,
-        binding::{
-            RendererBinding, ViewHitTest, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
-            debug_dump_render_tree,
-        },
         parent_data::{
             BoxParentData, FlexFit, FlexParentData, ParentData, SliverMultiBoxAdaptorParentData,
             SliverParentData, SliverPhysicalParentData, StackParentData,

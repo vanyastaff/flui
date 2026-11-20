@@ -71,11 +71,10 @@ pub struct SemanticsHost {
     ///
     /// `Arc`-wrapped (not a bare `AtomicBool`) so
     /// [`Self::platform_semantics_enabled_handle`] can hand a cheap clone to
-    /// the UI runtime's `RenderingBinding::add_semantics_enabled_listener`
-    /// fan-out closure without that closure borrowing this host (which lives
-    /// on the same `UiRuntime` the renderer does — a self-reference the
-    /// closure's `'static` bound forbids). Mirrors `AppRuntime`'s
-    /// `needs_redraw` handle-sharing shape for the identical reason.
+    /// the platform accessibility bridge's activation listener without that
+    /// listener borrowing this host (a self-reference the listener's
+    /// `'static` bound forbids). Mirrors `AppRuntime`'s `needs_redraw`
+    /// handle-sharing shape for the identical reason.
     platform_semantics_enabled: Arc<AtomicBool>,
 
     /// Whether the platform adapter needs a self-contained full republish.
@@ -160,10 +159,10 @@ impl SemanticsHost {
         self.platform_semantics_enabled.load(Ordering::Relaxed)
     }
 
-    /// A cheap clone of the platform-enablement flag, for wiring into a
-    /// UI runtime's `RenderingBinding::add_semantics_enabled_listener` fan-out
-    /// closure — see this field's own doc for why a handle rather than
-    /// borrowing `&self`. Wired at `UiRuntime::construct`.
+    /// A cheap clone of the platform-enablement flag, for wiring into the
+    /// platform accessibility bridge's activation listener — see this
+    /// field's own doc for why a handle rather than borrowing `&self`. Wired
+    /// where the presentation attaches its bridge.
     #[must_use]
     pub fn platform_semantics_enabled_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.platform_semantics_enabled)
