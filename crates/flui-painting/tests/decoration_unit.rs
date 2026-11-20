@@ -380,7 +380,7 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
     // A layer with no opacity is no layer.
     let invisible = BoxDecoration::with_image(DecorationImage {
         opacity: 0.0,
-        ..DecorationImage::new(red)
+        ..DecorationImage::new(red.clone())
     });
     let images = painted(&BoxDecoration::lerp(&invisible, &with(&blue), 0.5));
     assert!(
@@ -388,6 +388,76 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
             && images[0].0 == blue
             && layers(&BoxDecoration::lerp(&invisible, &with(&blue), 0.5)) == 0,
         "an image with no opacity adds no layer: {images:?}"
+    );
+
+    // With no image on b's side, the published image is the strongest layer.
+    let fading_blend = BoxDecoration::lerp(&crossfaded, &BoxDecoration::new(), 0.5);
+    assert!(
+        fading_blend
+            .image
+            .as_ref()
+            .is_some_and(|image| image.image == red),
+        "the strongest layer is published when b has no image"
+    );
+
+    // When b is itself a blend, the published image is b's own, not its last
+    // layer: back_to_red publishes red, though blue is its last layer.
+    let onto_blend = BoxDecoration::lerp(&with(&green), &back_to_red, 0.5);
+    assert!(
+        onto_blend
+            .image
+            .as_ref()
+            .is_some_and(|image| image.image == red),
+        "b's own published image is published: {:?}",
+        onto_blend.image.as_ref().map(|image| image.opacity)
+    );
+
+    // Four images blended evenly, then lerped a little toward back_to_red:
+    // six layers, b's own red among the weakest and blue weaker still, after
+    // it. The cap keeps red, drops blue and the weakest of the four, and the
+    // kept layers still cover the box.
+    let even: Vec<Image> = [Color::GREEN, Color::BLACK, Color::WHITE, Color::TRANSPARENT]
+        .iter()
+        .map(|color| Image::solid_color(4, 4, *color))
+        .collect();
+    let mut four = with(&even[0]);
+    for (index, image) in even.iter().enumerate().skip(1) {
+        #[expect(clippy::cast_precision_loss, reason = "a share of four images")]
+        let t = 1.0 / (index as f64 + 1.0);
+        four = BoxDecoration::lerp(&four, &with(image), t);
+    }
+    let toward_red = BoxDecoration::lerp(&four, &back_to_red, 0.1);
+    let kept = painted(&toward_red);
+    let coverage: f32 = kept.iter().map(|(_, opacity, _)| opacity).sum();
+    assert!(
+        kept.len() == 4
+            && kept.iter().any(|(image, _, _)| *image == red)
+            && !kept.iter().any(|(image, _, _)| *image == blue)
+            && (coverage - 1.0).abs() < 0.01
+            && toward_red
+                .image
+                .as_ref()
+                .is_some_and(|image| image.image == red),
+        "b's own image kept and published, a later weaker layer dropped: {:?}",
+        kept.iter()
+            .map(|(_, opacity, _)| opacity)
+            .collect::<Vec<_>>()
+    );
+
+    // A blend keeps its images when its gradient is replaced.
+    let gradient =
+        flui_painting::styling::Gradient::Linear(flui_painting::styling::LinearGradient::new(
+            flui_painting::Alignment::CENTER_LEFT,
+            flui_painting::Alignment::CENTER_RIGHT,
+            vec![Color::RED, Color::BLUE],
+            None,
+            flui_painting::paint::TileMode::Clamp,
+        ));
+    let regraded = crossfaded.clone().set_gradient(Some(gradient));
+    assert_eq!(
+        painted(&regraded).len(),
+        2,
+        "the blend outlives a new gradient"
     );
 
     // Past four layers the weakest other one goes, the incoming image stays,

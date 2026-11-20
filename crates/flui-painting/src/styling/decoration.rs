@@ -132,13 +132,15 @@ impl ImageBlend {
     /// `a`'s layers at `1 - t` of their opacity and `b`'s at `t`, as the
     /// decoration's `image` and the blend beside it. One layer needs no blend.
     ///
-    /// The published `image` is `b`'s own image, as far as it is in the blend,
-    /// else the strongest layer. Past [`MAX_LAYERS`](Self::MAX_LAYERS) the
-    /// weakest other layers go, and the ones kept take up their shares, so the
-    /// blend covers the box as fully as before.
+    /// The published `image` is the layer that holds `b`'s own published image
+    /// (`target`), as the blend paints it, else the strongest layer. Past
+    /// [`MAX_LAYERS`](Self::MAX_LAYERS) the weakest other layers go, and the ones
+    /// kept take up their shares, so the blend covers the box as fully as
+    /// before.
     fn mix(
         a: &[DecorationImage],
         b: &[DecorationImage],
+        target: Option<&DecorationImage>,
         t: f64,
     ) -> (Option<DecorationImage>, Option<Self>) {
         let mut layers: Vec<DecorationImage> = Vec::new();
@@ -168,8 +170,7 @@ impl ImageBlend {
                 .max_by(|(_, x), (_, y)| x.opacity.total_cmp(&y.opacity))
                 .map(|(index, _)| index)
         };
-        let mut published = b
-            .last()
+        let mut published = target
             .and_then(|target| {
                 layers
                     .iter()
@@ -455,7 +456,7 @@ where
     /// opacity and `b`'s at `t`, painted added together in a layer, so an
     /// opaque crossfade covers the box at every `t`. An image on both sides is
     /// one layer, a lerped endpoint brings the layers it blends, and `image`
-    /// holds `b`'s image at its share. The shape is not interpolated and switches at
+    /// holds `b`'s own image as the blend paints it. The shape is not interpolated and switches at
     /// `t = 0.5`.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
@@ -557,9 +558,9 @@ where
         // up. The same image on both sides is one layer whose shares add back
         // to its own opacity, so it does not dim.
         let (image, image_blend) = if a.image_layers() == b.image_layers() {
-            (a.image.clone(), a.image_blend().cloned())
+            (b.image.clone(), b.image_blend().cloned())
         } else {
-            ImageBlend::mix(a.image_layers(), b.image_layers(), t)
+            ImageBlend::mix(a.image_layers(), b.image_layers(), b.image.as_ref(), t)
         };
         // Not interpolatable: a discrete switch at the midpoint.
         let shape = if t < 0.5 { a.shape } else { b.shape };
