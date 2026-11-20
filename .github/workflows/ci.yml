@@ -1124,9 +1124,11 @@ jobs:
           }
           create perf-counter
           create perf-reload --hot-reload
-          counter_release_bytes=$(size_of perf-counter perf-counter)
-          counter_wasm_bytes=$(size_of perf-counter perf-counter wasm32-unknown-unknown)
-          hot_reload_host_release_bytes=$(size_of perf-reload perf-reload-host)
+          # One assignment each, so a failed build stops the step (`set -e`).
+          declare -A bytes
+          bytes[counter_release_bytes]=$(size_of perf-counter perf-counter)
+          bytes[counter_wasm_bytes]=$(size_of perf-counter perf-counter wasm32-unknown-unknown)
+          bytes[hot_reload_host_release_bytes]=$(size_of perf-reload perf-reload-host)
           failed=0
           {
             echo "### Release sizes"
@@ -1135,7 +1137,7 @@ jobs:
             echo "|---|---:|---:|"
           } >> "$GITHUB_STEP_SUMMARY"
           for counter in counter_release_bytes counter_wasm_bytes hot_reload_host_release_bytes; do
-            current=${!counter}
+            current=${bytes[$counter]}
             base=$(sed -n "s/^$counter = \([0-9][0-9]*\)$/\1/p" perf/size.toml)
             echo "$counter = $current  (perf/size.toml: ${base:-none})"
             echo "| \`$counter\` | ${base:--} | $current |" >> "$GITHUB_STEP_SUMMARY"
