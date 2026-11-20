@@ -89,7 +89,10 @@ impl RenderBox for RenderShimmerMask {
 
     // Closure is load-bearing: `PaintContext::paint_child` is ambiguous as a method
     // path across arities.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "paint_child` is ambiguous as a method path across `PaintContext` arities (E0034), so the lint's rewrite does not compile"
+    )]
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         if !self.has_child {
             return;

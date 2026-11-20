@@ -251,6 +251,10 @@ fn calc_cache_offset(c: &SliverConstraints, from: f64, to: f64) -> f64 {
 ///   by any mid-pass `item_count` shrink via `NoChild`).  The caller forwards
 ///   these to `ctx.emit_retain_band(cache_first, cache_last)` so the element
 ///   tree can evict everything outside the band.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct borrow of the caller's layout state or its context; bundling them would add a struct that exists only for this one call"
+)]
 pub(super) fn walk_virtualizer_band<'ctx, G>(
     virtualizer: &mut Virtualizer,
     logical_to_slot: &mut BTreeMap<usize, usize>,
@@ -351,7 +355,10 @@ where
             // the `#[non_exhaustive]` forward-compat wildcard on purpose — the
             // arm exists to document this variant's semantics, and merging it
             // into `_` would silently absorb future `ChildLayout` variants.
-            #[expect(clippy::match_same_arms)]
+            #[expect(
+                clippy::match_same_arms,
+                reason = "the empty `Scheduled` arm documents the variant and must not merge into the `#[non_exhaustive]` wildcard, which would absorb future variants"
+            )]
             match on_absent(logical_i, dense_count, box_constraints, ctx) {
                 ChildLayout::Scheduled => {
                     // Parked for the element tree to service between layout

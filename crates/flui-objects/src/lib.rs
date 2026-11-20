@@ -30,8 +30,7 @@
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
-// Crate-specific relaxations (same rationale as flui-rendering):
-#![expect(clippy::too_many_arguments)]
+#![warn(clippy::allow_attributes_without_reason)]
 
 mod animation_sample;
 mod dynamic_type;
@@ -84,8 +83,6 @@ pub use proxy::{
     PathClip, PhysicalClipShape, PhysicalClipSource, RectangleClip, RenderPhysicalModelBase,
 };
 pub use shimmer::{ShimmerBand, ShimmerSweep};
-// The follower's clip mode is a layer value its configuration takes.
-pub use flui_layer::LeaderClip;
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{
