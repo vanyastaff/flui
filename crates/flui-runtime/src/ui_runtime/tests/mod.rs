@@ -288,14 +288,9 @@ mod agent_stability;
 mod agent_wait;
 
 // ========================================================================
-// Frame pipeline, first-frame deferral, and Vsync — migrated from the
-// retired `AppBinding`'s own test module (`binding.rs`, deleted alongside
-// it). These are the frame-loop parity oracle: `draw_frame_entered`'s
-// internal ordering (vsync tick before build, the async-driver
-// mid-frame slot, the pipeline-failure retry path) and the first-frame
-// deferral gate moved to `UiRuntime` verbatim; only the receiver syntax
-// changed (`binding.draw_frame(&ui_runtime, c)` -> `ui_runtime.draw_frame(c)`),
-// never the assertions themselves.
+// Frame pipeline, first-frame deferral, and Vsync: `draw_frame_entered`'s
+// internal ordering (vsync tick before build, the async-driver mid-frame
+// slot, the pipeline-failure retry path) and the first-frame deferral gate.
 mod frame_pipeline_and_vsync;
 
 // ========================================================================
@@ -537,6 +532,7 @@ fn frame_failure_containment_matrix() {
             ("frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_presented_frame", frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_presented_frame as fn()),
             ("frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported", frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported as fn()),
             ("frame_failure_containment::a_panicking_semantics_report_schedules_its_retry", frame_failure_containment::a_panicking_semantics_report_schedules_its_retry as fn()),
+            ("frame_failure_containment::a_frame_reports_its_semantics_diagnostics", frame_failure_containment::a_frame_reports_its_semantics_diagnostics as fn()),
             ("super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene", super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene as fn()),
             ("super::frame_failure_phase_tests::a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry", super::frame_failure_phase_tests::a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry as fn()),
             ("super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt", super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt as fn()),
