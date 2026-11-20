@@ -498,8 +498,4 @@ impl PlatformHaptics for IOSHaptics {
             HapticCapabilities::FEEDBACK_ONLY
         }
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

@@ -54,12 +54,19 @@ pub fn a_drawer_release_keeps_finger_speed() {
     let painted_x = |laid: &common::LaidOut| {
         drawer_scene_sample(laid.layer_tree().expect("committed scene"), color).0
     };
-    for (configured, viewport, end) in [
-        (150.0, 400.0, false),
-        (1200.0, 1320.0, false),
-        (304.0, 100.0, false),
-        (150.0, 400.0, true),
-        (1200.0, 1320.0, true),
+    use flui_sdk::painting::TextDirection::{Ltr, Rtl};
+    use flui_sdk::widgets::Directionality;
+    // A right-to-left start drawer opens from the right and an end drawer
+    // from the left: the drag follows the finger and the fling keeps its
+    // speed, mirrored.
+    for (configured, viewport, end, direction) in [
+        (150.0, 400.0, false, Ltr),
+        (1200.0, 1320.0, false, Ltr),
+        (304.0, 100.0, false, Ltr),
+        (150.0, 400.0, true, Ltr),
+        (1200.0, 1320.0, true, Ltr),
+        (150.0, 400.0, false, Rtl),
+        (150.0, 400.0, true, Rtl),
     ] {
         let vsync = Vsync::new();
         let drawer = Drawer::new()
@@ -71,12 +78,13 @@ pub fn a_drawer_release_keeps_finger_speed() {
             Scaffold::new().drawer(drawer)
         };
         let mut laid = lay_out_animated(
-            themed_animated(scaffold, &vsync),
+            Directionality::new(direction, themed_animated(scaffold, &vsync)),
             tight(viewport, 400.0),
             vsync,
         );
-        let sign = if end { -1.0 } else { 1.0 };
-        let mut x = if end { viewport - 5.0 } else { 5.0 };
+        let from_right = end != (direction == Rtl);
+        let sign = if from_right { -1.0 } else { 1.0 };
+        let mut x = if from_right { viewport - 5.0 } else { 5.0 };
         laid.dispatch_pointer_down(x, 200.0);
         for _ in 0..5 {
             x += sign * 15.0;
@@ -101,7 +109,8 @@ pub fn a_drawer_release_keeps_finger_speed() {
         let speed = (pair[1] - pair[0]) / step.as_secs_f64();
         assert!(
             (speed - sign * 1500.0).abs() < 150.0,
-            "configured {configured}, viewport {viewport}, end {end}: painted speed {speed}"
+            "configured {configured}, viewport {viewport}, end {end}, {direction:?}: \
+             painted speed {speed}"
         );
         laid.pump_widget(SizedBox::shrink());
     }
@@ -1170,4 +1179,304 @@ pub fn retained_drawer_recomputes_its_extent_after_a_collapsed_resize() {
         "same retained handle observes resized drag"
     );
     assert_drawer_panel_width(&laid, 100.0);
+}
+
+/// A drawer resolves its reading edge against the ambient direction: a
+/// right-to-left start drawer's closed edge strip is on the right and widens by
+/// the right safe-area inset, its panel rounds the corners facing the interior
+/// (the left ones), and a direction flip while it is open moves the panel to
+/// the other side at the same progress, rounding the other corners.
+pub fn a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction() {
+    use flui_sdk::geometry::Point;
+    use flui_sdk::painting::TextDirection::{self, Ltr, Rtl};
+    use flui_sdk::painting::{Color, DrawOp};
+    use flui_sdk::widgets::Directionality;
+
+    // The panel's fill: the outline of its `Material`, in its own coordinates.
+    fn panel_outline(laid: &common::LaidOut, fill: Color) -> flui_sdk::painting::Path {
+        let tree = laid.layer_tree().expect("committed scene");
+        tree.iter()
+            .filter_map(|(_, node)| match node.layer() {
+                flui_layer::Layer::Picture(picture) => Some(picture),
+                _ => None,
+            })
+            .flat_map(|picture| picture.picture().iter())
+            .find_map(|command| match &command.op {
+                DrawOp::Path { path, paint } if paint.color == fill => {
+                    Some(command.payload(*path).clone())
+                }
+                _ => None,
+            })
+            .expect("the open panel paints its Material's outline")
+    }
+    // Which corners of the 304 x 400 panel the outline rounds off: top left,
+    // top right, bottom right, bottom left.
+    fn rounded_corners(outline: &flui_sdk::painting::Path) -> [bool; 4] {
+        [(1.0, 1.0), (303.0, 1.0), (303.0, 399.0), (1.0, 399.0)]
+            .map(|(x, y)| !outline.contains(Point::new(x, y)))
+    }
+    // A panel flush with the right side faces the interior with its left
+    // corners, one flush with the left side with its right corners.
+    const FACING_LEFT: [bool; 4] = [true, false, false, true];
+    const FACING_RIGHT: [bool; 4] = [false, true, true, false];
+
+    // The subtree below the `Directionality` is preserved across pumps, so a
+    // flip reaches the drawer only through its dependencies.
+    let tree = |direction: TextDirection,
+                slot: Rc<RefCell<Option<DrawerHandle>>>,
+                vsync: &Vsync| {
+        Directionality::new(
+            direction,
+            crate::rebuild_exactness::StaticChild {
+                inner: VsyncScope::new(
+                    vsync.clone(),
+                    MediaQuery::new(
+                        MediaQueryData {
+                            // Right inset 40, left inset 0.
+                            view_padding: flui_sdk::geometry::EdgeInsets::new(0.0, 40.0, 0.0, 0.0),
+                            ..MediaQueryData::default()
+                        },
+                        Theme::new(
+                            ThemeData::light(),
+                            Scaffold::new()
+                                .drawer(Drawer::new().child(SizedBox::height(400.0)))
+                                .body(HandleProbe {
+                                    slot,
+                                    on_tap: Rc::new(|_handle| {}),
+                                }),
+                        ),
+                    ),
+                )
+                .boxed(),
+            },
+        )
+    };
+    let fill = ThemeData::light().color_scheme.surface_container_low;
+    let vsync = Vsync::new();
+    let slot = Rc::new(RefCell::new(None));
+    let mut laid = lay_out_animated(
+        tree(Rtl, Rc::clone(&slot), &vsync),
+        tight(400.0, 400.0),
+        vsync.clone(),
+    );
+    let handle = slot.borrow().clone().expect("mounted drawer handle");
+
+    // 50 from the right edge: inside the strip of 20 plus the right inset,
+    // outside one that took the left inset. A leftward drag opens it.
+    laid.dispatch_pointer_down(350.0, 200.0);
+    for x in [300.0, 200.0, 100.0] {
+        laid.dispatch_pointer_move(x, 200.0);
+        laid.pump();
+    }
+    laid.dispatch_pointer_up(100.0, 200.0);
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        handle.is_drawer_open(),
+        "a leftward drag from the right inset opens it"
+    );
+    let panel = drawer_panels(&laid)[0];
+    assert_eq!(
+        laid.absolute_offset(panel).dx,
+        400.0 - 304.0,
+        "flush with the right side"
+    );
+    assert_eq!(
+        rounded_corners(&panel_outline(&laid, fill)),
+        FACING_LEFT,
+        "rounded toward the interior, on the left"
+    );
+
+    laid.pump_widget(tree(Ltr, Rc::clone(&slot), &vsync));
+    laid.pump();
+    assert!(handle.is_drawer_open(), "a flip keeps the drawer open");
+    let panel = drawer_panels(&laid)[0];
+    assert_eq!(
+        laid.absolute_offset(panel).dx,
+        0.0,
+        "flush with the left side"
+    );
+    assert_eq!(
+        rounded_corners(&panel_outline(&laid, fill)),
+        FACING_RIGHT,
+        "rounded toward the interior, on the right"
+    );
+
+    // A controller outside a scaffold, under a preserved subtree: nothing
+    // above it rebuilds its `Drawer`, so the corners flip only because the
+    // drawer depends on the side its controller publishes.
+    let controller = |direction: TextDirection| {
+        Directionality::new(
+            direction,
+            crate::rebuild_exactness::StaticChild {
+                inner: MediaQuery::new(
+                    MediaQueryData::default(),
+                    Theme::new(
+                        ThemeData::light(),
+                        flui_material::DrawerController::new(
+                            flui_sdk::view::GlobalKey::new(),
+                            flui_material::DrawerAlignment::Start,
+                            Drawer::new().child(SizedBox::height(400.0)),
+                        )
+                        .is_open(true),
+                    ),
+                )
+                .boxed(),
+            },
+        )
+    };
+    let mut laid = common::lay_out(controller(Ltr), tight(400.0, 400.0));
+    assert_eq!(rounded_corners(&panel_outline(&laid, fill)), FACING_RIGHT);
+    laid.pump_widget(controller(Rtl));
+    assert_eq!(
+        rounded_corners(&panel_outline(&laid, fill)),
+        FACING_LEFT,
+        "a standalone controller's drawer follows the flip"
+    );
+
+    // A drawer with no controller above it is a start drawer: rounded toward
+    // the interior from the reading start, and, under a preserved subtree, a
+    // flip reaches it through its own dependency on the direction.
+    let bare = |direction: TextDirection| {
+        Directionality::new(
+            direction,
+            crate::rebuild_exactness::StaticChild {
+                inner: MediaQuery::new(
+                    MediaQueryData::default(),
+                    Theme::new(
+                        ThemeData::light(),
+                        flui_sdk::widgets::Align::new(flui_sdk::painting::Alignment::TOP_LEFT)
+                            .child(Drawer::new().child(SizedBox::height(400.0))),
+                    ),
+                )
+                .boxed(),
+            },
+        )
+    };
+    let mut laid = common::lay_out(bare(Ltr), tight(400.0, 400.0));
+    assert_eq!(rounded_corners(&panel_outline(&laid, fill)), FACING_RIGHT);
+    laid.pump_widget(bare(Rtl));
+    assert_eq!(
+        rounded_corners(&panel_outline(&laid, fill)),
+        FACING_LEFT,
+        "a drawer outside a controller follows the flip"
+    );
+
+    // A drawer flush with the left side (left-to-right start, right-to-left
+    // end) widens its strip by the left inset: 50 from the left edge is inside
+    // 20 plus 40, and a rightward drag opens it.
+    for (direction, end) in [(Ltr, false), (Rtl, true)] {
+        let slot = Rc::new(RefCell::new(None));
+        let vsync = Vsync::new();
+        let drawer = Drawer::new().child(SizedBox::height(400.0));
+        let scaffold = if end {
+            Scaffold::new().end_drawer(drawer)
+        } else {
+            Scaffold::new().drawer(drawer)
+        };
+        let mut laid = lay_out_animated(
+            Directionality::new(
+                direction,
+                VsyncScope::new(
+                    vsync.clone(),
+                    MediaQuery::new(
+                        MediaQueryData {
+                            // Left inset 40, right inset 0.
+                            view_padding: flui_sdk::geometry::EdgeInsets::new(0.0, 0.0, 0.0, 40.0),
+                            ..MediaQueryData::default()
+                        },
+                        Theme::new(
+                            ThemeData::light(),
+                            scaffold.body(HandleProbe {
+                                slot: Rc::clone(&slot),
+                                on_tap: Rc::new(|_handle| {}),
+                            }),
+                        ),
+                    ),
+                ),
+            ),
+            tight(400.0, 400.0),
+            vsync,
+        );
+        let handle = slot.borrow().clone().expect("mounted drawer handle");
+        laid.dispatch_pointer_down(50.0, 200.0);
+        for x in [100.0, 200.0, 300.0] {
+            laid.dispatch_pointer_move(x, 200.0);
+            laid.pump();
+        }
+        laid.dispatch_pointer_up(300.0, 200.0);
+        for _ in 0..FLING_SETTLE_PUMPS {
+            laid.pump_for(FRAME);
+        }
+        let opened = if end {
+            handle.is_end_drawer_open()
+        } else {
+            handle.is_drawer_open()
+        };
+        assert!(
+            opened,
+            "{direction:?}, end {end}: a rightward drag from the left inset opens it"
+        );
+    }
+}
+
+/// A direction flip in the middle of a drag keeps the drawer's progress and
+/// moves it to the other side, and the contact's next move is signed by the
+/// new side: toward the interior from the left now opens it further.
+pub fn a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_new_side() {
+    use flui_sdk::painting::Color;
+    use flui_sdk::painting::TextDirection::{self, Ltr, Rtl};
+    use flui_sdk::widgets::{ColoredBox, Directionality};
+
+    let color = Color::rgb(17, 83, 149);
+    let vsync = Vsync::new();
+    let tree = |direction: TextDirection| {
+        Directionality::new(
+            direction,
+            crate::rebuild_exactness::StaticChild {
+                inner: themed_animated(
+                    Scaffold::new().drawer(
+                        Drawer::new().child(SizedBox::height(400.0).child(ColoredBox::new(color))),
+                    ),
+                    &vsync,
+                )
+                .boxed(),
+            },
+        )
+    };
+    let mut laid = lay_out_animated(tree(Rtl), tight(400.0, 400.0), vsync.clone());
+    // The panel's painted left edge, and the fraction of its 304 that shows.
+    let painted_x =
+        |laid: &common::LaidOut| drawer_scene_sample(laid.layer_tree().expect("scene"), color).0;
+
+    // A right-to-left start drawer opens leftward from the right edge: 152
+    // of 304 shown.
+    laid.dispatch_pointer_down(395.0, 200.0);
+    for x in [365.0, 335.0, 305.0, 275.0, 243.0] {
+        laid.dispatch_pointer_move(x, 200.0);
+        laid.pump();
+    }
+    let shown_from_right = 400.0 - painted_x(&laid);
+    assert!(
+        shown_from_right > 100.0 && shown_from_right < 200.0,
+        "mid-drag: {shown_from_right} shown"
+    );
+
+    laid.pump_widget(tree(Ltr));
+    laid.pump();
+    let shown_from_left = painted_x(&laid) + 304.0;
+    assert!(
+        (shown_from_left - shown_from_right).abs() < 1e-6,
+        "the flip keeps progress: {shown_from_right} shown from the right, \
+         {shown_from_left} from the left"
+    );
+
+    laid.dispatch_pointer_move(273.0, 200.0);
+    laid.pump();
+    assert!(
+        (painted_x(&laid) + 304.0 - (shown_from_left + 30.0)).abs() < 1e-6,
+        "a rightward move opens the now-left drawer by its distance"
+    );
+    laid.dispatch_pointer_cancel();
 }

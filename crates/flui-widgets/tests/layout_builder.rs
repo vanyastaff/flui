@@ -232,10 +232,6 @@ pub(crate) fn a_layout_builder_feeding_its_own_constraints_paints_without_panick
         fn should_relayout(&self, _old: &dyn MultiChildLayoutDelegate) -> bool {
             false
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 
     let runs = Rc::new(Cell::new(0_usize));

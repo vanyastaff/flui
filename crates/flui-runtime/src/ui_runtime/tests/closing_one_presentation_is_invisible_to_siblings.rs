@@ -202,12 +202,8 @@ impl Clone for RetirementKey {
 }
 
 impl flui_foundation::ViewKey for RetirementKey {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn key_eq(&self, other: &dyn flui_foundation::ViewKey) -> bool {
-        other
-            .as_any()
+        (other as &dyn std::any::Any)
             .downcast_ref::<Self>()
             .is_some_and(|other| self.id == other.id)
     }

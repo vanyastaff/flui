@@ -3,7 +3,7 @@
 //! the selection's start, or under its end where there is no room above,
 //! and pinned to the start's leader so it moves with the selection.
 
-use std::rc::Rc;
+use std::{any::Any, rc::Rc};
 
 use flui_foundation::geometry::{Offset, Point, Size};
 use flui_layer::LayerLink;
@@ -184,13 +184,8 @@ impl SingleChildLayoutDelegate for ToolbarLayout {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| old != self)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }

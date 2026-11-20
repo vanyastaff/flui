@@ -263,7 +263,7 @@ impl CustomPainter for ArcPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any().downcast_ref::<Self>().is_none_or(|old| {
+        (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             old.color != self.color
                 || old.controller.is_some() != self.controller.is_some()
                 || !Arc::ptr_eq(&old.motion, &self.motion)
@@ -274,9 +274,5 @@ impl CustomPainter for ArcPainter {
         self.controller
             .as_ref()
             .map(|controller| std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Listenable>)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }

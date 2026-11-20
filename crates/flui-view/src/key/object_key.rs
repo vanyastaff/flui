@@ -54,13 +54,8 @@ impl fmt::Debug for ObjectKey {
 }
 
 impl ViewKey for ObjectKey {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        other
-            .as_any()
+        (other as &dyn Any)
             .downcast_ref::<Self>()
             .is_some_and(|other| Rc::ptr_eq(&self.holder, &other.holder))
     }

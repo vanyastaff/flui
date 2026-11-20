@@ -2989,9 +2989,5 @@ pub(crate) mod status_bar {
                 );
             });
         }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
 }

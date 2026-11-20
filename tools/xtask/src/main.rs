@@ -47,8 +47,6 @@ struct Cli {
 enum Command {
     /// Run the source checks that need no workspace build (the CI `checks` job).
     Checks(tasks::ChecksArgs),
-    /// Run the fuzz targets under libFuzzer.
-    Fuzz(tasks::FuzzArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
     /// Check that every declared MSRV matches rust-toolchain.toml.
@@ -87,7 +85,6 @@ fn main() -> ExitCode {
     }
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
-        Command::Fuzz(args) => tasks::fuzz(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         Command::UnmountedTests(args) => unmounted_tests::unmounted_tests(&args),

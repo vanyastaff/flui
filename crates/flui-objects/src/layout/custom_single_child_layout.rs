@@ -59,7 +59,7 @@ impl RenderCustomSingleChildLayoutBox {
         if Rc::ptr_eq(&self.delegate, &delegate) {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let type_changed = self.delegate.as_any().type_id() != delegate.as_any().type_id();
+        let type_changed = !crate::dynamic_type::same_concrete_type(&*self.delegate, &*delegate);
         let relayout = type_changed || delegate.should_relayout(&*self.delegate);
         self.delegate = delegate;
         if relayout {

@@ -62,7 +62,7 @@ use crate::{HapticFeedback, input::pointer::DeviceId};
 /// when that frame is presented. A source device it does not know plays on the
 /// window's actuator (ADR-0210 §5). It never stretches a duration, raises an
 /// intensity, or plays for a hidden window.
-pub trait PlatformHaptics: Send + Sync {
+pub trait PlatformHaptics: std::any::Any + Send + Sync {
     /// Perform `feedback` on this window, best-effort and unaddressed.
     ///
     /// The Stable tier-1 entry point; [`perform_with`](Self::perform_with)
@@ -105,9 +105,4 @@ pub trait PlatformHaptics: Send + Sync {
         let _ = source;
         HapticCapabilities::FEEDBACK_ONLY
     }
-
-    /// Downcast support for tests that need to reach a concrete recording
-    /// fake (such as `flui_platform::testing::FakeHaptics`) behind the trait object
-    /// `PlatformWindow::haptics` returns.
-    fn as_any(&self) -> &dyn std::any::Any;
 }

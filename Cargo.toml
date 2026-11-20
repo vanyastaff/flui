@@ -566,7 +566,7 @@ insta = "1"
 proptest = "1"
 
 # COVERAGE-GUIDED FUZZING - libFuzzer's runtime, linked into the fuzz targets
-# (`cargo xtask fuzz`). A crate names it under `cfg(fuzzing)` only, so no other
+# (`.cargo/fuzz.toml`). A crate names it under `cfg(fuzzing)` only, so no other
 # build compiles it.
 libfuzzer-sys = "0.4"
 
@@ -586,7 +586,7 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 # unexpected_cfgs: a typo in one of the many `cfg(target_arch = ...)` /
 # `cfg(feature = ...)` gates would otherwise compile to a silently-dead branch —
 # exactly the failure mode that kept the web backend from ever being exercised.
-# `fuzzing` is the one name beyond rustc's and Cargo's own: `cargo xtask fuzz`
+# `fuzzing` is the one name beyond rustc's and Cargo's own: `.cargo/fuzz.toml`
 # sets it for the fuzz targets.
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzing)'] }
 # unsafe_op_in_unsafe_fn: edition 2024 already warns; denying states that an
