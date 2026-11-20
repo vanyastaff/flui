@@ -672,12 +672,16 @@ cargo +nightly --config .cargo/fuzz.toml run --locked --target x86_64-unknown-li
 
 It needs the nightly toolchain on x86_64 Linux; on another host cargo fails
 to build the sanitizer target. A `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` in
-the environment replaces the file's flags, and a
-`target.x86_64-unknown-linux-gnu.rustflags` in another config file (your
-`~/.cargo/config.toml`, a linker flag) is joined to them, so a replay leaves
-both out. The night's nightly is in its log (the toolchain step prints
-`rustc +nightly --version --verbose`); a finding that depends on codegen
-replays with that one, `cargo +nightly-<date>`. libFuzzer keeps the inputs that reached new code in the corpus
+the environment replaces the file's flags, and any `target.<triple>` or
+`target.<cfg>` rustflags another config file sets (your `~/.cargo/config.toml`,
+a linker flag), or `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS`, is
+joined to them, so a replay leaves them out; `cargo +nightly -Zunstable-options
+--config .cargo/fuzz.toml config get target` shows what it builds with. The night's nightly is in its log: the toolchain step prints `rustc
++nightly --version --verbose` with its commit hash. rustup's
+`nightly-<date>` is the date it was published, usually the day after that
+commit date, so a finding that depends on codegen replays with the
+`nightly-<date>` whose `rustc --version` names the same hash. libFuzzer keeps
+the inputs that reached new code in the corpus
 directory and writes the input that ended a run to `findings/`, named by what
 it did (`crash-`, `timeout-`, `oom-`, `leak-`). It reads a directory as a
 corpus and fuzzes it without end, so a replay names a file. The example built
@@ -687,11 +691,9 @@ and it refuses a PNG whose checksum the fuzzer never repaired, so it does not
 stand in for the replay.
 
 `fuzz.yml` runs each target as a job of its own for ten minutes every night
-against main, carries the corpus and the inputs earlier nights found from one
-night to the next, and reads those findings back first, so a night stays red
-until the fix of each lands. It uploads what a failing run found as
-`fuzz-findings-<target>` and keeps the "Fuzzing failed on main" issue open
-while a run is red. No pull request runs it (ADR-0376): a change to a target,
+against main, carries the corpus from one night to the next, uploads what a
+failing run found as `fuzz-findings-<target>` and keeps the "Fuzzing failed
+on main" issue open while a run is red. No pull request runs it (ADR-0376): a change to a target,
 its seeds or what it is built from runs the workflow on its branch (`gh
 workflow run Fuzz --ref <branch>`) at the head that merges, and the night's
 run sees every other change.

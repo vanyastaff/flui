@@ -15,8 +15,9 @@
 # build is the dev profile without them. Under a target table with `--target`
 # named the flags reach the target's crates only, never a build script or a
 # procedural macro, and only on the one host the sanitizer runtime is written
-# for. Cargo joins them with any `target.x86_64-unknown-linux-gnu.rustflags` of
-# another config file, and a `RUSTFLAGS` in the environment replaces them.
+# for. Cargo joins them with any `target.<triple>` or `target.<cfg>` rustflags
+# of another config file and with `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, and a
+# `RUSTFLAGS` in the environment replaces them.
 # `-Zsanitizer` needs nightly.
 
 [target.x86_64-unknown-linux-gnu]

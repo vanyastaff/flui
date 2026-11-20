@@ -61,10 +61,11 @@ pub(super) fn target_dir() -> anyhow::Result<PathBuf> {
 mod tests {
     use super::*;
 
-    /// A step whose command exits non-zero, or fails to run, is an error
-    /// naming its command line; a dry run runs nothing, so nothing fails.
+    /// A step whose command exits non-zero is an error naming its command
+    /// line, an error the command returns is passed on as it is (the caller
+    /// prints the command beside it), and a dry run runs nothing.
     #[test]
-    fn a_failing_step_is_an_error_naming_it_and_a_dry_run_runs_nothing() {
+    fn a_failing_exit_is_an_error_naming_the_step_and_a_dry_run_runs_nothing() {
         let runner = Runner { dry_run: false };
         let failed = runner
             .in_process("toolchain", || Ok(ExitCode::FAILURE))
