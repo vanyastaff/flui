@@ -15,8 +15,9 @@
 //! tree assistive technology reads, projected onto the wire's nodes, and the OS's own capture of
 //! the window ([`Lane::capture_window`]).
 //!
-//! The lanes: [`windows`].
+//! The lanes: [`windows`], [`macos`].
 
+pub mod macos;
 pub mod windows;
 
 use std::fmt;
