@@ -25,6 +25,13 @@ use crate::{
 /// GPU painter for wgpu-based rendering.
 ///
 /// Manages instanced batching, tessellation, text rendering, and offscreen compositing.
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports `WgpuPainter` only under `testing`, for the benches"
+    )
+)]
 pub struct WgpuPainter {
     domain: Arc<crate::device_domain::DeviceDomain>,
     frame_scope: Option<crate::device_domain::FrameSubmissionScope>,
@@ -146,11 +153,18 @@ pub(crate) struct ChunkEntry {
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts.
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports `WgpuPainter` only under `testing`, for the benches"
+    )
+)]
 impl WgpuPainter {
-    /// Start an embedder-owned frame before recording any drawing commands.
+    /// Start a caller-owned frame before recording any drawing commands.
     ///
     /// After success, record draws, encode them with [`Self::render_to_view`],
-    /// submit with [`Self::submit_encoder`], then call [`Self::finish_frame`].
+    /// submit with `submit_encoder`, then call [`Self::finish_frame`].
     /// Intermediate flushes and submissions share the same cumulative frame quota.
     /// If encoding or submission fails, discard any unsubmitted encoders and
     /// still finish the frame. A failed begin does not start a frame; do not finish
@@ -158,6 +172,7 @@ impl WgpuPainter {
     /// # Errors
     /// Rejects a nested frame, pending-work backpressure, a device-progress
     /// failure, or a closing/lost device domain.
+    #[cfg(feature = "testing")]
     pub fn begin_frame(&mut self) -> crate::error::EngineResult<()> {
         let scope = self.domain.begin_frame_scope()?;
         self.frame_scope = Some(scope);
@@ -178,7 +193,7 @@ impl WgpuPainter {
         self.region_pass = pass;
     }
 
-    /// Finish an embedder-owned frame after submitting its final encoder.
+    /// Finish a caller-owned frame after submitting its final encoder.
     ///
     /// Call once, including when rendering failed and the encoder was discarded.
     /// Advances resource reclamation and releases frame-local uniform allocations.
@@ -198,26 +213,11 @@ impl WgpuPainter {
         self.frame_scope = None;
         self.region_pass = 0;
     }
-    /// Create a new GPU painter
-    ///
-    /// # Arguments
-    /// * `device` - wgpu device
-    /// * `queue` - wgpu queue
-    /// * `surface_format` - Surface texture format
-    /// * `size` - Initial viewport size (width, height)
-    pub fn new(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-        size: (u32, u32),
-    ) -> Self {
-        Self::with_shared_device(Arc::new(device), Arc::new(queue), surface_format, size)
-    }
-
     /// Create a WgpuPainter with shared device and queue.
     ///
     /// Use this when the device/queue are already wrapped in Arc
     /// (e.g., shared with another painter on the same device).
+    #[cfg(feature = "testing")]
     pub fn with_shared_device(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -231,6 +231,7 @@ impl WgpuPainter {
         )
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_domain(
         domain: Arc<crate::device_domain::DeviceDomain>,
         surface_format: wgpu::TextureFormat,
@@ -437,20 +438,16 @@ impl WgpuPainter {
 
     /// Returns a reference to the wgpu device.
     #[must_use]
-    pub fn device(&self) -> &Arc<wgpu::Device> {
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
     }
 
     /// Returns a reference to the wgpu queue.
     #[must_use]
-    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.queue
-    }
-
-    /// Returns the surface texture format.
-    #[must_use]
-    pub fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_format
     }
 
     // ===== Frame Lifecycle =====
@@ -565,7 +562,7 @@ impl WgpuPainter {
     ///
     /// This encodes work; it neither submits nor finishes the frame. Begin with
     /// [`Self::begin_frame`] before recording, submit every encoder containing
-    /// prepared draws through [`Self::submit_encoder`], then finish with
+    /// prepared draws through `submit_encoder`, then finish with
     /// [`Self::finish_frame`]. Multiple flushes may share one encoder. On error,
     /// discard that encoder and finish the frame; do not submit its partial work.
     /// Direct queue submission bypasses the painter's submission admission and
@@ -575,6 +572,7 @@ impl WgpuPainter {
     /// `wgpu::Texture` to supply. Call [`Self::render_to_texture`] when the
     /// backing texture is available, so blend passes can read its destination.
     #[must_use = "errors must be propagated or handled"]
+    #[cfg(feature = "testing")]
     pub fn render_to_view(
         &mut self,
         view: &wgpu::TextureView,
@@ -589,7 +587,7 @@ impl WgpuPainter {
     /// single-sample 2D attachment, and permit `RENDER_ATTACHMENT | COPY_SRC`.
     /// The texture and encoder must belong to this painter's device. Only mip
     /// level zero is rendered. Validation precedes encoding. The managed lifecycle
-    /// is the same as [`Self::render_to_view`].
+    /// is the same as `render_to_view`.
     #[must_use = "errors must be propagated or handled"]
     pub fn render_to_texture(
         &mut self,
@@ -676,16 +674,10 @@ impl WgpuPainter {
         self.recording_cache.end_frame();
     }
 
-    /// Returns the current viewport size as `(width, height)`.
-    #[must_use]
-    pub fn size(&self) -> (u32, u32) {
-        self.size
-    }
-
     /// Resize the viewport.
     ///
     /// Call this when the window is resized.
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub(crate) fn resize(&mut self, width: u32, height: u32) {
         self.size = (width, height);
         self.replay.update_viewport(width, height);
         // Delegate the GPU uniform-buffer write to GpuReplay, which owns the
@@ -699,7 +691,8 @@ impl WgpuPainter {
     /// Imports remain a trusted same-device raw wgpu contract; the registry
     /// cannot prove foreign-device provenance. Recorded draws hold allocation
     /// leases, so update/unregister cannot replace already recorded work.
-    pub fn external_texture_registry(
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn external_texture_registry(
         &self,
     ) -> &crate::external_texture_registry::ExternalTextureRegistry {
         self.resources.external_texture_registry()
@@ -710,6 +703,7 @@ impl WgpuPainter {
     /// Update preserves descriptor and dimensions. Use unregister/register to
     /// change policy. Writes into the same allocation stay visible to recorded
     /// draws; allocation ownership does not copy texel contents.
+    #[cfg(any(test, feature = "testing"))]
     pub fn external_texture_registry_mut(
         &mut self,
     ) -> &mut crate::external_texture_registry::ExternalTextureRegistry {
@@ -729,7 +723,8 @@ impl WgpuPainter {
     /// The first frame refused: an empty image, one past the device's texture
     /// limit, or one the registry rejects;
     /// every other frame and every retirement is still applied.
-    pub fn apply_texture_updates(
+    #[cfg(test)]
+    pub(crate) fn apply_texture_updates(
         &mut self,
         updates: flui_layer::TextureUpdates,
     ) -> crate::error::EngineResult<()> {

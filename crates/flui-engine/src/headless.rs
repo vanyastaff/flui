@@ -635,10 +635,10 @@ impl RetainedCapture {
                 .register(
                     id,
                     texture,
-                    crate::ExternalTextureDescriptor {
-                        sampling: crate::ExternalSampling::Nearest,
-                        alpha: crate::ExternalAlpha::Straight,
-                        color: crate::ExternalColorEncoding::EncodedSrgb,
+                    crate::external_texture_registry::ExternalTextureDescriptor {
+                        sampling: crate::external_texture_registry::ExternalSampling::Nearest,
+                        alpha: crate::external_texture_registry::ExternalAlpha::Straight,
+                        color: crate::external_texture_registry::ExternalColorEncoding::EncodedSrgb,
                     },
                 )
                 .expect("supported test texture");

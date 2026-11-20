@@ -11,10 +11,10 @@ use std::{
 };
 
 use flui_engine::{
-    DeviceHealth, EngineError, ExecutorHealth, PresentDisposition, RasterCommand, RasterExecutor,
-    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
-    SlotId, SlotPhase, SlotSettlement, SlotTarget, SlotVisibility, SurfaceHold,
-    raster_executor::LIFECYCLE_CAPACITY,
+    DeviceHealth, EngineError, ExecutorHealth, LIFECYCLE_CAPACITY, PresentDisposition,
+    RasterCommand, RasterExecutor, RasterSendError, RasterSender, RasterVerdict, SendReceipt,
+    SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotSettlement, SlotTarget,
+    SlotVisibility, SurfaceHold,
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
 use flui_foundation::{

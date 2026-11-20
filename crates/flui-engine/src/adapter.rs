@@ -10,7 +10,7 @@
 //!   probed backend attempt asks for and its capability-negotiated device,
 //!   which the GPU probe and the context's device rebuild both take.
 //! - `required_features` and `required_limits` — what that device asks
-//!   for, read from the adapter's [`GpuCapabilities`].
+//!   for, read from the adapter's [`GpuCapabilities`](crate::adapter::GpuCapabilities).
 //!
 //! `HeadlessRenderer` and the offscreen contexts deliberately do not use the
 //! negotiated device: capture wants wgpu's default (downlevel-friendly)
@@ -18,43 +18,24 @@
 
 use crate::error::{EngineError, EngineResult};
 
-/// What the GPU adapter reports, and what this engine asked for.
+/// What the GPU adapter reports, which the device request is negotiated from.
 ///
 /// Holds the adapter's own `Features`/`Limits` tables rather than one `bool`
-/// per question: a query is a method (so a capability this engine starts
-/// using needs no struct change and no `struct_field_names` suppression), and
-/// the tables are what a caller needs when it wants to ask something this
-/// type does not.
-///
-/// `#[non_exhaustive]`: wgpu adds features and limit buckets, and this struct
-/// tracks them. Construction is [`Self::detect`] — an embedder reads the
-/// fields, it does not build one.
-#[non_exhaustive]
+/// per question: a query is a method, so a capability this engine starts
+/// using needs no struct change. Built by [`Self::detect`].
 #[derive(Debug, Clone)]
-pub struct GpuCapabilities {
-    /// The backend the adapter belongs to: the preferred one, or the
-    /// fallback the probe took when the preferred one gave no device
-    /// (ADR-0244 §1).
-    pub backend: crate::GpuBackend,
-    /// Adapter name, vendor, and device type as wgpu reports them.
-    pub adapter_name: String,
-    /// Human-readable vendor name resolved from the PCI vendor id.
-    pub vendor: String,
+pub(crate) struct GpuCapabilities {
     /// The features the adapter exposes.
-    pub features: wgpu::Features,
+    pub(crate) features: wgpu::Features,
     /// The limits the adapter reports.
-    pub limits: wgpu::Limits,
+    pub(crate) limits: wgpu::Limits,
 }
 
 impl GpuCapabilities {
     /// Detect GPU capabilities from an adapter.
     #[must_use]
-    pub fn detect(adapter: &wgpu::Adapter) -> Self {
-        let info = adapter.get_info();
+    pub(crate) fn detect(adapter: &wgpu::Adapter) -> Self {
         Self {
-            backend: crate::GpuBackend::of_adapter(&info),
-            adapter_name: info.name,
-            vendor: Self::vendor_name(info.vendor),
             features: adapter.features(),
             limits: adapter.limits(),
         }
@@ -62,7 +43,7 @@ impl GpuCapabilities {
 
     /// Whether the adapter accepts immediate constants ("push constants").
     #[must_use]
-    pub fn supports_push_constants(&self) -> bool {
+    pub(crate) fn supports_push_constants(&self) -> bool {
         self.features.contains(wgpu::Features::IMMEDIATES)
     }
 
@@ -70,7 +51,7 @@ impl GpuCapabilities {
     /// frames on the GPU (ADR-0388). Pass timestamps need no
     /// `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
     #[must_use]
-    pub fn supports_timestamp_queries(&self) -> bool {
+    pub(crate) fn supports_timestamp_queries(&self) -> bool {
         self.features.contains(wgpu::Features::TIMESTAMP_QUERY)
     }
 
@@ -83,20 +64,8 @@ impl GpuCapabilities {
     /// be folded into source alpha, so the second source carries it. Without
     /// it, those modes use independent source/coverage isolation and
     /// destination sampling for exact partial coverage.
-    pub fn supports_dual_source_blending(&self) -> bool {
+    pub(crate) fn supports_dual_source_blending(&self) -> bool {
         self.features.contains(wgpu::Features::DUAL_SOURCE_BLENDING)
-    }
-
-    fn vendor_name(vendor_id: u32) -> String {
-        match vendor_id {
-            0x1002 => "AMD".to_string(),
-            0x10DE => "NVIDIA".to_string(),
-            0x8086 => "Intel".to_string(),
-            0x106B => "Apple".to_string(),
-            0x1414 => "Microsoft (WARP)".to_string(),
-            0x5143 => "Qualcomm".to_string(),
-            _ => format!("Unknown (0x{vendor_id:04X})"),
-        }
     }
 }
 
@@ -287,9 +256,6 @@ mod tests {
             wgpu::Features::PIPELINE_CACHE,
         ] {
             let capabilities = GpuCapabilities {
-                backend: crate::GpuBackend::WebGpu,
-                adapter_name: String::new(),
-                vendor: String::new(),
                 features,
                 limits: wgpu::Limits::default(),
             };

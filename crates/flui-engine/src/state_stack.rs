@@ -320,6 +320,7 @@ impl GpuStateStack {
     }
 
     /// Post-multiply the CTM by a Z-axis rotation.
+    #[cfg(all(test, feature = "testing"))]
     pub(super) fn rotate(&mut self, angle_radians: f32) {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::rotate: angle={}", angle_radians);
@@ -344,6 +345,7 @@ impl GpuStateStack {
     }
 
     /// Post-multiply the CTM by a uniform scale.
+    #[cfg(test)]
     pub(super) fn scale(&mut self, sx: f32, sy: f32) {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::scale: sx={}, sy={}", sx, sy);

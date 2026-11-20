@@ -1155,7 +1155,7 @@ mod tests {
 
     #[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
     fn test_external_lease(domain: &Arc<DeviceDomain>) -> ExternalAllocationLease {
-        use crate::{
+        use crate::external_texture_registry::{
             ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
             ExternalTextureRegistry,
         };

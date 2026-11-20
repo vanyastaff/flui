@@ -24,7 +24,7 @@ const PQ_REFERENCE_WHITE_NITS: f32 = 203.0;
 ///
 /// A request, not a promise: the surface's capabilities decide, a request the
 /// surface cannot meet falls back down the chain `Hdr` → `WideGamut` →
-/// `Srgb8`, and the slot's [`ResolvedSurfaceColor`] holds what was granted.
+/// `Srgb8`, and the slot's `ResolvedSurfaceColor` holds what was granted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SurfaceColor {
@@ -94,7 +94,7 @@ pub(crate) struct ColorRequest {
 
 /// The colour configuration a surface was given.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ResolvedSurfaceColor {
+pub(crate) struct ResolvedSurfaceColor {
     request: ColorRequest,
     granted: SurfaceColor,
     format: wgpu::TextureFormat,
@@ -106,46 +106,47 @@ pub struct ResolvedSurfaceColor {
 impl ResolvedSurfaceColor {
     /// What the application asked for.
     #[must_use]
-    pub const fn requested(&self) -> SurfaceColor {
+    pub(crate) const fn requested(&self) -> SurfaceColor {
         self.request.requested
     }
 
     /// What the surface delivers. Differs from [`requested`](Self::requested)
     /// when the surface could not meet it.
     #[must_use]
-    pub const fn granted(&self) -> SurfaceColor {
+    pub(crate) const fn granted(&self) -> SurfaceColor {
         self.granted
     }
 
     /// Whether the request was met only in part.
     #[must_use]
-    pub fn is_downgraded(&self) -> bool {
+    pub(crate) fn is_downgraded(&self) -> bool {
         self.request.requested != self.granted
     }
 
     /// The swapchain texture format.
     #[must_use]
-    pub const fn format(&self) -> wgpu::TextureFormat {
+    pub(crate) const fn format(&self) -> wgpu::TextureFormat {
         self.format
     }
 
     /// The colour space the swapchain was configured with.
     #[must_use]
-    pub const fn color_space(&self) -> wgpu::SurfaceColorSpace {
+    pub(crate) const fn color_space(&self) -> wgpu::SurfaceColorSpace {
         self.color_space
     }
 
     /// The format the renderer paints in, which the swapchain format is
     /// converted from when they differ.
     #[must_use]
-    pub const fn working_format(&self) -> wgpu::TextureFormat {
+    pub(crate) const fn working_format(&self) -> wgpu::TextureFormat {
         self.working_format
     }
 
     /// How far above SDR white the display can show, as a multiple; `1.0` for
     /// an SDR surface.
     #[must_use]
-    pub fn headroom(&self) -> f32 {
+    #[cfg(test)]
+    pub(crate) fn headroom(&self) -> f32 {
         match self.output {
             OutputEncoding::Identity => 1.0,
             OutputEncoding::Transform(transform) => transform.headroom,
@@ -181,7 +182,7 @@ impl ResolvedSurfaceColor {
     /// # Errors
     /// [`EngineError::UnsupportedSurfaceColorConfiguration`] when the surface
     /// offers no 8-bit sRGB pair, the one every request can fall back to.
-    pub fn resolve(
+    pub(crate) fn resolve(
         requested: SurfaceColor,
         caps: &wgpu::SurfaceCapabilities,
         display: Option<DisplayColor>,

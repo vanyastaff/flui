@@ -1397,63 +1397,64 @@ fn backdrop_resize_attachment_coordinates(_renderer: &HeadlessRenderer) {
                 });
             }
         }
-        let mut painter = crate::WgpuPainter::with_shared_device(
+        let mut painter = crate::painter::WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             wgpu::TextureFormat::Rgba8Unorm,
             (64, 64),
         );
-        let render =
-            |painter: &mut crate::WgpuPainter, texture: &wgpu::Texture, bounds: Rect<f64>| {
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
+        let render = |painter: &mut crate::painter::WgpuPainter,
+                      texture: &wgpu::Texture,
+                      bounds: Rect<f64>| {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &seed,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(extent * 4),
+                    rows_per_image: Some(extent),
+                },
+                wgpu::Extent3d {
+                    width: extent,
+                    height: extent,
+                    depth_or_array_layers: 1,
+                },
+            );
+            painter.begin_frame().expect("begin resized backdrop");
+            painter
+                .record_backdrop_filter(
+                    bounds,
+                    &ImageFilter::Blur {
+                        sigma_x: 2.0,
+                        sigma_y: 0.0,
                     },
-                    &seed,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(extent * 4),
-                        rows_per_image: Some(extent),
-                    },
-                    wgpu::Extent3d {
-                        width: extent,
-                        height: extent,
-                        depth_or_array_layers: 1,
-                    },
-                );
-                painter.begin_frame().expect("begin resized backdrop");
-                painter
-                    .record_backdrop_filter(
-                        bounds,
-                        &ImageFilter::Blur {
-                            sigma_x: 2.0,
-                            sigma_y: 0.0,
-                        },
-                        mode,
-                        None,
-                    )
-                    .expect("record resized backdrop");
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let mut encoder =
-                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                painter
-                    .render(
-                        crate::render_target::RenderTarget::sampleable(&view, texture),
-                        &mut encoder,
-                    )
-                    .expect("render acquired resize attachment");
-                painter
-                    .submit_encoder(encoder)
-                    .expect("submit resized backdrop");
-                painter.finish_frame();
-                crate::test_support::readback_bytes(&device, &queue, texture, extent, extent)
-            };
+                    mode,
+                    None,
+                )
+                .expect("record resized backdrop");
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            painter
+                .render(
+                    crate::render_target::RenderTarget::sampleable(&view, texture),
+                    &mut encoder,
+                )
+                .expect("render acquired resize attachment");
+            painter
+                .submit_encoder(encoder)
+                .expect("submit resized backdrop");
+            painter.finish_frame();
+            crate::test_support::readback_bytes(&device, &queue, texture, extent, extent)
+        };
         let output = Rect::from_xywh(8.0, 8.0, 32.0, 32.0);
         let actual = render(&mut painter, &target(), output);
-        let mut reference = crate::WgpuPainter::with_shared_device(
+        let mut reference = crate::painter::WgpuPainter::with_shared_device(
             Arc::clone(&device),
             Arc::clone(&queue),
             wgpu::TextureFormat::Rgba8Unorm,

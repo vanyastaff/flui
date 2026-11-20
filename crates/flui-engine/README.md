@@ -28,8 +28,12 @@ GPU (wgpu)
   GPU-free test double stand in for the context. `flui-app`'s runners drive
   it; an application does not.
 - `HeadlessRenderer::new()` — rasterizes a scene to RGBA8 without a window.
-- `WgpuPainter` — the per-frame painter, for embedders driving draw calls
-  directly (see `examples/painting_demo`).
+
+What either draws is a `Scene`: draw calls recorded on a `flui_painting::Canvas`,
+its display list in a picture layer. There is no public painter below the
+scene. An application draws through a `CustomPaint`, as `examples/painting_demo`
+does, and `flui-app`'s runners present its scenes; an embedder that wants a
+scene's whole path reads those runners or starts from `HeadlessRenderer`.
 
 The context and headless constructors are `async` — wgpu's adapter and device
 requests are, so the library does not choose a blocking strategy on the

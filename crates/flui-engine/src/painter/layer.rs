@@ -133,11 +133,11 @@ impl WgpuPainter {
     /// Return the full viewport bounds as a device-pixel rect.
     ///
     /// Equivalent to `Rect::from_ltrb(0, 0, width, height)` where
-    /// `(width, height)` is the size last set by [`Self::new`] or
+    /// `(width, height)` is the size the painter was built with or last set by
     /// [`Self::resize`].  Used as the fallback composite rect when a
     /// `save_layer` carries no explicit bounds.
     #[must_use]
-    pub fn viewport_bounds(&self) -> Rect<f64> {
+    pub(crate) fn viewport_bounds(&self) -> Rect<f64> {
         Rect::from_ltrb(
             0.0,
             0.0,
@@ -589,7 +589,7 @@ impl WgpuPainter {
     /// transparent source (`Src`, `Clear`, …) changes every pixel of the
     /// region, even for an empty layer (mapping decision 19 in
     /// `ARCHITECTURE.md`).
-    pub fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
+    pub(crate) fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
         let paint_alpha = paint.color.opacity();
         let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
         let region = self.composite_region(bounds);
@@ -933,7 +933,7 @@ impl WgpuPainter {
     /// Calling `restore_layer` without a matching open is a logic error; the
     /// compositor logs a warning and reinstates the pre-restore draw state
     /// (`RestoreOutcome::Underflow`).
-    pub fn restore_layer(&mut self) {
+    pub(crate) fn restore_layer(&mut self) {
         if self.suppressed_layer_depth != 0 {
             self.suppressed_layer_depth -= 1;
             return;

@@ -80,7 +80,8 @@ not promise continued polling of raw device clones after their owner disappears.
 
 ## Verification
 
-Public `WgpuPainter::begin_frame` is fallible and owns the same cumulative
+`WgpuPainter::begin_frame` (crate-private; the `testing` feature's benches call it)
+is fallible and owns the same cumulative
 submission scope until `finish_frame`; callback retirement cannot renew that
 allowance mid-frame. Internal child painters only reset recording under their
 parent's scope. Domain quarantine participates directly in the backend loss

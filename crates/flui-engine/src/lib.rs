@@ -6,14 +6,15 @@
     )
 )]
 // `missing_debug_implementations` is suppressed crate-wide for the public
-// types that hold `lyon`/atlas state or boxed closures with no `Debug`
-// (`WgpuPainter`, the pre-present hook). wgpu 30's
+// types that hold `lyon`/atlas state or boxed closures with no `Debug`:
+// `GpuContext` (its painter, its device-loss wake) and, under `testing`, the
+// bench re-exports (`WgpuPainter`, `OffscreenRenderer`, `PathCache`). wgpu 30's
 // own handles (Device, Queue, Texture, Buffer, …) all derive `Debug`, so they
 // are not the reason. It is an `expect`, not an `allow`: if the last such
 // type gains `Debug`, the attribute must go with it.
 #![expect(
     missing_debug_implementations,
-    reason = "public types such as `WgpuPainter` and the pre-present hook hold lyon or atlas state or boxed closures with no `Debug`"
+    reason = "`GpuContext` holds a painter with lyon and atlas state and a device-loss wake, a boxed closure, with no `Debug`"
 )]
 // No hand-written production `unsafe` in this crate but two: surfaces come from wgpu's safe
 // `create_surface` over an owned `WindowTarget` (ADR-0063), and every GPU
@@ -66,11 +67,18 @@
 //! |---|---|
 //! | presenting every window of an application | [`RasterExecutor`] over one [`GpuContext`] ([`GpuContext::bootstrap`]) — each window a slot of one device, its surface made by the [`SurfaceFactory`] (ADR-0305) |
 //! | rendering without a window (tests, screenshots, thumbnails, CI) | [`HeadlessRenderer::new`] — rasterizes a layer tree to RGBA8 bytes |
-//! | driving draw calls yourself | [`WgpuPainter`] — the per-frame painter; `examples/painting_demo` is the worked example |
 //!
-//! An application does not drive these itself: `flui-app`'s runners bootstrap
-//! the context, attach each window's surface as a slot and send the executor
-//! its frames.
+//! What either draws is a [`Scene`](flui_layer::Scene): record draw calls on a
+//! `flui_painting::Canvas`, put the display list it finishes into a picture
+//! layer, and hand the scene to the executor as a frame. There is no public
+//! painter below the scene.
+//!
+//! An application does not drive these itself: it draws through a
+//! `CustomPaint` (as `examples/painting_demo` does), and `flui-app`'s runners
+//! bootstrap the context, attach each window's surface as a slot and send the
+//! executor its frames. An embedder that wants a scene's whole path reads
+//! those runners, or starts from [`HeadlessRenderer`], which rasterizes a
+//! scene without a window.
 //!
 //! The context and headless constructors are `async`, because wgpu's adapter
 //! and device requests are. The library does not choose a blocking strategy
@@ -79,7 +87,8 @@
 //!
 //! # Architecture
 //!
-//! Everything below [`Scene`](flui_layer::Scene) is this crate's internals,
+//! Everything below [`Scene`](flui_layer::Scene) is this crate's internals
+//! (none of `LayerDispatcher`, `WgpuPainter` or `GpuReplay` is public),
 //! reached through the entry point you picked above:
 //!
 //! ```text
@@ -140,7 +149,7 @@ compile_error!(
 // ============================================================================
 
 /// Common error types for all rendering backends
-pub mod error;
+mod error;
 
 /// The command dispatch surface (`CommandRenderer` — crate-private). Plumbing: the
 /// layer walk dispatches through it, no embedder implements it today.
@@ -172,11 +181,11 @@ pub(crate) mod dispatch;
 pub(crate) mod superellipse;
 
 /// What a frame became once a backend drew it ([`PresentDisposition`]).
-pub mod raster;
+mod raster;
 
 /// The raster executor: one mutator rendering every presentation's slot,
 /// fed by closed commands and settling each frame by its stamp (ADR-0305).
-pub mod raster_executor;
+mod raster_executor;
 
 /// Test support: a GPU-free stand-in for the raster executor's backend.
 #[cfg(feature = "testing")]
@@ -254,7 +263,7 @@ mod gpu_probe;
 mod gpu_timer;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
-pub mod headless;
+mod headless;
 mod image_source_filter;
 /// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
 /// `ArcInstance`, `TextureInstance`, and the gradient/shadow instances.
@@ -459,12 +468,10 @@ mod blur_filter_tests;
 // RE-EXPORTS (convenience)
 // ============================================================================
 
-// Abstract traits and errors
+// Each public item has this one path; the modules that hold them are private.
+// `ExternalTextureError` is public as the payload of `EngineError::ExternalTexture`,
+// which a scene naming an unregistered texture returns.
 pub use error::{EngineError, EngineResult, ExternalTextureError, GeometryError, Recoverability};
-pub use external_texture_registry::{
-    ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
-    ExternalTextureEntry, ExternalTextureRegistry,
-};
 pub use raster::PresentDisposition;
 // The raster executor and its commands (ADR-0305).
 // The threaded placement's handle (ADR-0305 §10); the web turns inline.
@@ -472,24 +479,33 @@ pub use raster::PresentDisposition;
 pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
     DETACH_DEADLINE, DeviceAnswered, DeviceHealth, DeviceRetries, DeviceTicket, ExecutorFailure,
-    ExecutorHealth, PainterResets, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement,
-    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
-    SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget,
-    SlotVisibility, SurfaceHold, TurnOutcome,
+    ExecutorHealth, LIFECYCLE_CAPACITY, PainterResets, RasterBackend, RasterCommand,
+    RasterExecutor, RasterPlacement, RasterSendError, RasterSender, RasterVerdict, SendReceipt,
+    SlotChange, SlotConfig, SlotDomain, SlotFailure, SlotId, SlotPhase, SlotRecord, SlotSettlement,
+    SlotSize, SlotSurface, SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
 // The one GPU context every slot renders through (ADR-0305 §1).
 pub use gpu_context::{GpuBootstrap, GpuContext};
 pub use gpu_probe::{GpuProbe, ProbedDevice};
-pub use painter::WgpuPainter;
 pub use surface_factory::{SurfaceFactory, UnconfiguredSurface};
-// The adapter a context draws with, and its swapchain latency.
-pub use adapter::GpuCapabilities;
+// The swapchain latency a slot asks for, and the backend a context draws with.
 pub use frame_latency::FrameLatency;
 pub use gpu_backend::{BackendFailure, GpuBackend};
-pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
+pub use surface_color::SurfaceColor;
 
+// The painter below the scene and its external-texture registry — re-exported
+// ONLY under the `testing` feature, for the engine's benches and its
+// warm-path allocation test, which drive draw calls directly. An application
+// draws through `flui_painting::Canvas` into a `flui_layer::Scene`.
+#[cfg(feature = "testing")]
+pub use external_texture_registry::{
+    ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
+    ExternalTextureEntry, ExternalTextureRegistry,
+};
+#[cfg(feature = "testing")]
+pub use painter::WgpuPainter;
 // Presentation blit helper — re-exported ONLY under the
 // `testing` feature for the retained-presentation blit benchmark.
 // Gated so benching does not widen the public surface.
