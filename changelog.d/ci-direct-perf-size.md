@@ -8,4 +8,5 @@
   facade's default graph with `cargo tree`, and the `size` job builds the generated projects and
   compares their sizes with `perf/size.toml`.
 - The `size` job's comparison of each `main` push with the commit before it, and the cache it kept
-  for that comparison. A binary now fails only past 2% over its `perf/size.toml` line.
+  for that comparison. A binary fails past 2% over its `perf/size.toml` line and warns past 2%
+  under it; a package count now has to equal its line.

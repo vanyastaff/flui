@@ -760,7 +760,7 @@ target's `tests/perf/baseline.rs`):
 ```bash
 cargo nextest run -p flui-widgets --test perf                          # the budget assertions alone
 FLUI_PERF_BASELINE=check cargo nextest run -p flui-widgets --test perf -E 'test(/^perf_/)'   # and every count against its file
-FLUI_PERF_BASELINE=bless cargo nextest run -p flui-widgets --test perf -E 'test(/^perf_/)'   # rewrite each scenario's file from this run
+FLUI_PERF_BASELINE=bless cargo nextest run --no-fail-fast -p flui-widgets --test perf -E 'test(/^perf_/)'   # rewrite the file of each scenario that passed
 ```
 
 The comparison is exact, and how a difference counts depends on the counter.
@@ -768,15 +768,20 @@ A work counter (elements rebuilt, nodes laid out or painted, layers, frames) has
 to match its baseline: a rise is a regression, and a fall is work that went
 missing until a bless records it as meant, in the PR that changed it. A cost
 counter (a name with `alloc` or `bytes` in it) only has to stay at or under its
-baseline: a fall prints and passes, so a PR that makes a scenario cheaper does
-not touch the baseline. After it merges, a bless on a fresh `main`, committed
-alone, ratchets the files down, and any thread may do it; from then on a rise
-back to the old value fails. A counter on one side only fails. Each scenario
-has its own file, so changes to different scenarios never conflict, and
-`every_baseline_file_is_a_scenario` fails on a file no scenario holds. The
-files are blessed from `-p flui-widgets` with its default features: a run
-over the workspace unifies other features into it, which move the heap
-counters. A count is a function of the tree and
+baseline: a fall passes, so a PR that makes a scenario cheaper does not touch
+the baseline. After it merges, a bless on a fresh `main`, committed alone,
+ratchets the files down, and any thread may do it; from then on a rise back to
+the old value fails. A counter on one side only fails. A bless writes a
+scenario's file only when its test passed, so a broken budget blesses nothing.
+Each scenario has its own file, so changes to different scenarios never
+conflict, and `every_baseline_file_is_a_scenario` fails on a file whose name is
+not in the module's list of scenarios. With a mode set and `FLUI_PERF_OUT`
+naming a directory, each scenario writes its counts there; the `perf-gates`
+job then fails on a baseline file no scenario wrote a record for, and prints
+each record that moved, which is where a cost that fell shows. The files are
+blessed from `-p flui-widgets` with its default features: a run over the
+workspace unifies other features into it, which move the heap counters. A
+count is a function of the tree and
 the change, so it must not depend on a random seed: a per-frame table keyed by
 ids is slot-indexed (`flui_foundation::SlotIndex`, `SlotSet`) or hashed with a
 fixed hasher, never `std`'s `RandomState`, whose tombstones decide when a table
@@ -823,15 +828,18 @@ own, named in [`gaps.md`](gaps.md).
 two CI jobs hold it on Linux x86_64. The `deps` job, on every PR, counts the
 packages of the facade's default graph on Linux, Windows, macOS, Android and
 wasm32 (`cargo tree -p flui`, normal edges, each name and version once). A
-count has to stay at or under its line, so a change that adds a package to an
-application's default graph raises that line in the same PR and says why. The
+count is a function of `Cargo.lock` and the manifests, so it has to equal its
+line: a change that adds a package to an application's default graph raises
+that line in the same PR and says why, and one that removes a package lowers
+it. The
 `size` job, on `main` (ADR-0375), builds projects `flui create --local`
 generates in release, with the release profile the templates write: a counter
 for the host and for wasm32, and the host of a `--hot-reload` project, which
 links the logic crate and installs no reload hook. A binary grows with every
-change to the code it links, so a size fails only past 2% over its line; the
-job's summary lists each size beside its line, and a line is raised by hand
-from it, with the reason in the PR. A change to a manifest, `Cargo.lock`, the
+change to the code it links, so a size fails only past 2% over its line, and
+warns past 2% under it so the line follows a fall; the job's summary lists
+each size beside its line, and a line is moved by hand from it, with the
+reason in the PR. A change to a manifest, `Cargo.lock`, the
 toolchain, `.cargo/` or the `flui create` templates runs the `full` lane on its
 branch (`gh workflow run CI --ref <branch>`) before it merges.
 
@@ -1347,7 +1355,9 @@ heavier ones need installed. One row per job:
 | `test-trybuild` | `cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --features flui/material,flui/cupertino,flui/native -E 'group(trybuild)'`, then `cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast` | compile-fail suites in three shards (`facade`, `core`, `view`) on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; a shard adds its `--test` list and its binaries' `binary_id` filter from the job's matrix, so it builds only its own test targets with the whole run's features; locally the command above runs every suite |
 | `test-features` | the job's `cargo nextest run` lines | — |
 | `doc` | `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --locked --document-private-items --features <every package's testing feature>` | the job reads the feature list from `cargo metadata`; its step shows how |
-| `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
+| `perf-gates` | `FLUI_PERF_BASELINE=check FLUI_PERF_OUT=<dir> cargo nextest run --locked -p flui-widgets --test perf --no-fail-fast -E 'test(/^perf_/)'`, then the job's comparison of `<dir>` with `crates/flui-widgets/perf/baseline/` and its callgrind loop over the `perf_scaling_` scenarios | main only; the callgrind step needs valgrind (Linux) |
+| `size` | the job's step: `flui create --local` twice, three `cargo build --release` runs and their binaries' bytes against `perf/size.toml` | main only, CI only: three cold release builds on Linux x86_64, the baseline's host |
+| `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories`, then for each triple `cargo tree --locked --quiet --edges normal --prefix none --package flui --target <triple> \| awk 'NF >= 2 { print $1, $2 }' \| LC_ALL=C sort -u \| wc -l` against `perf/size.toml` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |
 | `feature-matrix` | `cargo hack clippy --workspace --partition k/5 --locked --each-feature --keep-going -- -D warnings`, then with `--tests --benches --examples`; the `combinations` leg runs `cargo clippy -p flui --locked --all-targets <combination> -- -D warnings` for each combination ci.yml lists | locally, `-p <crate>` in place of `--workspace --partition k/5` lints the crates a change touched |

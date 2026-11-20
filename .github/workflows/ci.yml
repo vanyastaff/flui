@@ -990,14 +990,41 @@ jobs:
           packages: valgrind
 
       # flui-widgets alone, with its default features: the heap counters move
-      # with the features a workspace run unifies into it.
+      # with the features a workspace run unifies into it. Each scenario also
+      # writes its counts to FLUI_PERF_OUT, which a run with no mode does not.
       - name: cargo nextest run the perf scenarios against their baseline
         run: cargo nextest run --locked -p flui-widgets --test perf --no-fail-fast -E 'test(/^perf_/)'
         env:
           FLUI_PERF_BASELINE: check
+          FLUI_PERF_OUT: ${{ runner.temp }}/perf-records
 
-      # Instructions are collected only while `perf_measured` runs. The
-      # products below stay far inside 64 bits: a count is tens of millions.
+      # The scenarios hold only what they ran: a baseline file with no record
+      # is a scenario that no longer runs or no longer reaches `baseline::hold`,
+      # and fails here. A record that differs from its file in a cost that fell
+      # passed the check above; its diff is printed so a bless on main follows.
+      - name: Every baseline file was held, and what moved
+        if: ${{ !cancelled() }}
+        env:
+          RECORDS: ${{ runner.temp }}/perf-records
+        run: |
+          set -euo pipefail
+          counts() { grep -v '^#' "$1" | sed '/^$/d'; }
+          failed=0
+          for file in crates/flui-widgets/perf/baseline/*.toml; do
+            record="$RECORDS/$(basename "$file")"
+            if [ ! -f "$record" ]; then
+              echo "::error::no scenario held $file in this run"
+              failed=1
+            elif ! diff -u --label "$file" --label "this run" <(counts "$file") <(counts "$record"); then
+              echo "::notice::$(basename "$file" .toml) moved; a cost that fell is lowered by a bless on main"
+            fi
+          done
+          exit "$failed"
+
+      # Instructions are collected only while `perf_measured` runs, so a count
+      # of zero means the window was renamed or skipped and fails. The libtest
+      # harness's own lines go to stdout, kept apart from callgrind's stderr.
+      # The products below stay far inside 64 bits: a count is tens of millions.
       - name: callgrind each perf_scaling_ scenario on its small and large tree
         run: |
           set -euo pipefail
@@ -1021,14 +1048,14 @@ jobs:
             if ! FLUI_PERF_SIZE=$2 valgrind --tool=callgrind \
                 --callgrind-out-file="$logs/$1.$2.callgrind" \
                 --toggle-collect='*perf_measured*' \
-                "$binary" --exact "$1" --test-threads=1 2> "$log"; then
-              cat "$log" >&2
+                "$binary" --exact "$1" --test-threads=1 > "$log.out" 2> "$log"; then
+              cat "$log.out" "$log" >&2
               echo "::error::$1 ($2) failed under callgrind" >&2
               return 1
             fi
             count=$(sed -n 's/.*Collected : *\([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)
-            if [ -z "$count" ]; then
-              echo "::error::callgrind printed no Collected line for $1 ($2)" >&2
+            if [ -z "$count" ] || (( count == 0 )); then
+              echo "::error::callgrind collected nothing inside perf_measured for $1 ($2): '${count:-no Collected line}'" >&2
               return 1
             fi
             echo "$count"
@@ -1085,9 +1112,10 @@ jobs:
       # from the checkout's, so it resolves the versions the workspace does.
       # Every project builds into one target directory: they share the profile
       # and the dependency graph. A binary fails past 2% over its line, a
-      # tolerance for the growth every change to linked code brings; a line is
-      # raised by hand from this step's log, with the reason in the pull
-      # request (ADR-0331).
+      # tolerance for the growth every change to linked code brings, and warns
+      # past 2% under it, so the line follows a fall. A line is moved by hand
+      # from this step's log, with the reason in the pull request (AGENTS.md
+      # "Before each push", item 14).
       - name: Build the generated projects in release and compare their sizes
         run: |
           set -euo pipefail
@@ -1147,6 +1175,8 @@ jobs:
             elif (( current * 100 > base * 102 )); then
               echo "::error::$counter is $current bytes, more than 2% over perf/size.toml's $base"
               failed=1
+            elif (( current * 100 < base * 98 )); then
+              echo "::warning::$counter is $current bytes, more than 2% under perf/size.toml's $base; lower the line"
             fi
           done
           exit "$failed"
@@ -1203,11 +1233,12 @@ jobs:
 
       # The distinct packages (`name version`) of the facade's default graph on
       # each target, normal edges only, against perf/size.toml's
-      # `crates_<target>` lines (`cargo tree` only, nothing builds). A pull
-      # request that adds a package to an application's default graph fails
-      # here until it raises that line and says why (ADR-0331); a count that
-      # fell passes, and lowering its line keeps the next rise from passing.
-      # The binary sizes of the same file are the `size` job's.
+      # `crates_<target>` lines (`cargo tree` only, nothing builds). A count is
+      # a function of Cargo.lock and the manifests, so it has to equal its
+      # line: a pull request that adds a package to an application's default
+      # graph raises the line and says why (AGENTS.md "Before each push", item
+      # 14), and one that removes a package lowers it, so no slack is left for
+      # the next. The binary sizes of the same file are the `size` job's.
       - name: Count the facade's default graph on each target
         run: |
           set -euo pipefail
@@ -1220,14 +1251,14 @@ jobs:
             triple=${pair#*:}
             count=$(cargo tree --locked --quiet --edges normal --prefix none --package flui \
                 --target "$triple" \
-              | awk 'NF >= 2 { print $1, $2 }' | sort -u | wc -l)
+              | awk 'NF >= 2 { print $1, $2 }' | LC_ALL=C sort -u | wc -l)
             base=$(sed -n "s/^crates_$name = \([0-9][0-9]*\)$/\1/p" perf/size.toml)
             echo "crates_$name = $count  (perf/size.toml: ${base:-none})"
             if [ -z "$base" ]; then
               echo "::error::perf/size.toml has no crates_$name line"
               failed=1
-            elif (( count > base )); then
-              echo "::error::the facade's default graph on $triple has $count packages, over perf/size.toml's $base"
+            elif (( count != base )); then
+              echo "::error::the facade's default graph on $triple has $count packages; perf/size.toml says $base: set crates_$name = $count and say why"
               failed=1
             fi
           done

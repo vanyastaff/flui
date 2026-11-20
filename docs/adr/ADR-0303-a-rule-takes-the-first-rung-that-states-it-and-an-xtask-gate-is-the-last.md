@@ -22,7 +22,8 @@
   [ADR-0383](ADR-0383-ci-runs-the-standard-tools-directly-and-xtask-does-not-wrap-them.md) for §1
   only for the command lines that must match between a contributor and CI (`test`, `clippy`,
   `miri`, `feature-matrix`, the `wasm-check` step, `wasm-link`, `wasm-test`, `cross-typecheck`):
-  a workflow step calls the tool.
+  a workflow step calls the tool; and for `perf` among the tools for working in the repository:
+  the perf scenarios hold their own baseline, and the other comparisons are workflow steps.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry
@@ -96,7 +97,7 @@ stock lint can state to that lint, and puts each exception where the compiler se
   `feature-matrix`, `miri`, the `wasm-*` steps), and the `checks` bundle.
 - **Generators and importers whose output is committed** (`key-vocabulary`, `icon-import`,
   `font-assets`, `changelog`, …).
-- **Tools for working in the repository** (`worktree`, `doctor`).
+- **Tools for working in the repository** (`worktree`, `doctor`, `perf`).
 - **Gates admitted under §3.**
 
 A new step that is one tool call with fixed arguments is written in the workflow and in

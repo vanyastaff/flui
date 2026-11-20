@@ -1,4 +1,4 @@
-# Written by `FLUI_PERF_BASELINE=bless cargo nextest run --locked -p flui-widgets --test perf -E 'test(/^perf_/)'`;
+# Written by `FLUI_PERF_BASELINE=bless cargo nextest run --locked --no-fail-fast -p flui-widgets --test perf -E 'test(/^perf_/)'`;
 # counts, not timings. One scenario of crates/flui-widgets/tests/perf.rs.
 
 [caret_blink_in_10k_list]

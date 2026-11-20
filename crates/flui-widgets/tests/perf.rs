@@ -212,11 +212,12 @@ fn mount() -> Mounted {
 
 /// Holds `report` and what the measured frames asked of the heap to the
 /// scenario's baseline file ([`baseline::hold`]). Called before a scenario
-/// asserts, so a failing budget still reports its numbers.
-fn record(scenario: &str, report: &FrameReport, heap: HeapCounts) {
+/// asserts, so a failing budget still reports its numbers; the scenario keeps
+/// the returned hold to its end, so a bless waits for its assertions.
+fn record(scenario: &str, report: &FrameReport, heap: HeapCounts) -> baseline::Held {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
     counts.extend(heap_counts(heap));
-    baseline::hold(scenario, &counts);
+    baseline::hold(scenario, &counts)
 }
 
 fn counter(report: &FrameReport, name: &str) -> u64 {
@@ -240,7 +241,7 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     app.laid.perform_reassemble();
     app.laid.reassemble_render_tree();
     let (report, allocations) = perf_measured(|| app.laid.pump_report(FRAME));
-    record("full_reassemble", &report, allocations);
+    let _baseline = record("full_reassemble", &report, allocations);
 
     for (name, value) in report.counters() {
         if matches!(
@@ -272,7 +273,7 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     // Two frames: a lazy band that first appears is built after that frame's
     // paint and lands on the next (the ListView first-frame divergence).
     let (report, allocations) = perf_measured(|| app.pump_many(2));
-    record("list_10k_scroll_one_screen", &report, allocations);
+    let _baseline = record("list_10k_scroll_one_screen", &report, allocations);
 
     assert!(
         band < 400,
@@ -351,7 +352,7 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     }
     let (first, first_built) = scroll_to(WARM_SCROLLS + 1);
     let (next, next_built) = scroll_to(WARM_SCROLLS + 2);
-    baseline::hold("list_10k_scroll_warm", &heap_counts(first));
+    let _baseline = baseline::hold("list_10k_scroll_warm", &heap_counts(first));
 
     assert!(
         first_built >= visible_rows && next_built >= visible_rows,
@@ -454,7 +455,7 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         controller.set_value(0.5).expect("no build is running");
         laid.pump_report(FRAME)
     });
-    record("slide_transition_tick", &report, allocations);
+    let _baseline = record("slide_transition_tick", &report, allocations);
     assert_eq!(
         allocations,
         HeapCounts::default(),
@@ -552,10 +553,18 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
         if only.as_deref().is_some_and(|selected| selected != name) {
             continue;
         }
-        let heap = label_change_heap(buttons);
-        baseline::hold(&format!("label_change_{name}"), &heap_counts(heap));
-        measured.push((buttons, heap));
+        measured.push((name, buttons, label_change_heap(buttons)));
     }
+    // Both sizes are measured before either is held; a check stops at the
+    // first size whose counts fail.
+    let _baseline: Vec<baseline::Held> = measured
+        .iter()
+        .map(|(name, _, heap)| baseline::hold(&format!("label_change_{name}"), &heap_counts(*heap)))
+        .collect();
+    let measured: Vec<(usize, HeapCounts)> = measured
+        .into_iter()
+        .map(|(_, buttons, heap)| (buttons, heap))
+        .collect();
     assert!(
         !measured.is_empty(),
         "FLUI_PERF_SIZE names no size of {SCALING_SIZES:?}"
@@ -585,7 +594,7 @@ fn perf_raw_button_over_text() {
         ("text_reallocations", cost.bare.reallocations),
         ("text_bytes", cost.bare.live_bytes),
     ]);
-    baseline::hold("raw_button_over_text", &counts);
+    let _baseline = baseline::hold("raw_button_over_text", &counts);
 
     // One element for the button and one for its behaviours; one render
     // object. The allocations and bytes are held by the baseline, which
@@ -699,7 +708,7 @@ fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
 fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
     let (small, small_heap) = caret_blinks(1_000);
     let (large, large_heap) = caret_blinks(10_000);
-    record("caret_blink_in_10k_list", &large, large_heap);
+    let _baseline = record("caret_blink_in_10k_list", &large, large_heap);
 
     for name in [
         "nodes_painted",
@@ -760,7 +769,7 @@ fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
             let _ = host.pump(FRAME);
         }
     });
-    baseline::hold("idle_frame_retained_scene", &heap_counts(allocations));
+    let _baseline = baseline::hold("idle_frame_retained_scene", &heap_counts(allocations));
     assert_eq!(
         allocations,
         HeapCounts::default(),
@@ -811,7 +820,7 @@ fn perf_a_not_shown_retry_republishes_the_held_version() {
     let shown = laid.painted_frame_count();
 
     let (retry, heap) = perf_measured(|| laid.pump_report(FRAME));
-    record("not_shown_retry", &retry, heap);
+    let _baseline = record("not_shown_retry", &retry, heap);
     assert_eq!(
         laid.painted_frame_count(),
         shown + 1,
@@ -962,7 +971,7 @@ fn perf_a_texture_frame_republishes_the_held_version() {
 
     feed(&feeds, 0, 9);
     let (report, heap) = perf_measured(|| laid.pump_report(FRAME));
-    record("texture_frame", &report, heap);
+    let _baseline = record("texture_frame", &report, heap);
     assert_eq!(
         heap,
         HeapCounts::default(),
@@ -1099,7 +1108,7 @@ fn perf_semantics_action_over_text() {
             .child(Text::new(format!("Row {row}")))
             .boxed()
     });
-    baseline::hold("semantics_action_over_text", &cost.counts());
+    let _baseline = baseline::hold("semantics_action_over_text", &cost.counts());
 }
 
 /// A press counter, driven the way an application's test drives it.

@@ -9,7 +9,17 @@
 //!   flui-widgets' default features, which is where the files were blessed: the
 //!   heap counters move with the allocator's platform and with the features
 //!   that change what a frame builds.
-//! - `bless`: a scenario rewrites its file from this run.
+//! - `bless`: a scenario rewrites its file from this run once its test has
+//!   passed. [`hold`] returns a [`Held`] the scenario keeps to its end, and a
+//!   panic before then (a broken budget) writes nothing.
+//!
+//! When `FLUI_PERF_OUT` names a directory, a `check` or `bless` run first
+//! writes each scenario's counts there as `<scenario>.toml`, in the baseline
+//! file's form. CI's
+//! `perf-gates` job compares that directory with the baseline afterwards, so a
+//! scenario that held nothing (it stopped running, or no longer reaches
+//! [`hold`]) fails there, and a cost that fell, which passes here, shows in the
+//! job's log.
 //!
 //! The comparison depends on the kind of counter:
 //!
@@ -18,25 +28,30 @@
 //!   regression, and a fall is work that went missing until a bless says it was
 //!   meant;
 //! - a **cost** counter (a name with `alloc` or `bytes` in it) only has to stay
-//!   at or under its file. A fall prints and passes, so a pull request that
-//!   makes a scenario cheaper needs no baseline edit; a bless on a fresh `main`
-//!   lowers the file, so a later rise back to the old value fails.
+//!   at or under its file. A fall passes, so a pull request that makes a
+//!   scenario cheaper needs no baseline edit; a bless on a fresh `main` lowers
+//!   the file, so a later rise back to the old value fails.
 //!
 //! A counter on one side only fails either way.
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The environment variable that turns the comparison on.
 const MODE_VARIABLE: &str = "FLUI_PERF_BASELINE";
 
-/// The command that rewrites every file.
-const BLESS_COMMAND: &str = "FLUI_PERF_BASELINE=bless cargo nextest run --locked -p flui-widgets --test perf -E 'test(/^perf_/)'";
+/// The environment variable that names a directory for the run's counts.
+const RECORD_VARIABLE: &str = "FLUI_PERF_OUT";
 
-/// Every scenario that holds a file, so a file whose scenario was renamed or
-/// removed fails `every_baseline_file_is_a_scenario` instead of lingering.
-/// Kept sorted, which that test checks.
+/// The command that rewrites every file.
+const BLESS_COMMAND: &str = "FLUI_PERF_BASELINE=bless cargo nextest run --locked --no-fail-fast -p flui-widgets --test perf -E 'test(/^perf_/)'";
+
+/// Every scenario that may hold a file: [`hold`] refuses a name not listed, and
+/// `every_baseline_file_is_a_scenario` fails on a file not listed. That each
+/// listed scenario still runs and holds its file is the `perf-gates` step's
+/// comparison of the `FLUI_PERF_OUT` records with the directory. Kept sorted,
+/// which that test checks.
 pub(crate) const SCENARIOS: [&str; 12] = [
     "caret_blink_in_10k_list",
     "full_reassemble",
@@ -65,28 +80,48 @@ enum Mode {
 }
 
 impl Mode {
-    /// The mode `FLUI_PERF_BASELINE` names, or `None` when it is unset.
-    fn from_env() -> Option<Self> {
-        let value = std::env::var(MODE_VARIABLE).ok()?;
-        match value.as_str() {
-            "check" => Some(Self::Check),
-            "bless" => Some(Self::Bless),
-            other => panic!("{MODE_VARIABLE}={other:?} names no mode; use `check` or `bless`"),
+    /// The mode a value of `FLUI_PERF_BASELINE` names; `None` when it is unset.
+    fn parse(value: Option<&str>) -> Result<Option<Self>, String> {
+        match value {
+            None => Ok(None),
+            Some("check") => Ok(Some(Self::Check)),
+            Some("bless") => Ok(Some(Self::Bless)),
+            Some(other) => Err(format!(
+                "{MODE_VARIABLE}={other:?} names no mode; use `check` or `bless`"
+            )),
         }
     }
 }
 
-/// Holds `scenario`'s `counts` to its file, or rewrites the file, as
-/// `FLUI_PERF_BASELINE` says; does nothing when it is unset. Called before a
-/// scenario asserts its budget, so a check that fails reports every counter.
-pub(crate) fn hold(scenario: &str, counts: &[(&str, u64)]) {
+/// A scenario's hold on its file, kept to the end of its test. Under `bless`
+/// it rewrites the file when it drops, unless the thread is panicking: a
+/// scenario whose budget broke after it held its counts blesses nothing.
+#[must_use = "a bless writes the file when this drops without a panic; bind it to the end of the test"]
+pub(crate) struct Held {
+    /// The file and the text a bless writes to it.
+    bless: Option<(PathBuf, String)>,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Some((path, text)) = self.bless.take()
+            && !std::thread::panicking()
+        {
+            std::fs::write(&path, text)
+                .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
+        }
+    }
+}
+
+/// Holds `scenario`'s `counts` to its file as `FLUI_PERF_BASELINE` says, and
+/// writes them to `FLUI_PERF_OUT` when that is set. Called before a scenario
+/// asserts its budget, so a check that fails reports every counter; the
+/// returned [`Held`] is kept to the end of the test, so a bless waits for it.
+pub(crate) fn hold(scenario: &str, counts: &[(&str, u64)]) -> Held {
     assert!(
         SCENARIOS.contains(&scenario),
         "scenario {scenario} holds a baseline file but is not in baseline::SCENARIOS"
     );
-    let Some(mode) = Mode::from_env() else {
-        return;
-    };
     let current: Counts = counts
         .iter()
         .map(|(name, value)| ((*name).to_owned(), *value))
@@ -96,34 +131,63 @@ pub(crate) fn hold(scenario: &str, counts: &[(&str, u64)]) {
         counts.len(),
         "{scenario} reports a counter twice: {counts:?}"
     );
-    let path = file(scenario);
+    let mode = Mode::parse(std::env::var(MODE_VARIABLE).ok().as_deref())
+        .unwrap_or_else(|error| panic!("{error}"));
+    // Only a run with a mode records, so a step whose mode variable is
+    // misspelled finds no records rather than a run that compared nothing.
+    if mode.is_some()
+        && let Some(records) = std::env::var_os(RECORD_VARIABLE)
+    {
+        record(Path::new(&records), scenario, &current);
+    }
+    hold_in(&directory(), mode, scenario, &current)
+}
+
+/// Writes `current` as `<records>/<scenario>.toml`, in the baseline file's form.
+fn record(records: &Path, scenario: &str, current: &Counts) {
+    std::fs::create_dir_all(records)
+        .unwrap_or_else(|error| panic!("creating {}: {error}", records.display()));
+    let path = records.join(format!("{scenario}.toml"));
+    std::fs::write(&path, render(scenario, current))
+        .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
+}
+
+/// [`hold`] against the files of `dir`.
+fn hold_in(dir: &Path, mode: Option<Mode>, scenario: &str, current: &Counts) -> Held {
+    let path = dir.join(format!("{scenario}.toml"));
     match mode {
-        Mode::Bless => {
-            std::fs::write(&path, render(scenario, &current))
-                .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
-        }
-        Mode::Check => {
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-                panic!(
-                    "reading {}: {error}; a new scenario's file comes from `{BLESS_COMMAND}`",
-                    path.display()
-                )
-            });
-            let baseline = parse(scenario, &text)
-                .unwrap_or_else(|error| panic!("parsing {}: {error}", path.display()));
-            let findings = compare(&baseline, &current);
+        None => Held { bless: None },
+        Some(Mode::Bless) => Held {
+            bless: Some((path, render(scenario, current))),
+        },
+        Some(Mode::Check) => {
+            let findings =
+                check_file(&path, scenario, current).unwrap_or_else(|error| panic!("{error}"));
             let mut report = String::new();
             for finding in &findings {
                 writeln!(report, "{scenario}.{finding}").expect("BUG: writing to a String");
             }
-            print!("{report}");
             assert!(
                 findings.iter().all(|finding| !finding.fails()),
                 "{scenario} differs from {}:\n{report}a change that was meant is blessed with `{BLESS_COMMAND}`",
                 path.display()
             );
+            Held { bless: None }
         }
     }
+}
+
+/// Every difference between the file at `path` and `current`.
+fn check_file(path: &Path, scenario: &str, current: &Counts) -> Result<Vec<Finding>, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "reading {}: {error}; a new scenario's file comes from `{BLESS_COMMAND}`",
+            path.display()
+        )
+    })?;
+    let baseline =
+        parse(scenario, &text).map_err(|error| format!("parsing {}: {error}", path.display()))?;
+    Ok(compare(&baseline, current))
 }
 
 /// The directory that holds one `<scenario>.toml` per scenario.
@@ -131,10 +195,6 @@ pub(crate) fn directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("perf")
         .join("baseline")
-}
-
-fn file(scenario: &str) -> PathBuf {
-    directory().join(format!("{scenario}.toml"))
 }
 
 /// The file's text: a header, then the scenario's table with its counters sorted.
@@ -384,6 +444,102 @@ fn a_blessed_file_parses_back_and_a_malformed_one_does_not() {
     ] {
         assert!(parse("scroll", text).is_err(), "{case}");
     }
+}
+
+/// A fresh, empty directory under the system temp dir for one test.
+fn scratch(name: &str) -> PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("flui-perf-baseline-{name}-{}", std::process::id()));
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).expect("clear the scratch directory");
+    }
+    std::fs::create_dir_all(&dir).expect("create the scratch directory");
+    dir
+}
+
+/// Runs `body` on a thread of its own and returns whether it panicked: a
+/// [`Held`] it drops during that panic sees `std::thread::panicking()`.
+fn panics(body: impl FnOnce() + Send + 'static) -> bool {
+    std::thread::spawn(body).join().is_err()
+}
+
+/// The variable's values: unset is no mode, `check` and `bless` are theirs,
+/// and anything else is refused rather than read as unset.
+#[test]
+fn the_mode_variable_is_check_bless_or_unset() {
+    assert_eq!(Mode::parse(None), Ok(None));
+    assert_eq!(Mode::parse(Some("check")), Ok(Some(Mode::Check)));
+    assert_eq!(Mode::parse(Some("bless")), Ok(Some(Mode::Bless)));
+    for refused in ["", "Check", "nope"] {
+        assert!(Mode::parse(Some(refused)).is_err(), "{refused:?}");
+    }
+}
+
+/// A check passes on the file's counts and panics on a work counter that
+/// moved, a cost that rose and a scenario with no file; with no mode nothing
+/// is read.
+#[test]
+fn a_check_fails_on_a_difference_that_fails_and_on_a_missing_file() {
+    let dir = scratch("check");
+    let held = counts(&[("allocations", 12), ("nodes_laid_out", 40)]);
+    std::fs::write(dir.join("scroll.toml"), render("scroll", &held)).expect("plant a file");
+    for (case, scenario, current, fails) in [
+        ("equal", "scroll", held.clone(), false),
+        (
+            "a cost that fell",
+            "scroll",
+            counts(&[("allocations", 11), ("nodes_laid_out", 40)]),
+            false,
+        ),
+        (
+            "a cost that rose",
+            "scroll",
+            counts(&[("allocations", 13), ("nodes_laid_out", 40)]),
+            true,
+        ),
+        (
+            "work that fell",
+            "scroll",
+            counts(&[("allocations", 12), ("nodes_laid_out", 39)]),
+            true,
+        ),
+        ("no file", "idle", held, true),
+    ] {
+        let dir = dir.clone();
+        let panicked = panics(move || drop(hold_in(&dir, Some(Mode::Check), scenario, &current)));
+        assert_eq!(panicked, fails, "{case}");
+    }
+    let dir_for_unset = dir.clone();
+    assert!(
+        !panics(move || drop(hold_in(&dir_for_unset, None, "idle", &BTreeMap::new()))),
+        "no mode reads no file"
+    );
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
+}
+
+/// A bless writes the scenario's file when its hold drops at the end of a test
+/// that passed, and writes nothing when the test panics after holding.
+#[test]
+fn a_bless_writes_the_file_only_when_the_test_ends_without_a_panic() {
+    let dir = scratch("bless");
+    let current = counts(&[("allocations", 7)]);
+    let (passing, passed_counts) = (dir.clone(), current.clone());
+    assert!(!panics(move || {
+        let _held = hold_in(&passing, Some(Mode::Bless), "scroll", &passed_counts);
+    }));
+    let written = std::fs::read_to_string(dir.join("scroll.toml")).expect("a passing bless writes");
+    assert_eq!(parse("scroll", &written), Ok(current.clone()));
+
+    let failing = dir.clone();
+    assert!(panics(move || {
+        let _held = hold_in(&failing, Some(Mode::Bless), "idle", &current);
+        panic!("the scenario's budget broke after it held its counts");
+    }));
+    assert!(
+        !dir.join("idle.toml").exists(),
+        "a failed test blesses nothing"
+    );
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
 }
 
 /// The directory holds a file for each scenario of [`SCENARIOS`] and no other,

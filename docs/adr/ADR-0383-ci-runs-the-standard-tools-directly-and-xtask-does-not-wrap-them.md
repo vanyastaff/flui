@@ -175,29 +175,46 @@ a rule loses when it leaves the Rust that tested it:
 - *Keep `perf`*: one command for a contributor and CI, but about 2,000 lines a reader opens to
   learn what three jobs check, which is what this record removes elsewhere.
 - *Every comparison as a step*: the command is in the job, but the counts' rules (a work counter
-  matches, a cost counter only stays at or under, a counter on one side only fails, a file no
-  scenario holds fails) would be shell over twelve files with no test, and a bless would be lines
-  a contributor copies.
+  matches, a cost counter only stays at or under, a counter on one side only fails) would be shell
+  over twelve files with no test, and a bless would be lines a contributor copies.
+- *The catalogs' holder*, `flui_testing::control_cost::held_to_baseline`, which flui-material and
+  flui-cupertino use: it holds every counter as a ceiling on every run and host and is lowered by
+  hand, so it cannot hold a work counter exactly, and flui-widgets' heap counters are checked on
+  one host and feature set only. Making one holder of the two changes the catalogs' contract,
+  which is a change of its own; the two share `FLUI_PERF_OUT` for the records they write.
 - *The counts in the scenarios, the rest as steps* (chosen): the counts' rules live beside the
-  scenarios that produce them, in the perf target's `baseline` module, with its own tests
-  (`the_comparison_passes_only_an_equal_counter_or_a_cost_that_fell`,
-  `every_baseline_file_is_a_scenario`). `FLUI_PERF_BASELINE=check` holds each scenario's counts
-  to its file before the scenario asserts its budget, and `bless` rewrites the file; unset, the
-  scenarios run as before on every host and feature set. `perf-gates` sets `check` and runs
-  `-p flui-widgets` alone, with its default features, where the files are blessed. Each of the
-  other three is one tool's output compared with one number: `valgrind --tool=callgrind` on each
-  size, `cargo tree` piped through `sort -u`, and the bytes of the binary `cargo build` reports,
-  each in its job's step.
+  scenarios that produce them, in the perf target's `baseline` module, with its own tests.
+  `FLUI_PERF_BASELINE=check` holds each scenario's counts to its file before the scenario asserts
+  its budget; `bless` rewrites the file when the scenario's test ends without a panic, through a
+  guard the scenario keeps, so a run whose budget broke blesses nothing. Unset, the scenarios run
+  as before on every host and feature set. With a mode set, each scenario also writes its counts
+  to `FLUI_PERF_OUT`. `perf-gates` sets `check` and runs `-p flui-widgets` alone, with its
+  default features, where the files are blessed, then compares the records with the directory: a
+  file with no record (a scenario that stopped running or reaching `hold`, or a mode variable
+  the step misspelled) fails, and a record that moved is printed, so a cost that fell is seen and
+  blessed on main. Each of the other three is one tool's output compared with one number:
+  `valgrind --tool=callgrind` on each size (a zero count fails, so a renamed measured window does
+  not pass), `cargo tree` piped through `sort -u` (exactly equal to its line, since it is a
+  function of `Cargo.lock`), and the bytes of the binary `cargo build` reports, each in its job's
+  step.
 - *A callgrind harness crate* (gungraun, formerly iai-callgrind) for the instructions: it compares
   a benchmark with its own earlier run, not one tree size with another, and adds a dependency and
   a bench harness for what one step's loop does.
 
 The `size` job also compared each `main` push's binaries with the commit before it, from a cache
 entry each push saved, so that growth inside the 2% tolerance was answered at the merge that
-brought it. Kept, it needs a measurement file, a cache restore and save, a check that the file is
-the parent's and a rule for a baseline restated in between, in shell with no test. It is dropped:
-a binary fails past 2% over its line, as before, and the job summary lists each size beside its
-line for the pull request that raises it.
+brought it. The options for that driver:
+
+- *Keep the comparison*: a measurement file, a cache restore and save, a check that the file is
+  the parent's and a rule for a baseline restated in between, in shell with no test.
+- *The parent's sizes as a workflow artifact*: the same measurement file and parent check, with
+  an artifact in place of the cache.
+- *Build the merge base in the job*: a second set of three cold release builds on every run.
+- *A lower tolerance*: one number, but every change to linked code moves a binary, so a line
+  under 2% is raised by most merges.
+- *The 2% line, two-sided* (chosen): a binary fails past 2% over its line and warns past 2%
+  under it, so the line follows a fall and no slack builds up below it. Growth inside the 2%
+  still passes until the merge that crosses it.
 
 ### Consequences
 
@@ -232,10 +249,16 @@ line for the pull request that raises it.
   lists them.
 - Bad, because growth inside `size`'s 2% passes until the merge that crosses it, whose author then
   answers for the growth earlier merges brought (§7).
-- Bad, because the callgrind, package-count and binary-size comparisons lose their tests with
-  `perf` (the tolerance arithmetic, the parsers of callgrind's and libtest's output, the distinct
-  package count): the reader of a change to those steps holds them, and the steps run only on
-  main, except the package count, which `deps` runs on every pull request.
+- Bad, because the callgrind, package-count, binary-size and record comparisons lose their tests
+  with `perf` (the tolerance arithmetic, the parsers of callgrind's and libtest's output, the
+  distinct package count) or never had one: the reader of a change to those steps holds them, and
+  the steps run only on main, except the package count, which `deps` runs on every pull request.
+- Bad, because the measured window's name (`perf_measured`), the `perf_scaling_` prefix and the
+  `FLUI_PERF_SIZE` values are written in both the perf target and the callgrind step, tied by a
+  comment; the zero-count guard catches a rename, not a window that measures part of a frame.
+- Bad, because a bless does not know its host: a bless off Linux x86_64 writes that host's counts,
+  and Linux's check then fails on a cost that is higher there, or prints a cost that is lower in
+  the records step, for the reader to catch.
 - Bad, because there is no local command for a size check: `perf/size.toml` is edited by hand from
   the job's log, and its counts are Linux x86_64's.
 
@@ -247,8 +270,12 @@ line for the pull request that raises it.
   finds none in `.github/`.
 - flui-widgets' perf target tests the counts' rules on every pull request
   (`the_comparison_passes_only_an_equal_counter_or_a_cost_that_fell`,
-  `a_blessed_file_parses_back_and_a_malformed_one_does_not`, `every_baseline_file_is_a_scenario`),
-  and `perf-gates` holds the files on every main run.
+  `a_blessed_file_parses_back_and_a_malformed_one_does_not`,
+  `the_mode_variable_is_check_bless_or_unset`,
+  `a_check_fails_on_a_difference_that_fails_and_on_a_missing_file`,
+  `a_bless_writes_the_file_only_when_the_test_ends_without_a_panic`,
+  `every_baseline_file_is_a_scenario`), and `perf-gates` holds the files, and requires a record
+  for each, on every main run.
 - `cross-typecheck` runs its four legs on every main run. Its scope (`--workspace`, `--all-targets`,
   the two feature sets, the four triples) is read in the diff of a change to the job, against §6.
 - A pull request that changes the steps of a job only main runs (`wasm-check`,
