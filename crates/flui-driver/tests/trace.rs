@@ -149,10 +149,14 @@ fn renumber(
             }
         }
         serde_json::Value::Array(items) => {
-            items.iter_mut().for_each(|item| renumber(item, handles))
+            for item in items {
+                renumber(item, handles);
+            }
         }
         serde_json::Value::Object(fields) => {
-            fields.values_mut().for_each(|item| renumber(item, handles))
+            for item in fields.values_mut() {
+                renumber(item, handles);
+            }
         }
         _ => {}
     }
@@ -520,6 +524,58 @@ fn a_headless_replay_has_no_divergence_and_a_changed_app_diverges_at_its_wait() 
     );
 }
 
+/// The trace in `dir` with `edit` applied to each line's JSON.
+fn rewrite(dir: &Path, mut edit: impl FnMut(&mut serde_json::Value)) {
+    let path = dir.join("trace.jsonl");
+    let text = std::fs::read_to_string(&path).expect("the rows");
+    let edited = text.lines().fold(String::new(), |mut out, line| {
+        let mut value: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
+        edit(&mut value);
+        out.push_str(&value.to_string());
+        out.push('\n');
+        out
+    });
+    std::fs::write(&path, edited).expect("the rows");
+}
+
+#[test]
+fn a_replay_leaves_out_frames_and_compares_positions_only_at_exact_fidelity() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = trace_dir(&root, "fidelity");
+    record(&mut stepper(1), &dir, TraceOptions::new(&dir), tap_once);
+    // The wait's answer recorded other frame counts and its element somewhere else.
+    rewrite(&dir, |row| {
+        if let Some(ok) = row.pointer_mut("/result/ok")
+            && ok.get("satisfied").is_some()
+        {
+            ok["frames"] = 999.into();
+            let x = ok["observation"]["matched"][0]["surface_rect"]["x"]
+                .as_i64()
+                .expect("the matched element's bounds");
+            ok["observation"]["matched"][0]["surface_rect"]["x"] = (x + 7).into();
+        }
+    });
+    let exact = trace::replay(&Trace::open(&dir).expect("it reads"), &mut stepper(1))
+        .expect("the replay runs");
+    let divergence = exact.divergence.expect("an exact lane compares positions");
+    assert_eq!(
+        divergence.at, "/observation/matched/0/surface_rect/x",
+        "{divergence:?}"
+    );
+
+    rewrite(&dir, |row| {
+        if row.get("flui_trace").is_some() {
+            row["fidelity"]["positions"] = "order".into();
+        }
+    });
+    let order = trace::replay(&Trace::open(&dir).expect("it reads"), &mut stepper(1))
+        .expect("the replay runs");
+    assert_eq!(
+        order.divergence, None,
+        "frames never compare, and positions not at order fidelity"
+    );
+}
+
 #[test]
 fn codegen_writes_the_checked_in_test_from_a_trace() {
     let root = tempfile::tempdir().expect("a temporary directory");
@@ -735,6 +791,7 @@ fn a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core() 
                         native_line(json!({ "row": { "row": "click_settings" } })),
                         native_line(json!({ "gap": { "rows": 2 } })),
                         input_row(json!({ "deadline": { "window": 1, "t": 5, "member": 1 } })),
+                        json!({ "event": "gap", "params": { "missed": 3 } }),
                     ],
                     then: AfterLines::Serve,
                 }
@@ -811,9 +868,23 @@ fn a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core() 
         "the gap stays where the stream lost rows"
     );
     let (events, dropped) = driver.take_events();
+    assert_eq!(dropped, 0);
     assert!(
-        events.is_empty() && dropped == 0,
-        "the recording's rows were the trace's: {events:?}"
+        matches!(events.as_slice(), [flui_driver::protocol::events::Event::Gap(gap)] if gap.missed == 3),
+        "the recording's rows were the trace's, and every other event is still the caller's: \
+         {events:?}"
+    );
+    let event = trace
+        .rows()
+        .iter()
+        .find_map(|row| match row {
+            Row::Event(event) => Some(event.clone()),
+            _ => None,
+        })
+        .expect("the event is in the trace too");
+    assert_eq!(
+        (event.name.as_str(), &event.params),
+        ("gap", &json!({ "missed": 3 }))
     );
     drop(driver);
     agent
