@@ -11,7 +11,9 @@
 //!   for, and the test the issue's acceptance names ("fails if the hook is
 //!   re-stubbed to a no-op");
 //! - `should_rebuild` gates delegate swaps;
-//! - all four pinned × floating variants mount and build through the seam.
+//! - all four pinned × floating variants mount and build through the seam;
+//! - a stretching header runs its `on_stretch_trigger` once per crossing of
+//!   the trigger offset while a finger over-scrolls the view.
 //!
 //! Floating snap tests exercise gesture release, registry migration and
 //! withdrawal during an active run through the mounted widget.
@@ -333,4 +335,125 @@ fn exercise_floating_snap(pinned: bool, migrate_and_unmount: bool) {
          deep; got {}",
         controller.pixels()
     );
+}
+
+// ============================================================================
+// Stretch: over-scroll past the trigger offset runs `on_stretch_trigger`
+// ============================================================================
+
+/// The over-scroll, in logical pixels, at which the stretching delegate's
+/// trigger runs.
+const STRETCH_TRIGGER_OFFSET: f64 = 40.0;
+
+/// A delegate whose header stretches when the scroll view over-scrolls at its
+/// start, with a trigger that counts its calls.
+struct StretchingDelegate {
+    calls: Rc<std::cell::Cell<u32>>,
+}
+
+impl SliverPersistentHeaderDelegate for StretchingDelegate {
+    fn build(
+        &self,
+        _ctx: &dyn flui_view::BuildContext,
+        _shrink_offset: f64,
+        _overlaps_content: bool,
+    ) -> BoxedView {
+        SizedBox::shrink().into_view().boxed()
+    }
+
+    fn min_extent(&self) -> f64 {
+        40.0
+    }
+
+    fn max_extent(&self) -> f64 {
+        100.0
+    }
+
+    fn stretch_configuration(&self) -> Option<flui_widgets::OverScrollHeaderStretchConfiguration> {
+        let calls = Rc::clone(&self.calls);
+        Some(flui_widgets::OverScrollHeaderStretchConfiguration::new(
+            STRETCH_TRIGGER_OFFSET,
+            Some(flui_widgets::StretchTrigger::new(move || {
+                calls.set(calls.get() + 1);
+            })),
+        ))
+    }
+}
+
+/// A finger pulls the scroll view past its start, so every variant's header
+/// stretches: the trigger runs once on the frame the stretch reaches the
+/// offset, not again while it stays past it, and once more only after the
+/// stretch fell back below the offset and crossed it again.
+pub(crate) fn a_stretching_header_runs_its_trigger_once_per_crossing_of_the_offset() {
+    use flui_animation::Vsync;
+    use flui_view::environment::VsyncScope;
+    use flui_widgets::{BouncingScrollPhysics, ScrollController};
+
+    for (pinned, floating) in [(false, false), (true, false), (false, true), (true, true)] {
+        let variant = format!("pinned {pinned}, floating {floating}");
+        let calls = Rc::new(std::cell::Cell::new(0_u32));
+        let controller = ScrollController::new();
+        let vsync = Vsync::new();
+        let view = CustomScrollView::new((
+            SliverPersistentHeader::new(StretchingDelegate {
+                calls: Rc::clone(&calls),
+            })
+            .pinned(pinned)
+            .floating(floating),
+            trailing_content(),
+        ))
+        .controller(controller.clone())
+        .physics(Rc::new(BouncingScrollPhysics::new()));
+        let mut laid = crate::common::lay_out_animated(
+            VsyncScope::new(vsync.clone(), view),
+            tight(300.0, 300.0),
+            vsync,
+        );
+
+        laid.dispatch_pointer_down(150.0, 50.0);
+        let mut pull_to = |y: f64| {
+            laid.dispatch_pointer_move(150.0, y);
+            laid.tick();
+            -controller.pixels()
+        };
+
+        let stretch = pull_to(80.0);
+        assert!(
+            stretch > 0.0 && stretch < STRETCH_TRIGGER_OFFSET,
+            "{variant}: premise: a short pull stretches below the offset; stretch {stretch}"
+        );
+        assert_eq!(calls.get(), 0, "{variant}: no call below the offset");
+
+        let stretch = pull_to(200.0);
+        assert!(
+            stretch >= STRETCH_TRIGGER_OFFSET,
+            "{variant}: premise: a long pull stretches past the offset; stretch {stretch}"
+        );
+        assert_eq!(calls.get(), 1, "{variant}: one call on the crossing frame");
+
+        let stretch = pull_to(260.0);
+        assert!(
+            stretch >= STRETCH_TRIGGER_OFFSET,
+            "{variant}: premise: still past the offset; stretch {stretch}"
+        );
+        assert_eq!(calls.get(), 1, "{variant}: no call while it stays past");
+
+        let stretch = pull_to(200.0);
+        assert!(
+            stretch > 0.0 && stretch < STRETCH_TRIGGER_OFFSET,
+            "{variant}: premise: easing back drops below the offset; stretch {stretch}"
+        );
+        assert_eq!(calls.get(), 1, "{variant}: dropping below runs nothing");
+
+        let stretch = pull_to(295.0);
+        assert!(
+            stretch >= STRETCH_TRIGGER_OFFSET,
+            "{variant}: premise: the second pull crosses again; stretch {stretch}"
+        );
+        assert_eq!(
+            calls.get(),
+            2,
+            "{variant}: the second crossing calls once more"
+        );
+    }
 }

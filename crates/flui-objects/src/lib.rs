@@ -122,6 +122,6 @@ pub use sliver::{
     RenderSliverOffstage, RenderSliverOpacity, RenderSliverPadding,
     RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader,
     RenderSliverSemanticsAnnotations, RenderSliverToBoxAdapter, RenderViewport, SnapAction,
-    SnapCommand, StretchTriggerSignal,
+    SnapCommand, StretchTrigger,
 };
 pub use sliver::{Placement, PlacementSlot};
