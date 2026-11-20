@@ -719,8 +719,12 @@ graph LR
     `a_long_text_is_cut_at_the_same_place_on_both_sides`,
     `the_walk_reads_the_window_and_leaves_a_gone_element_out`,
     `a_provider_that_times_out_fails_the_read_with_a_timeout`,
-    `the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart`;
-    `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`.
+    `the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart`,
+    `the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_included`,
+    `a_key_windows_took_is_held_even_when_its_echo_never_comes`,
+    `no_property_is_read_after_the_first_timeout`;
+    `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`;
+    `steps::small_scrolls_add_up_and_a_part_of_a_pixel_is_carried`.
   - The scenarios on the headless target (CI): `scenarios::the_gallery_scenario_passes_on_the_headless_target`,
     `the_accessibility_scenario_passes_on_the_headless_target`,
     `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
@@ -733,7 +737,9 @@ graph LR
     identifier, an `InvokePattern` invoke acts, an unknown id is `not_found`),
     `every_role_reads_back_as_its_control_type_through_ui_automation`,
     `the_guard_watches_and_stops_on_a_desktop_of_its_own`,
-    `a_guard_whose_watcher_died_ends_the_run`, `a_job_ends_its_processes_when_it_closes`,
+    `a_guard_whose_watcher_died_ends_the_run`,
+    `the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey`,
+    `a_job_ends_its_processes_when_it_closes`,
     `a_process_joins_its_job_before_it_runs`,
     `a_launched_app_ends_with_its_session`; `the_conformance_scenario_runs_through_the_os_lane` and
     `the_device_check_scenarios_run_through_the_os_lane` announce their OS run and come out
@@ -742,8 +748,11 @@ graph LR
     no compositor area); `a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input` reports
     `CANNOT_VERIFY`.
   - Taken out one at a time, each fails a test above: the check before the first event, the
-    millionth-of-a-pixel origin lift, the headless window's text input and the framework
-    namespace in the projection.
+    millionth-of-a-pixel origin lift, the headless window's text input, the framework
+    namespace in the projection, recording a key or button before its echo is confirmed, a
+    release of everything reaching the shortcut counts, a mouse button restarting the run of
+    Shift taps, the lane's check reading typed text, the scroll remainder carry and the stop at
+    the first property timeout.
   - Owed on W, by hand on the desktop that takes the user's input (`FLUI_TEST_VISIBLE_DESKTOP=1`;
     no automated run reaches that desktop: `nightly-platforms.yml` runs only `flui-native`
     there): the gallery, input and notes scenarios and the conformance scenario passing through the
@@ -757,7 +766,10 @@ graph LR
     `activity` and `walk` are pure; `win32`, `guard`, `uia`, `capture` and `job` call Windows. Key
     events and typed text go through one plan (`held::HeldKeys`), which the shell-hotkey check
     reads and the lane sends stroke by stroke; held keys, buttons and contacts are recorded once
-    Windows took them; a pause is waited out whole; a launched app starts suspended and joins its
+    Windows took them, before the guard confirms the echo; `HeldKeys` is the one owner of the
+    shell's shortcut counts too, and a mouse button, wheel turn or contact restarts the run of
+    Shift taps (Windows documents five presses and no time limit, so a pause does not reset it);
+    reading an element stops at its first property timeout; a pause is waited out whole; a launched app starts suspended and joins its
     job before its first instruction. UI Automation, Windows
     Graphics Capture and the job object go through the `windows` crate the workspace already pins,
     not `uiautomation` and `windows-capture`.

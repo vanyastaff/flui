@@ -14,14 +14,15 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use flui_driver::lane::ActivityGuard;
 use flui_driver::lane::windows::job::KillOnCloseJob;
 use flui_driver::lane::windows::{
     STOPPED_WATCHING, WindowsGuard, WindowsLane, desktop_takes_input,
 };
+use flui_driver::lane::{ActivityGuard, Lane};
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::input::{DeviceClass, InputKind};
 use flui_driver::protocol::wire::Role;
+use flui_driver::steps::OsEvent;
 use flui_driver::{
     Driver, Error, InputPath, InputPolicy, Launch, Locator, Report, Scenario, Verdict, WindowSpec,
     expect,
@@ -198,6 +199,33 @@ fn the_guard_watches_and_stops_on_a_desktop_of_its_own() {
     guard.disarm();
     guard.arm().expect("a guard arms again after it disarmed");
     guard.disarm();
+}
+
+/// The lane's own check, before a sequence's first event, refuses typed text whose Tab under a
+/// held Alt is the task switcher: it reads the plan the lane sends, text included.
+#[test]
+fn the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey() {
+    let mut lane = WindowsLane::for_process(std::process::id());
+    let alt_tab = [
+        OsEvent::KeyDown("Alt".into()),
+        OsEvent::Text("\t".into()),
+        OsEvent::KeyUp("Alt".into()),
+    ];
+    let refused = lane.check(&alt_tab);
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::NotSupported { capability: Some(capability), .. })
+                if capability == "os_shell_hotkey"
+        ),
+        "{refused:?}"
+    );
+    let plain = [
+        OsEvent::KeyDown("Alt".into()),
+        OsEvent::Text("plain".into()),
+        OsEvent::KeyUp("Alt".into()),
+    ];
+    assert!(lane.check(&plain).is_ok());
 }
 
 /// A guard whose watcher is gone while armed can no longer tell the person's input from the

@@ -79,7 +79,7 @@ mod lane {
     use super::guard::WindowsGuard;
     use super::held::{HeldButtons, HeldKeys, KeyInput, Keystroke};
     use super::keys::{self, KeyName, VirtualKey};
-    use super::safety::{self, Desk, Held, Landing, Refusal, ShortcutWatch};
+    use super::safety::{self, Desk, Held, Landing, Refusal};
     use super::win32::{self, DeviceUnits, Hwnd, PointerDevice as SyntheticDevice};
     use super::{capture, screen, uia};
     use crate::coordinates::{DevicePoint, WindowGeometry};
@@ -96,11 +96,34 @@ mod lane {
         guard: WindowsGuard,
         keys: HeldKeys,
         buttons: HeldButtons,
-        /// The shell's shortcuts as the keyboard has seen the lane's keys, across its sends.
-        shortcuts: ShortcutWatch,
         contacts: Contacts,
         touch: Option<SyntheticDevice>,
         pen: Option<SyntheticDevice>,
+    }
+
+    /// Wait for `guard` to have seen more of the lane's own events than `before`: a hook Windows
+    /// removed sees no more input, the person's included. A guard that is not watching waits for
+    /// nothing.
+    fn echo_since(guard: &WindowsGuard, before: Option<u64>) -> Result<()> {
+        let Some(before) = before else {
+            return Ok(());
+        };
+        let deadline = Instant::now() + ECHO_WITHIN;
+        while guard.echoes().is_some_and(|seen| seen <= before) {
+            if Instant::now() >= deadline {
+                return Err(Error::Lane {
+                    lane: safety::LANE.to_owned(),
+                    unavailable: true,
+                    message: format!(
+                        "the user-activity guard's hook did not see the lane's own input within \
+                         {} ms: Windows may have removed it, and it would not see yours",
+                        ECHO_WITHIN.as_millis()
+                    ),
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(())
     }
 
     /// The synthetic device of `kind` in `slot`, made on first use.
@@ -133,7 +156,6 @@ mod lane {
                 guard: WindowsGuard::new(),
                 keys: HeldKeys::new(),
                 buttons: HeldButtons::default(),
-                shortcuts: ShortcutWatch::new(),
                 contacts: Contacts::new(),
                 touch: None,
                 pen: None,
@@ -242,31 +264,12 @@ mod lane {
             }
         }
 
-        /// Send one `SendInput` event through `send`, then wait for the guard's hooks to see it
-        /// come back: a hook Windows removed sees no more input, the person's included.
+        /// Send one `SendInput` event that holds nothing (a pointer move, a wheel turn) through
+        /// `send`, then wait for the guard to see it come back.
         fn echoed(&self, send: impl FnOnce() -> Result<()>) -> Result<()> {
             let before = self.guard.echoes();
             send()?;
-            let Some(before) = before else {
-                return Ok(());
-            };
-            let deadline = Instant::now() + ECHO_WITHIN;
-            while self.guard.echoes().is_some_and(|seen| seen <= before) {
-                if Instant::now() >= deadline {
-                    return Err(Error::Lane {
-                        lane: safety::LANE.to_owned(),
-                        unavailable: true,
-                        message: format!(
-                            "the user-activity guard's hook did not see the lane's own input \
-                             within {} ms: Windows may have removed it, and it would not see \
-                             yours",
-                            ECHO_WITHIN.as_millis()
-                        ),
-                    });
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            Ok(())
+            echo_since(&self.guard, before)
         }
 
         /// The key event or text `event` is, its keys resolved on the app's layout.
@@ -302,22 +305,23 @@ mod lane {
         }
 
         /// Send the keystrokes of `input` one by one, the desktop read again before each, each
-        /// recorded once Windows took it.
+        /// recorded as soon as Windows took it and then confirmed through the guard's echo.
         fn type_keys(&mut self, window: Hwnd, input: &KeyInput) -> Result<()> {
             for stroke in self.keys.plan(input) {
                 self.checked(window, None)?;
-                self.echoed(|| match stroke {
-                    Keystroke::Press(key) => win32::key(key, true),
-                    Keystroke::Release(key) => win32::key(key, false),
-                    Keystroke::ShiftFor(_) => win32::key(keys::SHIFT, true),
-                    Keystroke::UnshiftFor(_) => win32::key(keys::SHIFT, false),
-                    Keystroke::Unit(unit) => win32::unicode(unit),
-                })?;
-                self.keys.apply(stroke);
-                for edge in stroke.edges() {
-                    // The sequence passed `check`; the watch only counts what the OS has seen.
-                    let _ = self.shortcuts.observe(edge);
-                }
+                let before = self.guard.echoes();
+                let guard = &self.guard;
+                self.keys.deliver(
+                    stroke,
+                    || match stroke {
+                        Keystroke::Press(key) => win32::key(key, true),
+                        Keystroke::Release(key) => win32::key(key, false),
+                        Keystroke::ShiftFor(_) => win32::key(keys::SHIFT, true),
+                        Keystroke::UnshiftFor(_) => win32::key(keys::SHIFT, false),
+                        Keystroke::Unit(unit) => win32::unicode(unit),
+                    },
+                    || echo_since(guard, before),
+                )?;
             }
             Ok(())
         }
@@ -337,9 +341,18 @@ mod lane {
                     .into_error());
                 }
             };
-            self.echoed(|| win32::mouse_button(physical, pressed))?;
-            self.buttons.apply(physical, pressed);
-            Ok(())
+            let before = self.guard.echoes();
+            let (guard, keys) = (&self.guard, &mut self.keys);
+            self.buttons.deliver(
+                physical,
+                pressed,
+                || {
+                    win32::mouse_button(physical, pressed)?;
+                    keys.other_input();
+                    Ok(())
+                },
+                || echo_since(guard, before),
+            )
         }
 
         fn pointer(&mut self, event: &OsEvent) -> Result<()> {
@@ -360,7 +373,9 @@ mod lane {
                     Some(kind) => {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
-                        contacts.down(pointer, kind, |frame| device.inject(frame))
+                        contacts.down(pointer, kind, |frame| device.inject(frame))?;
+                        self.keys.other_input();
+                        Ok(())
                     }
                     None => self.mouse_button(*button, true),
                 },
@@ -382,7 +397,15 @@ mod lane {
                     delta_y,
                 } => {
                     self.echoed(|| win32::move_pointer(*at))?;
-                    self.echoed(|| win32::wheel(*delta_x, *delta_y))
+                    // A turn that sends nothing waits for no echo.
+                    if *delta_x == 0 && *delta_y == 0 {
+                        return Ok(());
+                    }
+                    let before = self.guard.echoes();
+                    win32::wheel(*delta_x, *delta_y)?;
+                    // Recorded once Windows took the turn, before its echo is waited for.
+                    self.keys.other_input();
+                    echo_since(&self.guard, before)
                 }
                 _ => Ok(()),
             }
@@ -476,13 +499,15 @@ mod lane {
                         }
                         .into_error());
                     }
+                    OsEvent::PointerDown { .. } | OsEvent::Scroll { .. } => {
+                        inputs.push(KeyInput::Pointer);
+                    }
                     _ => inputs.extend(self.key_input(event)?),
                 }
             }
             // The strokes the lane will send, typed text's Tab and Enter included, read as the OS
             // reads them after what it has already seen of the lane's keys.
-            let edges = self.keys.sequence_edges(&inputs);
-            match safety::shell_hotkey(&self.shortcuts, &edges) {
+            match self.keys.shell_hotkey(&inputs) {
                 Some(handler) => Err(Refusal::ShellHotkey { handler }.into_error()),
                 None => Ok(()),
             }

@@ -110,12 +110,16 @@ struct Tick<'a> {
 /// source no OS lane sends (an input-method composition, a trackpad gesture), naming it. Either
 /// is answered before any event is handed over.
 pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result<Vec<OsEvent>> {
-    let mut positions: Vec<Option<LogicalPoint>> = vec![None; sequence.sources.len()];
+    let mut states: Vec<SourceState> = sequence
+        .sources
+        .iter()
+        .map(|_| SourceState::default())
+        .collect();
     let mut events = Vec::new();
     for index in 0..sequence.ticks() {
         let mut tick = Tick::default();
-        for (source, position) in sequence.sources.iter().zip(positions.iter_mut()) {
-            source_tick(source, index, geometry, position, &mut tick)?;
+        for (source, state) in sequence.sources.iter().zip(states.iter_mut()) {
+            source_tick(source, index, geometry, state, &mut tick)?;
         }
         tick.emit(geometry, &mut events)?;
     }
@@ -183,9 +187,10 @@ fn source_tick<'a>(
     source: &'a InputSource,
     index: usize,
     geometry: &WindowGeometry,
-    position: &mut Option<LogicalPoint>,
+    state: &mut SourceState,
     tick: &mut Tick<'a>,
 ) -> Result<()> {
+    let position = &mut state.position;
     let wait = |tick: &mut Tick<'a>, duration_ms: u64| {
         tick.pause = tick.pause.max(Duration::from_millis(duration_ms));
     };
@@ -228,11 +233,21 @@ fn source_tick<'a>(
                 delta_x,
                 delta_y,
                 ..
-            }) => tick.instant.push(OsEvent::Scroll {
-                at: coordinates::to_device(geometry, *at)?,
-                delta_x: device_delta(*delta_x, geometry.scale)?,
-                delta_y: device_delta(*delta_y, geometry.scale)?,
-            }),
+            }) => {
+                let at = coordinates::to_device(geometry, *at)?;
+                let (asked_x, asked_y) = &mut state.scrolled;
+                let (sent_x, sent_y) = &mut state.sent;
+                let delta_x = SourceState::delta(asked_x, sent_x, *delta_x, geometry.scale)?;
+                let delta_y = SourceState::delta(asked_y, sent_y, *delta_y, geometry.scale)?;
+                // A scroll that adds up to no whole pixel yet is carried, not sent.
+                if delta_x != 0 || delta_y != 0 {
+                    tick.instant.push(OsEvent::Scroll {
+                        at,
+                        delta_x,
+                        delta_y,
+                    });
+                }
+            }
             Some(WheelAction::Pause { duration_ms }) => wait(tick, *duration_ms),
             _ => {}
         },
@@ -266,18 +281,43 @@ fn split(duration: Duration) -> u32 {
     u32::try_from(steps).map_or(MAX_STEPS, |steps| steps.min(MAX_STEPS))
 }
 
-fn device_delta(logical: f64, scale: f64) -> Result<i32> {
-    let device = (logical * scale).round();
-    if !(device.is_finite() && device >= f64::from(i32::MIN) && device <= f64::from(i32::MAX)) {
-        return Err(Error::invalid_argument(format!(
-            "a scroll of {logical} logical pixels does not fit the screen's range"
-        )));
+/// What one source has done so far: where its pointer is, and how far its wheel has turned in
+/// device pixels, asked for and sent, so the part of a pixel one scroll leaves is carried into the
+/// next and small scrolls add up instead of each rounding to nothing.
+#[derive(Default)]
+struct SourceState {
+    position: Option<LogicalPoint>,
+    scrolled: (f64, f64),
+    sent: (i64, i64),
+}
+
+impl SourceState {
+    /// The whole device pixels to send for a scroll of `logical` at `scale` on the axis `asked`
+    /// and `sent` keep: what the total asked for rounds to, less what went out before.
+    fn delta(asked: &mut f64, sent: &mut i64, logical: f64, scale: f64) -> Result<i32> {
+        let total = *asked + logical * scale;
+        let rounded = total.round();
+        let fits =
+            rounded.is_finite() && rounded >= f64::from(i32::MIN) && rounded <= f64::from(i32::MAX);
+        if !fits {
+            return Err(Error::invalid_argument(format!(
+                "a scroll of {logical} logical pixels does not fit the screen's range"
+            )));
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a whole number checked inside i32's range"
+        )]
+        let rounded = rounded as i64;
+        let delta = i32::try_from(rounded - *sent).map_err(|_| {
+            Error::invalid_argument(format!(
+                "a scroll of {logical} logical pixels does not fit the screen's range"
+            ))
+        })?;
+        *asked = total;
+        *sent = rounded;
+        Ok(delta)
     }
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "a whole number checked inside i32's range"
-    )]
-    Ok(device as i32)
 }
 
 fn unsent(capability: &str) -> Error {

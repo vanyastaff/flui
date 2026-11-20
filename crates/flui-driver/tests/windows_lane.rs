@@ -10,11 +10,9 @@ use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
 use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke};
 use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, VirtualKey};
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
-use flui_driver::lane::windows::safety::{
-    self, Desk, Held, KeyEdge, Landing, Refusal, ShortcutWatch, check_event,
-};
+use flui_driver::lane::windows::safety::{self, Desk, Held, Landing, Refusal, check_event};
 use flui_driver::lane::windows::screen;
-use flui_driver::lane::windows::walk::{self, Provider, ProviderError};
+use flui_driver::lane::windows::walk::{self, Properties, Provider, ProviderError};
 use flui_driver::projection::{Projection, ProjectionDifference};
 use flui_driver::protocol::error::ErrorCode;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
@@ -398,18 +396,41 @@ fn the_lane_runs_on_the_shared_desktop_and_refuses_unproven_isolation() {
     }
 }
 
-/// A chord as its key edges: each key pressed in order, released in reverse.
-fn chord(names: &[&str]) -> Vec<KeyEdge> {
-    let keys: Vec<VirtualKey> = names
-        .iter()
-        .map(|name| match keys::resolve(name) {
-            Some(KeyName::Virtual { key, .. }) => key,
-            other => panic!("{name} is no virtual key: {other:?}"),
-        })
-        .collect();
-    let mut edges: Vec<KeyEdge> = keys.iter().map(|key| KeyEdge::Down(*key)).collect();
-    edges.extend(keys.iter().rev().map(|key| KeyEdge::Up(*key)));
-    edges
+fn key(name: &str) -> VirtualKey {
+    match keys::resolve(name) {
+        Some(KeyName::Virtual { key, .. }) => key,
+        other => panic!("{name} is no virtual key: {other:?}"),
+    }
+}
+
+fn down(name: &str) -> KeyInput {
+    KeyInput::Down {
+        key: key(name),
+        shift: false,
+    }
+}
+
+fn up(name: &str) -> KeyInput {
+    KeyInput::Up { key: key(name) }
+}
+
+/// A chord as key inputs: each key pressed in order, released in reverse.
+fn chord(names: &[&str]) -> Vec<KeyInput> {
+    let mut inputs: Vec<KeyInput> = names.iter().map(|name| down(name)).collect();
+    inputs.extend(names.iter().rev().map(|name| up(name)));
+    inputs
+}
+
+/// Send `inputs` as the lane does, every stroke taken.
+fn send(keys: &mut HeldKeys, inputs: &[KeyInput]) {
+    for input in inputs {
+        if *input == KeyInput::Pointer {
+            keys.other_input();
+        }
+        for stroke in keys.plan(input) {
+            let _ = keys.apply(stroke);
+        }
+    }
 }
 
 #[test]
@@ -430,10 +451,10 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
         &["PrintScreen"],
         &["AudioVolumeUp"],
     ];
-    let quiet = ShortcutWatch::new();
+    let quiet = HeldKeys::new();
     for keys in shell {
         assert!(
-            safety::shell_hotkey(&quiet, &chord(keys)).is_some(),
+            quiet.shell_hotkey(&chord(keys)).is_some(),
             "{keys:?} is the shell's"
         );
     }
@@ -452,7 +473,7 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
     ];
     for keys in app {
         assert_eq!(
-            safety::shell_hotkey(&quiet, &chord(keys)),
+            quiet.shell_hotkey(&chord(keys)),
             None,
             "{keys:?} is the app's"
         );
@@ -460,58 +481,134 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
 }
 
 /// Sticky Keys turns on at the fifth Shift tapped alone in a row, counted across the lane's sends
-/// as the OS counts it, and any other key starts the count again.
+/// as the OS counts it, and any other key or a mouse button between starts the count again.
 #[test]
 fn only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut() {
-    let tap = chord(&["Shift"]);
-    let taps = |count: usize| -> Vec<KeyEdge> {
-        tap.iter()
-            .copied()
-            .cycle()
-            .take(tap.len() * count)
-            .collect()
-    };
-    let quiet = ShortcutWatch::new();
-    assert_eq!(safety::shell_hotkey(&quiet, &taps(4)), None);
-    assert_eq!(
-        safety::shell_hotkey(&quiet, &taps(5)),
-        Some("the accessibility shortcut (Sticky Keys)")
-    );
+    let taps =
+        |count: usize| -> Vec<KeyInput> { (0..count).flat_map(|_| chord(&["Shift"])).collect() };
+    let quiet = HeldKeys::new();
+    assert_eq!(quiet.shell_hotkey(&taps(4)), None);
+    assert_eq!(quiet.shell_hotkey(&taps(5)), Some(safety::STICKY_KEYS));
     // Four taps sent before, then one more: the OS counts on.
-    let mut watch = ShortcutWatch::new();
-    for edge in taps(4) {
-        watch.observe(edge).expect("four taps are no shortcut");
-    }
-    assert!(safety::shell_hotkey(&watch, &tap).is_some());
+    let mut keys = HeldKeys::new();
+    send(&mut keys, &taps(4));
+    assert_eq!(keys.shell_hotkey(&taps(1)), Some(safety::STICKY_KEYS));
     // Another key between restarts the count.
     let mut broken = taps(4);
     broken.extend(chord(&["a"]));
     broken.extend(taps(4));
-    assert_eq!(safety::shell_hotkey(&quiet, &broken), None);
+    assert_eq!(quiet.shell_hotkey(&broken), None);
+    // Five Shift-clicks: a mouse button under each Shift, which no run of taps goes on across.
+    let mut clicks = HeldKeys::new();
+    for _ in 0..5 {
+        let shift_click = [down("Shift"), KeyInput::Pointer, up("Shift")];
+        assert_eq!(
+            clicks.shell_hotkey(&shift_click),
+            None,
+            "a Shift-click is the app's"
+        );
+        send(&mut clicks, &shift_click);
+    }
+}
+
+/// The shortcut check reads what the OS saw of the lane's keys from their one owner, a release
+/// of everything included: a key an interrupted run left down and the release let go of is not
+/// held for the next chord, and Shift held and let go of by five releases is five taps.
+#[test]
+fn the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_included() {
+    let mut keys = HeldKeys::new();
+    send(&mut keys, &[down("Alt")]);
+    keys.release_all(|_| Ok(())).expect("released");
+    assert_eq!(
+        keys.shell_hotkey(&chord(&["Tab"])),
+        None,
+        "Alt was released: a Tab after the interrupted run is the app's"
+    );
+    let mut keys = HeldKeys::new();
+    send(&mut keys, &[down("Control"), down("Shift")]);
+    keys.release_all(|_| Ok(())).expect("released");
+    assert_eq!(keys.shell_hotkey(&chord(&["Escape"])), None);
+
+    // Shift pressed alone by five runs, each ended by the release of everything.
+    let mut keys = HeldKeys::new();
+    for run in 0..5 {
+        let shift = [down("Shift")];
+        if run == 4 {
+            assert_eq!(
+                keys.shell_hotkey(&shift),
+                Some(safety::STICKY_KEYS),
+                "the fifth lone Shift is refused before it goes down"
+            );
+            break;
+        }
+        assert_eq!(keys.shell_hotkey(&shift), None, "run {run}");
+        send(&mut keys, &shift);
+        keys.release_all(|_| Ok(())).expect("released");
+    }
 }
 
 /// Typed text reaches the keyboard as keys too: its Tab under a held Alt is the task switcher, and
 /// the check reads it from the same plan the lane sends.
 #[test]
 fn typed_text_goes_through_the_shell_hotkey_check_as_the_keys_it_sends() {
-    let alt = KeyInput::Down {
-        key: keys::ALT,
-        shift: false,
-    };
-    let release_alt = KeyInput::Up { key: keys::ALT };
-    let quiet = ShortcutWatch::new();
+    let quiet = HeldKeys::new();
     for (text, expected) in [
         ("\t", Some("the Windows task switcher")),
         ("a\tb", Some("the Windows task switcher")),
         ("plain", None),
     ] {
-        let edges = HeldKeys::new().sequence_edges(&[
-            alt.clone(),
-            KeyInput::Text(text.to_owned()),
-            release_alt.clone(),
-        ]);
-        assert_eq!(safety::shell_hotkey(&quiet, &edges), expected, "{text:?}");
+        let inputs = [down("Alt"), KeyInput::Text(text.to_owned()), up("Alt")];
+        assert_eq!(quiet.shell_hotkey(&inputs), expected, "{text:?}");
     }
+}
+
+/// A key Windows took stays recorded when the guard's echo of it never comes, so the release of
+/// everything releases it; a key Windows refused is never recorded.
+#[test]
+fn a_key_windows_took_is_held_even_when_its_echo_never_comes() {
+    let echo_never_comes = || {
+        Err(flui_driver::Error::Lane {
+            lane: "windows".into(),
+            unavailable: true,
+            message: "no echo".into(),
+        })
+    };
+    let mut keys = HeldKeys::new();
+    let control = Keystroke::Press(keys::CONTROL);
+    assert!(keys.deliver(control, || Ok(()), echo_never_comes).is_err());
+    assert_eq!(
+        keys.held(),
+        [keys::CONTROL.code],
+        "the press Windows took is held"
+    );
+    let mut released = Vec::new();
+    keys.release_all(|key| {
+        released.push(key);
+        Ok(())
+    })
+    .expect("released");
+    assert_eq!(released, [keys::CONTROL]);
+    assert_eq!(keys.held(), [] as [u16; 0]);
+
+    let refused = || {
+        Err(flui_driver::Error::Protocol {
+            message: "refused".into(),
+        })
+    };
+    assert!(keys.deliver(control, refused, || Ok(())).is_err());
+    assert_eq!(
+        keys.held(),
+        [] as [u16; 0],
+        "a press Windows refused is not held"
+    );
+
+    let mut buttons = HeldButtons::default();
+    assert!(
+        buttons
+            .deliver(0, true, || Ok(()), echo_never_comes)
+            .is_err()
+    );
+    assert_eq!(buttons.bits(), 0b1, "the button Windows took is held");
 }
 
 /// A capital letter holds Shift around its key unless Shift is already held, and the Shift it
@@ -1210,6 +1307,29 @@ fn a_provider_that_times_out_fails_the_read_with_a_timeout() {
         [0, 1, 2],
         "the walk stopped at the element that hung"
     );
+}
+
+/// After the first property read that times out, no further read of the element is made: a hung
+/// provider costs one timeout, not one per property.
+#[test]
+fn no_property_is_read_after_the_first_timeout() {
+    let mut reads = Properties::new();
+    let mut calls = 0;
+    let mut call = |answer: Result<u32, ProviderError>| {
+        calls += 1;
+        answer
+    };
+    assert_eq!(reads.read(|| call(Ok(1))), Some(1));
+    assert_eq!(
+        reads.read(|| call(Err(ProviderError::Failed("not offered".into())))),
+        None,
+        "a property not offered reads as its default"
+    );
+    assert_eq!(reads.read(|| call(Err(ProviderError::Timeout))), None);
+    assert_eq!(reads.read(|| call(Ok(2))), None);
+    assert_eq!(reads.read(|| call(Ok(3))), None);
+    assert_eq!(calls, 3, "nothing is asked after the timeout");
+    assert_eq!(reads.finish(()), Err(ProviderError::Timeout));
 }
 
 /// The search for an automation id walks the app's window only, within its budgets, and tells a

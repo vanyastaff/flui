@@ -37,7 +37,7 @@ use flui_protocol::wire::Checked;
 
 use crate::error::Result;
 use crate::lane::windows::roles::{self, ControlType, RoleFlags};
-use crate::lane::windows::walk::{self, Provider, ProviderError};
+use crate::lane::windows::walk::{self, Properties, Provider, ProviderError};
 use crate::lane::windows::win32::{Apartment, Hwnd, lane_error};
 
 /// How long the client waits for a provider to answer one call, in milliseconds.
@@ -135,13 +135,10 @@ impl Provider for Uia {
     ) -> std::result::Result<Node, ProviderError> {
         let mut reader = Reader {
             element,
-            failure: None,
+            reads: Properties::new(),
         };
         let node = reader.describe(id);
-        match reader.failure {
-            Some(failure) => Err(failure),
-            None => Ok(node),
-        }
+        reader.reads.finish(node)
     }
 }
 
@@ -204,33 +201,22 @@ fn client() -> Result<IUIAutomation> {
         .map_err(|error| lane_error(format!("UI Automation is not available: {error}")))
 }
 
-/// Reads one element's properties, keeping the first timeout or disappearance: a property the
-/// provider does not offer reads as its default, a property it did not answer fails the node.
+/// Reads one element's properties through [`Properties`]: a property the provider does not offer
+/// reads as its default, and after the first it did not answer no further call is made.
 struct Reader<'a> {
     element: &'a IUIAutomationElement,
-    failure: Option<ProviderError>,
+    reads: Properties,
 }
 
 impl Reader<'_> {
-    fn keep<T>(&mut self, read: windows::core::Result<T>) -> Option<T> {
-        match read {
-            Ok(value) => Some(value),
-            Err(error) => {
-                let class = classify(&error);
-                if self.failure.is_none()
-                    && matches!(class, ProviderError::Timeout | ProviderError::Gone)
-                {
-                    self.failure = Some(class);
-                }
-                None
-            }
-        }
+    fn keep<T>(&mut self, call: impl FnOnce() -> windows::core::Result<T>) -> Option<T> {
+        self.reads.read(|| call().map_err(|error| classify(&error)))
     }
 
     fn property(&mut self, id: UIA_PROPERTY_ID) -> Option<VARIANT> {
+        let element = self.element;
         // SAFETY: reads one property of a live element of this thread's client.
-        let read = unsafe { self.element.GetCurrentPropertyValue(id) };
-        self.keep(read)
+        self.keep(|| unsafe { element.GetCurrentPropertyValue(id) })
     }
 
     fn flag(&mut self, id: UIA_PROPERTY_ID) -> Option<bool> {
@@ -255,24 +241,24 @@ impl Reader<'_> {
         BSTR::try_from(&value).ok().as_ref().and_then(text)
     }
 
-    fn bstr(&mut self, read: windows::core::Result<BSTR>) -> Option<String> {
-        self.keep(read).as_ref().and_then(text)
+    fn bstr(&mut self, call: impl FnOnce() -> windows::core::Result<BSTR>) -> Option<String> {
+        self.keep(call).as_ref().and_then(text)
     }
 
     fn describe(&mut self, id: ElementId) -> Node {
         let element = self.element;
         // SAFETY: each call reads one property of a live element of this thread's client.
         let control_id = self
-            .keep(unsafe { element.CurrentControlType() })
+            .keep(|| unsafe { element.CurrentControlType() })
             .map_or(0, |control| control.0);
         let control = ControlType::from_id(control_id);
         // SAFETY: as above.
         let aria = self
-            .bstr(unsafe { element.CurrentAriaRole() })
+            .bstr(|| unsafe { element.CurrentAriaRole() })
             .unwrap_or_default();
         // SAFETY: as above.
         let password = self
-            .keep(unsafe { element.CurrentIsPassword() })
+            .keep(|| unsafe { element.CurrentIsPassword() })
             .is_some_and(windows::core::BOOL::as_bool);
         let dialog = self.flag(UIA_IsDialogPropertyId).unwrap_or(false);
         let role = control.map_or(flui_protocol::wire::Role::Unknown, |control| {
@@ -284,11 +270,11 @@ impl Reader<'_> {
         );
         let mut node = Node::new(id, role, native);
         // SAFETY: as above.
-        node.name = self.bstr(unsafe { element.CurrentName() });
+        node.name = self.bstr(|| unsafe { element.CurrentName() });
         // SAFETY: as above.
-        node.automation_id = self.bstr(unsafe { element.CurrentAutomationId() });
+        node.automation_id = self.bstr(|| unsafe { element.CurrentAutomationId() });
         // SAFETY: as above.
-        node.class_name = self.bstr(unsafe { element.CurrentClassName() });
+        node.class_name = self.bstr(|| unsafe { element.CurrentClassName() });
         node.description = self.string(UIA_FullDescriptionPropertyId);
         if self.flag(UIA_IsValuePatternAvailablePropertyId) == Some(true) {
             // An element with a value pattern has a value, the empty text of an empty field
@@ -315,18 +301,18 @@ impl Reader<'_> {
         }
         // SAFETY: as above.
         node.disabled = self
-            .keep(unsafe { element.CurrentIsEnabled() })
+            .keep(|| unsafe { element.CurrentIsEnabled() })
             .is_some_and(|enabled| !enabled.as_bool());
         // SAFETY: as above.
         node.focused = self
-            .keep(unsafe { element.CurrentHasKeyboardFocus() })
+            .keep(|| unsafe { element.CurrentHasKeyboardFocus() })
             .is_some_and(windows::core::BOOL::as_bool);
         // SAFETY: as above.
         node.focusable = self
-            .keep(unsafe { element.CurrentIsKeyboardFocusable() })
+            .keep(|| unsafe { element.CurrentIsKeyboardFocusable() })
             .is_some_and(windows::core::BOOL::as_bool);
         // SAFETY: as above.
-        if let Some(bounds) = self.keep(unsafe { element.CurrentBoundingRectangle() }) {
+        if let Some(bounds) = self.keep(|| unsafe { element.CurrentBoundingRectangle() }) {
             let width = u32::try_from(bounds.right.saturating_sub(bounds.left)).unwrap_or(0);
             let height = u32::try_from(bounds.bottom.saturating_sub(bounds.top)).unwrap_or(0);
             if width > 0 && height > 0 {

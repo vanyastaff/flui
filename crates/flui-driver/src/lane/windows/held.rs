@@ -6,7 +6,7 @@
 
 use crate::error::{Error, Result};
 use crate::lane::windows::keys::{self, SHIFT, TextStroke, VirtualKey};
-use crate::lane::windows::safety::KeyEdge;
+use crate::lane::windows::safety::{KeyEdge, STICKY_KEYS, ShellShortcuts};
 
 /// `VK_PACKET`, the key a Unicode packet arrives as.
 pub const PACKET: VirtualKey = VirtualKey {
@@ -32,6 +32,9 @@ pub enum KeyInput {
     },
     /// Type `text`.
     Text(String),
+    /// A mouse button, a wheel turn or a touch or pen contact between keys: it sends no key, and
+    /// no run of Shift taps or chord of modifiers goes on across it.
+    Pointer,
 }
 
 /// One thing the lane sends to the keyboard.
@@ -64,13 +67,17 @@ impl Keystroke {
     }
 }
 
-/// The keys the lane holds: see the [module docs](self).
+/// The keys the lane holds, and the counts the OS keeps across them for its shortcuts: see the
+/// [module docs](self). The one owner of both: every key edge the OS took goes through
+/// [`Self::apply`], a release of everything included.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeldKeys {
     /// The keys down, by virtual-key code, in the order they went down.
     held: Vec<u16>,
     /// The keys pressed with a Shift the lane added for them.
     shifted: Vec<u16>,
+    /// The shell's shortcuts as the OS has seen the lane's keys.
+    shortcuts: ShellShortcuts,
 }
 
 impl HeldKeys {
@@ -111,51 +118,91 @@ impl HeldKeys {
                     TextStroke::Unit(unit) => vec![Keystroke::Unit(unit)],
                 })
                 .collect(),
+            KeyInput::Pointer => Vec::new(),
         }
     }
 
-    /// Record `stroke`, which Windows took.
-    pub fn apply(&mut self, stroke: Keystroke) {
+    /// Record `stroke`, which Windows took; what of the shell's it completed, if anything.
+    pub fn apply(&mut self, stroke: Keystroke) -> Option<&'static str> {
+        let mut completed = None;
+        for edge in stroke.edges() {
+            let taken = match edge {
+                KeyEdge::Down(key) => {
+                    let taken = self.shortcuts.press(key, &self.held);
+                    if key != PACKET && !self.held.contains(&key.code) {
+                        self.held.push(key.code);
+                    }
+                    taken
+                }
+                KeyEdge::Up(key) => {
+                    self.held.retain(|code| *code != key.code);
+                    self.shortcuts.release(key, &self.held)
+                }
+            };
+            completed = completed.or(taken);
+        }
         match stroke {
-            Keystroke::Press(key) => {
-                if !self.held.contains(&key.code) {
-                    self.held.push(key.code);
-                }
-            }
-            Keystroke::Release(key) => self.held.retain(|code| *code != key.code),
-            Keystroke::ShiftFor(code) => {
-                if !self.held.contains(&SHIFT.code) {
-                    self.held.push(SHIFT.code);
-                }
-                self.shifted.push(code);
-            }
-            Keystroke::UnshiftFor(code) => {
+            Keystroke::ShiftFor(code) => self.shifted.push(code),
+            Keystroke::UnshiftFor(code) | Keystroke::Release(VirtualKey { code, .. }) => {
                 self.shifted.retain(|shifted| *shifted != code);
-                if self.shifted.is_empty() {
-                    self.held.retain(|held| *held != SHIFT.code);
-                }
             }
-            Keystroke::Unit(_) => {}
+            _ => {}
         }
+        if !self.held.contains(&SHIFT.code) {
+            self.shifted.clear();
+        }
+        completed
     }
 
-    /// The key edges of `inputs` sent one after another from this state: what the shell-hotkey
-    /// rule reads before the sequence's first event.
+    /// Input other than a key (a mouse button, the wheel, a touch or pen contact) the OS took:
+    /// no run of Shift taps or chord of modifiers goes on across it.
+    pub fn other_input(&mut self) {
+        self.shortcuts.other_key();
+    }
+
+    /// Send `stroke` through `send` and record it as soon as `send` says Windows took it; only
+    /// then `confirm` (that the guard saw it come back), whose failure is reported with the
+    /// stroke already recorded, so a release of everything releases it.
+    ///
+    /// # Errors
+    ///
+    /// `send`'s failure, with nothing recorded; `confirm`'s, with the stroke recorded.
+    pub fn deliver(
+        &mut self,
+        stroke: Keystroke,
+        send: impl FnOnce() -> Result<()>,
+        confirm: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        send()?;
+        let _ = self.apply(stroke);
+        confirm()
+    }
+
+    /// What of the shell's `inputs`, sent from this state, would take: see
+    /// [`safety::press_takes`](crate::lane::windows::safety::press_takes) and [`ShellShortcuts`].
+    /// A sequence that leaves a lone Shift down whose release, by the sequence or by the release of
+    /// everything after an interrupted run, would complete Sticky Keys is refused too.
     #[must_use]
-    pub fn sequence_edges(&self, inputs: &[KeyInput]) -> Vec<KeyEdge> {
+    pub fn shell_hotkey(&self, inputs: &[KeyInput]) -> Option<&'static str> {
         let mut state = self.clone();
-        let mut edges = Vec::new();
         for input in inputs {
+            if *input == KeyInput::Pointer {
+                state.other_input();
+            }
             for stroke in state.plan(input) {
-                edges.extend(stroke.edges());
-                state.apply(stroke);
+                if let Some(taken) = state.apply(stroke) {
+                    return Some(taken);
+                }
             }
         }
-        edges
+        state
+            .shortcuts
+            .release_completes_sticky_keys()
+            .then_some(STICKY_KEYS)
     }
 
     /// Release every key held, last pressed first, through `release`; a key whose release fails
-    /// stays held.
+    /// stays held, and each release Windows took is recorded as the OS saw it.
     ///
     /// # Errors
     ///
@@ -169,16 +216,12 @@ impl HeldKeys {
             };
             match release(key) {
                 Ok(()) => {
-                    self.held.retain(|held| *held != code);
-                    self.shifted.retain(|shifted| *shifted != code);
+                    let _ = self.apply(Keystroke::Release(key));
                 }
                 Err(error) => {
                     first.get_or_insert(error);
                 }
             }
-        }
-        if !self.held.contains(&SHIFT.code) {
-            self.shifted.clear();
         }
         first.map_or(Ok(()), Err)
     }
@@ -203,6 +246,24 @@ impl HeldButtons {
         } else {
             self.0 &= !(1 << button);
         }
+    }
+
+    /// Send a press (`pressed`) or release of `button` through `send`, record it as soon as
+    /// `send` says Windows took it, and only then `confirm`, as [`HeldKeys::deliver`] does.
+    ///
+    /// # Errors
+    ///
+    /// `send`'s failure, with nothing recorded; `confirm`'s, with the change recorded.
+    pub fn deliver(
+        &mut self,
+        button: u8,
+        pressed: bool,
+        send: impl FnOnce() -> Result<()>,
+        confirm: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        send()?;
+        self.apply(button, pressed);
+        confirm()
     }
 
     /// Release every button held through `release`; a button whose release fails stays held.

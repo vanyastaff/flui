@@ -59,8 +59,14 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **Every key goes through one checked plan.** A key event and typed text become keystrokes
   planned against what the lane holds (`lane::windows::held::HeldKeys`): the shell-hotkey rule
   reads those strokes before a sequence, and the lane sends them, reading the desktop again before
-  each. What the lane holds (keys, buttons, contacts) is recorded once Windows took the press and
-  forgotten once it took the release, so a refused release is released again.
+  each. What the lane holds (keys, buttons, contacts) is recorded as soon as Windows took the
+  press, before the guard confirms its echo, and forgotten once it took the release, so a press
+  whose echo never came and a refused release are both released again. `HeldKeys` is also the
+  one owner of what the shell's shortcuts count across sends (the modifiers of a chord, the run
+  of lone Shift taps): every key edge Windows took goes through it, a release of everything
+  included, and a mouse button, wheel turn or contact restarts the run as it does for the OS.
+  The run of five Shift taps has no time limit Windows documents, so the count is not reset by a
+  pause.
 - **A pause is waited out whole,** in slices with the guard looked at between them; a guard whose
   watcher is gone, or whose hook no longer sees the lane's own input, ends the run, never reads as
   a quiet desktop.
@@ -83,6 +89,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   one timeline, each split by its own duration, so they move together and each keeps its own
   speed, as on the synthetic path. Steps due within one millisecond go out together, so every
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
+  A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
+  that adds up to no whole pixel yet sends nothing.
+- **A hung app costs one timeout.** Reading a UI Automation element stops at the first property
+  read that times out or finds the element gone (`lane::windows::walk::Properties`), and the walk
+  ends with `timeout`.
 - **Waits are on the connection's clock.** An action's actionability wait ends at a deadline on
   the clock the connection counts budgets in, or as soon as the window presents no frame before
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts

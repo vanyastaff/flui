@@ -65,6 +65,49 @@ pub trait Provider {
     fn node(&mut self, element: &Self::Element, id: ElementId) -> Result<Node, ProviderError>;
 }
 
+/// One element's property reads for a [`Provider::node`]: after the first read that times out or
+/// finds the element gone, no further call is made, so a hung provider costs one timeout per
+/// walk, not one per property. A property the provider does not offer reads as `None`.
+#[derive(Debug, Default)]
+pub struct Properties {
+    failure: Option<ProviderError>,
+}
+
+impl Properties {
+    /// No read made yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make the read `call`, unless an earlier one timed out or found the element gone.
+    pub fn read<T>(&mut self, call: impl FnOnce() -> Result<T, ProviderError>) -> Option<T> {
+        if self.failure.is_some() {
+            return None;
+        }
+        match call() {
+            Ok(value) => Some(value),
+            Err(failure @ (ProviderError::Timeout | ProviderError::Gone)) => {
+                self.failure = Some(failure);
+                None
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// `value`, the node the reads made, or the first timeout or disappearance among them.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Timeout`] or [`ProviderError::Gone`], the first a read met.
+    pub fn finish<T>(self, value: T) -> Result<T, ProviderError> {
+        match self.failure {
+            Some(failure) => Err(failure),
+            None => Ok(value),
+        }
+    }
+}
+
 fn timed_out(timeout: Duration) -> Error {
     Error::Timeout {
         effect: None,

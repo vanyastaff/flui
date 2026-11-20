@@ -19,3 +19,6 @@
 
 - A focused text field on `flui-driver`'s headless target takes the text `element.type_text` and
   an input-method composition commit: the headless window offers text input, as a native one does.
+- `flui_driver::steps::os_events` carries the part of a device pixel a scroll leaves into the
+  source's next scroll, so small scrolls add up instead of each rounding to nothing, and a scroll
+  that adds up to no whole pixel yet sends no event.
