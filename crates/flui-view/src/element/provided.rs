@@ -254,9 +254,11 @@ impl Dependents {
         let Some(position) = self.position(element) else {
             return;
         };
-        if let Some(index) = &mut self.index
-            && let Ok(found) = index.find_entry(hash_of(element), |&at| at as usize == position)
-        {
+        if let Some(index) = &mut self.index {
+            // `position` came from this index a line above, under the same hash.
+            let found = index
+                .find_entry(hash_of(element), |&at| at as usize == position)
+                .expect("BUG: an indexed dependent's position is in the index");
             let _: (u32, _) = found.remove();
         }
         self.entries[position] = None;

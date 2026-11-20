@@ -1993,25 +1993,30 @@ impl BuildOwner {
                 self.inherited_dependencies.reset_build_misses(id);
             }
             let mut recorded: Vec<crate::context::DependentRecord> = dep_sink.into_inner();
-            for (at, record) in recorded.iter().enumerate() {
-                if recorded[..at]
-                    .iter()
-                    .any(|earlier| earlier.dependent == record.dependent)
-                {
-                    continue;
-                }
-                // The providers the loop below registers for this dependent.
+            {
+                // The distinct (dependent, provider) edges the loop below
+                // registers, sorted so that each dependent's are adjacent: a
+                // sort of the build's reads, not a scan per read. Sixteen
+                // stay inline, so an ordinary build allocates nothing here.
                 let tree = &*tree;
-                let providers = recorded
+                let mut edges: smallvec::SmallVec<[(ElementId, ElementId); 16]> = recorded
                     .iter()
-                    .filter(|other| other.dependent == record.dependent)
-                    .filter_map(|other| other.provider)
-                    .filter(|&provider| {
+                    .filter_map(|record| {
+                        record.provider.map(|provider| (record.dependent, provider))
+                    })
+                    .filter(|&(_, provider)| {
                         tree.get(provider)
                             .is_some_and(|node| node.element().as_inherited().is_some())
-                    });
-                self.inherited_dependencies
-                    .reserve(record.dependent, providers);
+                    })
+                    .collect();
+                edges.sort_unstable();
+                edges.dedup();
+                for dependent_edges in edges.chunk_by(|a, b| a.0 == b.0) {
+                    self.inherited_dependencies.reserve(
+                        dependent_edges[0].0,
+                        dependent_edges.iter().map(|&(_, provider)| provider),
+                    );
+                }
             }
             for record in recorded.drain(..) {
                 let Some(provider) = record.provider else {

@@ -53,25 +53,23 @@ impl InheritedDependencies {
     /// hold yet, in one allocation, before they are registered one by one.
     ///
     /// A list that outgrows its inline slots would otherwise double, and a
-    /// control that reads five values keeps eight slots. `providers` may name
-    /// one provider more than once; the caller registers each of them next,
-    /// so a list created here is not left empty.
+    /// control that reads five values keeps eight slots. `providers` names
+    /// each provider once; the caller registers each of them next, so a list
+    /// created here is not left empty. The cost is that of the registrations
+    /// that follow: one look through the held list per provider, so a
+    /// dependent with `k` providers pays O(k²) a build. `k` counts the
+    /// distinct provider types one element reads, a handful in practice
+    /// (eight stay inline); an element that read hundreds would spend that
+    /// quadratic time here and in [`Self::register`] alike, and the list,
+    /// not this check, is what to replace then.
     pub(crate) fn reserve(
         &mut self,
         dependent: ElementId,
-        providers: impl Iterator<Item = ElementId> + Clone,
+        providers: impl Iterator<Item = ElementId>,
     ) {
         let held = self.active.get(&dependent);
         let added = providers
-            .clone()
-            .enumerate()
-            .filter(|&(at, provider)| {
-                !held.is_some_and(|held| held.contains(&provider))
-                    && !providers
-                        .clone()
-                        .take(at)
-                        .any(|earlier| earlier == provider)
-            })
+            .filter(|provider| !held.is_some_and(|held| held.contains(provider)))
             .count();
         let held = held.map_or(0, ProviderIds::len);
         if held + added > INLINE_PROVIDERS {
