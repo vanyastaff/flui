@@ -9,7 +9,8 @@
 
 use std::time::Duration;
 
-use flui_protocol::error::{ErrorCode, Retry};
+use flui_protocol::act::{Effect, EffectKind};
+use flui_protocol::error::{ErrorCode, HandleKind, Retry};
 use flui_protocol::tree::{ElementId, Node, Tree};
 
 use crate::error::{Error, Result};
@@ -124,6 +125,80 @@ fn failed(why: &str) -> Error {
         effect: None,
         message: format!("the OS accessibility tree could not be read: {why}"),
         retry: Retry::Never,
+    }
+}
+
+/// The control pattern `pattern` of the element `automation_id`, from its provider's `answer`,
+/// `Ok(None)` when the element does not offer it.
+///
+/// # Errors
+///
+/// [`Error::ActionUnsupported`] when the element offers no such pattern, [`Error::Timeout`] when
+/// its provider did not answer within `timeout`, [`Error::Gone`] when the element went away, and
+/// [`Error::Platform`] when the provider failed otherwise.
+pub fn pattern<T>(
+    answer: Result<Option<T>, ProviderError>,
+    automation_id: &str,
+    pattern: &str,
+    timeout: Duration,
+) -> Result<T> {
+    match answer {
+        Ok(Some(found)) => Ok(found),
+        Ok(None) => Err(Error::ActionUnsupported {
+            message: format!("the element {automation_id:?} offers no {pattern} pattern"),
+            retry: ErrorCode::ActionUnsupported.default_retry(),
+        }),
+        Err(ProviderError::Timeout) => Err(timed_out(timeout)),
+        Err(ProviderError::Gone) => Err(element_gone(automation_id, "asked for its pattern")),
+        Err(ProviderError::Failed(why)) => Err(Error::Platform {
+            effect: None,
+            message: format!(
+                "the {pattern} pattern of the element {automation_id:?} could not be read: {why}"
+            ),
+            retry: Retry::Never,
+        }),
+    }
+}
+
+/// What invoking the element `automation_id` answered. The invoke may have reached the app
+/// whenever its provider did not say it failed, so a timeout carries `may_have_run`.
+///
+/// # Errors
+///
+/// [`Error::Timeout`] with `may_have_run` when the provider did not answer within `timeout`,
+/// [`Error::Gone`] when the element went away, and [`Error::Platform`] when the invoke failed.
+pub fn invoked(
+    answer: Result<(), ProviderError>,
+    automation_id: &str,
+    timeout: Duration,
+) -> Result<()> {
+    match answer {
+        Ok(()) => Ok(()),
+        Err(ProviderError::Timeout) => Err(Error::Timeout {
+            effect: Some(Effect::new(EffectKind::MayHaveRun)),
+            message: format!(
+                "the app's accessibility provider did not answer the invoke of {automation_id:?} \
+                 within {} ms: read the tree for its effect",
+                timeout.as_millis()
+            ),
+            retry: ErrorCode::Timeout.default_retry(),
+        }),
+        Err(ProviderError::Gone) => Err(element_gone(automation_id, "invoked")),
+        Err(ProviderError::Failed(why)) => Err(Error::Platform {
+            effect: None,
+            message: format!("invoking the element {automation_id:?} failed: {why}"),
+            retry: Retry::Never,
+        }),
+    }
+}
+
+fn element_gone(automation_id: &str, before: &str) -> Error {
+    Error::Gone {
+        kind: Some(HandleKind::Element),
+        handle: None,
+        exit: None,
+        message: format!("the element {automation_id:?} went away before it was {before}"),
+        retry: ErrorCode::Gone.default_retry(),
     }
 }
 

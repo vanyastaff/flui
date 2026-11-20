@@ -7,7 +7,7 @@ use std::time::Duration;
 use flui_driver::coordinates::{DevicePoint, to_device};
 use flui_driver::lane::windows::activity::{self, LANE_TAG, MouseMotion, Observed};
 use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
-use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke};
+use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK};
 use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, VirtualKey};
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
 use flui_driver::lane::windows::safety::{self, Desk, Held, Landing, Refusal, check_event};
@@ -424,9 +424,6 @@ fn chord(names: &[&str]) -> Vec<KeyInput> {
 /// Send `inputs` as the lane does, every stroke taken.
 fn send(keys: &mut HeldKeys, inputs: &[KeyInput]) {
     for input in inputs {
-        if *input == KeyInput::Pointer {
-            keys.other_input();
-        }
         for stroke in keys.plan(input) {
             let _ = keys.apply(stroke);
         }
@@ -481,7 +478,8 @@ fn shell_hotkeys_are_refused_and_app_chords_are_not() {
 }
 
 /// Sticky Keys turns on at the fifth Shift tapped alone in a row, counted across the lane's sends
-/// as the OS counts it, and any other key or a mouse button between starts the count again.
+/// as the OS counts it, and another key between starts the count again. (Pointer input between
+/// does not: `windows_desktop::the_lanes_check_counts_a_shift_click_as_a_shift_tap`.)
 #[test]
 fn only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut() {
     let taps =
@@ -498,52 +496,109 @@ fn only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut() {
     broken.extend(chord(&["a"]));
     broken.extend(taps(4));
     assert_eq!(quiet.shell_hotkey(&broken), None);
-    // Five Shift-clicks: a mouse button under each Shift, which no run of taps goes on across.
-    let mut clicks = HeldKeys::new();
-    for _ in 0..5 {
-        let shift_click = [down("Shift"), KeyInput::Pointer, up("Shift")];
-        assert_eq!(
-            clicks.shell_hotkey(&shift_click),
-            None,
-            "a Shift-click is the app's"
-        );
-        send(&mut clicks, &shift_click);
-    }
+}
+
+/// Release everything `keys` holds, recording each stroke sent, every one taken.
+fn release_recorded(keys: &mut HeldKeys) -> Vec<Keystroke> {
+    let mut sent = Vec::new();
+    keys.release_all(|stroke| {
+        sent.push(stroke);
+        Ok(())
+    })
+    .expect("released");
+    sent
+}
+
+/// The strokes of `sent`, after `before`, read stroke by stroke as the OS reads them: what each
+/// completes of the shell's.
+fn completed_by(before: &[KeyInput], sent: &[Keystroke]) -> Vec<Option<&'static str>> {
+    let mut os = HeldKeys::new();
+    send(&mut os, before);
+    sent.iter().map(|stroke| os.apply(*stroke)).collect()
 }
 
 /// The shortcut check reads what the OS saw of the lane's keys from their one owner, a release
-/// of everything included: a key an interrupted run left down and the release let go of is not
-/// held for the next chord, and Shift held and let go of by five releases is five taps.
+/// of everything included, and nothing the lane sends completes a shortcut of the shell's: a
+/// sequence that leaves a chord of modifiers down is refused, and the release of everything after
+/// an interrupted run breaks the chord with the mask key before it lets go of a modifier.
 #[test]
 fn the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_included() {
+    let chords: [[&str; 2]; 3] = [["Control", "Shift"], ["Alt", "Shift"], ["Shift", "Alt"]];
+    for [first, second] in chords {
+        let left_down = [down(first), down(second)];
+        assert_eq!(
+            HeldKeys::new().shell_hotkey(&left_down),
+            Some(safety::LANGUAGE_SWITCH),
+            "{first}+{second} left down: whatever releases it switches the input language"
+        );
+
+        // An interrupted run left the chord down anyway.
+        let mut keys = HeldKeys::new();
+        send(&mut keys, &left_down);
+        let sent = release_recorded(&mut keys);
+        assert_eq!(
+            sent,
+            [
+                Keystroke::Press(MASK),
+                Keystroke::Release(MASK),
+                Keystroke::Release(key(second)),
+                Keystroke::Release(key(first)),
+            ]
+        );
+        assert_eq!(
+            completed_by(&left_down, &sent),
+            [None; 4],
+            "no stroke of the release completes a shortcut"
+        );
+        assert_eq!(keys.held(), [] as [u16; 0]);
+    }
+    assert_eq!(
+        HeldKeys::new().shell_hotkey(&[down("Control"), down("Shift"), down("s")]),
+        None,
+        "a key pressed under the modifiers breaks the chord"
+    );
+
+    // The mask refused: no release that would complete the chord is sent, and both stay held.
+    let left_down = [down("Control"), down("Shift")];
+    let mut keys = HeldKeys::new();
+    send(&mut keys, &left_down);
+    let mut sent = Vec::new();
+    let refused = keys.release_all(|stroke| {
+        if stroke == Keystroke::Press(MASK) {
+            return Err(flui_driver::Error::Protocol {
+                message: "refused".into(),
+            });
+        }
+        sent.push(stroke);
+        Ok(())
+    });
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        sent,
+        [] as [Keystroke; 0],
+        "nothing that completes the chord"
+    );
+    assert_eq!(keys.held(), [key("Control").code, key("Shift").code]);
+
+    // Alt released by the release of everything: a Tab after the run is the app's.
     let mut keys = HeldKeys::new();
     send(&mut keys, &[down("Alt")]);
-    keys.release_all(|_| Ok(())).expect("released");
-    assert_eq!(
-        keys.shell_hotkey(&chord(&["Tab"])),
-        None,
-        "Alt was released: a Tab after the interrupted run is the app's"
-    );
-    let mut keys = HeldKeys::new();
-    send(&mut keys, &[down("Control"), down("Shift")]);
-    keys.release_all(|_| Ok(())).expect("released");
-    assert_eq!(keys.shell_hotkey(&chord(&["Escape"])), None);
+    let sent = release_recorded(&mut keys);
+    assert_eq!(completed_by(&[down("Alt")], &sent), [None; 3]);
+    assert_eq!(keys.shell_hotkey(&chord(&["Tab"])), None);
 
-    // Shift pressed alone by five runs, each ended by the release of everything.
+    // Shift pressed alone by five runs, each ended by the release of everything: the mask key
+    // between the taps keeps them from adding up.
     let mut keys = HeldKeys::new();
+    let mut os = HeldKeys::new();
     for run in 0..5 {
         let shift = [down("Shift")];
-        if run == 4 {
-            assert_eq!(
-                keys.shell_hotkey(&shift),
-                Some(safety::STICKY_KEYS),
-                "the fifth lone Shift is refused before it goes down"
-            );
-            break;
-        }
         assert_eq!(keys.shell_hotkey(&shift), None, "run {run}");
         send(&mut keys, &shift);
-        keys.release_all(|_| Ok(())).expect("released");
+        send(&mut os, &shift);
+        for stroke in release_recorded(&mut keys) {
+            assert_eq!(os.apply(stroke), None, "run {run}: {stroke:?}");
+        }
     }
 }
 
@@ -581,13 +636,14 @@ fn a_key_windows_took_is_held_even_when_its_echo_never_comes() {
         [keys::CONTROL.code],
         "the press Windows took is held"
     );
-    let mut released = Vec::new();
-    keys.release_all(|key| {
-        released.push(key);
-        Ok(())
-    })
-    .expect("released");
-    assert_eq!(released, [keys::CONTROL]);
+    assert_eq!(
+        release_recorded(&mut keys),
+        [
+            Keystroke::Press(MASK),
+            Keystroke::Release(MASK),
+            Keystroke::Release(keys::CONTROL),
+        ]
+    );
     assert_eq!(keys.held(), [] as [u16; 0]);
 
     let refused = || {
@@ -653,8 +709,8 @@ fn a_release_windows_refused_stays_held() {
     for stroke in [Keystroke::Press(keys::CONTROL), Keystroke::Press(keys::TAB)] {
         held.apply(stroke);
     }
-    let refused = held.release_all(|key| {
-        if key == keys::TAB {
+    let refused = held.release_all(|stroke| {
+        if stroke == Keystroke::Release(keys::TAB) {
             Err(flui_driver::Error::Protocol {
                 message: "refused".into(),
             })
@@ -1330,6 +1386,45 @@ fn no_property_is_read_after_the_first_timeout() {
     assert_eq!(reads.read(|| call(Ok(3))), None);
     assert_eq!(calls, 3, "nothing is asked after the timeout");
     assert_eq!(reads.finish(()), Err(ProviderError::Timeout));
+}
+
+/// Asking an element for a control pattern and invoking it keep the provider's answers apart: a
+/// pattern the element does not offer is `action_unsupported`, a hung provider a timeout (one that
+/// may have run, for the invoke), an element that went away `gone`.
+#[test]
+fn a_pattern_request_and_an_invoke_tell_their_failures_apart() {
+    let timeout = Duration::from_millis(250);
+    let pattern = |answer: Result<Option<()>, ProviderError>| {
+        walk::pattern(answer, "like", "invoke", timeout)
+            .expect_err("no pattern")
+            .code()
+    };
+    assert_eq!(
+        walk::pattern(Ok(Some(7)), "like", "invoke", timeout).ok(),
+        Some(7)
+    );
+    assert_eq!(pattern(Ok(None)), Some(ErrorCode::ActionUnsupported));
+    assert_eq!(
+        pattern(Err(ProviderError::Timeout)),
+        Some(ErrorCode::Timeout)
+    );
+    assert_eq!(pattern(Err(ProviderError::Gone)), Some(ErrorCode::Gone));
+    assert_ne!(
+        pattern(Err(ProviderError::Failed("broken".into()))),
+        Some(ErrorCode::ActionUnsupported),
+        "a provider's failure is not a missing pattern"
+    );
+
+    assert!(walk::invoked(Ok(()), "like", timeout).is_ok());
+    let hung = walk::invoked(Err(ProviderError::Timeout), "like", timeout).expect_err("hung");
+    assert_eq!(hung.code(), Some(ErrorCode::Timeout));
+    assert!(
+        matches!(&hung, flui_driver::Error::Timeout { effect: Some(effect), .. }
+            if effect.kind == flui_driver::protocol::act::EffectKind::MayHaveRun),
+        "{hung:?}"
+    );
+    let gone = walk::invoked(Err(ProviderError::Gone), "like", timeout).expect_err("gone");
+    assert_eq!(gone.code(), Some(ErrorCode::Gone));
 }
 
 /// The search for an automation id walks the app's window only, within its budgets, and tells a

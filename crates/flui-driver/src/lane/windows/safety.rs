@@ -320,6 +320,9 @@ pub const STICKY_KEYS_TAPS: u8 = 5;
 /// What the Sticky Keys shortcut is told by name when it is refused.
 pub const STICKY_KEYS: &str = "the accessibility shortcut (Sticky Keys)";
 
+/// What the input-language switch is told by name when it is refused.
+pub const LANGUAGE_SWITCH: &str = "the Windows input-language switch";
+
 fn has(held: &[u16], modifier: Modifier) -> bool {
     held.iter().any(|&code| {
         Modifier::of(VirtualKey {
@@ -356,12 +359,14 @@ pub fn press_takes(key: VirtualKey, held: &[u16]) -> Option<&'static str> {
 /// The counts the OS keeps across key presses for its shortcuts that no single press makes: the
 /// input-language switch and Sticky Keys. It owns no copy of what is held: each call is told
 /// the held keys by their one owner (`held::HeldKeys`), which feeds it every key edge the OS saw,
-/// releases included, and every other input.
+/// releases included.
 ///
-/// Sticky Keys counts Shift pressed and released alone; any other key or a mouse button or wheel
-/// between starts the count again. Microsoft documents the shortcut as five presses of Shift and
-/// no time window for them, so a pause between taps does not start the count again here: a gap
-/// Windows might forget is still counted, which refuses rather than risks the shortcut.
+/// Sticky Keys counts Shift pressed and released alone; another key between starts the count
+/// again. Microsoft documents the shortcut as five presses of Shift and nothing else about it: no
+/// time window, and nothing about a mouse button, wheel turn or contact between the presses. So
+/// neither a pause nor pointer input starts the count again here, and neither breaks a chord of
+/// modifiers: what Windows might forget is still counted, which refuses rather than risks the
+/// shortcut.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShellShortcuts {
     /// Shift and Alt or Control held together with no other key pressed since: releasing them
@@ -412,7 +417,7 @@ impl ShellShortcuts {
             Some(Modifier::Shift | Modifier::Alt | Modifier::Control)
         ) && self.modifier_chord
         {
-            completed = Some("the Windows input-language switch");
+            completed = Some(LANGUAGE_SWITCH);
         }
         self.lone_shift = false;
         if held.is_empty() {
@@ -421,18 +426,25 @@ impl ShellShortcuts {
         completed
     }
 
-    /// A key that is no modifier, or a mouse button or wheel: no chord of modifiers and no run of
-    /// Shift taps goes on across it.
+    /// A press of a key that is no modifier: no chord of modifiers and no run of Shift taps goes
+    /// on across it.
     pub(crate) fn other_key(&mut self) {
         self.lone_shift = false;
         self.shift_taps = 0;
         self.modifier_chord = false;
     }
 
-    /// Whether a lone Shift is down that, released by anything (the sequence, or the release of
-    /// everything after an interrupted run), completes the Sticky Keys shortcut.
+    /// The shortcut a release of the modifiers held now would complete, with no other key pressed
+    /// first: the input-language switch for a chord of modifiers, Sticky Keys for the fifth lone
+    /// Shift.
     #[must_use]
-    pub(crate) fn release_completes_sticky_keys(&self) -> bool {
-        self.lone_shift && self.shift_taps.saturating_add(1) >= STICKY_KEYS_TAPS
+    pub(crate) fn pending(&self) -> Option<&'static str> {
+        if self.modifier_chord {
+            Some(LANGUAGE_SWITCH)
+        } else if self.lone_shift && self.shift_taps.saturating_add(1) >= STICKY_KEYS_TAPS {
+            Some(STICKY_KEYS)
+        } else {
+            None
+        }
     }
 }

@@ -64,9 +64,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   whose echo never came and a refused release are both released again. `HeldKeys` is also the
   one owner of what the shell's shortcuts count across sends (the modifiers of a chord, the run
   of lone Shift taps): every key edge Windows took goes through it, a release of everything
-  included, and a mouse button, wheel turn or contact restarts the run as it does for the OS.
-  The run of five Shift taps has no time limit Windows documents, so the count is not reset by a
-  pause.
+  included. Only another key restarts the run or breaks a chord: Windows documents five presses
+  of Shift and nothing about a pause or pointer input between them, so neither resets the count.
+  A sequence that leaves a chord of modifiers or a fifth lone Shift down is refused, and the
+  release of everything never completes a shell shortcut: while a modifier is held it presses and
+  releases the unassigned virtual key `0xE8` first (`held::MASK`), and a release that would still
+  complete one is not sent.
+- **An accessibility provider's answers stay apart.** A UI Automation read or invoke tells a
+  provider that timed out (`timeout`, `may_have_run` for an invoke), an element that went away
+  (`gone`) and a pattern the element does not offer (`action_unsupported`) from each other.
 - **A pause is waited out whole,** in slices with the guard looked at between them; a guard whose
   watcher is gone, or whose hook no longer sees the lane's own input, ends the run, never reads as
   a quiet desktop.

@@ -722,7 +722,8 @@ graph LR
     `the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart`,
     `the_shortcut_check_follows_every_key_the_os_saw_a_release_of_everything_included`,
     `a_key_windows_took_is_held_even_when_its_echo_never_comes`,
-    `no_property_is_read_after_the_first_timeout`;
+    `no_property_is_read_after_the_first_timeout`,
+    `a_pattern_request_and_an_invoke_tell_their_failures_apart`;
     `policy::a_sequence_the_lane_cannot_send_is_refused_before_any_event`;
     `steps::small_scrolls_add_up_and_a_part_of_a_pixel_is_carried`.
   - The scenarios on the headless target (CI): `scenarios::the_gallery_scenario_passes_on_the_headless_target`,
@@ -739,6 +740,7 @@ graph LR
     `the_guard_watches_and_stops_on_a_desktop_of_its_own`,
     `a_guard_whose_watcher_died_ends_the_run`,
     `the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey`,
+    `the_lanes_check_counts_a_shift_click_as_a_shift_tap`,
     `a_job_ends_its_processes_when_it_closes`,
     `a_process_joins_its_job_before_it_runs`,
     `a_launched_app_ends_with_its_session`; `the_conformance_scenario_runs_through_the_os_lane` and
@@ -750,15 +752,19 @@ graph LR
   - Taken out one at a time, each fails a test above: the check before the first event, the
     millionth-of-a-pixel origin lift, the headless window's text input, the framework
     namespace in the projection, recording a key or button before its echo is confirmed, a
-    release of everything reaching the shortcut counts, a mouse button restarting the run of
-    Shift taps, the lane's check reading typed text, the scroll remainder carry and the stop at
-    the first property timeout.
+    release of everything reaching the shortcut counts, the refusal of a chord left down, the
+    mask key and the refusal of a completing release in the release of everything, a pointer
+    press not resetting the run of Shift taps, the lane's check reading typed text, the scroll
+    remainder carry, the stop at the first property timeout and the pattern request's typed
+    failures.
   - Owed on W, by hand on the desktop that takes the user's input (`FLUI_TEST_VISIBLE_DESKTOP=1`;
     no automated run reaches that desktop: `nightly-platforms.yml` runs only `flui-native`
     there): the gallery, input and notes scenarios and the conformance scenario passing through the
     OS lane, a foreign mouse move ending a run `cannot_verify` with its contact released
     (`a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input`), the guard's hook seeing the
-    lane's own input come back, the foreground read again before each typed stroke, Windows
+    lane's own input come back, the foreground read again before each typed stroke, the mask key
+    keeping the release of a held Control+Shift or Alt+Shift from switching the input language,
+    Windows
     Graphics Capture of the app's window, a Narrator session over the scenario app, and the
     isolation spikes below.
 - **As built:**
@@ -767,9 +773,12 @@ graph LR
     events and typed text go through one plan (`held::HeldKeys`), which the shell-hotkey check
     reads and the lane sends stroke by stroke; held keys, buttons and contacts are recorded once
     Windows took them, before the guard confirms the echo; `HeldKeys` is the one owner of the
-    shell's shortcut counts too, and a mouse button, wheel turn or contact restarts the run of
-    Shift taps (Windows documents five presses and no time limit, so a pause does not reset it);
-    reading an element stops at its first property timeout; a pause is waited out whole; a launched app starts suspended and joins its
+    shell's shortcut counts too, and only another key restarts the run of Shift taps (Windows
+    documents five presses and nothing about a pause or pointer input between them); a sequence
+    that leaves a chord of modifiers down is refused, and the release of everything masks held
+    modifiers with the unassigned key `0xE8` so it completes no shortcut; reading an element stops
+    at its first property timeout, and an invoke tells a timeout, a gone element and a missing
+    pattern apart; a pause is waited out whole; a launched app starts suspended and joins its
     job before its first instruction. UI Automation, Windows
     Graphics Capture and the job object go through the `windows` crate the workspace already pins,
     not `uiautomation` and `windows-capture`.

@@ -5,12 +5,22 @@
 //! release Windows refused stays held for the next [`HeldKeys::release_all`] to try again.
 
 use crate::error::{Error, Result};
-use crate::lane::windows::keys::{self, SHIFT, TextStroke, VirtualKey};
-use crate::lane::windows::safety::{KeyEdge, STICKY_KEYS, ShellShortcuts};
+use crate::lane::windows::keys::{self, Modifier, SHIFT, TextStroke, VirtualKey};
+use crate::lane::windows::safety::{KeyEdge, Refusal, ShellShortcuts};
 
 /// `VK_PACKET`, the key a Unicode packet arrives as.
 pub const PACKET: VirtualKey = VirtualKey {
     code: 0xE7,
+    extended: false,
+};
+
+/// The key pressed and released between held modifiers and their release, so that releasing them
+/// completes nothing (the input-language switch, Sticky Keys, an app's menu bar on a lone Alt):
+/// those fire on a release of modifiers with no other key pressed while they were held. `0xE8`
+/// is unassigned in Microsoft's virtual-key code table, so no window gives it a meaning, and it is
+/// the key AutoHotkey masks a modifier release with by default (`#MenuMaskKey`).
+pub const MASK: VirtualKey = VirtualKey {
+    code: 0xE8,
     extended: false,
 };
 
@@ -32,9 +42,6 @@ pub enum KeyInput {
     },
     /// Type `text`.
     Text(String),
-    /// A mouse button, a wheel turn or a touch or pen contact between keys: it sends no key, and
-    /// no run of Shift taps or chord of modifiers goes on across it.
-    Pointer,
 }
 
 /// One thing the lane sends to the keyboard.
@@ -118,7 +125,6 @@ impl HeldKeys {
                     TextStroke::Unit(unit) => vec![Keystroke::Unit(unit)],
                 })
                 .collect(),
-            KeyInput::Pointer => Vec::new(),
         }
     }
 
@@ -154,12 +160,6 @@ impl HeldKeys {
         completed
     }
 
-    /// Input other than a key (a mouse button, the wheel, a touch or pen contact) the OS took:
-    /// no run of Shift taps or chord of modifiers goes on across it.
-    pub fn other_input(&mut self) {
-        self.shortcuts.other_key();
-    }
-
     /// Send `stroke` through `send` and record it as soon as `send` says Windows took it; only
     /// then `confirm` (that the guard saw it come back), whose failure is reported with the
     /// stroke already recorded, so a release of everything releases it.
@@ -180,50 +180,74 @@ impl HeldKeys {
 
     /// What of the shell's `inputs`, sent from this state, would take: see
     /// [`safety::press_takes`](crate::lane::windows::safety::press_takes) and [`ShellShortcuts`].
-    /// A sequence that leaves a lone Shift down whose release, by the sequence or by the release of
-    /// everything after an interrupted run, would complete Sticky Keys is refused too.
+    /// A sequence that leaves modifiers down whose release, by a later sequence or by an
+    /// interrupted run's release of everything, would complete a shortcut with no other key
+    /// pressed first (a chord of modifiers, the fifth lone Shift) is refused too.
     #[must_use]
     pub fn shell_hotkey(&self, inputs: &[KeyInput]) -> Option<&'static str> {
         let mut state = self.clone();
         for input in inputs {
-            if *input == KeyInput::Pointer {
-                state.other_input();
-            }
             for stroke in state.plan(input) {
                 if let Some(taken) = state.apply(stroke) {
                     return Some(taken);
                 }
             }
         }
-        state
-            .shortcuts
-            .release_completes_sticky_keys()
-            .then_some(STICKY_KEYS)
+        state.shortcuts.pending()
     }
 
-    /// Release every key held, last pressed first, through `release`; a key whose release fails
-    /// stays held, and each release Windows took is recorded as the OS saw it.
+    /// Release every key held, last pressed first, through `send`, completing no shortcut of the
+    /// shell's: while a modifier is held, [`MASK`] is pressed and released first, which breaks a
+    /// chord of modifiers and a run of Shift taps as any other key does. A release that would
+    /// still complete one (the mask was not sent) is not sent, and that key stays held; so does a
+    /// key whose release fails. Each stroke Windows took is recorded as the OS saw it.
     ///
     /// # Errors
     ///
-    /// The first release that failed, after every key was tried.
-    pub fn release_all(&mut self, mut release: impl FnMut(VirtualKey) -> Result<()>) -> Result<()> {
+    /// The first stroke that failed or was refused, after every key was tried.
+    pub fn release_all(&mut self, mut send: impl FnMut(Keystroke) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
+        let modifier_held = self.held.iter().any(|&code| {
+            Modifier::of(VirtualKey {
+                code,
+                extended: false,
+            })
+            .is_some()
+        });
+        if modifier_held {
+            let masked = self
+                .send_unless_shortcut(Keystroke::Press(MASK), &mut send)
+                .and_then(|()| self.send_unless_shortcut(Keystroke::Release(MASK), &mut send));
+            if let Err(error) = masked {
+                first.get_or_insert(error);
+            }
+        }
         for code in self.held.clone().into_iter().rev() {
             let key = VirtualKey {
                 code,
                 extended: keys::is_extended(code),
             };
-            match release(key) {
-                Ok(()) => {
-                    let _ = self.apply(Keystroke::Release(key));
-                }
-                Err(error) => {
-                    first.get_or_insert(error);
-                }
+            if let Err(error) = self.send_unless_shortcut(Keystroke::Release(key), &mut send) {
+                first.get_or_insert(error);
             }
         }
         first.map_or(Ok(()), Err)
+    }
+
+    /// Send `stroke` through `send` unless it completes a shortcut of the shell's from this state,
+    /// and record it once Windows took it.
+    fn send_unless_shortcut(
+        &mut self,
+        stroke: Keystroke,
+        send: &mut impl FnMut(Keystroke) -> Result<()>,
+    ) -> Result<()> {
+        let mut next = self.clone();
+        if let Some(handler) = next.apply(stroke) {
+            return Err(Refusal::ShellHotkey { handler }.into_error());
+        }
+        send(stroke)?;
+        *self = next;
+        Ok(())
     }
 }
 

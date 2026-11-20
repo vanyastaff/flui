@@ -311,17 +311,8 @@ mod lane {
                 self.checked(window, None)?;
                 let before = self.guard.echoes();
                 let guard = &self.guard;
-                self.keys.deliver(
-                    stroke,
-                    || match stroke {
-                        Keystroke::Press(key) => win32::key(key, true),
-                        Keystroke::Release(key) => win32::key(key, false),
-                        Keystroke::ShiftFor(_) => win32::key(keys::SHIFT, true),
-                        Keystroke::UnshiftFor(_) => win32::key(keys::SHIFT, false),
-                        Keystroke::Unit(unit) => win32::unicode(unit),
-                    },
-                    || echo_since(guard, before),
-                )?;
+                self.keys
+                    .deliver(stroke, || send_stroke(stroke), || echo_since(guard, before))?;
             }
             Ok(())
         }
@@ -342,15 +333,11 @@ mod lane {
                 }
             };
             let before = self.guard.echoes();
-            let (guard, keys) = (&self.guard, &mut self.keys);
+            let guard = &self.guard;
             self.buttons.deliver(
                 physical,
                 pressed,
-                || {
-                    win32::mouse_button(physical, pressed)?;
-                    keys.other_input();
-                    Ok(())
-                },
+                || win32::mouse_button(physical, pressed),
                 || echo_since(guard, before),
             )
         }
@@ -373,9 +360,7 @@ mod lane {
                     Some(kind) => {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
-                        contacts.down(pointer, kind, |frame| device.inject(frame))?;
-                        self.keys.other_input();
-                        Ok(())
+                        contacts.down(pointer, kind, |frame| device.inject(frame))
                     }
                     None => self.mouse_button(*button, true),
                 },
@@ -403,8 +388,6 @@ mod lane {
                     }
                     let before = self.guard.echoes();
                     win32::wheel(*delta_x, *delta_y)?;
-                    // Recorded once Windows took the turn, before its echo is waited for.
-                    self.keys.other_input();
                     echo_since(&self.guard, before)
                 }
                 _ => Ok(()),
@@ -442,6 +425,17 @@ mod lane {
                 std::thread::sleep(slice);
             }
             Ok(())
+        }
+    }
+
+    /// Send one keystroke through `SendInput`.
+    fn send_stroke(stroke: Keystroke) -> Result<()> {
+        match stroke {
+            Keystroke::Press(key) => win32::key(key, true),
+            Keystroke::Release(key) => win32::key(key, false),
+            Keystroke::ShiftFor(_) => win32::key(keys::SHIFT, true),
+            Keystroke::UnshiftFor(_) => win32::key(keys::SHIFT, false),
+            Keystroke::Unit(unit) => win32::unicode(unit),
         }
     }
 
@@ -499,9 +493,6 @@ mod lane {
                         }
                         .into_error());
                     }
-                    OsEvent::PointerDown { .. } | OsEvent::Scroll { .. } => {
-                        inputs.push(KeyInput::Pointer);
-                    }
                     _ => inputs.extend(self.key_input(event)?),
                 }
             }
@@ -528,7 +519,7 @@ mod lane {
 
         fn release_all(&mut self) -> Result<()> {
             let _units = DeviceUnits::enter();
-            let keys = self.keys.release_all(|key| win32::key(key, false));
+            let keys = self.keys.release_all(send_stroke);
             let buttons = self
                 .buttons
                 .release_all(|button| win32::mouse_button(button, false));

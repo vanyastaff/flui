@@ -96,13 +96,14 @@ impl Uia {
         })
     }
 
-    /// A step of the walker: a null element (the end of a level) is what the binding reports as
-    /// an error with no code, told apart from a provider's failure.
-    fn step(
-        step: windows::core::Result<IUIAutomationElement>,
-    ) -> std::result::Result<Option<IUIAutomationElement>, ProviderError> {
-        match step {
-            Ok(element) => Ok(Some(element)),
+    /// An answer that may be no object (the end of a level for the walker, a pattern the element
+    /// does not offer): a null object is what the binding reports as an error with no code, told
+    /// apart from a provider's failure.
+    fn optional<T>(
+        answer: windows::core::Result<T>,
+    ) -> std::result::Result<Option<T>, ProviderError> {
+        match answer {
+            Ok(found) => Ok(Some(found)),
             Err(error) if error.code().is_ok() => Ok(None),
             Err(error) => Err(classify(&error)),
         }
@@ -117,7 +118,7 @@ impl Provider for Uia {
         element: &IUIAutomationElement,
     ) -> std::result::Result<Option<IUIAutomationElement>, ProviderError> {
         // SAFETY: a live element of this thread's client.
-        Self::step(unsafe { self.walker.GetFirstChildElement(element) })
+        Self::optional(unsafe { self.walker.GetFirstChildElement(element) })
     }
 
     fn next_sibling(
@@ -125,7 +126,7 @@ impl Provider for Uia {
         element: &IUIAutomationElement,
     ) -> std::result::Result<Option<IUIAutomationElement>, ProviderError> {
         // SAFETY: as above.
-        Self::step(unsafe { self.walker.GetNextSiblingElement(element) })
+        Self::optional(unsafe { self.walker.GetNextSiblingElement(element) })
     }
 
     fn node(
@@ -162,24 +163,23 @@ pub(super) fn read(window: Hwnd) -> Result<Tree> {
 ///
 /// [`Error::NotFound`](crate::Error::NotFound) when no element within the walk's budgets has that
 /// id; [`Error::Timeout`](crate::Error::Timeout) when the provider did not answer in time;
-/// [`Error::ActionUnsupported`](crate::Error::ActionUnsupported) when it offers no invoke pattern;
-/// when COM or UI Automation is unavailable or the invoke fails.
+/// as [`walk::pattern`] for the element's invoke pattern and [`walk::invoked`] for the invoke;
+/// when COM or UI Automation is unavailable.
 pub(super) fn invoke(window: Hwnd, automation_id: &str) -> Result<()> {
     let _apartment = Apartment::enter()?;
     let mut uia = Uia::open()?;
     let root = uia.root(window)?;
     let element = walk::find(&mut uia, root, automation_id, timeout())?;
-    // SAFETY: a live element of this thread's client.
-    let pattern: IUIAutomationInvokePattern = unsafe {
-        element.GetCurrentPatternAs(UIA_InvokePatternId)
-    }
-    .map_err(|_| crate::Error::ActionUnsupported {
-        message: format!("the element {automation_id:?} offers no invoke pattern"),
-        retry: flui_protocol::error::ErrorCode::ActionUnsupported.default_retry(),
-    })?;
+    let pattern: IUIAutomationInvokePattern = walk::pattern(
+        // SAFETY: a live element of this thread's client.
+        Uia::optional(unsafe { element.GetCurrentPatternAs(UIA_InvokePatternId) }),
+        automation_id,
+        "invoke",
+        timeout(),
+    )?;
     // SAFETY: a live pattern of this thread's client.
-    unsafe { pattern.Invoke() }
-        .map_err(|error| lane_error(format!("invoking {automation_id:?} failed: {error}")))
+    let answer = unsafe { pattern.Invoke() }.map_err(|error| classify(&error));
+    walk::invoked(answer, automation_id, timeout())
 }
 
 fn client() -> Result<IUIAutomation> {

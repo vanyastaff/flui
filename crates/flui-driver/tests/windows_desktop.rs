@@ -20,7 +20,7 @@ use flui_driver::lane::windows::{
 };
 use flui_driver::lane::{ActivityGuard, Lane};
 use flui_driver::os_input::OsDevice;
-use flui_driver::protocol::input::{DeviceClass, InputKind};
+use flui_driver::protocol::input::{DeviceClass, InputKind, PointerButton, PointerDevice};
 use flui_driver::protocol::wire::Role;
 use flui_driver::steps::OsEvent;
 use flui_driver::{
@@ -226,6 +226,55 @@ fn the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey() {
         OsEvent::KeyUp("Alt".into()),
     ];
     assert!(lane.check(&plain).is_ok());
+}
+
+/// Windows documents no reset of the Sticky Keys count by a mouse button, so the lane's check
+/// counts a Shift-click as a Shift tap and refuses the fifth.
+#[test]
+fn the_lanes_check_counts_a_shift_click_as_a_shift_tap() {
+    let mut lane = WindowsLane::for_process(std::process::id());
+    let shift_clicks = |count: usize| -> Vec<OsEvent> {
+        let button = |pressed: bool| {
+            let (pointer, device, button) = (
+                "mouse".to_owned(),
+                PointerDevice::Mouse,
+                PointerButton::Primary,
+            );
+            if pressed {
+                OsEvent::PointerDown {
+                    pointer,
+                    device,
+                    button,
+                }
+            } else {
+                OsEvent::PointerUp {
+                    pointer,
+                    device,
+                    button,
+                }
+            }
+        };
+        (0..count)
+            .flat_map(|_| {
+                [
+                    OsEvent::KeyDown("Shift".into()),
+                    button(true),
+                    button(false),
+                    OsEvent::KeyUp("Shift".into()),
+                ]
+            })
+            .collect()
+    };
+    assert!(lane.check(&shift_clicks(4)).is_ok());
+    let refused = lane.check(&shift_clicks(5));
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::NotSupported { capability: Some(capability), .. })
+                if capability == "os_shell_hotkey"
+        ),
+        "{refused:?}"
+    );
 }
 
 /// A guard whose watcher is gone while armed can no longer tell the person's input from the
