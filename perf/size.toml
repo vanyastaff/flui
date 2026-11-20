@@ -12,5 +12,5 @@ crates_android = 220
 crates_linux = 271
 crates_macos = 203
 crates_wasm32 = 176
-crates_windows = 205
+crates_windows = 202
 hot_reload_host_release_bytes = 22703792
