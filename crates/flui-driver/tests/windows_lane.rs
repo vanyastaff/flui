@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use flui_driver::coordinates::{DevicePoint, to_device};
+use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows::activity::{self, LANE_TAG, MouseMotion, Observed};
 use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
 use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK};
@@ -798,6 +799,111 @@ fn a_release_windows_refused_stays_held() {
     });
     assert!(refused.is_err());
     assert_eq!(buttons.bits(), 0b10, "the refused button is still held");
+}
+
+/// Each part of the lane names what it still holds when a release fails, and the release of
+/// everything names what every part holds after the first failure's message: the keys' failure
+/// does not hide the buttons and contacts left down.
+#[test]
+fn the_release_of_everything_names_what_every_part_still_holds() {
+    let refuse = |part: &str| -> flui_driver::Result<()> {
+        Err(flui_driver::Error::Protocol {
+            message: format!("{part} refused"),
+        })
+    };
+    let held_by = |outcome: &flui_driver::Result<()>| match outcome {
+        Err(flui_driver::Error::ReleaseFailed { held, message, .. }) => {
+            Some((held.clone(), message.clone()))
+        }
+        _ => None,
+    };
+
+    let mut held_keys = HeldKeys::new();
+    held_keys.apply(Keystroke::Press(keys::TAB));
+    let keys = held_keys.release_all(|_| refuse("the keys"));
+    assert_eq!(
+        held_by(&keys),
+        Some((
+            vec!["Tab".to_owned()],
+            "protocol: the keys refused".to_owned()
+        ))
+    );
+
+    let mut buttons = HeldButtons::default();
+    buttons.apply(1, true);
+    buttons.apply(4, true);
+    let buttons = buttons.release_all(|button| {
+        if button == 1 {
+            refuse("the mouse")
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(
+        held_by(&buttons),
+        Some((
+            vec!["the right mouse button".to_owned()],
+            "protocol: the mouse refused".to_owned()
+        )),
+        "only the button whose release failed is named"
+    );
+
+    let mut contacts = Contacts::new();
+    let mut os = Injected::default();
+    for (pointer, kind) in [("a", PointerKind::Touch), ("p", PointerKind::Pen)] {
+        contacts
+            .move_to(pointer, kind, point(10, 10), |f| os.take(f))
+            .expect("a placement");
+        contacts
+            .down(pointer, kind, |f| os.take(f))
+            .expect("a press");
+    }
+    let mut refusing = Injected {
+        refuse: true,
+        ..Injected::default()
+    };
+    let contacts = contacts.release_all(|f| refusing.take(f));
+    assert_eq!(
+        held_by(&contacts),
+        Some((
+            vec!["the touch contact a".to_owned(), "the pen p".to_owned()],
+            "protocol: Windows refused the frame".to_owned()
+        ))
+    );
+
+    let everything = release_outcome([keys, buttons, contacts]);
+    assert_eq!(
+        held_by(&everything),
+        Some((
+            vec![
+                "Tab".to_owned(),
+                "the right mouse button".to_owned(),
+                "the touch contact a".to_owned(),
+                "the pen p".to_owned(),
+            ],
+            "protocol: the keys refused".to_owned()
+        )),
+        "{everything:?}"
+    );
+
+    // A part that failed with nothing left held still gives the first message.
+    let mut buttons = HeldButtons::default();
+    buttons.apply(0, true);
+    let stuck = buttons.release_all(|_| refuse("the mouse"));
+    let after_bare = release_outcome([refuse("the mask"), stuck]);
+    assert_eq!(
+        held_by(&after_bare),
+        Some((
+            vec!["the left mouse button".to_owned()],
+            "protocol: the mask refused".to_owned()
+        )),
+        "{after_bare:?}"
+    );
+    assert!(matches!(
+        release_outcome([refuse("the mask"), Ok(())]),
+        Err(flui_driver::Error::Protocol { message }) if message == "the mask refused"
+    ));
+    assert!(release_outcome([Ok(()), Ok(()), Ok(())]).is_ok());
 }
 
 /// A pause is waited out whole, in slices short enough to look at the guard between them.

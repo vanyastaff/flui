@@ -216,8 +216,43 @@ pub trait Lane: Send {
     ///
     /// # Errors
     ///
-    /// When the OS refused a release.
+    /// When the OS refused a release: [`Error::ReleaseFailed`] naming everything still held, as
+    /// [`release_outcome`] gathers it from the lane's parts.
     fn release_all(&mut self) -> Result<()>;
+}
+
+/// What releasing everything came to, from the releases of a lane's parts (its keys, its mouse,
+/// its contacts) in the order they ran: the first failure's message, with everything each part
+/// still holds named, so one part's failure never hides what another left held.
+///
+/// # Errors
+///
+/// [`Error::ReleaseFailed`] naming what every part that answered one still holds, with the first
+/// failure's message; the first failure itself when no part holds anything.
+pub fn release_outcome(parts: impl IntoIterator<Item = Result<()>>) -> Result<()> {
+    let mut first: Option<Error> = None;
+    let mut stuck: Option<(String, Vec<String>)> = None;
+    for mut error in parts.into_iter().filter_map(Result::err) {
+        if let Error::ReleaseFailed { lane, held, .. } = &mut error {
+            stuck
+                .get_or_insert_with(|| (lane.clone(), Vec::new()))
+                .1
+                .append(held);
+        }
+        first.get_or_insert(error);
+    }
+    match (first, stuck) {
+        (None, _) => Ok(()),
+        (Some(first), None) => Err(first),
+        (Some(first), Some((lane, held))) => Err(Error::ReleaseFailed {
+            lane,
+            held,
+            message: match first {
+                Error::ReleaseFailed { message, .. } => message,
+                other => other.to_string(),
+            },
+        }),
+    }
 }
 
 /// The OS's capture of a window's surface: tightly packed RGBA rows, top row first.

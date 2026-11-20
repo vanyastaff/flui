@@ -18,7 +18,8 @@ use flui_driver::lane::macos::safety::{
 };
 use flui_driver::lane::macos::screen::{self, PointRect, WindowInfo};
 use flui_driver::lane::macos::version::MacosVersion;
-use flui_driver::lane::macos::{callback, frame, release_outcome};
+use flui_driver::lane::macos::{callback, frame};
+use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows;
 use flui_driver::projection::Projection;
 use flui_driver::protocol::error::{ErrorCode, HandleKind};
@@ -1603,21 +1604,21 @@ fn the_release_of_everything_keeps_what_it_released_apart_from_what_failed() {
             message: message.to_owned(),
         })
     };
-    let both = release_outcome(
+    let both = release_outcome([
         stuck("Control", "keys"),
         stuck("the left mouse button", "mouse"),
-    );
+    ]);
     assert!(
         matches!(&both, Err(Error::ReleaseFailed { held, message, .. })
             if held == &["Control", "the left mouse button"] && message == "keys"),
         "{both:?}"
     );
-    let mouse = release_outcome(Ok(()), stuck("the left mouse button", "mouse"));
+    let mouse = release_outcome([Ok(()), stuck("the left mouse button", "mouse")]);
     assert!(
         matches!(&mouse, Err(Error::ReleaseFailed { message, .. }) if message == "mouse"),
         "{mouse:?}"
     );
-    assert!(release_outcome(Ok(()), Ok(())).is_ok());
+    assert!(release_outcome([Ok(()), Ok(())]).is_ok());
 }
 
 /// A press needs a place and a button that is up, a release a button that is down; each button a

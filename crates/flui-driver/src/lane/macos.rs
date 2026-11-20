@@ -70,36 +70,6 @@ pub fn granted(permission: safety::Permission) -> bool {
     quartz::granted(permission)
 }
 
-/// What releasing everything came to, from the release of the keys and then of the mouse: the
-/// first failure, naming what both still hold.
-///
-/// # Errors
-///
-/// The keys' failure, or the mouse's when the keys released; [`Error::ReleaseFailed`] naming the
-/// keys and the buttons when neither released everything.
-///
-/// [`Error::ReleaseFailed`]: crate::Error::ReleaseFailed
-pub fn release_outcome(keys: crate::Result<()>, mouse: crate::Result<()>) -> crate::Result<()> {
-    match (keys, mouse) {
-        (
-            Err(crate::Error::ReleaseFailed {
-                lane,
-                mut held,
-                message,
-            }),
-            Err(crate::Error::ReleaseFailed { held: buttons, .. }),
-        ) => {
-            held.extend(buttons);
-            Err(crate::Error::ReleaseFailed {
-                lane,
-                held,
-                message,
-            })
-        }
-        (keys, mouse) => keys.and(mouse),
-    }
-}
-
 #[cfg(target_os = "macos")]
 mod lane {
     use std::time::{Duration, Instant};
@@ -534,7 +504,7 @@ mod lane {
                 Self::permitted(Permission::Accessibility)?;
                 quartz::mouse(pid, event, flags)
             });
-            super::release_outcome(keys, pointer)
+            crate::lane::release_outcome([keys, pointer])
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {

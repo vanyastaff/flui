@@ -531,7 +531,7 @@ mod lane {
                 };
                 device(slot, frame.kind)?.inject(frame)
             });
-            keys.and(buttons).and(lifted)
+            crate::lane::release_outcome([keys, buttons, lifted])
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
