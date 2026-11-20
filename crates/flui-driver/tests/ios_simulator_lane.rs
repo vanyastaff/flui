@@ -106,6 +106,7 @@ fn a_udid_is_a_uuid_and_is_held_in_upper_case() {
     let lower = Udid::try_new(UDID.to_ascii_lowercase()).expect("a lower-case UDID");
     assert_eq!(lower, udid(), "two spellings of one UDID are one simulator");
     assert_eq!(lower.as_str(), UDID);
+    assert_eq!(lower.to_string(), UDID);
     for refused in [
         "",
         "booted",
@@ -124,7 +125,13 @@ fn a_udid_is_a_uuid_and_is_held_in_upper_case() {
 
 #[test]
 fn a_bundle_identifier_is_checked_before_it_becomes_an_argument() {
-    for accepted in ["dev.flui.scenario", "com.example.My-App2", "a"] {
+    let longest = "a".repeat(255);
+    for accepted in [
+        "dev.flui.scenario",
+        "com.example.My-App2",
+        "a",
+        longest.as_str(),
+    ] {
         device::check_bundle_id(accepted).expect(accepted);
     }
     let long = "a".repeat(256);
@@ -178,6 +185,9 @@ fn the_listing_is_read_entry_by_entry() {
     assert_eq!(simulators[0].runtime_name(), "iOS 18.0");
     let other = device::parse_devices(listing("Booting", true).as_bytes()).expect("a listing");
     assert_eq!(other[0].state, DeviceState::Other("Booting".to_owned()));
+    let shut = device::parse_devices(listing("Shutdown", true).as_bytes()).expect("a listing");
+    assert_eq!(shut[0].state, DeviceState::Shutdown);
+    assert_eq!(shut[0].state.to_string(), "Shutdown");
     for refused in ["", "[]", "{}", "{\"devices\": []}", "not json"] {
         assert!(
             device::parse_devices(refused.as_bytes()).is_err(),
@@ -234,6 +244,7 @@ fn an_ios_runtime_reads_as_its_version() {
         ("com.apple.CoreSimulator.SimRuntime.tvOS-18-0", None),
         ("com.apple.CoreSimulator.SimRuntime.iOS-", None),
         ("com.apple.CoreSimulator.SimRuntime.iOS-18-x", None),
+        ("com.apple.CoreSimulator.SimRuntime.iOS-18a-0", None),
         ("com.apple.CoreSimulator.SimRuntime.iOS-1-2-3-4", None),
     ] {
         assert_eq!(
@@ -250,6 +261,7 @@ fn the_launch_line_gives_the_apps_process() {
         ("dev.flui.scenario: 4321\n", Some(4321)),
         ("note\ndev.flui.scenario:  77 \n", Some(77)),
         ("dev.flui.scenario.other: 4321\n", None),
+        ("dev.flui.scenario: 1\n", Some(1)),
         ("dev.flui.scenario: 0\n", None),
         ("dev.flui.scenario: -1\n", None),
         ("dev.flui.scenario 4321\n", None),
@@ -265,6 +277,9 @@ fn the_xcode_version_is_read_from_xcodebuild() {
     assert_eq!(read.version, "27.1");
     assert_eq!(read.build.as_deref(), Some("27A9269"));
     assert_eq!(read.to_string(), "Xcode 27.1 (27A9269)");
+    let longest = format!("Xcode 27.1\nBuild version {}\n", "A".repeat(32));
+    let long = format!("Xcode 27.1\nBuild version {}\n", "A".repeat(33));
+    let longest_build = "A".repeat(32);
     let cases = [
         (
             "Xcode 26.4.1\nBuild version 26E101\n",
@@ -272,7 +287,15 @@ fn the_xcode_version_is_read_from_xcodebuild() {
         ),
         ("Xcode 27\n", Some(("27", None))),
         ("Xcode 27.1\nBuild version 27A 9269\n", Some(("27.1", None))),
+        ("Xcode 27.1\nBuild version \n", Some(("27.1", None))),
+        (
+            longest.as_str(),
+            Some(("27.1", Some(longest_build.as_str()))),
+        ),
+        (long.as_str(), Some(("27.1", None))),
         ("Xcode 27.1.0.1\n", None),
+        ("Xcode 27.x\n", None),
+        ("Xcode 2x\n", None),
         ("Xcode beta\n", None),
         (
             "xcode-select: error: tool 'xcodebuild' requires Xcode\n",
@@ -358,8 +381,13 @@ fn every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_se
             assert_eq!(direct.missing_capability().as_deref(), Some(HID_CAPABILITY));
         }
         assert_eq!(xcrun.log(), before, "nothing went to the Simulator");
-        lane::send_guarded(&mut lane, &[OsEvent::Pause(Duration::from_millis(1))])
+        let started = std::time::Instant::now();
+        lane::send_guarded(&mut lane, &[OsEvent::Pause(Duration::from_millis(60))])
             .expect("a pause alone is waited out");
+        assert!(
+            started.elapsed() >= Duration::from_millis(60),
+            "the pause was waited out whole"
+        );
         lane.release_all().expect("the lane holds nothing");
     }
 }
@@ -420,13 +448,123 @@ fn the_lane_refuses_a_simulator_it_cannot_drive() {
     assert!(matches!(error, Error::InvalidArgument { .. }), "{error:?}");
 }
 
+/// What `simctl` says when the host cannot run the lane (no Xcode, no such simulator, a
+/// simulator that shut down, a CoreSimulator service gone) makes the run cannot-verify; any other
+/// failure fails it, with what `simctl` said cut to a message's length.
+#[test]
+fn a_failure_the_host_causes_is_cannot_verify_and_any_other_fails_the_run() {
+    let connect_with = |reply: XcrunReply| {
+        let xcrun = ScriptedXcrun::new().reply("simctl list devices", reply);
+        IosSimulatorLane::connect(xcrun.simulator(), &udid(), BUNDLE).expect_err("refused")
+    };
+    for said in [
+        "xcrun: error: invalid active developer path",
+        "Invalid device: 1F2E3D4C-5B6A-4798-8A7B-6C5D4E3F2A1B",
+        "Unable to lookup in current state: Shutdown",
+        "No devices are booted.",
+        "Failed to initialize simulator device set: CoreSimulatorService connection interrupted",
+    ] {
+        let error = connect_with(XcrunReply::new(1, "").stderr(said));
+        assert!(
+            matches!(&error, Error::Lane { unavailable: true, message, .. } if message.contains(said)),
+            "{said}: {error:?}"
+        );
+    }
+    let long = "x".repeat(400);
+    let error = connect_with(XcrunReply::new(2, "").stderr(long.as_str()));
+    let Error::Lane {
+        unavailable,
+        message,
+        ..
+    } = &error
+    else {
+        panic!("a lane failure: {error:?}");
+    };
+    assert!(!unavailable, "{error:?}");
+    assert!(!error.is_cannot_verify(), "{error:?}");
+    assert!(
+        message.ends_with(&format!("it exited with 2: {}…", "x".repeat(300))),
+        "{message}"
+    );
+    let failure = |reply: XcrunReply| reply.failure();
+    assert_eq!(failure(XcrunReply::new(0, "out")), None);
+    assert_eq!(
+        failure(XcrunReply::new(3, "")).as_deref(),
+        Some("it exited with 3")
+    );
+    assert_eq!(
+        failure(XcrunReply::new(3, "").stderr("  nope \n")).as_deref(),
+        Some("it exited with 3: nope")
+    );
+    let mut ended = XcrunReply::new(0, "");
+    ended.exit = None;
+    assert_eq!(
+        failure(ended).as_deref(),
+        Some("it ended without an exit code")
+    );
+}
+
+/// The listing is read within its bound and the version within its own, each to the byte: a
+/// listing past it refuses the lane, and a version past it leaves the Xcode unnamed.
+#[test]
+fn what_simctl_and_xcodebuild_print_is_read_within_its_bound() {
+    // JSON and `xcodebuild`'s lines both take trailing spaces.
+    let padded = |mut text: String, length: usize| {
+        let pad = length - text.len();
+        text.extend(std::iter::repeat_n(' ', pad));
+        text
+    };
+    let at = |listing_length: usize, version_length: usize| {
+        ScriptedXcrun::new()
+            .reply(
+                "simctl list devices",
+                XcrunReply::new(0, padded(listing("Booted", true), listing_length)),
+            )
+            .reply(
+                "xcodebuild -version",
+                XcrunReply::new(0, padded(xcodebuild("27.1", "27A9269"), version_length)),
+            )
+    };
+    let small = 64 * 1024;
+    let lane =
+        IosSimulatorLane::connect(at(device::MAX_LISTING, small).simulator(), &udid(), BUNDLE)
+            .expect("a listing and a version at their bounds");
+    assert_eq!(
+        lane.xcode().map(|xcode| xcode.version.as_str()),
+        Some("27.1")
+    );
+    let lane = IosSimulatorLane::connect(
+        at(device::MAX_LISTING, small + 1).simulator(),
+        &udid(),
+        BUNDLE,
+    )
+    .expect("a version past its bound leaves the Xcode unnamed");
+    assert_eq!(lane.xcode(), None);
+    let error = IosSimulatorLane::connect(
+        at(device::MAX_LISTING + 1, small).simulator(),
+        &udid(),
+        BUNDLE,
+    )
+    .expect_err("a listing past its bound");
+    assert!(matches!(error, Error::Lane { .. }), "{error:?}");
+}
+
 #[test]
 fn a_capture_is_the_screen_when_the_window_fills_it() {
     let (width, height) = (1179, 2556);
     let mut rgba = vec![255_u8; (width * height * 4) as usize];
     rgba[..4].copy_from_slice(&[10, 20, 30, 255]);
-    let xcrun = scripted().screenshot(png_of(width, height, &rgba));
+    // The screen turned, then upright: each capture reads the screen afresh.
+    let turned = png_of(height, width, &rgba);
+    let xcrun = scripted()
+        .screenshot(turned)
+        .screenshot(png_of(width, height, &rgba));
     let mut lane = connect(&xcrun);
+    let error = lane.capture_window(&placement()).expect_err("turned");
+    assert_eq!(
+        error.missing_capability().as_deref(),
+        Some("window_position")
+    );
     let image = lane.capture_window(&placement()).expect("the screen");
     assert_eq!((image.width(), image.height()), (width, height));
     assert_eq!(image.pixel(0, 0), Some([10, 20, 30, 255]));
@@ -474,21 +612,77 @@ fn a_screen_of_another_size_than_the_window_is_refused_before_it_is_decoded() {
             Some("window_position")
         );
     }
-    // Two pixels off on a side is the window laid out in whole pixels.
-    screenshot::check_fills(&placement(), 1181, 2554).expect("within the tolerance");
+    // Two pixels off on a side is the window laid out in whole pixels; three is another screen.
+    for (width, height) in [(1181, 2554), (1177, 2558)] {
+        screenshot::check_fills(&placement(), width, height).expect("within the tolerance");
+    }
+    for (width, height) in [(1176, 2556), (1179, 2559)] {
+        assert!(
+            screenshot::check_fills(&placement(), width, height).is_err(),
+            "{width} x {height}"
+        );
+    }
     // A header that declares a screen past the bound, or no PNG at all, is never decoded.
     let mut huge = png_of(1, 1, &[0, 0, 0, 255]);
     huge[16..20].copy_from_slice(&9000_u32.to_be_bytes());
-    for refused in [huge, b"GIF89a".to_vec(), Vec::new()] {
+    let mut tall = png_of(1, 1, &[0, 0, 0, 255]);
+    tall[20..24].copy_from_slice(&8193_u32.to_be_bytes());
+    for refused in [huge, tall, b"GIF89a".to_vec(), Vec::new()] {
         let error = screenshot::window_image(&refused, &placement()).expect_err("refused");
         assert!(matches!(error, Error::Lane { .. }), "{error:?}");
     }
+    let error = screenshot::window_image(b"GIF89a", &placement()).expect_err("no PNG");
+    assert!(error.to_string().contains("no PNG"), "{error}");
+    // A screen of the bound itself is read.
+    let column = Placement::new(window(), LogicalSize::new(1.0, 8192.0), 1.0);
+    let image = screenshot::window_image(&png_of(1, 8192, &vec![0; 8192 * 4]), &column)
+        .expect("a side of the bound");
+    assert_eq!((image.width(), image.height()), (1, 8192));
+    let bad_scale =
+        |width: f64, scale: f64| Placement::new(window(), LogicalSize::new(width, 852.0), scale);
+    for placement in [
+        bad_scale(f64::NAN, 3.0),
+        bad_scale(f64::INFINITY, 3.0),
+        bad_scale(393.0, 0.0),
+        bad_scale(393.0, -3.0),
+    ] {
+        assert!(
+            matches!(
+                screenshot::check_fills(&placement, 1179, 2556),
+                Err(Error::InvalidArgument { .. })
+            ),
+            "{placement:?}"
+        );
+    }
+}
+
+/// A PNG's size is read from its header's first chunk, which must be `IHDR` of 13 bytes, each
+/// side a big-endian word.
+#[test]
+fn a_pngs_size_is_read_from_its_header() {
+    let header = |length: u32, chunk: &[u8; 4], width: u32, height: u32| {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(&length.to_be_bytes());
+        bytes.extend_from_slice(chunk);
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes
+    };
+    assert_eq!(
+        screenshot::png_size(&header(13, b"IHDR", 0x0102_0304, 0x0506_0708)),
+        Some((0x0102_0304, 0x0506_0708))
+    );
     assert_eq!(screenshot::png_size(&png_of(3, 2, &[0; 24])), Some((3, 2)));
-    let bad_size = Placement::new(window(), LogicalSize::new(f64::NAN, 852.0), 3.0);
-    assert!(matches!(
-        screenshot::check_fills(&bad_size, 1179, 2556),
-        Err(Error::InvalidArgument { .. })
-    ));
+    let mut not_png = header(13, b"IHDR", 3, 2);
+    not_png[1] = b'Q';
+    for refused in [
+        header(12, b"IHDR", 3, 2),
+        header(13, b"IDAT", 3, 2),
+        not_png,
+        header(13, b"IHDR", 3, 2)[..23].to_vec(),
+    ] {
+        assert_eq!(screenshot::png_size(&refused), None, "{refused:?}");
+    }
 }
 
 #[cfg(unix)]

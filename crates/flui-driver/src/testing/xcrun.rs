@@ -61,12 +61,6 @@ impl ScriptedXcrun {
         self.rule(prefix.into(), Answer::Reply(reply), false)
     }
 
-    /// Answer the next command starting with `prefix` with `reply`, before any lasting rule.
-    #[must_use]
-    pub fn reply_once(self, prefix: impl Into<String>, reply: XcrunReply) -> Self {
-        self.rule(prefix.into(), Answer::Reply(reply), true)
-    }
-
     /// Let the next command starting with `prefix` outlive its deadline.
     #[must_use]
     pub fn timeout_once(self, prefix: impl Into<String>) -> Self {
