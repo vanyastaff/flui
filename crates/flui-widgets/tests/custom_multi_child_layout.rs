@@ -40,14 +40,9 @@ impl MultiChildLayoutDelegate for TwoSlotDelegate {
     }
 
     fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
-        old_delegate
-            .as_any()
+        (old_delegate as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| self.size != old.size)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

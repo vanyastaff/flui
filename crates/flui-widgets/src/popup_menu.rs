@@ -232,11 +232,7 @@ impl SingleChildLayoutDelegate for MenuPlacement {
     }
 
     fn should_relayout(&self, old_delegate: &dyn SingleChildLayoutDelegate) -> bool {
-        old_delegate.as_any().downcast_ref::<Self>() != Some(self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        (old_delegate as &dyn Any).downcast_ref::<Self>() != Some(self)
     }
 }
 

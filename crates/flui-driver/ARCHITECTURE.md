@@ -47,6 +47,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Lane::check` over the whole sequence before it arms the guard: a key a lane has no code for, a
   device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
   released.
+- **A lane imports no other lane.** What more than one lane uses is a module of `lane`:
+  `lane::walk` (the bounded accessibility walk), `lane::pacing` (the guard-watched slices of a
+  pause and the echo deadline) and `lane::screen` (a window's geometry from its device origin).
 - **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
@@ -140,7 +143,9 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **Nothing stays pressed without a word.** Where no caller is left to retry (the lane's worker
   ending, a job that panicked), the worker releases once more after a failed release and logs
   what is still held at error level; the error (`Error::ReleaseFailed`, the lane's own failure,
-  apart from `input_held`) names the keys. It never waits, and a panic in that release (the
+  apart from `input_held`) names every key, mouse button and touch contact still down and a pen
+  down or in range, gathered from the lane's parts by `lane::release_outcome` with each part's
+  first failure, so one part's failure never hides another's. It never waits, and a panic in that release (the
   lane's, a log subscriber's) is held behind the job's panic (`FirstPanic`), never in its place.
 - **An accessibility provider's answers stay apart.** A UI Automation read or invoke tells a
   provider that timed out (`timeout`), an element that went away (`gone`) and a pattern the
@@ -174,7 +179,7 @@ app's trees, frames and input, and this crate composes that with what only the O
   that adds up to no whole pixel yet sends nothing.
 - **A hung app costs one timeout.** Reading a UI Automation, AX or AT-SPI element stops at the
   first property read that times out or finds the element gone
-  (`lane::windows::walk::Properties`, which all three readers walk through), and the walk ends
+  (`lane::walk::Properties`, which all three readers walk through), and the walk ends
   with `timeout`.
 - **Waits are on the connection's clock.** An action's actionability wait ends at a deadline on
   the clock the connection counts budgets in, or as soon as the window presents no frame before

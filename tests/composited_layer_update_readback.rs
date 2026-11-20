@@ -588,10 +588,6 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
             false
         }
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn repaint(&self) -> Option<Rc<dyn Listenable>> {
             Some(self.0.clone())
         }
@@ -771,9 +767,6 @@ fn decoration_filters_preserve_tap_order_and_batch_identity() {
         fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
             false
         }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
     }
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let image = Image::from_rgba8(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]);
@@ -847,9 +840,6 @@ fn decoration_filter_precision(filter: fn(f32) -> flui_painting::paint::ColorFil
 
         fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
             false
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
 

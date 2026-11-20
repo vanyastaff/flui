@@ -64,17 +64,13 @@ mod registry_reentry {
     struct Key(u64);
 
     impl ViewKey for Key {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
         fn key_hash(&self) -> u64 {
             inspect("hash");
             7
         }
         fn key_eq(&self, other: &dyn ViewKey) -> bool {
             inspect("equality");
-            other
-                .as_any()
+            (other as &dyn Any)
                 .downcast_ref::<Self>()
                 .is_some_and(|other| self.0 == other.0)
         }

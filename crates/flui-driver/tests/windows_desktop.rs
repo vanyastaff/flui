@@ -10,6 +10,13 @@
 //! does that yet, and those runs are owed (`crates/flui-native/platform-parity.toml`).
 //! `FLUI_REQUIRE_INPUT_DESKTOP=1` makes a run off the input desktop fail instead of reporting
 //! `CANNOT_VERIFY`.
+//!
+//! A test that opens a window, installs the hooks, starts a job or sends input first asks
+//! [`private_desktop::require`], which fails a run that is not on a desktop of its own without
+//! `FLUI_TEST_VISIBLE_DESKTOP=1`: libtest (`cargo test`, cargo-gamma) starts a test on the
+//! person's desktop, where these tests would open windows over their work. The `LiveDesktop` it
+//! returns is a parameter of `session`, `live_guard`, `live_job` and `foreign_mouse_move`, so
+//! those do not compile without the check; cargo-gamma skips this module (`gamma.toml`).
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -28,6 +35,7 @@ use flui_driver::{
     expect,
 };
 
+use crate::private_desktop::{self, LiveDesktop};
 use crate::scenarios;
 
 /// The scenario app `app`, built from this crate's example in its debug profile, which carries
@@ -44,7 +52,7 @@ const WINDOW_WITHIN: Duration = Duration::from_secs(60);
 
 /// A session of the scenario app `app` with the Windows lane attached, its OS-input lock in
 /// `dir`, once the app shows its window.
-fn session(app: &str, dir: &tempfile::TempDir) -> Driver {
+fn session(_live: &LiveDesktop, app: &str, dir: &tempfile::TempDir) -> Driver {
     let mut driver = Driver::launch(scenario_app(app)).expect("the scenario app starts");
     let deadline = Instant::now() + WINDOW_WITHIN;
     while driver.windows().expect("the app answers").is_empty() {
@@ -62,6 +70,17 @@ fn session(app: &str, dir: &tempfile::TempDir) -> Driver {
                 .expect("the lane runs on the shared desktop"),
         )
         .expect("the lane starts")
+}
+
+/// A guard, on a desktop these tests may use: its hooks and raw-input window go on the calling
+/// thread's desktop.
+fn live_guard(_live: &LiveDesktop) -> WindowsGuard {
+    WindowsGuard::new()
+}
+
+/// A kill-on-close job, on a desktop these tests may use: what runs in it may show a window.
+fn live_job(_live: &LiveDesktop) -> KillOnCloseJob {
+    KillOnCloseJob::try_new().expect("a job")
 }
 
 /// Waits for the app's window to show its controls.
@@ -89,8 +108,9 @@ fn input_desktop_for(what: &str) -> bool {
 
 #[test]
 fn ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does() {
+    let live = private_desktop::require();
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let mut driver = session("controls", &dir);
+    let mut driver = session(&live, "controls", &dir);
     shown(&mut driver);
     let mut window = driver.main_window().expect("a window");
     let tree = window.os_tree().expect("UI Automation reads the window");
@@ -138,8 +158,9 @@ fn scenarios_find<'a>(
 
 #[test]
 fn every_role_reads_back_as_its_control_type_through_ui_automation() {
+    let live = private_desktop::require();
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let mut driver = session("roles", &dir);
+    let mut driver = session(&live, "roles", &dir);
     let mut window = driver.main_window().expect("a window");
     expect(window.locate(Locator::named("button fixture")))
         .timeout(Duration::from_secs(30))
@@ -161,8 +182,9 @@ fn every_role_reads_back_as_its_control_type_through_ui_automation() {
 
 #[test]
 fn the_compositor_captures_the_apps_window_alone() {
+    let live = private_desktop::require();
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let mut driver = session("controls", &dir);
+    let mut driver = session(&live, "controls", &dir);
     shown(&mut driver);
     let mut window = driver.main_window().expect("a window");
     let placement = window.placement().expect("a placement");
@@ -191,7 +213,8 @@ fn the_compositor_captures_the_apps_window_alone() {
 
 #[test]
 fn the_guard_watches_and_stops_on_a_desktop_of_its_own() {
-    let mut guard = WindowsGuard::new();
+    let live = private_desktop::require();
+    let mut guard = live_guard(&live);
     guard
         .arm()
         .expect("the hooks and the raw-input window install");
@@ -308,7 +331,8 @@ fn the_lanes_check_allows_chords_whose_release_is_masked() {
 /// lane's: it says so, which ends the run as the person's input does, never as unguarded.
 #[test]
 fn a_guard_whose_watcher_died_ends_the_run() {
-    let mut guard = WindowsGuard::new();
+    let live = private_desktop::require();
+    let mut guard = live_guard(&live);
     guard.arm().expect("the guard watches");
     assert!(
         flui_driver::testing::end_guard_watcher(&guard),
@@ -335,7 +359,8 @@ fn a_guard_whose_watcher_died_ends_the_run() {
 /// nothing until resumed, and then runs.
 #[test]
 fn a_process_joins_its_job_before_it_runs() {
-    let job = KillOnCloseJob::try_new().expect("a job");
+    let live = private_desktop::require();
+    let job = live_job(&live);
     let mut command = Command::new("cmd");
     command
         .args(["/c", "exit", "7"])
@@ -357,7 +382,8 @@ fn a_process_joins_its_job_before_it_runs() {
 
 #[test]
 fn a_job_ends_its_processes_when_it_closes() {
-    let job = KillOnCloseJob::try_new().expect("a job");
+    let live = private_desktop::require();
+    let job = live_job(&live);
     let mut command = Command::new("cmd");
     command
         .args(["/c", "ping", "-n", "60", "127.0.0.1"])
@@ -387,8 +413,9 @@ fn a_job_ends_its_processes_when_it_closes() {
 
 #[test]
 fn a_launched_app_ends_with_its_session() {
+    let live = private_desktop::require();
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let driver = session("controls", &dir);
+    let driver = session(&live, "controls", &dir);
     let pid = driver.app_pid().expect("a process");
     drop(driver);
     let gone = Command::new("tasklist")
@@ -407,8 +434,9 @@ fn a_launched_app_ends_with_its_session() {
 /// lane, as its certification run.
 #[test]
 fn the_conformance_scenario_runs_through_the_os_lane() {
+    let live = private_desktop::require();
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let mut driver = session("controls", &dir);
+    let mut driver = session(&live, "controls", &dir);
     shown(&mut driver);
     let scale = driver
         .main_window()
@@ -451,6 +479,7 @@ fn the_conformance_scenario_runs_through_the_os_lane() {
 /// input desktop, and passing on it.
 #[test]
 fn the_device_check_scenarios_run_through_the_os_lane() {
+    let live = private_desktop::require();
     type ScenarioFn = fn(&mut Driver, &mut Report) -> flui_driver::Result<()>;
     // A row: the scenario, its app, what it takes, and whether it sends OS input at all (the
     // accessibility scenario acts through UI Automation and the agent alone, so it passes off the
@@ -493,7 +522,7 @@ fn the_device_check_scenarios_run_through_the_os_lane() {
     let on_input_desktop = input_desktop_for("the_device_check_scenarios_run_through_the_os_lane");
     for (name, app, scenario, devices, sends_input) in rows {
         let dir = tempfile::tempdir().expect("a temporary directory");
-        let mut driver = session(app, &dir);
+        let mut driver = session(&live, app, &dir);
         let scale = driver
             .main_window()
             .and_then(|mut window| window.placement())
@@ -530,13 +559,14 @@ fn a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input() {
     if !input_desktop_for("a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input") {
         return;
     }
+    let live = private_desktop::require();
     let dir = tempfile::tempdir().expect("a temporary directory");
     let mut driver =
-        session("controls", &dir).with_input_policy(InputPolicy::require(InputPath::Os));
+        session(&live, "controls", &dir).with_input_policy(InputPolicy::require(InputPath::Os));
     shown(&mut driver);
-    let intruder = std::thread::spawn(|| {
+    let intruder = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
-        foreign_mouse_move();
+        foreign_mouse_move(&live);
     });
     let mut window = driver.main_window().expect("a window");
     let held = window
@@ -566,7 +596,7 @@ fn a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input() {
 }
 
 /// One relative mouse move through `SendInput`, with no lane tag.
-fn foreign_mouse_move() {
+fn foreign_mouse_move(_live: &LiveDesktop) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
     };

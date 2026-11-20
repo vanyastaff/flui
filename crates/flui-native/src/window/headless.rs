@@ -1897,10 +1897,6 @@ impl flui_platform::PlatformSystemChrome for HeadlessSystemChrome {
     fn set_overlay_style(&self, style: flui_platform::SystemUiOverlayStyle) {
         self.styles.lock().push(style);
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// Each headless window records its own overlay styles.

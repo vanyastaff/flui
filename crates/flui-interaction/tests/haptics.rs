@@ -932,10 +932,6 @@ impl PlatformHaptics for FailsOnCall {
         let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         assert!(call != self.failing, "backend failed");
     }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 /// The backend panics on the second of three requests a frame plays: the

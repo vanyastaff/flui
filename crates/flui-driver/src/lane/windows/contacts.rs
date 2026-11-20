@@ -18,8 +18,8 @@
 //! pen is its device's only contact, so it is always primary.
 
 use crate::coordinates::DevicePoint;
-use crate::error::Result;
-use crate::lane::windows::safety::Refusal;
+use crate::error::{Error, Result};
+use crate::lane::windows::safety::{LANE, Refusal};
 
 /// The most touch contacts the lane's synthetic touch device carries at once.
 pub const MAX_TOUCH_CONTACTS: u32 = 10;
@@ -98,7 +98,7 @@ pub struct Contacts {
     pen: Option<Pen>,
 }
 
-fn unsent(what: &str, pointer: &str) -> crate::error::Error {
+fn unsent(what: &str, pointer: &str) -> Error {
     Refusal::UnsentInput {
         what: format!("{what} ({pointer})"),
     }
@@ -281,7 +281,8 @@ impl Contacts {
     ///
     /// # Errors
     ///
-    /// The first injection that failed, after every frame was tried.
+    /// After every frame was tried: [`Error::ReleaseFailed`] naming the touch contacts still down
+    /// and the pen still down or in range, and the first injection that failed.
     pub fn release_all(&mut self, mut inject: impl FnMut(&Frame) -> Result<()>) -> Result<()> {
         let mut first = None;
         self.placed.clear();
@@ -328,7 +329,30 @@ impl Contacts {
                 }
             }
         }
-        first.map_or(Ok(()), Err)
+        match first {
+            None => Ok(()),
+            Some(first) => Err(Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held: self.held(),
+                message: first.to_string(),
+            }),
+        }
+    }
+
+    /// The touch contacts down and the pen down or in range, by their pointers, for people.
+    fn held(&self) -> Vec<String> {
+        let touch = self
+            .touch
+            .iter()
+            .map(|contact| format!("the touch contact {}", contact.pointer));
+        let pen = self.pen.iter().map(|pen| {
+            if pen.down {
+                format!("the pen {}", pen.pointer)
+            } else {
+                format!("the pen {} in range", pen.pointer)
+            }
+        });
+        touch.chain(pen).collect::<Vec<String>>()
     }
 }
 

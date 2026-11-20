@@ -38,17 +38,12 @@ pub trait ProvidedValue: 'static {
 }
 
 /// The object-safe face of one published value.
-trait ErasedValue {
-    fn as_any(&self) -> &dyn Any;
+trait ErasedValue: Any {
     /// `old` is the previous value of the same type.
     fn should_notify(&self, old: &dyn Any) -> bool;
 }
 
 impl<T: ProvidedValue> ErasedValue for T {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn should_notify(&self, old: &dyn Any) -> bool {
         // A slot is replaced only by a value of its own type: the caller pairs
         // values by `TypeId`.
@@ -404,7 +399,7 @@ impl ProvidedValues {
         for slot in &staged {
             match self.slots.iter().find(|old| old.type_id == slot.type_id) {
                 Some(old) => {
-                    if slot.value.should_notify(old.value.as_any()) {
+                    if slot.value.should_notify(&*old.value) {
                         changed |= self.known_field_of(slot.type_id);
                     }
                 }
@@ -442,7 +437,7 @@ impl crate::element::InheritedElementAccess for ProvidedValues {
     fn provided(&self, type_id: TypeId) -> Option<crate::element::ProvidedRef<'_>> {
         let slot = self.slots.iter().find(|slot| slot.type_id == type_id)?;
         Some(crate::element::ProvidedRef {
-            value: slot.value.as_any(),
+            value: &*slot.value,
             field: Some(self.known_field_of(type_id)),
         })
     }

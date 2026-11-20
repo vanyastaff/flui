@@ -604,7 +604,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         delegates::{FlowDelegate, FlowPaintingContext},
     };
     use flui_widgets::Flow;
-    use std::{any::Any, cell::Cell};
+    use std::cell::Cell;
 
     #[derive(Debug)]
     struct Delegate {
@@ -638,9 +638,6 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         }
         fn repaint(&self) -> Option<Rc<dyn Listenable>> {
             Some(self.notifier.clone())
-        }
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
     let selected = Rc::new(Cell::new(0));
@@ -729,9 +726,6 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
                 Rect::from_origin_size(Point::ZERO, Size::new(size.width / 2.0, size.height)),
                 config,
             )]
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
     let view = |width, label, rebuild_semantics| {
@@ -836,9 +830,6 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
                 Rect::from_origin_size(Point::ZERO, size),
                 config,
             )]
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
         }
     }
     let view = |text| {

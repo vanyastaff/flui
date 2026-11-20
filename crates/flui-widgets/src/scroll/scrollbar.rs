@@ -880,7 +880,7 @@ impl CustomPainter for ScrollbarPainter {
     }
 
     fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
-        old.as_any()
+        (old as &dyn Any)
             .downcast_ref::<Self>()
             .is_none_or(|old| !Rc::ptr_eq(&old.bar, &self.bar))
     }
@@ -891,10 +891,6 @@ impl CustomPainter for ScrollbarPainter {
 
     fn hit_test(&self, position: Offset) -> Option<bool> {
         Some(self.bar.takes(position).is_some())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

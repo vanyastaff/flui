@@ -177,7 +177,9 @@ fn action(key: &Key, other: &dyn ViewKey) {
             if mode == REPLACE {
                 let mut replacement = owner(&scope());
                 replacement.register_global_key(other, element(93));
-                let declared = other.as_any().downcast_ref::<Key>().expect("custom key");
+                let declared = (other as &dyn Any)
+                    .downcast_ref::<Key>()
+                    .expect("custom key");
                 PEERS.with(|slot| {
                     slot.borrow_mut().push((
                         replacement,
@@ -196,9 +198,6 @@ fn action(key: &Key, other: &dyn ViewKey) {
     }
 }
 impl ViewKey for Key {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn key_hash(&self) -> u64 {
         assert!(
             !self.control.forbidden_callbacks.load(Ordering::SeqCst),
@@ -231,7 +230,9 @@ impl ViewKey for Key {
             && self.control.fail_local_admission.load(Ordering::SeqCst)
             && scope().claim_count() == 2
         {
-            let incoming = other.as_any().downcast_ref::<Key>().expect("incoming key");
+            let incoming = (other as &dyn Any)
+                .downcast_ref::<Key>()
+                .expect("incoming key");
             incoming
                 .control
                 .forbidden_callbacks
@@ -242,8 +243,7 @@ impl ViewKey for Key {
             panic!("first local admission failure");
         }
         action(self, other);
-        other
-            .as_any()
+        (other as &dyn Any)
             .downcast_ref::<Self>()
             .is_some_and(|other| self.id == other.id)
     }
