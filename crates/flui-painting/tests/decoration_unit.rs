@@ -422,6 +422,57 @@ pub(crate) fn a_lerped_decoration_crossfades_its_images() {
         "a NaN share paints no image: {undefined:?}"
     );
 
+    // b publishes the same image as a blend but holds no blend: the two are
+    // mixed, not taken as equal, so a's layers fade to half.
+    let quarter_blue = BoxDecoration::with_image(DecorationImage {
+        opacity: 0.25,
+        ..DecorationImage::new(blue.clone())
+    });
+    let halved = painted(&BoxDecoration::lerp(&crossfaded, &quarter_blue, 0.5));
+    assert!(
+        halved.len() == 2 && halved[0].0 == red && near(halved[0].1, 0.375),
+        "the same published image over a different blend is mixed: {halved:?}"
+    );
+
+    // A blend whose image was replaced is stale: an interior lerp toward the
+    // same new image drops it, and writing the old published image back
+    // paints that image alone.
+    let mut stale = crossfaded.clone();
+    stale.image = Some(DecorationImage::new(green.clone()));
+    let mut through = BoxDecoration::lerp(&stale, &with(&green), 0.3);
+    through.image = crossfaded.image.clone();
+    assert_eq!(
+        painted(&through).len(),
+        1,
+        "a stale blend does not come back through a lerp"
+    );
+
+    // b's image invisible and in no layer of a's: the strongest layer is
+    // published instead.
+    let unseen = BoxDecoration::with_image(DecorationImage {
+        opacity: 0.0,
+        ..DecorationImage::new(green.clone())
+    });
+    let toward_unseen = BoxDecoration::lerp(&crossfaded, &unseen, 0.5);
+    assert!(
+        toward_unseen
+            .image
+            .as_ref()
+            .is_some_and(|image| image.image == red),
+        "an invisible target leaves the strongest layer published"
+    );
+
+    // An infinite opacity is no layer either.
+    let boundless = BoxDecoration::with_image(DecorationImage {
+        opacity: f64::INFINITY,
+        ..DecorationImage::new(red.clone())
+    });
+    let images = painted(&BoxDecoration::lerp(&boundless, &BoxDecoration::new(), 0.5));
+    assert!(
+        images.is_empty(),
+        "an infinite opacity paints no image: {images:?}"
+    );
+
     // When b is itself a blend, the published image is b's own, not its last
     // layer: back_to_red publishes red, though blue is its last layer.
     let onto_blend = BoxDecoration::lerp(&with(&green), &back_to_red, 0.5);
