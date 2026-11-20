@@ -624,6 +624,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The check is the counter scenario passing on a Simulator, then on a device.
 - The check is `flui run --agent` in Safari on macOS, `flui mcp` reading the app and acting on it, and a reload reconnecting.
 
+### The driver's Wayland lane captures no window and is told no window position
+
+> **Environments:** Linux (Wayland) · **Who it hurts:** Tests and agents that check pixels or aim OS input at a FLUI app on Wayland · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `flui-driver`'s Wayland lane answers `capture_window` with `not_supported` naming `os_capture`: the ScreenCast portal hands its capture over as a PipeWire stream, and PipeWire is a C library none of the workspace's Linux builds link (CI's included), as `tools/desktop-mcp` keeps `xcap` off Linux for the same reason. The X11 lane captures through `GetImage`.
+- A Wayland client is told nothing of where its window is, so the lane maps OS input from the origin its owner gives it (`WaylandLane::window_origin`, a kiosk shell's fullscreen window at the origin) and otherwise refuses naming `window_position`.
+- The capture closes with a PipeWire consumer the Linux CI image builds (the `pipewire` crate and `libpipewire-0.3-dev`) and a run against a GNOME session's portal; the position closes with a compositor protocol that tells a client where its toplevel is (none is in wide use) or a portal that maps a window to its stream's region.
+
 ### The CLI speaks to the driver agent through a client of its own
 
 > **Environments:** all · **Who it hurts:** Contributors, who keep two clients of one conversation in step · **Parity:** none (a tool's internals)
@@ -778,7 +786,8 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** Linux · **Who it hurts:** Every Linux application, which compiles both D-Bus stacks · **Parity:** none (build graph)
 
 - `flui-native` and `flui-system` speak D-Bus through zbus 6, while `accesskit_unix` 0.24.1, the newest release, reaches zbus 5 through `atspi`, so the default graph on Linux carries both with their `zvariant`, `zbus_names` and macro crates (`cargo tree -p flui -i zbus@5.19.0`). Moving FLUI's own D-Bus code back to zbus 5 would trade a current API for an unmaintained one (RUSTSEC-2026-0370 to -0372 in `deny.toml`).
-- The entry closes when `accesskit_unix` moves to zbus 6: then the workspace resolves one zbus, the three advisories leave `deny.toml`, and `crates_linux` in `perf/size.toml` falls.
+- `flui-driver`'s Linux lanes read AT-SPI through `atspi`'s proxies on zbus 5, the version `accesskit_unix` serves the app's tree with, and the Wayland lane asks the RemoteDesktop portal over the same zbus 5 rather than build both stacks into the driver.
+- The entry closes when `accesskit_unix` moves to zbus 6: then the workspace resolves one zbus, the three advisories leave `deny.toml`, `flui-driver`'s AT-SPI client and portal move with it, and `crates_linux` in `perf/size.toml` falls.
 
 ### Shaders are parsed from WGSL on every launch
 

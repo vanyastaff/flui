@@ -50,7 +50,40 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
-  and `WindowsLane` are `cfg(windows)`.
+  and `WindowsLane` are `cfg(windows)`. `lane::x11` keeps its keysyms, keymap and held input, safety
+  rules, echo count and image layout pure, `lane::atspi::roles` and `lane::wayland::mapping` are
+  pure, and the parts that reach an X server, AT-SPI or libei are Linux only (libei with the
+  `wayland` feature).
+- **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
+  the window is the app's (by the process X-Resource reports for its client, or its
+  `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and
+  no button or key it did not press is held (`lane::x11::safety::Refusal`). XTEST fakes a core
+  pointer and keyboard only, so touch and pen are refused before any event.
+- **Every X11 key goes through one plan over the server's keymap.** `lane::x11::held::HeldInput`
+  plans a key or text against the keymap and what the lane holds, records a press once the server
+  took it, and owns the StickyKeys count across sends; a character on no key is typed through a
+  spare key mapped for the text, with a pause after mapping and before emptying, since an app
+  reads its keymap again only when told it changed. The release of everything empties every
+  mapped key too.
+- **The X11 guard tells the lane's XTEST input from anyone else's by counting.** It reads XInput
+  2's raw events on its own connection; an event from a device other than the XTEST devices is the
+  person's, and one from them past the count of events the lane faked is another program's, which
+  ends the run as the person's does. Each faked event waits for its echo, so a guard that stopped
+  seeing the lane's input ends the run.
+- **The Wayland lane sends OS input only into a compositor of its own.** Wayland shows a client
+  no input it did not send, so the lane has no guard: on the shared session `lane::admit` refuses
+  its input, and it only reads. Keys and text go through EI's text interface as keysyms and UTF-8,
+  so no keymap is read; a portal that refuses or a compositor that does not answer is a lane the
+  host cannot run. A Wayland client is told nothing of where its window is: the lane maps from the
+  origin its owner gives it, or refuses naming `window_position`.
+- **AT-SPI is read, never switched on.** Both Linux lanes read the app through
+  `lane::atspi::client` on the accessibility bus the session bus names, finding the app by the
+  process owning its bus connection; AT-SPI off in the session is a lane the host cannot run, and
+  the lane leaves the person's setting alone.
+- **A launched Linux app dies with its session.** It leads a process group of its own, which the
+  session kills while the app is unreaped, and dies when the thread that started it ends
+  (`PR_SET_PDEATHSIG`): that thread is the session's own (`launch::linux::Starter`), so a driver
+  moved to another thread keeps its app.
 - **The Windows lane rechecks the desktop before every event.** It sends nothing off the desktop
   that takes the user's input (`UOI_IO`), and that refusal is a lane the host cannot run
   (`cannot_verify`); then the window, the foreground, the window under the point and the physical
@@ -106,9 +139,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
   A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
   that adds up to no whole pixel yet sends nothing.
-- **A hung app costs one timeout.** Reading a UI Automation element stops at the first property
-  read that times out or finds the element gone (`lane::windows::walk::Properties`), and the walk
-  ends with `timeout`.
+- **A hung app costs one timeout.** Reading a UI Automation or AT-SPI element stops at the first
+  property read that times out or finds the element gone (`lane::windows::walk::Properties`, which
+  both readers walk through), and the walk ends with `timeout`.
 - **Waits are on the connection's clock.** An action's actionability wait ends at a deadline on
   the clock the connection counts budgets in, or as soon as the window presents no frame before
   it. The answer is read after the last wait: `compose::actionable` reads the element's facts

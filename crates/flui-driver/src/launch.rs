@@ -4,8 +4,13 @@
 //! A launched process gets a fresh endpoint, a token of [`MIN_TOKEN_LEN`] random bytes written as
 //! hex (twice the shortest an app takes) and [`EXIT_ON_DISCONNECT_ENV`], so it exits when the
 //! driver's connection closes, however the driver went. The driver also owns the child: dropping the session kills a process that is still
-//! running. Building is not the driver's business, except [`Launch::cargo_example`], which builds
-//! one example of this workspace for host-desktop tests.
+//! running, on Windows with everything in its kill-on-close job and on Linux with its process
+//! group, where it also dies with the driver (`linux`). Building is not the driver's business,
+//! except [`Launch::cargo_example`], which builds one example of this workspace for host-desktop
+//! tests.
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -185,7 +190,9 @@ impl Launch {
                 other => other,
             })?
             .resume()?;
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        let (child, starter) = linux::spawn(command).map_err(started)?;
+        #[cfg(not(any(windows, target_os = "linux")))]
         let child = command.spawn().map_err(started)?;
         Ok(Launched {
             endpoint: place.address.clone(),
@@ -194,6 +201,8 @@ impl Launch {
                 child,
                 #[cfg(windows)]
                 _job: job,
+                #[cfg(target_os = "linux")]
+                _starter: starter,
                 _place: place,
             },
         })
@@ -232,6 +241,9 @@ pub(crate) struct AppProcess {
     child: Child,
     #[cfg(windows)]
     _job: crate::lane::windows::job::KillOnCloseJob,
+    /// The thread it was started from, whose end kills it: dropped after the process ended.
+    #[cfg(target_os = "linux")]
+    _starter: linux::Starter,
     /// Where its agent listens: the private directory its socket lives in (Unix), removed with the
     /// session, after the process ended.
     _place: EndpointPlace,
@@ -263,9 +275,13 @@ impl AppProcess {
         }
     }
 
-    /// End the process if it still runs, and reap it.
+    /// End the process if it still runs, with its process group on Linux, and reap it.
     pub(crate) fn end(&mut self) {
         if matches!(self.child.try_wait(), Ok(None)) {
+            // Only while the app is unreaped does its id surely name its group: a reaped id may
+            // be another process's by now.
+            #[cfg(target_os = "linux")]
+            linux::kill_group(&self.child);
             let _ = self.child.kill();
         }
         let _ = self.child.wait();

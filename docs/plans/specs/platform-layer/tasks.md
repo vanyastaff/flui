@@ -5027,8 +5027,8 @@ GPU-память простаивающего или невидимого окн
   `window_store_and_close_recordings_replay_on_the_headless_host`,
   `captured_streams_replay_to_what_the_session_delivered`,
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Эти потоки пишет `flui record --native`
-  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Android и Web. Крейт
-  `flui-driver` и его Windows-lane есть, но записи в драйвере пока нет (её строят задачи спеки
+  (LY98). Остаётся: `--record` `os`-lane драйвера на Windows, macOS, Linux, Android и Web. Крейт
+  `flui-driver`, его Windows-lane и Linux-lane (X11, Wayland) есть, но записи в драйвере пока нет (её строят задачи спеки
   [flui-driver](../flui-driver/tasks.md)), а `os`-lane других ОС ещё не написаны. Захват
   настоящего метода ввода на устройствах — строка качества parity «Recorded native input replays
   deterministically on the headless host».
@@ -5039,9 +5039,13 @@ GPU-память простаивающего или невидимого окн
   UIA равна дереву приложения, каждая роль таблицы ролей читается своим control type, элемент
   вызывается через `InvokePattern` (`windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`,
   `windows_desktop::every_role_reads_back_as_its_control_type_through_ui_automation`, прогон на
-  отдельном рабочем столе nextest, Windows 11, 2026-11-19). Долг: сеанс Narrator на Windows и
-  VoiceOver, Orca, TalkBack на остальных ОС — строка качества parity «Conformance executed with
-  assistive technology on each OS».
+  отдельном рабочем столе nextest, Windows 11, 2026-11-19). X11-lane (FD16) читает приложение
+  через AT-SPI, то дерево, что читает Orca: проекция равна дереву приложения, каждая роль таблицы
+  ролей AT-SPI читается своей ролью, элемент нажимается через действие AT-SPI
+  (`x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does`,
+  `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
+  Долг: сеанс Narrator на Windows, Orca в сеансе GNOME и KDE, VoiceOver и TalkBack — строка
+  качества parity «Conformance executed with assistive technology on each OS».
 
 - [ ] **LY99** (сценарий есть; прогон на Windows через `os`-lane в долгу) — сценарий conformance
   драйвера `scenarios::conformance` (`crates/flui-driver/tests/scenarios.rs`): имя, роль и
@@ -5051,6 +5055,9 @@ GPU-память простаивающего или невидимого окн
   который на отдельном рабочем столе nextest объявляет OS-ввод и выходит `cannot_verify` (ввод
   туда не доходит) и проходит только на рабочем столе, принимающем ввод пользователя; этот прогон
   — долг строки качества parity «Real OS input drives an app through the driver's OS lane».
+  Через X11-lane сценарий проходит в CI на Xvfb
+  (`x11_desktop::the_conformance_scenario_runs_through_the_os_lane`); долг Linux — прогон на X
+  сервере рабочего стола под оконным менеджером.
   Headless-таблица `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs`) —
   то, что такие сценарии повторяют на headless.
 

@@ -15,9 +15,13 @@
 //! tree assistive technology reads, projected onto the wire's nodes, and the OS's own capture of
 //! the window ([`Lane::capture_window`]).
 //!
-//! The lanes: [`windows`].
+//! The lanes: [`windows`], [`x11`] and [`wayland`] (its OS half with the `wayland` feature); both
+//! Linux lanes read the app through [`atspi`].
 
+pub mod atspi;
+pub mod wayland;
 pub mod windows;
+pub mod x11;
 
 use std::fmt;
 use std::sync::Arc;

@@ -1,19 +1,21 @@
-//! The scenarios that replace the Windows device checks, written once on `flui-driver` and run on
-//! the headless target here: synthetic input by default, so CI holds them. On Windows the same
-//! functions run against the same apps in a window, through the OS lane as their certification
-//! variant (`windows_desktop`).
+//! The scenarios that replace the Windows and X11 device checks, written once on `flui-driver` and
+//! run on the headless target here: synthetic input by default, so CI holds them. On Windows and
+//! Linux the same functions run against the same apps in a window, through the OS lane as their
+//! certification variant (`windows_desktop`, `x11_desktop`).
 //!
 //! - [`gallery`]: every control of the gallery reached by its identifier and acted on;
 //! - [`accessibility`]: what the app publishes for its controls, an action through the semantic
 //!   path, and, through an OS lane, the OS tree projected against the app's and an activation
 //!   through the OS accessibility API;
-//! - [`roles`]: each role of the role table publishes the wire role UI Automation folds it to;
+//! - [`roles`]: each role of the role table publishes the wire role UI Automation folds it to,
+//!   and, through an OS lane, reads back as the OS's own role (a control type, an AT-SPI role);
 //! - [`input`]: mouse, touch, pen, wheel and keys reach the app, read back from its journal, and a
 //!   press beside a control leaves it alone;
 //! - [`notes`]: text, chords and an input-method composition in a text field;
 //! - [`conformance`]: a button's name, role and identifier, its activation and the effect read
 //!   back: the conformance row a platform's run reports.
 
+use flui_driver::lane::atspi::roles as atspi;
 use flui_driver::lane::windows::roles::{ROLES, expected_wire_role};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
@@ -33,7 +35,7 @@ use crate::apps::{Controls, Notes, Roles, role_label};
 pub const WINDOW: (u32, u32) = (800, 600);
 
 /// Where the element `identifier` takes a pointer, once it is actionable.
-fn point_of(driver: &mut Driver, identifier: &str) -> Result<LogicalPoint> {
+pub fn point_of(driver: &mut Driver, identifier: &str) -> Result<LogicalPoint> {
     let mut window = driver.main_window()?;
     let facts = window
         .locate(Locator::identifier(identifier))
@@ -232,12 +234,16 @@ pub fn roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
             },
         );
     }
-    if driver.lane_name().is_none() {
+    let Some(lane) = driver.lane_name().map(str::to_owned) else {
         return Ok(());
-    }
+    };
     let os = driver.main_window()?.os_tree()?;
     let mut os_nodes = Vec::new();
     collect_nodes(&os.roots, &mut os_nodes);
+    if lane != "windows" {
+        atspi_roles(report, &os_nodes);
+        return Ok(());
+    }
     for row in ROLES {
         let label = role_label(row.role);
         let _ = report.check(
@@ -258,6 +264,28 @@ pub fn roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Through a Linux lane: each role of the AT-SPI role table reads back as its AT-SPI role, folded
+/// to the wire role the table expects.
+fn atspi_roles(report: &mut Report, os_nodes: &[&Node]) {
+    for row in atspi::ROLES {
+        let label = role_label(row.role);
+        let native = row.atspi.native_name();
+        let expected = atspi::expected_wire_role(row);
+        let _ = report.check(
+            format!("AT-SPI reads {} as {native}", row.role.name()),
+            || match os_nodes.iter().find(|node| {
+                node.name.as_deref() == Some(&label) || node.description.as_deref() == Some(&label)
+            }) {
+                Some(node) if node.native_role == native && node.role == expected => Ok(()),
+                found => Err(Error::Expectation {
+                    expected: format!("{label:?} as a {native} ({})", expected.name()),
+                    actual: format!("{:?}", found.map(|node| (&node.native_role, node.role))),
+                }),
+            },
+        );
+    }
 }
 
 /// Each node by its name, and by its description: a role ARIA forbids a name (a paragraph, a

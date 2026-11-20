@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD11 is built and under review (its runs on the input desktop owed), FD16 is built and under review (its runs in a real Linux session owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -886,11 +886,99 @@ graph LR
 - **Changes:**
   - `lane::x11`: XTEST via `x11rb`, AT-SPI via `atspi`, `GetImage`, `PDEATHSIG`, and an XInput2
     user-activity guard;
-  - `lane::wayland`: libei via `reis` through the RemoteDesktop portal with `ashpd`, ScreenCast
-    capture, and portal refusal as cannot-verify. It has no guard, so it runs OS input only in an
-    isolated compositor. The `live-smoke` checks become scenarios, and
-  `tools/live-smoke` is deleted.
+  - `lane::wayland`: libei via `reis`, from a compositor's EIS socket or through the
+    RemoteDesktop portal (asked over zbus, the `atspi` proxies' zbus 5), and portal refusal as
+    cannot-verify. It has no guard, so it runs OS input only in an isolated compositor. ScreenCast
+    capture needs PipeWire, which no Linux build of the workspace links: it is a `docs/gaps.md`
+    entry. `tools/live-smoke` was deleted with the probes (#1827).
 - **Done when:** the x11 scenarios run in CI under Xvfb, and the Wayland scenarios run on WL.
+- **Status (2026-11-19):** built; the pull request is under review. Open until the runs below that
+  need a real session are made: they are the `OS input through the driver` and `assistive
+  technology conformance` rows of `crates/flui-native/platform-parity.toml`.
+- **Evidence (2026-11-19):**
+  - On every host (`driver_it`, the tables): `x11_lane::a_key_name_maps_to_its_keysym_and_a_character_to_its_own`,
+    `text_is_typed_as_its_characters_and_line_breaks_as_keys`,
+    `the_atspi_role_table_was_read_against_the_locked_adapter`,
+    `every_role_that_publishes_a_node_has_an_atspi_row_in_vocabulary_order`,
+    `an_atspi_role_reads_back_by_its_name`,
+    `an_atspi_role_folds_to_the_wire_role_the_app_publishes_where_atspi_keeps_it_apart`,
+    `each_safety_rule_refuses_with_its_code`,
+    `the_lane_runs_on_a_desktops_server_or_an_xvfb_and_refuses_other_modes`,
+    `the_keymap_says_which_key_and_level_carries_a_keysym`,
+    `keys_and_text_are_planned_against_the_keymap_and_what_the_lane_holds`,
+    `chords_the_desktop_takes_are_refused_and_app_chords_are_not`,
+    `only_the_fifth_shift_tap_in_a_row_is_the_sticky_keys_shortcut`,
+    `a_key_the_server_took_is_held_even_when_its_echo_never_comes`,
+    `a_release_or_emptying_the_server_refused_stays_held`, `a_scroll_turns_the_wheel_in_whole_clicks`,
+    `only_the_xtest_events_the_lane_sent_are_its_own`, `an_image_reads_into_rgba_rows_whatever_its_layout`;
+    `wayland_lane::a_device_point_lands_in_the_compositors_logical_space_or_is_refused`,
+    `a_button_is_its_evdev_code_and_a_scroll_its_logical_distance`,
+    `the_lane_sends_only_into_a_compositor_of_its_own_and_reads_a_shared_session`,
+    `a_portal_that_refuses_or_ends_cannot_be_verified`.
+  - On Linux (CI's `test` job, which installs Xvfb, `dbus` and at-spi2-core and sets
+    `FLUI_REQUIRE_ATSPI`; run in WSL Ubuntu 24.04): each `x11_desktop` test starts its own Xvfb,
+    session bus and AT-SPI bus and launches `examples/scenario_app.rs` on them:
+    `x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does` (the AT-SPI projection
+    equals the app's, `AccessibleId` is the identifier, a click through the AT-SPI action acts, an
+    unknown id is `not_found`), `every_role_reads_back_as_its_at_spi_role`,
+    `the_server_captures_the_apps_window_alone`,
+    `the_guard_takes_input_another_client_fakes_for_the_persons`,
+    `the_lanes_check_refuses_what_xtest_cannot_send_or_the_desktop_takes`,
+    `the_conformance_scenario_runs_through_the_os_lane` (announced, passing),
+    `the_device_check_scenarios_run_through_the_os_lane` (`x11-gallery`, `x11-a11y` and
+    `x11-notes`, "Grüße 日本" typed through spare keys, pass; `x11-input` passes for the mouse, the
+    wheel and keys and is `cannot_verify` naming `os_input_device` for touch and pen),
+    `a_foreign_motion_mid_run_ends_it_and_releases_its_button`,
+    `a_launched_app_lives_as_long_as_its_session_whatever_thread_launched_it`;
+    `wayland_lane::eis::the_lanes_events_reach_the_compositor_as_ei_events` (an EIS server the test
+    plays with `reis`'s server half hears an absolute motion, the primary button by its evdev code,
+    a scroll, keys as keysyms and UTF-8 text, then the releases),
+    `the_shared_session_takes_no_input_from_the_lane`,
+    `a_compositor_that_does_not_answer_cannot_be_verified`.
+  - Taken out one at a time, each fails a test above: the count of the lane's own XTEST events
+    (the table, the guard and the foreign-motion tests), the session's starter thread (the app
+    dies with the thread that launched it), an EI frame after each event (the EIS server hears
+    nothing), and X-Resource's process of a window's client (in WSL, whose apps write no
+    `_NET_WM_PID` outside the first PID namespace, every desktop test finds no window).
+  - Owed, needing a real session: the X11 lane on a desktop's own X server under a window manager
+    (GNOME, KDE); an Orca session over the scenario app; the Wayland lane through the RemoteDesktop
+    portal of a GNOME and a KDE session, and into a headless compositor that serves EIS (mutter),
+    since neither Weston 13 nor sway (both in WSL and CI) serves EIS, which is why the Wayland
+    scenarios have not run on WL.
+- **As built:**
+  - The lanes are `lane::x11` (`keys`, `held`, `safety`, `activity`, `image` pure; `server`,
+    `guard` and `X11Lane` Linux only), `lane::wayland` (`mapping` pure; `eis`, `portal` and
+    `WaylandLane` Linux with the `wayland` feature) and `lane::atspi` (`roles` pure, the client
+    Linux only), which both read through. The AT-SPI client walks through
+    `lane::windows::walk`, the Windows lane's bounded walk, and the lanes map with
+    `lane::windows::screen` and wait in `lane::windows::activity`'s slices: platform-neutral pieces
+    still under the Windows lane's module.
+  - A window is the app's by the process X-Resource reports for its client, else its
+    `_NET_WM_PID`: an app outside the first PID namespace (WSL, a container) writes no
+    `_NET_WM_PID`.
+  - The guard tells the lane's XTEST input from another program's by counting: each faked request
+    makes one raw event, and one past the count is foreign, as a second XTEST client must be.
+  - A character the keymap carries on no key is typed through a spare key mapped for the text
+    (each distinct character its own key), with a pause after mapping and before emptying, since
+    an app reads its keymap again only when told it changed; the release of everything empties
+    them.
+  - XTEST fakes a core pointer and keyboard only: the X11 lane refuses touch and pen before any
+    event, so `x11-input`'s touch and pen rows are `cannot_verify` on every X server.
+  - The Wayland lane sends keys and text through EI's text interface (keysyms and UTF-8, libei
+    1.6), so it reads no keymap; it maps from an origin its owner gives it
+    (`WaylandLane::window_origin`), since a Wayland client is told nothing of where its window is,
+    and captures nothing (`docs/gaps.md`, "The driver's Wayland lane captures no window and is told
+    no window position"). Its positions are order-only until measured on a compositor.
+  - AT-SPI off in a session is a lane the host cannot run; the lane never turns it on. The X11
+    lane reads AT-SPI through the session bus it is given (`X11Lane::with_session_bus`), which the
+    tests point at their private bus.
+  - A launched app on Linux leads its own process group and dies when its starter thread ends
+    (`PR_SET_PDEATHSIG`); that thread is the session's own, so a driver moved to another thread
+    keeps its app. The group is killed only while the app is unreaped, whose id may otherwise be
+    another process's.
+  - `live-smoke`'s checks are not ported: its launch and its drag and wheel scrolls are the input
+    scenario's press and wheel rows; its occlusion gating and its clean and programmatic closes need
+    driver operations (occluding, closing a window) that do not exist yet.
 
 ### FD17. CLI and MCP
 
