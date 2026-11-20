@@ -6,7 +6,13 @@ use std::sync::Arc;
 mod blit;
 mod transform_blit;
 /// Cached presentation resources for intermediate-to-surface copies.
-#[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports it only under `testing`, for the benches"
+    )
+)]
 pub struct OffscreenRenderer {
     domain: Arc<DeviceDomain>,
     device: Arc<wgpu::Device>,
