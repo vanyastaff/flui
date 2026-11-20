@@ -1994,6 +1994,7 @@ dependencies = [
  "flui-rendering",
  "flui-testing",
  "glam",
+ "hashbrown 0.17.1",
  "image",
  "lyon",
  "parking_lot",
