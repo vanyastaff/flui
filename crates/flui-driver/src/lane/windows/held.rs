@@ -228,7 +228,8 @@ impl HeldKeys {
     /// # Errors
     ///
     /// After every key was tried: [`Error::ReleaseFailed`] naming the keys still held and the
-    /// first stroke that failed or was refused, or that stroke's error when nothing stayed held.
+    /// first stroke that failed or was refused, or that stroke's error when nothing stayed held
+    /// (the mask failed and every release after it still went out).
     pub fn release_all(&mut self, mut send: impl FnMut(Keystroke) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
         let modifier_held = self.held.iter().any(|&code| {
@@ -330,10 +331,11 @@ impl HeldButtons {
     ///
     /// # Errors
     ///
-    /// The first release that failed, after every button was tried.
+    /// After every button was tried: [`Error::ReleaseFailed`] naming the buttons still held and
+    /// the first release that failed.
     pub fn release_all(&mut self, mut release: impl FnMut(u8) -> Result<()>) -> Result<()> {
         let mut first: Option<Error> = None;
-        for button in 0..5_u8 {
+        for button in Self::BUTTONS {
             if self.0 & (1 << button) == 0 {
                 continue;
             }
@@ -344,6 +346,30 @@ impl HeldButtons {
                 }
             }
         }
-        first.map_or(Ok(()), Err)
+        match first {
+            None => Ok(()),
+            Some(first) => Err(Error::ReleaseFailed {
+                lane: LANE.to_owned(),
+                held: Self::BUTTONS
+                    .filter(|button| self.0 & (1 << button) != 0)
+                    .map(|button| Self::name_of(button).to_owned())
+                    .collect::<Vec<String>>(),
+                message: first.to_string(),
+            }),
+        }
+    }
+
+    /// The physical buttons, by number.
+    const BUTTONS: std::ops::Range<u8> = 0..5;
+
+    /// Physical button `button` by name, for people.
+    fn name_of(button: u8) -> &'static str {
+        match button {
+            0 => "the left mouse button",
+            1 => "the right mouse button",
+            2 => "the middle mouse button",
+            3 => "the back mouse button",
+            _ => "the forward mouse button",
+        }
     }
 }

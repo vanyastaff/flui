@@ -524,7 +524,7 @@ mod lane {
             let buttons = self
                 .buttons
                 .release_all(|button| server.fake(Fake::ButtonRelease(button)));
-            crate::lane::release_outcome(keys, buttons)
+            crate::lane::release_outcome([keys, buttons])
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
