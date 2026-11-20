@@ -190,8 +190,12 @@ impl Launch {
                 other => other,
             })?
             .resume()?;
+        // On Unix the app leads a process group of its own, which the session ends whole
+        // (`AppProcess::end`); on Linux it also dies with the session's starter thread.
         #[cfg(target_os = "linux")]
         let (child, starter) = linux::spawn(command).map_err(started)?;
+        #[cfg(all(unix, not(target_os = "linux")))]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         #[cfg(not(any(windows, target_os = "linux")))]
         let child = command.spawn().map_err(started)?;
         Ok(Launched {
@@ -236,7 +240,8 @@ pub(crate) struct Launched {
 
 /// A process the session owns: killed when the session ends while it still runs. On Windows it
 /// runs in a kill-on-close job, so whatever it started ends with it, and so does the app when the
-/// driver's process ends without dropping the session.
+/// driver's process ends without dropping the session. On Unix it leads a process group, which
+/// ends with it.
 pub(crate) struct AppProcess {
     child: Child,
     #[cfg(windows)]
@@ -290,13 +295,21 @@ impl AppProcess {
         }
     }
 
-    /// End the process if it still runs, with everything left in its process group on Linux
-    /// (whether or not the app itself is still running), and reap it.
+    /// End the process if it still runs, and reap it, with the process group it leads on Unix.
+    /// On Linux the group ends whether or not the app itself still runs, while `waitid` answers
+    /// for the unreaped app (`linux::kill_group`). On other Unix hosts it ends while the leader
+    /// runs unreaped, when the group's id is still its own, so the signal reaches nothing else; a
+    /// leader that already exited leaves its group to [`EXIT_ON_DISCONNECT_ENV`].
     pub(crate) fn end(&mut self) {
         // Before the app is reaped, while its id still names its group.
         #[cfg(target_os = "linux")]
         linux::kill_group(&self.child);
         if self.state() == ProcessState::Running {
+            #[cfg(all(unix, not(target_os = "linux")))]
+            {
+                let group = rustix::process::Pid::from_child(&self.child);
+                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            }
             let _ = self.child.kill();
         }
         let _ = self.child.wait();

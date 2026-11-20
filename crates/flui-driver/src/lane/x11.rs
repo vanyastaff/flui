@@ -512,17 +512,19 @@ mod lane {
                 Some(keymap) => Ok(keymap.clone()),
                 None => server.keymap(),
             };
-            let keys = keymap.and_then(|keymap| {
-                let per_keycode = keymap.per_keycode();
-                self.keys
-                    .release_all(&keymap, |stroke| send_stroke(server, stroke, per_keycode))
-            });
+            // A keymap that cannot be read releases no key: what the lane holds is named.
+            let keys = match keymap {
+                Ok(keymap) => {
+                    let per_keycode = keymap.per_keycode();
+                    self.keys
+                        .release_all(&keymap, |stroke| send_stroke(server, stroke, per_keycode))
+                }
+                Err(error) => self.keys.unreleased(error),
+            };
             let buttons = self
                 .buttons
                 .release_all(|button| server.fake(Fake::ButtonRelease(button)));
-            let mut still_held = self.keys.held_names();
-            still_held.extend(self.buttons.held_names());
-            held::release_answer(keys, buttons, still_held)
+            crate::lane::release_outcome(keys, buttons)
         }
 
         fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {

@@ -4,9 +4,9 @@
 
 use flui_driver::coordinates::DevicePoint;
 use flui_driver::lane::atspi::roles::{self as atspi, AtspiRole};
+use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows::roles as uia;
 use flui_driver::lane::x11::activity::{EchoCount, Observed, RawKind};
-use flui_driver::lane::x11::held;
 use flui_driver::lane::x11::held::{
     HeldButtons, HeldInput, KeyInput, Keymap, Keystroke, MAX_WHEEL_CLICKS, WHEEL_STEP,
     scroll_within, wheel_clicks,
@@ -800,30 +800,47 @@ fn the_held_records_follow_what_the_server_took() {
     );
 }
 
-/// The release of everything names everything still held, whichever half failed: a key release
-/// that failed plainly and a button release that failed both leave their keys and buttons named.
+/// The release of everything names everything still held, whichever half failed: keys whose
+/// release never started (the keymap unreadable) are named beside the buttons a refused release
+/// left down, with the keys' failure as the message; a half that leaves nothing held answers its
+/// own failure.
 #[test]
 fn a_release_failure_names_every_key_and_button_still_held() {
-    let plain = refuse();
-    let buttons = Err(Error::ReleaseFailed {
-        lane: "x11".to_owned(),
-        held: vec!["mouse button 3".to_owned()],
-        message: "refused".to_owned(),
-    });
-    let held = vec!["Control".to_owned(), "mouse button 3".to_owned()];
-    let answer = held::release_answer(plain, buttons, held.clone());
+    let keymap = keymap();
+    let mut input = HeldInput::new();
+    send(&mut input, &[down("Control")]);
+    let no_keymap = || Error::Lane {
+        lane: "x11".into(),
+        unavailable: false,
+        message: "no keymap".into(),
+    };
+    let keys = input.unreleased(no_keymap());
+    let mut buttons = HeldButtons::default();
+    buttons
+        .deliver(3, true, || Ok(()), || Ok(()))
+        .expect("pressed");
+    let buttons = buttons.release_all(|_| refuse());
+    let answer = release_outcome(keys, buttons);
     assert!(
-        matches!(&answer, Err(Error::ReleaseFailed { held: named, .. }) if named == &held),
+        matches!(&answer, Err(Error::ReleaseFailed { held, message, .. })
+            if held == &["Control", "mouse button 3"] && message.contains("no keymap")),
         "{answer:?}"
     );
-    assert!(held::release_answer(Ok(()), Ok(()), Vec::new()).is_ok());
     assert!(
-        matches!(
-            held::release_answer(refuse(), Ok(()), Vec::new()),
-            Err(Error::Lane { .. })
-        ),
-        "nothing stays held: the failure itself"
+        input.release_all(&keymap, |_| Ok(())).is_ok(),
+        "the keys still release"
     );
+
+    let empty = HeldInput::new().unreleased(no_keymap());
+    assert!(
+        matches!(&empty, Err(Error::Lane { message, .. }) if message == "no keymap"),
+        "nothing held: the failure itself, {empty:?}"
+    );
+    assert!(matches!(
+        release_outcome(refuse(), Ok(())),
+        Err(Error::Lane { .. })
+    ));
+    assert!(release_outcome(Ok(()), Ok(())).is_ok());
 }
 
 /// A wheel click is a press and a release held as a button's are: a click whose echo never came

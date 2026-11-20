@@ -60,7 +60,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Every claim of support · **Parity:** [Summary](platform-parity.md#summary)
 
 - 🟡 dominates every column of the parity summary.
-- Device checks exist for a handful of rows, and the macOS and iOS drivers are Python and Swift.
+- Device checks exist for a handful of rows.
 - Display runs still owed:
   - the macOS and iOS display sources (type-checked, never run)
   - the macOS window by hand: the AppKit window conformance kit passes on an M1, macOS 27.0,
@@ -641,12 +641,12 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **Autorepeat.** XTEST presses go through the server's own key handling, so a key the lane holds past the autorepeat delay repeats, as a held key does on the person's keyboard, where Windows' `SendInput` does not repeat. Whether the repeats reach the guard as raw events (which would count past the lane's own and end the run) is not measured; the lane neither turns autorepeat off (a setting of the whole server) nor holds a key that long in any scenario.
 - Each closes with its behaviour modelled and a row of `x11_lane` or `x11_desktop` holding it: text typed in pieces as spare keys free up, the Shift hold refused or broken, autorepeat turned off for the lane's keys and restored.
 
-### The driver's Linux lanes reach platform-neutral pieces through the Windows lane's module
+### The driver's macOS and Linux lanes reach platform-neutral pieces through the Windows lane's module
 
-> **Environments:** Linux · **Who it hurts:** Contributors, who find the Linux lanes importing `lane::windows` · **Parity:** none (module graph)
+> **Environments:** macOS, Linux · **Who it hurts:** Contributors, who find the macOS and Linux lanes importing `lane::windows` · **Parity:** none (module graph)
 
-- `flui-driver`'s AT-SPI client walks through `lane::windows::walk`, and the X11 and Wayland lanes map with `lane::windows::screen::window_geometry` and wait in `lane::windows::activity`'s slices: platform-neutral code still under the Windows lane's module, and each Linux lane computes its window's device size (`window_target`) for itself.
-- The entry closes when those pieces move to lane-level modules and no lane imports another's (`rg 'lane::windows::(walk|screen|activity)' crates/flui-driver/src/lane/{x11,wayland,atspi}` finds nothing).
+- `flui-driver`'s AT-SPI client and the macOS lane's AX reader walk through `lane::windows::walk`, the X11 and Wayland lanes map with `lane::windows::screen::window_geometry`, and the macOS, X11 and Wayland lanes wait in `lane::windows::activity`'s slices: platform-neutral code still under the Windows lane's module, and each Linux lane computes its window's device size (`window_target`) for itself.
+- The entry closes when those pieces move to lane-level modules and no lane imports another's (`rg 'lane::windows::(walk|screen|activity)' crates/flui-driver/src/lane/{macos,x11,wayland,atspi}` and `rg 'lane::windows::' crates/flui-driver/src/lane/macos.rs` find nothing).
 
 ### The CLI speaks to the driver agent through a client of its own
 

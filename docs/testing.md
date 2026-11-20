@@ -1281,9 +1281,9 @@ cargo +nightly miri test -p flui-rendering --lib storage::    # arena; ci.yml's 
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # miri job; NARROW — every
                                                               # unit test under that module, including PipelineCell
                                                               # checkout, an owner-local run_frame traversal, a
-                                                              # reentrant-layout walk, and two real-NodePtr walks
-                                                              # driving layout_dirty_root through every reborrow phase
-                                                              # of layout_subtree_borrowed_impl. Deeper sliver walks
+                                                              # reentrant-layout walk, and owner tests driving
+                                                              # layout_dirty_root through the node entries of
+                                                              # layout_subtree_borrowed_impl. Deeper sliver walks
                                                               # and intrinsics queries are not interpreted.
 ```
 

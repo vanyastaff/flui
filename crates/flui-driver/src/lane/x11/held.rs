@@ -475,15 +475,25 @@ impl HeldInput {
                 first.get_or_insert(error);
             }
         }
-        match first {
-            None => Ok(()),
-            Some(first) if self.keys.is_empty() && self.mapped.is_empty() => Err(first),
-            Some(first) => Err(crate::Error::ReleaseFailed {
-                lane: LANE.to_owned(),
-                held: self.held_names(),
-                message: first.to_string(),
-            }),
+        first.map_or(Ok(()), |first| self.unreleased(first))
+    }
+
+    /// The answer of a release that failed with `first`: `first` itself when nothing stays held
+    /// or mapped, else [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming what does, as
+    /// [`crate::lane::release_outcome`] expects of a lane's keys.
+    ///
+    /// # Errors
+    ///
+    /// Always: `first`, or the release failure naming what stays.
+    pub fn unreleased(&self, first: crate::Error) -> crate::Result<()> {
+        if self.keys.is_empty() && self.mapped.is_empty() {
+            return Err(first);
         }
+        Err(crate::Error::ReleaseFailed {
+            lane: LANE.to_owned(),
+            held: self.held_names(),
+            message: first.to_string(),
+        })
     }
 
     /// What the lane holds and has mapped, by name, as a release failure names it.
@@ -621,36 +631,6 @@ impl HeldButtons {
             .map(|button| format!("mouse button {button}"))
             .collect::<Vec<String>>()
     }
-}
-
-/// The answer of the release of everything from its keys' half and its buttons' half, `held`
-/// naming everything still held after both: the first failure, as a release failure naming all of
-/// `held` when anything stays held, whichever half failed and however.
-///
-/// # Errors
-///
-/// [`Error::ReleaseFailed`](crate::Error::ReleaseFailed) naming `held` when a half failed and
-/// anything stays held; that half's error when nothing does.
-pub fn release_answer(
-    keys: crate::Result<()>,
-    buttons: crate::Result<()>,
-    held: Vec<String>,
-) -> crate::Result<()> {
-    let Some(first) = keys.err().or_else(|| buttons.err()) else {
-        return Ok(());
-    };
-    if held.is_empty() {
-        return Err(first);
-    }
-    let message = match first {
-        crate::Error::ReleaseFailed { message, .. } => message,
-        other => other.to_string(),
-    };
-    Err(crate::Error::ReleaseFailed {
-        lane: LANE.to_owned(),
-        held,
-        message,
-    })
 }
 
 /// How far one click of an X wheel button scrolls, in device pixels: the clicks a scroll of `n`
