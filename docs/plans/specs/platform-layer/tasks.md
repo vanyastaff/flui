@@ -533,7 +533,7 @@ GPU-память простаивающего или невидимого окн
   `unsafe` в модуле `cfg(any(target_os = "macos", test))` с `forbid(unsafe_code)` не компилируется
   в тестовой сборке; `const _: () = assert!(..)` в FFI-модуле `cfg(target_os = "macos")` с неверным
   размером падает (E0080) под `cargo check --target aarch64-apple-darwin` — так, как его проверяет
-  job CI `cross-typecheck` (локальный `xtask cross-typecheck` требует `cargo-zigbuild`), — и не
+  job CI `cross-typecheck` (локально вне macOS — через `cargo-zigbuild clippy`), — и не
   собирается на Windows. AGENTS.md
   «Definition of Done» и `docs/extending.md` (строка «Платформа») дополнены. Проверки на Windows:
   clippy `-p flui-native -p flui-app --all-targets -D warnings`, с `winit-backend,a11y`; nextest

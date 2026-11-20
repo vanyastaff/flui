@@ -11907,7 +11907,7 @@ fn harness_sized_overflow_box_child_lays_out_under_incoming_constraints() {
 // ============================================================================
 
 fn harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_size() {
-    let mut run = RenderTester::mount(
+    let run = RenderTester::mount(
         box_node(RenderConstraintsTransformBox::new(
             Alignment::CENTER,
             None,
@@ -11920,10 +11920,8 @@ fn harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_siz
 
     let root = run.root();
     let node = run
-        .owner_mut()
-        .render_tree_mut()
-        .get_mut(root)
-        .and_then(|node| node.downcast_render_object_mut::<RenderConstraintsTransformBox>())
+        .owner()
+        .render_object::<RenderConstraintsTransformBox>(root)
         .expect("root should be a RenderConstraintsTransformBox");
     assert!(
         node.has_visual_overflow(),

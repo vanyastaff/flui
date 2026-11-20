@@ -1268,8 +1268,8 @@ cargo check -p flui-hot-reload --locked --target wasm32-unknown-unknown --all-fe
 cargo clippy -p flui --test wasm_consumer --locked --target wasm32-unknown-unknown -- -D warnings   # same job: an application on wasm32 (ADR-0086)
 cargo build -p flui-web-demo -p flui-painting-demo --locked --target wasm32-unknown-unknown       # same job: links the demos; the job then runs wasm-bindgen over each and lists its import modules with node
 cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --lib --test wasm32         # same job: one crate's line of the step that EXECUTES wasm (each target on its own, flui-native's `web_browser` among them)
-cargo check -p flui-native --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
-cargo check -p flui-native --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
+cargo clippy --workspace --all-targets --locked --target aarch64-linux-android -- -D warnings  # cross-typecheck job, for each shipped native triple (type-check only: no link, no tests)
+cargo clippy --workspace --all-targets --all-features --locked --target aarch64-linux-android -- -D warnings  # same job: every feature; off Windows the Windows leg is `cargo xwin clippy`
 cargo deny --workspace --locked check bans licenses sources   # deps job: cargo-deny bans / licenses / sources
 cargo deny --workspace --locked check advisories              # same job: RustSec advisories, blocking on main, reported on a pull request; advisories.yml runs it daily on main
 cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native -E 'not (group(nested-cargo) | group(trybuild))'   # test job; ci.yml has its flui-native, Wayland, GPU and link steps
@@ -1313,9 +1313,10 @@ Each CI run takes one of three lanes. The `plan` job picks it with a shell step
   `flui-native`'s suite runs only on Linux and no other backend is compiled;
   main type-checks the Windows, macOS, iOS and Android backends and the
   nightly platform runs reach them after the merge, so a change to one of
-  them needs `cargo xtask cross-typecheck --target <triple>` by hand before
-  it, and a Windows or macOS backend change `cargo nextest run -p flui-native`
-  on that host.
+  them needs the `cross-typecheck` job's two `cargo clippy` lines for its
+  triple by hand before it, or a run of the job on the branch
+  (`gh workflow run CI --ref <branch>`), and a Windows or macOS backend change
+  `cargo nextest run -p flui-native` on that host.
 - **Full lane**: main, the merge queue and manual runs add the remaining
   Linux checks. Labels do not change the lane. `ci.yml` has no scheduled
   run: nothing it checks changes without a commit, except the RustSec
@@ -1367,7 +1368,7 @@ heavier ones need installed. One row per job:
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |
 | `feature-matrix` | `cargo hack clippy --workspace --partition k/5 --locked --each-feature --keep-going -- -D warnings`, then with `--tests --benches --examples`; the `combinations` leg runs `cargo clippy -p flui --locked --all-targets <combination> -- -D warnings` for each combination ci.yml lists | locally, `-p <crate>` in place of `--workspace --partition k/5` lints the crates a change touched |
 | `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, its `cargo build` of the two web demos, `wasm-bindgen` over each and node's list of their import modules, then `cargo test --target wasm32-unknown-unknown` for each crate with a wasm32 `wasm-bindgen-test` dev-dependency | the tests need the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it), and a crate whose tests are `run_in_browser` a ChromeDriver (`CHROMEDRIVER=<path>`) |
-| `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>`, then the same command with `--all-features` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
+| `cross-typecheck` | `cargo clippy --workspace --all-targets --locked --target <triple> -- -D warnings`, then the same command with `--all-features`, for each of `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-linux-android` and `aarch64-apple-ios` | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require; a shell step over the needed jobs' results |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main, and closes it after the next green one (`.github/actions/tracking-issue`, which `advisories.yml` shares) |
 
@@ -1426,39 +1427,36 @@ rust-cache keeps their dependency artifacts. `weekly.yml` saves no cache: an
 entry unused for seven days is dropped before the next weekly run would
 restore it.
 
-`cross-typecheck` discovers native cfg predicates in the module trees of every
-workspace Cargo target and in target-specific dependency declarations. It
-selects packages directly with `--all-targets`, including their tests,
-examples and benches; indirect dependency compilation does not cover those
-targets. Required target features and a declared `testing` feature are
-enabled together. `--all-features` additionally compiles every feature of the
-selected packages. CI runs both configurations: all-features alone can hide
-disabled-feature branches. This is not an exhaustive optional-feature matrix or a
-macro expansion: generated `include!` output needs an explicit target-specific
-manifest dependency to participate in discovery.
+`cross-typecheck` lints every workspace package with `--all-targets`, its
+tests, examples and benches included, for each shipped native triple: once
+with default features, as the `clippy` job does on Linux, then with
+`--all-features`, which reaches the `testing` code and the targets behind
+`required-features` (plain `--all-targets` skips those silently). Both runs
+are needed: all-features alone hides a disabled-feature branch. This is not an
+exhaustive optional-feature matrix: a configuration with some optional
+features on and others off is the `feature-matrix` job's, on Linux only.
 
 On a Windows host, Windows checks use the installed MSVC tools. Other hosts
-use `cargo-xwin` (CI pins 0.23.1) with clang/LLVM and its MSVC SDK/CRT
-provisioning. On a macOS host, Apple checks use Xcode; macOS checks elsewhere
-use `cargo-zigbuild clippy` (validated locally with 0.23.4) and Zig (0.17.0)
-for the required-target configuration. iOS needs a
+use `cargo xwin clippy` (CI pins cargo-xwin 0.23.1) with clang/LLVM and its
+MSVC SDK/CRT provisioning. On a macOS host, Apple checks use Xcode. Off macOS,
+`cargo-zigbuild clippy` (the binary's own subcommand; `doctor full` names the
+cargo-zigbuild and Zig versions) supplies Darwin libc headers for a
+default-feature macOS run, which CI does not run that way. iOS needs a
 genuine Apple SDK: generic Darwin libc headers are insufficient for native
 logging dependencies. Android needs the NDK's target compiler and archiver,
 for example `CC_aarch64_linux_android` set to its clang wrapper for the Android floor in `platform-support.toml` and
-`AR_aarch64_linux_android` to `llvm-ar`. CI uses its bundled NDK. Explicit
-target, `TARGET_CC`/`TARGET_AR`, and global compiler settings are preserved.
+`AR_aarch64_linux_android` to `llvm-ar`. CI uses its bundled NDK.
 `doctor full` checks that the selected Android compiler can parse the NDK's
 API-level header for that floor or later and that the archiver runs. A
 host compiler's successful version output alone does not establish NDK support.
 
 The macOS `flui-log/apple-unified-logging` configuration also needs genuine
 Apple SDK logging headers. All-features Apple checks therefore use Xcode SDK
-hosts in CI; generic Zig libc headers do not validate this configuration.
-Local all-features macOS checks are explicitly skipped on non-macOS hosts.
+hosts in CI; generic Zig libc headers do not validate this configuration, so
+an all-features macOS run off macOS is no evidence for it.
 
-`cargo xtask cross-typecheck` runs the required-target configuration for native
-targets. Optional native coverage requires the explicit `--all-features`
-command or CI; a local default check is not evidence for those paths.
+A local run with default features is no evidence for the optional native
+paths: those need the `--all-features` run, or CI.
 
 ## See Also
 

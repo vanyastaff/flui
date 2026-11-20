@@ -158,26 +158,29 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
                    failure| {
         let source = Source { failure };
         let root = if sliver {
-            pipeline
-                .render_tree_mut()
-                .insert_box(Box::new(SliverHost(std::rc::Rc::clone(&captured))))
+            flui_rendering::testing::raw_tree::insert_box(
+                pipeline,
+                Box::new(SliverHost(std::rc::Rc::clone(&captured))),
+            )
         } else {
-            pipeline
-                .render_tree_mut()
-                .insert_box(Box::new(BoxParent(source)))
+            flui_rendering::testing::raw_tree::insert_box(pipeline, Box::new(BoxParent(source)))
         };
         let parent = if sliver {
-            pipeline
-                .render_tree_mut()
-                .insert_sliver_child(root, Box::new(SliverParent(Source { failure })))
-                .expect("sliver parent")
+            flui_rendering::testing::raw_tree::insert_sliver_child(
+                pipeline,
+                root,
+                Box::new(SliverParent(Source { failure })),
+            )
+            .expect("sliver parent")
         } else {
             root
         };
-        pipeline
-            .render_tree_mut()
-            .insert_box_child(parent, Box::new(Source { failure: 0 }))
-            .expect("attached leaf establishes nonleaf layout");
+        flui_rendering::testing::raw_tree::insert_box_child(
+            pipeline,
+            parent,
+            Box::new(Source { failure: 0 }),
+        )
+        .expect("attached leaf establishes nonleaf layout");
         root
     };
     let root = install(&mut pipeline, failure);
@@ -209,7 +212,7 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
             "original nonleaf layout failure remains authoritative: {result:?}"
         );
     }
-    pipeline.render_tree_mut().remove_recursive(root);
+    flui_rendering::testing::raw_tree::remove_subtree(&mut pipeline, root);
     let replacement = install(&mut pipeline, 0);
     assert_eq!(
         pipeline

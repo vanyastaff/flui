@@ -1954,6 +1954,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tracing",
  "web-time",
  "windows 0.62.2",
 ]
@@ -7645,7 +7646,6 @@ dependencies = [
  "clap",
  "keyboard-types",
  "kurbo",
- "proc-macro2",
  "pulldown-cmark",
  "regex",
  "roxmltree",

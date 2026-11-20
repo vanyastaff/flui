@@ -228,12 +228,13 @@ fn the_lanes_check_refuses_typed_text_that_completes_a_shell_hotkey() {
     assert!(lane.check(&plain).is_ok());
 }
 
-/// Windows documents no reset of the Sticky Keys count by a mouse button, so the lane's check
-/// counts a Shift-click as a Shift tap and refuses the fifth.
+/// The lane's check lets the app have the chords the shell would take only on a release, which
+/// the lane masks: five Shift-clicks, Control+Shift+click, a sequence that ends with Control+Shift
+/// held; the presses the shell takes are still refused.
 #[test]
-fn the_lanes_check_counts_a_shift_click_as_a_shift_tap() {
+fn the_lanes_check_allows_chords_whose_release_is_masked() {
     let mut lane = WindowsLane::for_process(std::process::id());
-    let shift_clicks = |count: usize| -> Vec<OsEvent> {
+    let click = || {
         let button = |pressed: bool| {
             let (pointer, device, button) = (
                 "mouse".to_owned(),
@@ -254,27 +255,53 @@ fn the_lanes_check_counts_a_shift_click_as_a_shift_tap() {
                 }
             }
         };
-        (0..count)
-            .flat_map(|_| {
-                [
-                    OsEvent::KeyDown("Shift".into()),
-                    button(true),
-                    button(false),
-                    OsEvent::KeyUp("Shift".into()),
-                ]
-            })
-            .collect()
+        [button(true), button(false)]
     };
-    assert!(lane.check(&shift_clicks(4)).is_ok());
-    let refused = lane.check(&shift_clicks(5));
-    assert!(
-        matches!(
-            &refused,
-            Err(Error::NotSupported { capability: Some(capability), .. })
-                if capability == "os_shell_hotkey"
-        ),
-        "{refused:?}"
-    );
+    let key = |name: &str, pressed: bool| {
+        if pressed {
+            OsEvent::KeyDown(name.into())
+        } else {
+            OsEvent::KeyUp(name.into())
+        }
+    };
+    let shift_click = || {
+        let mut events = vec![key("Shift", true)];
+        events.extend(click());
+        events.push(key("Shift", false));
+        events
+    };
+    let five_shift_clicks: Vec<OsEvent> = (0..5).flat_map(|_| shift_click()).collect();
+    let mut control_shift_click = vec![key("Control", true), key("Shift", true)];
+    control_shift_click.extend(click());
+    control_shift_click.extend([key("Shift", false), key("Control", false)]);
+    let left_held = [key("Control", true), key("Shift", true)];
+    for (case, events) in [
+        ("five Shift-clicks", five_shift_clicks.as_slice()),
+        ("Control+Shift+click", control_shift_click.as_slice()),
+        ("Control+Shift left held", left_held.as_slice()),
+    ] {
+        let checked = lane.check(events);
+        assert!(checked.is_ok(), "{case}: {checked:?}");
+    }
+    for refused in [
+        vec![key("Alt", true), key("Tab", true)],
+        vec![key("Meta", true)],
+        vec![
+            key("Control", true),
+            key("Shift", true),
+            key("Escape", true),
+        ],
+    ] {
+        let checked = lane.check(&refused);
+        assert!(
+            matches!(
+                &checked,
+                Err(Error::NotSupported { capability: Some(capability), .. })
+                    if capability == "os_shell_hotkey"
+            ),
+            "{refused:?}: {checked:?}"
+        );
+    }
 }
 
 /// A guard whose watcher is gone while armed can no longer tell the person's input from the

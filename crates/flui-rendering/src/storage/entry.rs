@@ -127,7 +127,7 @@ impl AttachmentState {
 ///
 /// The render object is owned plainly; there is no interior mutability on
 /// the storage type. Pipeline phases obtain mutable access by holding `&mut
-/// RenderTree` (via `PipelineOwner::render_tree_mut`) for the duration of
+/// RenderTree` (the owner's own, never lent outside the crate) for the duration of
 /// the phase. Re-entrant access from a parent to a child during layout goes
 /// through the pipeline's `SubtreeArena`. State bits that
 /// only need to be flipped (e.g. `WAS_REPAINT_BOUNDARY` written by the paint
@@ -287,7 +287,8 @@ impl<P: Protocol> RenderEntry<P> {
     /// Returns a mutable reference to the render object.
     ///
     /// Requires `&mut self`. Pipeline phases obtain this via `&mut RenderTree`
-    /// (`PipelineOwner::render_tree_mut`) for the duration of the phase.
+    /// (the owner's own, never lent outside the crate) for the duration of
+    /// the phase.
     /// Parent-to-child re-entrant mutation during layout goes through the
     /// pipeline's `SubtreeArena`.
     #[inline]

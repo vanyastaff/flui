@@ -288,52 +288,6 @@ impl RenderingBinding {
     pub fn mark_first_frame_sent(&self) {
         self.first_frame_sent.set(true);
     }
-
-    /// Pump the rendering pipeline once into the patch `writer` buffers,
-    /// gated by the first-frame deferral counter; whether there is a frame
-    /// to apply and show.
-    ///
-    /// Drives the root [`PipelineOwner`] through
-    /// [`PipelineOwner::run_frame`] (layout, compositing bits, paint,
-    /// semantics) in place — the owner is always left usable for the next
-    /// frame, error or not. The frame is withheld (`false`) while
-    /// [`Self::send_frames_to_engine`] is `false`; the pipeline work itself
-    /// (the warm-up cost) still runs either way, matching the oracle's
-    /// `drawFrame` split (see the module note above `defer_first_frame`).
-    /// A caller that drops the patch instead of applying it gets a repaint
-    /// from the root on the next frame.
-    ///
-    /// This is a convenience for using `RenderingBinding` directly,
-    /// without `WidgetsBinding` (see the module doc). The production
-    /// frame path (`UiRuntime::render_frame_entered`) does **not** call
-    /// this method — it drives the shared pipeline into the presentation's
-    /// own scene and consults [`Self::send_frames_to_engine`] /
-    /// [`Self::mark_first_frame_sent`] directly at its own presentation
-    /// step.
-    pub fn draw_frame(&self, writer: &mut flui_layer::SceneWriter<'_>) -> bool {
-        let painted = match self.root_pipeline_owner().run_frame(writer) {
-            Ok(painted) => painted,
-            Err(e) => {
-                tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                false
-            }
-        };
-        // The frame's semantics diagnostics, with the checkout released (a
-        // `tracing` subscriber is user code that may reach this pipeline). A
-        // subscriber that panics unwinds out of here; the patch stays staged
-        // in the pipeline, so a caller that catches the panic and drops it
-        // gets a full frame from the next draw.
-        self.root_pipeline_owner().report_semantics_diagnostics();
-
-        if self.send_frames_to_engine() {
-            self.mark_first_frame_sent();
-            painted
-        } else {
-            // Deferred-first-frame: pipeline work ran (warm-up), the
-            // output is withheld until the deferral count drains.
-            false
-        }
-    }
 }
 
 // ============================================================================
@@ -407,8 +361,6 @@ impl RenderingBinding {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::Ordering};
-
     use super::*;
 
     // `RenderingBinding` is no longer singleton-backed — each test
@@ -417,51 +369,28 @@ mod tests {
     // serialize (the retired semantics-binding test lock guarded exactly
     // this shared-singleton hazard; see AGENTS.md's "Testing quirks").
 
-    /// The authoritative frame path: `draw_frame` returns the layer
-    /// tree the pipeline produced (for the caller to wrap in a Scene
-    /// and hand to the renderer), and withholds it while the first
-    /// frame is deferred. Uses an isolated (non-singleton) binding so
-    /// no other test's pipeline state can interfere.
-    fn deferred_frame_returns_the_painted_tree_after_release() {
-        use flui_foundation::geometry::Size;
-        use flui_objects::RenderColoredBox;
-        use flui_rendering::constraints::BoxConstraints;
+    /// The gate withholds frames while any deferral is held, lifts when the
+    /// last is released, and once a frame has been sent stays open: a later
+    /// deferral has no effect. The production frame path consults it through
+    /// `UiRuntime::render_frame`
+    /// (`deferred_painted_frame_waits_for_the_later_present_to_commit`).
+    fn the_gate_follows_its_deferrals_until_a_frame_is_sent() {
+        let binding = RenderingBinding::new(TextContextHandle::standalone());
+        assert!(binding.send_frames_to_engine(), "nothing is deferred");
 
-        let owner = PipelineCell::new(PipelineOwner::new(TextContextHandle::standalone()));
-        let root_id = owner.with_mut(|o| {
-            let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
-                as Box<
-                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
-                >);
-            o.set_root_id(Some(id));
-            o.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
-            id
-        });
-        let binding = RenderingBinding::new_with_pipeline(owner);
-
-        // Deferred: the pipeline still runs (warm-up) but the output
-        // is withheld.
         binding.defer_first_frame();
-        let mut host = flui_rendering::testing::SceneHost::new();
-        let cell = binding.root_pipeline_owner();
-        let (shown, _) = host.drive_cell(cell, |writer| binding.draw_frame(writer));
-        assert!(!shown, "deferred first frame must withhold the layer tree");
+        binding.defer_first_frame();
+        assert!(!binding.send_frames_to_engine());
         binding.allow_first_frame();
+        assert!(!binding.send_frames_to_engine(), "one deferral remains");
+        binding.allow_first_frame();
+        assert!(binding.send_frames_to_engine(), "every deferral released");
 
-        // The deferred pass consumed the dirty work — re-mark so the
-        // next frame paints again.
-        binding
-            .root_pipeline_owner()
-            .with_mut(|owner| owner.mark_needs_layout(root_id));
-        let (shown, tree) = host.drive_cell(cell, |writer| binding.draw_frame(writer));
+        binding.mark_first_frame_sent();
+        binding.defer_first_frame();
         assert!(
-            shown,
-            "non-deferred frame with dirty work must return the layer tree"
-        );
-        let tree = tree.expect("a shown frame carries its layer tree");
-        assert!(
-            tree.len() > 1,
-            "the produced layer tree must carry the painted content under its root",
+            binding.send_frames_to_engine(),
+            "a deferral after the first frame was sent has no effect"
         );
     }
 
@@ -488,127 +417,18 @@ mod tests {
         assert!(!binding.send_frames_to_engine());
     }
 
-    /// A pipeline whose root is a button declaring `selected`, which a button
-    /// does not carry, so every publication leaves it out.
-    fn selected_button_binding() -> (PipelineCell, RenderingBinding) {
-        use flui_foundation::geometry::Size;
-        use flui_objects::{RenderColoredBox, RenderSemanticsAnnotations};
-        use flui_rendering::constraints::BoxConstraints;
-        use flui_semantics::{SemanticsConfiguration, SemanticsRole};
-
-        let owner = PipelineCell::new(PipelineOwner::new(TextContextHandle::standalone()));
-        owner.with_mut(|o| {
-            let mut config = SemanticsConfiguration::new();
-            config.set_role(SemanticsRole::Button);
-            config.set_label("Send");
-            config.set_selected(true);
-            let annotated =
-                RenderSemanticsAnnotations::from_configuration(config).with_container(true);
-            let id = o.insert(Box::new(annotated)
-                as Box<
-                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
-                >);
-            o.insert_child_render_object(id, Box::new(RenderColoredBox::red(40.0, 40.0)))
-                .expect("the root is live");
-            o.set_root_id(Some(id));
-            o.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
-            o.set_semantics_enabled(true);
-        });
-        let binding = RenderingBinding::new_with_pipeline(owner.clone());
-        (owner, binding)
-    }
-
-    /// The direct frame driver reports the frame's semantics diagnostics once
-    /// its checkout is released, so none stays queued after a draw.
-    fn draw_frame_reports_semantics_diagnostics() {
-        let (owner, binding) = selected_button_binding();
-
-        let _ = flui_rendering::testing::SceneHost::new()
-            .drive_cell(&owner, |writer| binding.draw_frame(writer));
-        assert_ne!(
-            owner.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics),
-            [],
-            "the frame left the button's `selected` out"
-        );
-        assert_eq!(
-            owner.with_mut(PipelineOwner::take_semantics_diagnostics),
-            [],
-            "the draw reported it"
-        );
-    }
-
-    /// A subscriber that panics on the report does not cost the caller the
-    /// painted frame: the next draw delivers it.
-    fn a_panicking_report_leaves_the_frame_for_the_next_draw() {
-        /// Panics on each semantics warning.
-        struct Panicking;
-        impl tracing::Subscriber for Panicking {
-            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-                true
-            }
-            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-                tracing::span::Id::from_u64(1)
-            }
-            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-            fn event(&self, event: &tracing::Event<'_>) {
-                assert!(
-                    !event.metadata().target().starts_with("flui_semantics"),
-                    "the subscriber panics"
-                );
-            }
-            fn enter(&self, _: &tracing::span::Id) {}
-            fn exit(&self, _: &tracing::span::Id) {}
-        }
-
-        let (owner, binding) = selected_button_binding();
-        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = Arc::clone(&wakes);
-        owner.with_mut(|o| {
-            o.set_on_need_visual_update(move || {
-                counter.fetch_add(1, Ordering::SeqCst);
-            });
-        });
-        let drawn = tracing::subscriber::with_default(Panicking, || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                flui_rendering::testing::SceneHost::new()
-                    .drive_cell(&owner, |writer| binding.draw_frame(writer))
-            }))
-        });
-        assert!(drawn.is_err(), "the subscriber's panic propagates");
-        assert_eq!(
-            wakes.load(Ordering::SeqCst),
-            0,
-            "keeping the frame calls out to no user code"
-        );
-        assert!(
-            flui_rendering::testing::SceneHost::new()
-                .drive_cell(&owner, |writer| binding.draw_frame(writer))
-                .0,
-            "the next draw delivers the frame the panic unwound"
-        );
-    }
-
     #[test]
-    fn draw_frame_returns_layer_tree_and_defers_when_gated() {
+    fn the_first_frame_gate_counts_deferrals() {
         crate::table_test::run_table(
-            "draw_frame_returns_layer_tree_and_defers_when_gated",
+            "the_first_frame_gate_counts_deferrals",
             &[
                 (
-                    "deferred_frame_returns_the_painted_tree_after_release",
-                    deferred_frame_returns_the_painted_tree_after_release,
+                    "the_gate_follows_its_deferrals_until_a_frame_is_sent",
+                    the_gate_follows_its_deferrals_until_a_frame_is_sent,
                 ),
                 (
                     "an_exhausted_deferral_count_preserves_all_existing_deferrals",
                     an_exhausted_deferral_count_preserves_all_existing_deferrals,
-                ),
-                (
-                    "draw_frame_reports_semantics_diagnostics",
-                    draw_frame_reports_semantics_diagnostics,
-                ),
-                (
-                    "a_panicking_report_leaves_the_frame_for_the_next_draw",
-                    a_panicking_report_leaves_the_frame_for_the_next_draw,
                 ),
             ],
         );

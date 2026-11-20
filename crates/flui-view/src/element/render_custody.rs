@@ -67,9 +67,7 @@ pub(crate) fn mount<V, A, R, P>(
         *slot = Some(render_id);
 
         // The node reports where its view was created when an error names it.
-        if let Some(node) = pipeline_owner.render_tree_mut().get_mut(render_id) {
-            node.set_creation_site(core.creation_site());
-        }
+        pipeline_owner.set_creation_site(render_id, core.creation_site());
 
         // `adopt_child` writes the child's parent link and the parent's
         // child-list entry in one call, so the two directions are never
@@ -177,35 +175,31 @@ pub(crate) fn push<V, A, R>(
         ),
     };
     let mut caught = FirstPanic::new();
-    let outcome = pipeline_owner.with_mut(|pipeline_owner| {
-        let node = pipeline_owner
-            .render_tree_mut()
-            .get_mut(render_id)
-            .expect("BUG: a render element's RenderId must resolve to a live node during update");
-        let render_object = node
-            .downcast_render_object_mut::<R>()
-            .expect("BUG: a render element's live node must hold its render object type");
-        // A panic here replaces the element with an ErrorView, through the
-        // caller.
-        caught.contain(|| update(&ctx, render_object))
+    let updated = pipeline_owner.with_mut(|pipeline_owner| {
+        pipeline_owner.update_render_object::<R>(render_id, |render_object| {
+            // A panic here replaces the element with an ErrorView, through the
+            // caller; the failed update reports no impact, so none is applied.
+            caught
+                .contain(|| update(&ctx, render_object))
+                .unwrap_or(RenderUpdateImpact::NONE)
+        })
     });
-    let Some(impact) = outcome else {
-        if let Some(payload) = caught.held() {
-            owner.record_armed_lifecycle_panic(
-                core.self_id(),
-                core.creation_site(),
-                TypeId::of::<V>(),
-                LifecycleHook::Update,
-                payload,
-                "updating the render object of RenderElement",
-            );
-        }
-        caught.resume();
-        return;
-    };
-    pipeline_owner.with_mut(|pipeline_owner| {
-        pipeline_owner.apply_render_update_impact(render_id, impact);
-    });
+    assert!(
+        updated.is_some(),
+        "BUG: a render element's RenderId must resolve to a live node holding its render \
+         object type during update"
+    );
+    if let Some(payload) = caught.held() {
+        owner.record_armed_lifecycle_panic(
+            core.self_id(),
+            core.creation_site(),
+            TypeId::of::<V>(),
+            LifecycleHook::Update,
+            payload,
+            "updating the render object of RenderElement",
+        );
+    }
+    caught.resume();
 }
 
 /// Runs `release` on the render object, then removes it and its subtree from
@@ -238,13 +232,11 @@ pub(crate) fn unmount<V, A, R>(
             owner.collects_semantics,
         );
         pipeline_owner.with_mut(|pipeline_owner| {
-            if let Some(render_object) = pipeline_owner
-                .render_tree_mut()
-                .get_mut(render_id)
-                .and_then(|node| node.downcast_render_object_mut::<R>())
-            {
-                caught.contain(|| release(&ctx, render_object));
-            }
+            // The node is removed below; releasing it schedules no work.
+            let _ = pipeline_owner.update_render_object::<R>(render_id, |render_object| {
+                let _ = caught.contain(|| release(&ctx, render_object));
+                RenderUpdateImpact::NONE
+            });
         });
     }
     if let Some(payload) = caught.held() {

@@ -429,6 +429,7 @@ impl Driver {
                 kind: Some(HandleKind::Process),
                 handle,
                 exit: None,
+                effect,
                 message,
                 retry,
             } => {
@@ -437,6 +438,7 @@ impl Driver {
                     kind: Some(HandleKind::Process),
                     handle,
                     exit,
+                    effect,
                     message,
                     retry,
                 }

@@ -128,7 +128,7 @@ impl RenderNode {
     /// Hot-reload hook: mark this render object for reprocessing.
     ///
     /// Dispatches to [`RenderObject::reassemble`] on the underlying object.
-    pub fn reassemble(&mut self) {
+    pub(crate) fn reassemble(&mut self) {
         with_entry!(self, entry => entry.render_object_mut().reassemble());
     }
 
@@ -238,27 +238,11 @@ impl RenderNode {
 
     /// Returns a mutable reference to the Box entry, if this is a Box node.
     #[inline]
-    pub fn as_box_mut(&mut self) -> Option<&mut RenderEntry<BoxProtocol>> {
+    pub(crate) fn as_box_mut(&mut self) -> Option<&mut RenderEntry<BoxProtocol>> {
         match self {
             Self::Box(entry) => Some(entry),
             Self::Sliver(_) => None,
         }
-    }
-
-    /// Returns a reference to the Box entry, panics if this is not a Box node.
-    ///
-    /// Use this when you know the node is Box protocol (e.g., in PipelineOwner
-    /// which only works with Box nodes currently).
-    #[inline]
-    pub fn as_box_unchecked(&self) -> &RenderEntry<BoxProtocol> {
-        self.as_box().expect("Expected Box protocol node")
-    }
-
-    /// Returns a mutable reference to the Box entry, panics if this is not a
-    /// Box node.
-    #[inline]
-    pub fn as_box_unchecked_mut(&mut self) -> &mut RenderEntry<BoxProtocol> {
-        self.as_box_mut().expect("Expected Box protocol node")
     }
 
     /// Returns a reference to the Sliver entry, if this is a Sliver node.
@@ -273,7 +257,7 @@ impl RenderNode {
     /// Returns a mutable reference to the Sliver entry, if this is a Sliver
     /// node.
     #[inline]
-    pub fn as_sliver_mut(&mut self) -> Option<&mut RenderEntry<SliverProtocol>> {
+    pub(crate) fn as_sliver_mut(&mut self) -> Option<&mut RenderEntry<SliverProtocol>> {
         match self {
             Self::Sliver(entry) => Some(entry),
             Self::Box(_) => None,
@@ -374,7 +358,7 @@ impl RenderNode {
     /// should still use `PipelineOwner::mark_needs_layout` for correct
     /// relayout-boundary semantics.
     #[inline]
-    pub fn mark_layout_flag(&self) {
+    pub(crate) fn mark_layout_flag(&self) {
         with_entry!(self, entry => entry.state().mark_needs_layout());
     }
 
@@ -386,7 +370,7 @@ impl RenderNode {
     /// across a relayout boundary. Sliver nodes carry no cache yet and
     /// always return `false`.
     #[inline]
-    pub fn clear_layout_cache(&mut self) -> bool {
+    pub(crate) fn clear_layout_cache(&mut self) -> bool {
         with_entry!(self, entry => entry.state_mut().clear_layout_cache())
     }
 
@@ -399,7 +383,7 @@ impl RenderNode {
     /// boundary. Initial attachment is scheduled separately because
     /// `RenderState::new()` already starts with `NEEDS_PAINT = true`.
     #[inline]
-    pub fn mark_paint_flag(&self) {
+    pub(crate) fn mark_paint_flag(&self) {
         with_entry!(self, entry => entry.state().flags().mark_needs_paint());
     }
 
@@ -411,7 +395,7 @@ impl RenderNode {
     /// caller: the whole point of this flag is that the node is NOT dirty for
     /// paint, so nothing here may touch `NEEDS_PAINT`.
     #[inline]
-    pub fn mark_composited_layer_update_flag(&self) {
+    pub(crate) fn mark_composited_layer_update_flag(&self) {
         with_entry!(self, entry => entry.state().flags().mark_needs_composited_layer_update());
     }
 
@@ -424,14 +408,14 @@ impl RenderNode {
     /// Clears the `LAID_OUT_SINCE_PAINT` flag and answers whether it was
     /// set: whether the node laid out since the paint walk last reached it.
     #[inline]
-    pub fn take_laid_out_since_paint(&self) -> bool {
+    pub(crate) fn take_laid_out_since_paint(&self) -> bool {
         with_entry!(self, entry => entry.state().flags().take_laid_out_since_paint())
     }
 
     /// Sets the `PAINT_CHANGED` flag: the node itself, not a descendant, was
     /// marked for paint.
     #[inline]
-    pub fn mark_paint_changed(&self) {
+    pub(crate) fn mark_paint_changed(&self) {
         with_entry!(self, entry => entry.state().flags().mark_paint_changed());
     }
 
@@ -439,17 +423,8 @@ impl RenderNode {
     /// whether the node was marked for paint since the paint walk last
     /// reached it.
     #[inline]
-    pub fn take_paint_changed(&self) -> bool {
+    pub(crate) fn take_paint_changed(&self) -> bool {
         with_entry!(self, entry => entry.state().flags().take_paint_changed())
-    }
-
-    /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
-    /// flag-only, no propagation. Additive
-    /// helper; not used by the queue-scan dedup path (see
-    /// [`Self::mark_paint_flag`] doc for rationale).
-    #[inline]
-    pub fn mark_compositing_flag(&self) {
-        with_entry!(self, entry => entry.state().flags().mark_needs_compositing());
     }
 
     /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
@@ -469,75 +444,6 @@ impl RenderNode {
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         with_entry!(self, entry => entry.state().needs_compositing())
-    }
-
-    /// Protocol-erased **leaf-mode** layout dispatch.
-    ///
-    /// Matches the inner `RenderEntry<P>` against the supplied
-    /// [`ErasedConstraints`](crate::storage::ErasedConstraints) variant
-    /// and forwards to
-    /// [`RenderEntry::<P>::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only),
-    /// returning the result as
-    /// [`ErasedGeometry`](crate::storage::ErasedGeometry).
-    ///
-    /// # ⚠ LEAF-ONLY — DO NOT CALL FOR NON-LEAF RENDER OBJECTS
-    ///
-    /// This method delegates to `RenderEntry::layout_leaf_only`, which
-    /// builds a `RawBoxLayoutContext::<Leaf, BoxParentData>` with **no
-    /// children**. Non-leaf render objects routed through this method
-    /// observe `ctx.child_count() == 0` and silently produce wrong
-    /// geometry. The name `layout_leaf_erased` (PR #141 Codex review
-    /// comment 3293746309 P1) makes the constraint compile-time
-    /// obvious at every callsite.
-    ///
-    /// # Background
-    ///
-    /// The pipeline operates on
-    /// protocol-erased `RenderNode`s, but
-    /// `RenderEntry::layout_leaf_only` is generic over `P: Protocol`.
-    /// This method bridges the seam — variant mismatch (e.g., `Box`
-    /// constraints handed to a `Sliver` entry) returns
-    /// [`RenderError::ProtocolMismatch`](crate::error::RenderError::ProtocolMismatch).
-    ///
-    /// Pipeline-side callers lift the protocol-typed root constraints
-    /// to `ErasedConstraints` via the `From<BoxConstraints>` /
-    /// `From<SliverConstraints>` impls before invoking. Per-protocol-typed
-    /// callers (the `RenderBox` bridge and `RenderSliver` bridge)
-    /// downcast the returned geometry via
-    /// `TryFrom<ErasedGeometry>`.
-    ///
-    /// `PipelineOwner::layout_dirty_root` does NOT route through
-    /// this method — it builds typed `RawBoxLayoutContext` with children via
-    /// disjoint borrows and calls `render_object.perform_layout_raw`
-    /// directly against an erased view, bypassing the leaf-mode
-    /// constraint entirely.
-    pub fn layout_leaf_erased(
-        &mut self,
-        constraints: crate::storage::ErasedConstraints,
-        text: crate::pipeline::TextSource<'_>,
-        has_parent: bool,
-    ) -> crate::error::RenderResult<crate::storage::ErasedGeometry> {
-        use crate::storage::ErasedConstraints;
-        match (self, constraints) {
-            (Self::Box(entry), ErasedConstraints::Box(c)) => {
-                entry.layout_leaf_only(c, text, has_parent).map(Into::into)
-            }
-            (Self::Sliver(entry), ErasedConstraints::Sliver(c)) => {
-                entry.layout_leaf_only(c, text, has_parent).map(Into::into)
-            }
-            (Self::Box(_), ErasedConstraints::Sliver(_)) => {
-                Err(crate::error::RenderError::ProtocolMismatch {
-                    node_protocol: "Box",
-                    constraints_protocol: "Sliver",
-                })
-            }
-            (Self::Sliver(_), ErasedConstraints::Box(_)) => {
-                Err(crate::error::RenderError::ProtocolMismatch {
-                    node_protocol: "Sliver",
-                    constraints_protocol: "Box",
-                })
-            }
-        }
     }
 
     /// Returns true if this is a repaint boundary.
@@ -576,7 +482,7 @@ impl RenderNode {
     /// time after reading the trait answer; not called from layout/paint
     /// hot paths (the flag is configuration, not dirty state).
     #[inline]
-    pub fn set_repaint_boundary_flag(&self, is_boundary: bool) {
+    pub(crate) fn set_repaint_boundary_flag(&self, is_boundary: bool) {
         with_entry!(self, entry => entry.state().flags().set_repaint_boundary(is_boundary));
     }
 
@@ -613,7 +519,7 @@ impl RenderNode {
     ///
     /// Returns `None` if no parent data has been set yet.
     #[inline]
-    pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::parent_data::ParentData> {
+    pub(crate) fn parent_data_mut(&mut self) -> Option<&mut dyn crate::parent_data::ParentData> {
         with_entry!(self, entry => entry.state_mut().parent_data_mut())
     }
 
@@ -635,14 +541,14 @@ impl RenderNode {
     /// [`Self::parent_data_mut`] when the node already has parent-data and
     /// only a field needs updating.
     #[inline]
-    pub fn set_parent_data(&mut self, data: Box<dyn crate::parent_data::ParentData>) {
+    pub(crate) fn set_parent_data(&mut self, data: Box<dyn crate::parent_data::ParentData>) {
         with_entry!(self, entry => entry.state_mut().set_parent_data(data));
     }
 
     /// Detaches and removes this node's persistent parent data.
     ///
     /// Returns `true` when parent data existed. Repeated calls are no-ops.
-    pub fn clear_parent_data(&mut self) -> bool {
+    pub(crate) fn clear_parent_data(&mut self) -> bool {
         match self {
             Self::Box(entry) => entry.state_mut().clear_parent_data(),
             Self::Sliver(entry) => entry.state_mut().clear_parent_data(),
@@ -668,7 +574,7 @@ impl RenderNode {
 
     /// Records where the view that made this node was created.
     #[inline]
-    pub fn set_creation_site(&mut self, site: flui_foundation::CreationSite) {
+    pub(crate) fn set_creation_site(&mut self, site: flui_foundation::CreationSite) {
         with_entry!(self, entry => entry.set_creation_site(site));
     }
 
@@ -786,7 +692,11 @@ impl RenderNode {
     /// `ctx.size()` instead of caching its own `size` field (2B field
     /// dedup). Box → committed `Size`; sliver → absolute paint size.
     #[inline]
-    pub fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
+    pub(crate) fn paint_raw(
+        &self,
+        recorder: &mut crate::context::FragmentRecorder,
+        child_count: usize,
+    ) {
         match self {
             Self::Box(entry) => {
                 let size = entry
@@ -810,7 +720,7 @@ impl RenderNode {
 
     /// Sets this node's parent-relative offset.
     #[inline]
-    pub fn set_offset(&self, offset: flui_foundation::geometry::Offset) {
+    pub(crate) fn set_offset(&self, offset: flui_foundation::geometry::Offset) {
         with_entry!(self, entry => entry.state().set_offset(offset));
     }
 
@@ -825,14 +735,14 @@ impl RenderNode {
     /// `RenderState::advance_layout_generation` for why this belongs at the
     /// commit rather than at layout entry.
     #[inline]
-    pub fn advance_layout_generation(&self) -> u64 {
+    pub(crate) fn advance_layout_generation(&self) -> u64 {
         with_entry!(self, entry => entry.state().advance_layout_generation())
     }
 
     /// Record that `parent` laid this node out during its `parent_generation`
     /// pass — see `RenderState::set_placed_by` for why both halves are stored.
     #[inline]
-    pub fn set_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) {
+    pub(crate) fn set_placed_by(&self, parent: flui_foundation::RenderId, parent_generation: u64) {
         with_entry!(self, entry => entry.state().set_placed_by(parent, parent_generation));
     }
 
@@ -863,29 +773,17 @@ impl RenderNode {
         self.as_sliver().and_then(|entry| entry.state().geometry())
     }
 
-    /// Returns a mutable reference to the Box render object.
-    ///
-    /// Panics if this is not a Box node. Requires `&mut self`; pipeline
-    /// phases obtain this through `&mut RenderTree`. See the exemplar
-    /// refactor docstring on `RenderEntry`.
-    pub fn box_render_object_mut(&mut self) -> &mut dyn RenderObject<BoxProtocol> {
-        self.as_box_unchecked_mut().render_object_mut()
-    }
-
     /// Downcasts this node's render object to a concrete type `T`, regardless
     /// of protocol (Box or Sliver). Returns `None` if the stored object is not
     /// a `T`.
     ///
-    /// This is the View layer's hook for the render-object update path: when
-    /// a render view updates, the framework downcasts the live render object
-    /// to the view's concrete `RenderObject` type and calls
-    /// `RenderView::update_render_object` to apply the new configuration in
-    /// place.
-    pub fn downcast_render_object_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
+    /// [`PipelineOwner::update_render_object`](crate::pipeline::PipelineOwner::update_render_object)
+    /// lends it to an update this way and applies the impact the update returns.
+    pub(crate) fn downcast_render_object_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
         with_entry!(self, entry => entry.render_object_mut().as_any_mut().downcast_mut::<T>())
     }
 
-    /// Shared-reference counterpart of [`Self::downcast_render_object_mut`]:
+    /// Downcasts this node's render object to a concrete type `T` for reading:
     /// a read of the live render object's own state (a lazy sliver's item
     /// count, a configuration knob) without checking the node out mutably.
     pub fn downcast_render_object<T: std::any::Any>(&self) -> Option<&T> {
@@ -894,19 +792,19 @@ impl RenderNode {
 
     /// Clears the needs_paint flag.
     #[inline]
-    pub fn clear_needs_paint(&self) {
+    pub(crate) fn clear_needs_paint(&self) {
         with_entry!(self, entry => entry.state().clear_needs_paint());
     }
 
     /// Clears the composited-layer-update flag.
     #[inline]
-    pub fn clear_needs_composited_layer_update(&self) {
+    pub(crate) fn clear_needs_composited_layer_update(&self) {
         with_entry!(self, entry => entry.state().clear_needs_composited_layer_update());
     }
 
     /// Clears the needs_layout flag.
     #[inline]
-    pub fn clear_needs_layout(&self) {
+    pub(crate) fn clear_needs_layout(&self) {
         with_entry!(self, entry => entry.state().clear_needs_layout());
     }
 
@@ -937,7 +835,7 @@ impl RenderNode {
     /// Called by the paint phase after a node is painted so subsequent
     /// compositing-bits walks can detect boundary-status transitions.
     #[inline]
-    pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
+    pub(crate) fn set_was_repaint_boundary(&self, was_boundary: bool) {
         with_entry!(self, entry => entry.state().flags().set_was_repaint_boundary(was_boundary));
     }
 
@@ -948,13 +846,13 @@ impl RenderNode {
     /// (`_updateCompositingBits`); `mark_compositing_flag` was added
     /// separately as an additive helper.
     #[inline]
-    pub fn mark_needs_compositing(&self) {
+    pub(crate) fn mark_needs_compositing(&self) {
         with_entry!(self, entry => entry.state().flags().mark_needs_compositing());
     }
 
     /// Clears the `NEEDS_COMPOSITING` flag.
     #[inline]
-    pub fn clear_needs_compositing(&self) {
+    pub(crate) fn clear_needs_compositing(&self) {
         with_entry!(self, entry => entry.state().flags().clear_needs_compositing());
     }
 
@@ -971,13 +869,13 @@ impl RenderNode {
 
     /// Sets the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
-    pub fn mark_needs_compositing_bits_update(&self) {
+    pub(crate) fn mark_needs_compositing_bits_update(&self) {
         with_entry!(self, entry => entry.state().flags().mark_needs_compositing_bits_update());
     }
 
     /// Clears the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
-    pub fn clear_needs_compositing_bits_update(&self) {
+    pub(crate) fn clear_needs_compositing_bits_update(&self) {
         with_entry!(self, entry => entry.state().flags().clear_needs_compositing_bits_update());
     }
 

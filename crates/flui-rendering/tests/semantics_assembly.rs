@@ -24,7 +24,7 @@ use flui_rendering::{
         AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole,
         States,
     },
-    testing::{FrameRun, Probe, RenderTester, SceneHost, box_node},
+    testing::{FrameRun, Probe, RenderTester, SceneHost, box_node, edit_render_object},
     traits::RenderBox,
 };
 
@@ -979,11 +979,16 @@ pub(crate) fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
     assert!(inserted.node(alpha_accessibility_id).is_some());
     assert!(inserted.node(beta_accessibility_id).is_some());
 
-    {
-        let tree = run.owner_mut().render_tree_mut();
-        tree.drop_child(root, alpha);
-        tree.adopt_child(root, alpha);
-    }
+    let alpha_last: Vec<RenderId> = run
+        .owner()
+        .render_tree()
+        .children(root)
+        .iter()
+        .copied()
+        .filter(|&child| child != alpha)
+        .chain([alpha])
+        .collect();
+    assert!(run.owner_mut().set_render_children(root, &alpha_last));
     run.owner_mut().mark_needs_layout(root);
     run.owner_mut().mark_needs_semantics(root);
     run.pump();
@@ -1154,17 +1159,9 @@ pub(crate) fn re_assembling_marked_subtrees_refuses_like_the_whole_tree() {
     };
     assert_eq!(leaves.len(), GROUPS);
     for &leaf in &leaves {
-        run.owner_mut()
-            .render_tree_mut()
-            .get_mut(leaf)
-            .expect("leaf node")
-            .as_box_mut()
-            .expect("leaf is a box")
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<SemanticsLeaf>()
-            .expect("leaf is a SemanticsLeaf")
-            .configuration = Some(invalid());
+        edit_render_object::<SemanticsLeaf, _, _>(run.owner_mut(), leaf, |leaf| {
+            leaf.configuration = Some(invalid());
+        });
         run.owner_mut().mark_needs_semantics(leaf);
     }
     let marked = run
@@ -1210,17 +1207,8 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
         config
     }
 
-    fn leaf_mut(run: &mut FrameRun, id: RenderId) -> &mut SemanticsLeaf {
-        run.owner_mut()
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("leaf node")
-            .as_box_mut()
-            .expect("leaf is a box")
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<SemanticsLeaf>()
-            .expect("leaf is a SemanticsLeaf")
+    fn edit_leaf(run: &mut FrameRun, id: RenderId, edit: impl FnOnce(&mut SemanticsLeaf)) {
+        edit_render_object::<SemanticsLeaf, _, _>(run.owner_mut(), id, edit);
     }
 
     fn clips_children(run: &FrameRun, id: RenderId) -> bool {
@@ -1303,7 +1291,9 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
 
     // The graft anchored at alpha destroys its old handler, which panics.
     armed.set(true);
-    leaf_mut(&mut run, alpha).configuration = Some(pressable(&Rc::new(Cell::new(false))));
+    edit_leaf(&mut run, alpha, |leaf| {
+        leaf.configuration = Some(pressable(&Rc::new(Cell::new(false))));
+    });
     run.owner_mut().mark_needs_semantics(alpha);
     #[expect(
         clippy::disallowed_methods,
@@ -1321,8 +1311,7 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
 
     // Gamma stops contributing, so kappa and beta are contained. The graft
     // is anchored at kappa, gamma's published parent, below the holder.
-    let gamma_leaf = leaf_mut(&mut run, gamma);
-    gamma_leaf.label = None;
+    edit_leaf(&mut run, gamma, |leaf| leaf.label = None);
     run.owner_mut().mark_needs_semantics(gamma);
     run.pump();
     assert!(

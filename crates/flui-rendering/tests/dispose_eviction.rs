@@ -9,7 +9,7 @@
 
 use flui_objects::RenderColoredBox;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::testing::SceneHost;
+use flui_rendering::testing::{SceneHost, raw_tree};
 
 use crate::common::BoxedRenderObject;
 
@@ -87,30 +87,36 @@ fn retirement_child(mode: &str) {
     use flui_rendering::{pipeline::PipelineCell, storage::RenderTree};
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut tree = RenderTree::new();
-    let vacant = (mode == "sparse")
-        .then(|| tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)) as BoxedRenderObject));
+    let vacant = (mode == "sparse").then(|| {
+        raw_tree::insert_box(
+            &mut tree,
+            Box::new(RenderColoredBox::red(1.0, 1.0)) as BoxedRenderObject,
+        )
+    });
     for (object, data, index) in [("object-a", "data-a", 0), ("object-b", "data-b", 1)] {
         let object_fails = matches!(mode, "object" | "pipeline") && index == 0
             || mode == "second-object" && index == 1;
         let data_fails = mode == "data" && index == 0 || mode == "second-data" && index == 1;
-        let id = tree.insert_box(Box::new(RetirementProbe {
-            label: object,
-            fail: object_fails,
-            log: log.clone(),
-        }));
-        tree.get_mut(id)
-            .expect("inserted node")
-            .as_box_mut()
-            .expect("box node")
-            .state_mut()
-            .set_parent_data(Box::new(RetirementProbe {
+        let id = raw_tree::insert_box(
+            &mut tree,
+            Box::new(RetirementProbe {
+                label: object,
+                fail: object_fails,
+                log: log.clone(),
+            }),
+        );
+        raw_tree::set_parent_data(
+            &mut tree,
+            id,
+            Box::new(RetirementProbe {
                 label: data,
                 fail: data_fails,
                 log: log.clone(),
-            }));
+            }),
+        );
     }
     if let Some(vacant) = vacant {
-        drop(tree.remove_shallow(vacant).expect("remove initial slot"));
+        drop(raw_tree::remove_shallow(&mut tree, vacant).expect("remove initial slot"));
     }
     // A destructor that panics leaves the rest of the tree to drop during the
     // unwind, as std drops a `Vec` (ADR-0281): every value is destroyed.
@@ -126,7 +132,7 @@ fn retirement_child(mode: &str) {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if matches!(mode, "pipeline" | "shared") {
             let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-            *owner.render_tree_mut() = tree;
+            drop(raw_tree::replace_tree(&mut owner, tree));
             let cell = PipelineCell::new(owner);
             if mode == "shared" {
                 let alias = cell.clone();
@@ -373,7 +379,7 @@ pub(crate) fn an_exhausted_render_slot_retires_and_its_last_id_never_resolves_ag
     let first = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
     assert_eq!(owner.remove_render_object(first), 1);
     assert!(
-        owner.render_tree_mut().age_next_free_slot_for_test(),
+        raw_tree::age_next_free_slot(&mut owner),
         "the removal freed a slot"
     );
     let last = owner.set_root_render_object(Box::new(RenderColoredBox::blue(10.0, 10.0)));
@@ -402,26 +408,24 @@ pub(crate) fn an_exhausted_render_slot_retires_and_its_last_id_never_resolves_ag
     assert_eq!(owner.remove_render_object(last), 0);
 
     let mut tree = RenderTree::new();
-    let first = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
-    drop(
-        tree.remove_shallow(first)
-            .expect("the first node is removed"),
-    );
+    let first = raw_tree::insert_box(&mut tree, Box::new(RenderColoredBox::red(1.0, 1.0)));
+    drop(raw_tree::remove_shallow(&mut tree, first).expect("the first node is removed"));
     assert!(
-        tree.age_next_free_slot_for_test(),
+        raw_tree::age_next_free_slot(&mut tree),
         "the removal freed a slot"
     );
-    let last = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
+    let last = raw_tree::insert_box(&mut tree, Box::new(RenderColoredBox::red(1.0, 1.0)));
     let removal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tree.remove_shallow(last).is_some()
+        raw_tree::remove_shallow(&mut tree, last).is_some()
     }));
     assert!(matches!(removal, Ok(true)), "the last id is removed");
-    let cleared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.clear()));
+    let cleared =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| raw_tree::clear(&mut tree)));
     assert!(
         cleared.is_ok(),
         "clear keeps a retired slot without panicking"
     );
-    let again = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
+    let again = raw_tree::insert_box(&mut tree, Box::new(RenderColoredBox::red(1.0, 1.0)));
     assert_ne!(again.index(), last.index(), "a retired slot survives clear");
 }
 
@@ -433,14 +437,15 @@ pub(crate) fn a_clear_whose_destructor_panics_leaves_every_old_id_stale() {
     use flui_rendering::storage::RenderTree;
 
     let mut tree = RenderTree::new();
-    let root = tree.insert_box(Box::new(RenderPadding::all(1.0)));
-    tree.set_root(Some(root));
-    let child = tree
-        .insert_box_child(root, panics_when_dropped("child destructor"))
-        .expect("the child attaches");
+    let root = raw_tree::insert_box(&mut tree, Box::new(RenderPadding::all(1.0)));
+    raw_tree::set_root(&mut tree, Some(root));
+    let child =
+        raw_tree::insert_box_child(&mut tree, root, panics_when_dropped("child destructor"))
+            .expect("the child attaches");
 
-    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.clear()))
-        .expect_err("the destructor's panic reaches the caller");
+    let payload =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| raw_tree::clear(&mut tree)))
+            .expect_err("the destructor's panic reaches the caller");
     assert_eq!(
         flui_foundation::panic::payload_text(payload.as_ref()),
         Some("child destructor")
@@ -449,7 +454,7 @@ pub(crate) fn a_clear_whose_destructor_panics_leaves_every_old_id_stale() {
 
     assert_eq!(tree.root(), None, "the root is reset before the drop");
     assert!(tree.is_empty(), "every node left the tree before the drop");
-    let fresh = tree.insert_box(Box::new(RenderColoredBox::red(1.0, 1.0)));
+    let fresh = raw_tree::insert_box(&mut tree, Box::new(RenderColoredBox::red(1.0, 1.0)));
     assert_ne!(fresh, root, "a fresh node never takes an old id");
     assert_ne!(fresh, child, "a fresh node never takes an old id");
     assert!(tree.get(root).is_none(), "the old root id stays stale");

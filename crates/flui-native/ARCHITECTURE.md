@@ -3609,7 +3609,7 @@ it by design, so the wait does happen with the lane held.
 headless window's `simulate_surface_change` drives the platform's own dispatch to
 the handler (`surface_changed` is a required method, so no backend can drop it
 silently), and the delivery's ordering rows pin the call itself. The Android arms themselves are
-**type-checked by `cargo xtask cross-typecheck` and executed by nothing**: no gate
+**type-checked by CI's `cross-typecheck` job and executed by nothing**: no gate
 on this host runs the Android backend, so their mapping is an inference from `android-activity`'s
 documented contract, recorded rather than measured.
 

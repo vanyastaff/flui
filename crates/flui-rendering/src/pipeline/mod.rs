@@ -30,9 +30,10 @@ pub use local_invalidation::LocalRenderInvalidationHandle;
 pub use notifier::{DeferredVisualUpdate, VisualUpdateNotifier};
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
-    DetachedRenderSubtrees, LayoutPremise, LeaderGeometry, LeaderWatch, PipelineCell,
-    PipelineCounters, PipelineOwner, PresentedPlacement, ReleaseDetachedRenderSubtreesError,
-    ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
+    DetachedRenderSubtrees, LayoutPremise, LeaderGeometry, LeaderWatch, ParentDataSlot,
+    PipelineCell, PipelineCounters, PipelineOwner, PresentedPlacement,
+    ReleaseDetachedRenderSubtreesError, ReleaseDetachedRenderSubtreesFailure, RenderChildrenEdit,
+    WeakPipelineCell,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use owner::{PresentedKind, PresentedNode};

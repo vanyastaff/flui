@@ -717,3 +717,45 @@ fn a_lane_worker_cancels_a_queued_job_and_serves_past_a_panicking_one() {
     );
     assert_eq!(worker.run(|_| 7).expect("the worker serves on"), 7);
 }
+
+/// A job's panic reaches the thread waiting for it even when the release after it panics too (a
+/// lane's code, a log subscriber): the first panic is resumed, the later one held behind it, and
+/// the worker serves on and ends without raising the release's panic.
+#[test]
+fn a_panicking_release_after_a_panicking_job_keeps_the_jobs_panic() {
+    let (lane, log) = ScriptedLane::new(Isolation::Xvfb);
+    let worker = LaneWorker::start(lane.panicking_releases()).expect("the worker starts");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test catches the job's panic, resumed on this thread, to assert on it"
+    )]
+    let resumed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        worker.run(|_| -> () { panic!("the job panics") })
+    }));
+    let payload = resumed.expect_err("the job's panic is resumed on the waiting thread");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("the job panics"),
+        "the job's panic, not the release's"
+    );
+    assert_eq!(log.releases(), 1, "the release ran, and panicked");
+    assert_eq!(worker.run(|_| 7).expect("the worker serves on"), 7);
+    drop(worker);
+    assert_eq!(log.releases(), 2, "the worker's last release ran too");
+}
+
+/// A lane whose release fails when its worker ends gets one more release, and the worker ends
+/// either way: nothing waits on a lane that cannot let go.
+#[test]
+fn a_lane_worker_tries_once_more_to_release_when_it_ends() {
+    for (failing, expected) in [(0, 1), (1, 2), (5, 2)] {
+        let (lane, log) = ScriptedLane::new(Isolation::Xvfb);
+        let worker = LaneWorker::start(lane.failing_releases(failing)).expect("the worker starts");
+        drop(worker);
+        assert_eq!(
+            log.releases(),
+            expected,
+            "{failing} failing releases: one release, and one more when it failed"
+        );
+    }
+}

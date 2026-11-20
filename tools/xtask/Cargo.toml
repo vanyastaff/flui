@@ -14,9 +14,6 @@ default-run = "xtask"
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
-# `cargo xtask cross-typecheck` reads each crate's module tree with syn to find the files a
-# target gates (`span-locations` gives a test-only item its lines).
-proc-macro2 = { workspace = true, features = ["span-locations"] }
 # `cargo xtask changelog`: Markdown read as events, not lines.
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }

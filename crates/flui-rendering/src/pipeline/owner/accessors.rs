@@ -638,8 +638,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         Some(flui_foundation::geometry::Point::new(x, y))
     }
 
-    /// Returns a mutable reference to the render tree.
-    pub fn render_tree_mut(&mut self) -> &mut crate::storage::RenderTree {
+    /// Returns a mutable reference to the render tree, for this crate's tests
+    /// and the `testing::raw_tree` kit. Every other edit goes through an owner
+    /// operation that applies its own dirty marks (`tree_edit`).
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn render_tree_mut(&mut self) -> &mut crate::storage::RenderTree {
         &mut self.render_tree
     }
 
@@ -1506,7 +1509,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// 2. Adds the node to the dirty layout list (since new nodes need layout)
     /// 3. Adds the node to the dirty paint list (since new nodes need paint)
     ///
-    /// Use this instead of `render_tree_mut().insert()` to ensure proper dirty
+    /// The tree's own insert does none of this; outside this crate this is the
+    /// way to add a parentless node with proper dirty
     /// tracking.
     ///
     /// # Returns
@@ -1547,7 +1551,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///    (semantics queueing remains gated by whether semantics is enabled)
     /// 4. Defers paint queueing until the successful layout pass
     ///
-    /// Use this instead of `render_tree_mut().insert_child()` to ensure proper
+    /// The tree's own child insert does none of this; outside this crate this is
+    /// the way to add a child with proper
     /// dirty tracking.
     ///
     /// # Arguments
@@ -1592,14 +1597,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// impacts.
     ///
     /// The Sliver-protocol counterpart of [`Self::insert_child_render_object`]
-    /// — same dirty tracking and ADR-0013 attach wiring, backed by
-    /// [`crate::storage::RenderTree::insert_sliver_child`] instead of
-    /// `insert_box_child`. Prefer this over calling
-    /// `render_tree_mut().insert_sliver_child(..)` directly: the raw tree
-    /// method inserts the node but skips dirty tracking AND the
-    /// ADR-0013 `attach` handshake, silently starving any Sliver render
+    /// — same dirty tracking and ADR-0013 attach wiring. The tree's own
+    /// Sliver-child insert, which this wraps, does neither: a Sliver render
     /// object that subscribes to a `Listenable` in `attach` (e.g. a
-    /// snap-animation controller) of its self-dirty handle.
+    /// snap-animation controller) would never get its self-dirty handle.
     ///
     /// This method:
     /// 1. Inserts the render object as a Sliver child in the RenderTree

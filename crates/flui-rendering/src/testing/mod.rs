@@ -70,6 +70,7 @@ mod harness;
 pub mod inspect;
 pub mod parent_data;
 pub mod queries;
+pub mod raw_tree;
 mod report;
 pub mod scene;
 pub mod sliver;
