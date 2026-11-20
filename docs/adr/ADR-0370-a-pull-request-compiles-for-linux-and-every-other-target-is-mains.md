@@ -9,7 +9,7 @@
   for §1 only for `public-api` and the on-demand jobs, for §2's list of `FULL_JOBS`, and for §3
   whole: the pull-request gate is `clippy` and `test`, and no job runs on demand.
   [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
-  for §2 only for `xtask-native.yml` on a pull request, and for the Confirmation: CI decides its
+  for §2 only for the native-host workflow on a pull request (the workflow is gone, see ADR-0383 §9), and for the Confirmation: CI decides its
   lane and judges its run in shell steps.
 - **Related:** [ADR-0324](ADR-0324-the-facade-api-is-a-committed-snapshot.md) (`public-api` stays
   in the pull-request gate under its §3, which also says when it leaves).
@@ -70,7 +70,7 @@ wasm32, Windows, macOS, iOS or Android on a pull request. A change that breaks o
 found by main's run and fixed forward or reverted, as AGENTS.md says of a red main.
 
 Two other workflows still start a native host for a pull request that touches the `paths` each
-names in its own file: `xtask-native.yml` and `nightly-platforms.yml`.
+names in its own file: `nightly-platforms.yml` (the former native-host workflow is gone, see ADR-0383 §9).
 
 ### §3. A job added later
 

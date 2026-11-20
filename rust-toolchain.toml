@@ -1,12 +1,12 @@
 # Pinned Rust toolchain for the FLUI workspace — the DEVELOPMENT toolchain, and
-# the single source of truth `cargo xtask toolchain` reads.
+# the single source of truth the `checks` job in `ci.yml` reads.
 #
 # This channel is not automatically the MSRV — the MSRV is
 # `[workspace.package].rust-version` in `Cargo.toml` (clippy reads it from
 # there). But under the pre-1.0 policy below they move together: the channel
 # is bumped to each new stable, and the MSRV is bumped to match within a
 # week, so in practice `channel`'s minor equals the declared MSRV, and every
-# CI job builds on it. `cargo xtask toolchain` (part of `cargo xtask checks`)
+# CI job builds on it. The `checks` job in `ci.yml`
 # enforces that `Cargo.toml`, all five `flui-cli` templates, the README badge,
 # and `llms.txt` agree with `channel` here.
 #
@@ -25,13 +25,13 @@
 #   2. Bump `[workspace.package].rust-version` in `Cargo.toml` and the
 #      `rust-version` line in all five
 #      `crates/flui-cli/src/templates/{basic,counter,empty,hot_reload,widget}.rs`
-#      — `cargo xtask toolchain` verifies these plus the README badge and
+#      — the `checks` job verifies these plus the README badge and
 #      `llms.txt` against `channel` here directly; nothing else in this list
 #      is machine-checked.
 #   3. Update the prose that states the number: README.md (outside the badge),
 #      crates/flui-cli/README.md, docs/getting-started.md and
 #      book/src/getting-started/installation.md.
-#   4. Run `cargo xtask toolchain` and `cargo xtask checks`.
+#   4. Run `cargo heli xtask checks`.
 
 [toolchain]
 channel = "1.100.0"

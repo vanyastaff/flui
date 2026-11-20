@@ -1,5 +1,5 @@
-//! `cargo xtask checks`: the repository's own source checks, the ones no
-//! standard tool makes. rustfmt, typos, taplo and lychee run as steps of CI's
+//! `cargo xtask checks`: the generated files against their sources and the
+//! changelog fragments. rustfmt, typos, taplo, lychee and the shell checks run as steps of CI's
 //! `checks` job beside it.
 //!
 //! Every check runs even when an earlier one failed, so one run reports every
@@ -11,8 +11,8 @@ use anyhow::bail;
 
 use super::exec::{Runner, parsed};
 use crate::{
-    adr_numbers, android_dex, changelog, fonts, icon_import, key_vocabulary, platform_floor,
-    recording_vocabulary, toolchain, unmounted_tests,
+    android_dex, changelog, fonts, icon_import, key_vocabulary, platform_floor,
+    recording_vocabulary,
 };
 
 /// Runs every check; an error lists the ones that failed.
@@ -39,14 +39,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-const IN_PROCESS: [(&str, InProcess); 10] = [
-    ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
-    ("unmounted-tests", |args| {
-        unmounted_tests::unmounted_tests(&parsed(args)?)
-    }),
-    ("adr-numbers", |args| {
-        adr_numbers::adr_numbers(&parsed(args)?)
-    }),
+const IN_PROCESS: [(&str, InProcess); 7] = [
     // `--package-list`: Cargo's file selection for flui-painting, listed
     // offline, no archive built
     ("font-assets --package-list", |args| {
@@ -139,9 +132,6 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "toolchain",
-                "unmounted-tests",
-                "adr-numbers",
                 "font-assets --package-list",
                 "icon-import material",
                 "key-vocabulary",

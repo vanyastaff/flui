@@ -16,7 +16,7 @@
 Every environment FLUI runs on has versions, and nothing in the repository says which ones FLUI
 supports. Where a minimum exists it was set in passing, and the values disagree:
 
-- Android: `flui-cli` packages with `minSdk` 23 (`android_package.rs`), `xtask doctor` accepts a
+- Android: `flui-cli` packages with `minSdk` 23 (`android_package.rs`), the Android compiler check accepts a
   compiler for API 21, and the backend renders only through wgpu's Vulkan backend, which Android
   provides from API 24. An application installs on an API 23 device and has nothing to draw with.
 - iOS: the bundle's `MinimumOSVersion` is copied from the Mach-O `minos`, which is whatever deployment
@@ -86,7 +86,7 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    repository-root file, so `cargo xtask platform-floor --write` generates a committed Rust source in
    each (the floor constant of each version type; the packaging values: Android `minSdk`, the iOS and
    macOS deployment targets passed to rustc, the Windows manifest's `supportedOS`), and the check mode
-   fails when a generated file differs from the root. `xtask doctor` reads the root file for
+   fails when a generated file differs from the root. CI reads the root file for
    toolchain checks; the Linux release build targets the floor glibc rather than the runner's.
 
 3. **Below the floor, FLUI refuses to start, loudly.** Where the system honours the packaged

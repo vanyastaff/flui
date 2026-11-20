@@ -62,10 +62,10 @@ through, and a wrapper it applies to every test needs no code in any test.
 
 `.config/nextest.toml` names the wrapper script `test-desktop` for every test on Windows
 (`filter = 'all()'`, `platform = 'cfg(windows)'`) and the setup script `build-test-desktop`, which
-builds it with `cargo build -p xtask --bin test-desktop --target-dir target` before the tests
+builds it with `cargo build -p test-desktop --target-dir target` before the tests
 run: into the workspace root's `target/` whatever target directory the tests use, since nextest
 tells neither script which one that is, and the wrapper names the program from the workspace root.
-`test-desktop` (`tools/xtask/src/bin/test-desktop.rs`) opens the desktop
+`test-desktop` (`tools/test-desktop/src/main.rs`) opens the desktop
 `flui-test-<NEXTEST_RUN_ID>` in the current window station with `CreateDesktopW`, which creates it
 when no test of the run holds it and opens it otherwise, starts the test there with
 `CreateProcessW`, inheriting its standard handles and environment, waits for it and exits with its
@@ -154,7 +154,7 @@ leaves its windows open (`no_case_leaves_a_window_shown` in `drag::windows::test
 
 ### Confirmation
 
-- `a_window_of_a_test_is_on_the_test_desktop_and_not_on_the_users` (`tools/xtask/tests/test_desktop.rs`)
+- `a_window_of_a_test_is_on_the_test_desktop_and_not_on_the_users` (`tools/test-desktop/tests/test_desktop.rs`)
   starts a process through `test-desktop` that shows a window, and finds the window among the run
   desktop's windows and not among the input desktop's (`EnumDesktopWindows`), from another process.
 - `windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` (flui-native's

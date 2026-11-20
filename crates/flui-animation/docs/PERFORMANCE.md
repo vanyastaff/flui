@@ -171,7 +171,7 @@ sampling settings before and after:
 cargo bench --locked -p flui-animation --bench vsync_registry -- --noplot 'running_vsync_registry/10000|nested_vsync_registry/1000'
 ```
 
-For an A/B comparison use `cargo xtask bench-collect <name>` on each commit and `critcmp`
+For an A/B comparison use `cargo bench -p <crate> -- --save-baseline <name>` on each commit and `critcmp`
 ([testing](../../../docs/testing.md)). Same-version runs on a shared host vary by several
 percent, and Criterion's change annotation is not reliable at small sample sizes or at the
 100-controller rows; read the rows with 1,000 or more controllers for a signal.

@@ -59,7 +59,8 @@ members = [
     "examples/web_demo",                     # wasm32 cdylibs; build steps in examples/README.md
     "examples/painting_demo",
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
-    "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
+    "tools/test-desktop",                    # nextest's wrapper that starts each Windows test on its own desktop
+    "tools/xtask",                           # `cargo xtask`: generators and source checks
 ]
 
 # No `default-members`: a bare `cargo build` at the root builds the `flui`

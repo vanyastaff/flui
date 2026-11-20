@@ -67,9 +67,9 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate: rustfmt, typos, taplo and lychee called
-  # directly, then `cargo xtask checks` (the toolchain pin, unmounted test
-  # files, ADR numbers, changelog fragments, the generated files against
-  # their sources), xtask's own tests (which include each self-test), and
+  # directly, shell steps for the MSRV, unmounted test files and ADR numbers,
+  # then `cargo xtask checks` (changelog fragments, the generated files
+  # against their sources), xtask's own tests (which include each self-test), and
   # the workflow linters. It builds only xtask, never the workspace, so a
   # malformed PR fails before any workspace build starts. It has no `if:`: a
   # docs-only PR, which skips every compile job, still runs it, and the link
@@ -88,8 +88,7 @@ jobs:
       # The same for lychee, plus the SHA-256 of that version's
       # x86_64-unknown-linux-gnu tarball. 0.24.2 is also lychee-action
       # v2.9.0's default, which docs.yml runs over the rendered book: bump the
-      # two together. `cargo test -p xtask` holds `cargo xtask doctor`'s install
-      # hint to this line.
+      # two together.
       LYCHEE_VERSION: 0.24.2
       LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
     steps:
@@ -249,9 +248,70 @@ jobs:
           shared-key: xtask
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # The repository's own checks, which no standard tool makes: the
-      # toolchain pin, test files a crate never mounts, ADR numbers, the
-      # changelog fragments, and the generated files against their sources.
+      # Every place that states the MSRV states rust-toolchain.toml's minor:
+      # the workspace `rust-version`, the `flui create` templates, the README
+      # badge and llms.txt.
+      - name: The MSRV everywhere is the toolchain's
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          minor=$(sed -n 's/^channel = "\([0-9]*\.[0-9]*\)\.[0-9]*"[[:space:]]*$/\1/p' rust-toolchain.toml)
+          [ -n "$minor" ] || { echo "::error::rust-toolchain.toml names no x.y.z channel"; exit 1; }
+          stated=$(git grep -nE 'rust-version = "[0-9]+\.[0-9]+"|MSRV[- ][0-9]+\.[0-9]+' \
+            -- Cargo.toml crates/flui-cli/src/templates README.md llms.txt)
+          [ -n "$stated" ] || { echo "::error::no MSRV statement found"; exit 1; }
+          if wrong=$(grep -vE "(rust-version = \"|MSRV[- ])${minor//./\\.}([^0-9]|$)" <<< "$stated"); then
+            echo "::error::these state an MSRV other than rust-toolchain.toml's $minor:"
+            echo "$wrong"
+            exit 1
+          fi
+
+      # A crate with `autotests = false` names its test targets itself, so a
+      # tests/*.rs that no [[test]] declares and no test file mounts (`mod x;`
+      # or `#[path = "x.rs"]`) never compiles and passes by not running.
+      - name: Every tests/*.rs of an autotests = false crate compiles
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          # Every test target's source, as cargo resolves it (a [[test]] with
+          # a name alone is tests/<name>.rs).
+          targets=$(cargo metadata --no-deps --locked --format-version 1 \
+            | jq -r '.packages[].targets[] | select(.kind == ["test"]) | .src_path')
+          [ -n "$targets" ] || { echo "::error::cargo metadata listed no test target"; exit 1; }
+          failed=0
+          crates=0
+          while read -r manifest; do
+            grep -qx 'autotests = false' "$manifest" || continue
+            crates=$((crates + 1))
+            dir=$(dirname "$manifest")
+            for file in "$dir"/tests/*.rs; do
+              [ -e "$file" ] || continue
+              stem=$(basename "$file" .rs)
+              grep -qxF "$PWD/$file" <<< "$targets" && continue
+              grep -qE "^[[:space:]]*(pub(\(crate\))? )?mod $stem;|#\[path = \"$stem\.rs\"\]" "$dir"/tests/*.rs && continue
+              echo "::error file=$file::no [[test]] declares $file and no test file mounts it, so it never compiles"
+              failed=1
+            done
+          done < <(git ls-files 'Cargo.toml' '*/Cargo.toml')
+          [ "$crates" -gt 0 ] || { echo "::error::no autotests = false crate found"; exit 1; }
+          exit "$failed"
+
+      # Code and documents cite a record by its number alone, and two pull
+      # requests can each take "the next free one" and both merge green.
+      - name: No two ADRs share a number
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          numbers=$(git ls-files 'docs/adr/ADR-*.md' | sed -n 's|^docs/adr/ADR-\([0-9]\{4\}\)-.*|\1|p')
+          [ -n "$numbers" ] || { echo "::error::docs/adr holds no record"; exit 1; }
+          if dups=$(sort <<< "$numbers" | uniq -d | grep .); then
+            echo "::error::ADR numbers used more than once: $(tr '\n' ' ' <<< "$dups")"
+            git ls-files 'docs/adr/ADR-*.md' | grep -F -f <(sed 's/^/ADR-/; s/$/-/' <<< "$dups")
+            exit 1
+          fi
+
+      # The generated files against their sources and the changelog fragments.
       - name: cargo xtask checks
         if: ${{ !cancelled() }}
         run: cargo xtask checks

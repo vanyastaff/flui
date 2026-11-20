@@ -25,7 +25,7 @@ name: Weekly
 # Runs Monday ~05:17 UTC (off the :00/:30 herd marks). Not a merge gate;
 # failures surface in the Actions tab. Benchmark numbers are not collected
 # here: shared runners are too noisy for a trend, and A/B comparisons happen
-# locally with `cargo xtask bench-collect <name>` and `critcmp`.
+# locally with `cargo bench -p <crate> -- --save-baseline <name>` and `critcmp`.
 # No build cache: GitHub drops an entry unused for seven days, so a weekly
 # entry is gone (or evicted by the 10 GB limit) before the next run, and
 # saving it only pushes ci.yml's entries out.

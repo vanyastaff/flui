@@ -212,8 +212,8 @@ only the `checks` job's steps: typos, the lychee line in `ci.yml` and `cargo hel
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
-| Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | `xtask unmounted-tests` (in `xtask checks`; ADR-0371 §3) |
-| No two records in `docs/adr/` share a number | `xtask adr-numbers` (in `xtask checks`; ADR-0371 §3) |
+| Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | a step of CI's `checks` job (ADR-0383 §9) |
+| No two records in `docs/adr/` share a number | a step of CI's `checks` job (ADR-0383 §9) |
 | A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned | `deny.toml` (ADR-0323 §3) |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
 

@@ -95,7 +95,7 @@ Three versions must agree or the runner refuses to start: the locked `wasm-bindg
 `wasm-bindgen-test` (pinned `=0.3.77` in flui-foundation — the unpinned `"0.3"` resolves to 0.3.78
 and would bump the workspace lock as a side effect of adding a dev-dependency), and
 `wasm-bindgen-cli`, whose version is the one `wasm-bindgen` the lock resolves: the step reads it
-from `cargo metadata`, `cargo xtask doctor full` compares the installed one with it, and both fail
+from `cargo metadata` and both fail
 on a lock with two. Locally, the step's loop is one line per test target:
 `cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32`.
 
@@ -152,8 +152,7 @@ module declarations with `syn`; a commented declaration or an example inside
 a string cannot mount a test file. This checks direct mounts, not arbitrary
 macro expansion or conditional module graphs.
 
-typos, taplo and lychee are binaries of their own (`cargo xtask doctor` says
-how to install each); CI's `checks` job installs them. The job's lychee line
+typos, taplo and lychee are binaries of their own; CI's `checks` job installs them. The job's lychee line
 is written for a Linux shell: on Windows its remap needs the checkout as
 `file:///D:/…` (`pwd -W` in Git Bash), or a correct link to this repository's
 `main` on GitHub fails. The flui-native step
@@ -255,7 +254,7 @@ window draws at the largest.
 ### The Windows test desktop
 
 On Windows, nextest starts every test on a desktop of its own (ADR-0355): `.config/nextest.toml`
-runs each test process through `test-desktop` (`tools/xtask/src/bin/test-desktop.rs`), which a
+runs each test process through `test-desktop` (`tools/test-desktop/src/main.rs`), which a
 setup script builds first, always into the workspace root's `target/`. The desktop is
 `flui-test-<run id>` in the user's window station, one per nextest run, shared by that run's tests
 and gone once nothing holds it: every test of the run has exited, crashed or not, and so has every
@@ -422,9 +421,9 @@ directory as Cargo resolves it (`cargo metadata`'s `target_directory`), so a
 whatever `CARGO_TARGET_DIR` said. trybuild keeps its own `tests/trybuild/` there, since
 it builds with a different `--cfg` and would thrash a shared cache. Nothing
 prunes these three directories: they grow with every FLUI version and feature
-set built through them (1.5-3 GB each is normal). `cargo heli xtask clean-nested`
-deletes them once no build or test heli runs in this checkout is using them
-(`.config/heli.toml` makes it a mutating command); `cargo sweep --installed .`
+set built through them (1.5-3 GB each is normal). Delete them by hand while no test runs:
+`target/cli-template-check/`, `target/facade-consumer-check/` and `target/tests/trybuild/`;
+`cargo sweep --installed .`
 then `cargo sweep --maxsize 12GB .` bounds the main target directory (oldest
 artifacts first).
 
@@ -470,16 +469,11 @@ multiplies that. To keep it bounded:
 - **Delete a worktree's `target/` once its branch is pushed.** From then on CI
   is the proof; a review fix rebuilds in minutes, while keeping the directory
   costs tens of GB until the merge.
-- **After the merge, `cargo xtask worktree prune`.** It surveys every worktree
-  git knows, `.claude/worktrees/` included, not only `.worktrees/`, and removes
-  a merged one with its `target/` and branch. It keeps a worktree that is
-  locked (Claude Code locks an agent's worktree while the agent runs, and a
-  lock left by a process that died stays until `git worktree unlock`),
-  detached, unmerged, or holding modified, untracked or ignored files other
-  than `TASKS.md` and `target/`. `cargo xtask worktree prune --dry-run` names
-  each kept one and why; deleting a kept one's `target/` by hand still frees
-  the space.
-- **The main checkout:** `cargo heli xtask clean-nested` drops the nested-test
+- **After the merge, `git worktree remove <path>` and `git branch -d <branch>`.** Claude Code and
+  the desktop app make their own worktrees under `.claude/worktrees/`; remove each with its
+  `target/` once merged. A worktree Claude Code locked while an agent ran, or a lock left by a
+  process that died, stays until `git worktree unlock`.
+- **The main checkout:** delete the nested-test caches by hand (`target/cli-template-check/`, `target/facade-consumer-check/`, `target/tests/trybuild/`), then `cargo sweep --installed .` and `cargo sweep --maxsize 12GB .`
   caches, then `cargo sweep --installed .` and `cargo sweep --maxsize 12GB .`
   bound the rest ([Nested-cargo tests](#nested-cargo-tests)).
 
@@ -731,11 +725,9 @@ them) proves they build; it does not detect a regression — numbers have to
 be collected and compared. The workflow for that:
 
 - **Local A/B (the authoritative comparison).** Run on a quiet machine:
-  `cargo xtask bench-collect before` on the baseline commit, apply the change,
-  then `cargo xtask bench-collect after` and `critcmp before after` (needs
-  `critcmp`, e.g. `cargo binstall critcmp`). Criterion also prints its own
-  change estimate against the last run of the same bench when run directly.
-  `bench-collect` uses fresh isolated output for each target, so compare its
+  `cargo bench -p <crate> -- --save-baseline before` on the baseline commit, apply the change,
+  then `cargo bench -p <crate> -- --save-baseline after` and `critcmp before after` (needs
+  `critcmp`, e.g. `cargo binstall critcmp`). Criterion also prints its own Compare the saved baselines with `critcmp`.
   published named baselines with `critcmp` instead.
 - **Weekly trend (advisory).** The `bench` job in `weekly.yml` executes the
   full suite and uploads `target/criterion` as a 90-day artifact. Shared
@@ -1353,11 +1345,9 @@ measurements): of those, `wasm-check` and `cross-typecheck` are the ones
 that fail alone, so a change to the web or a native backend is the one to
 check by hand before its pull request. Native application
 Windows/macOS and GPU runtime checks are local commands; no labels enable
-them in CI. The host tool is covered separately: `xtask-native.yml` runs
-strict xtask Clippy and the complete xtask test suite on Windows and macOS
-every week and by hand (ADR-0376; on Linux, `checks` runs
-the suite and `clippy` lints xtask on every pull request). This
-includes native cache-key, host-lock and platform driver regressions; it
+them in CI. The host tool (xtask) has no Windows or macOS code path, so on Linux `checks` runs
+the suite and `clippy` lints xtask on every pull request (ADR-0383 §9); native cache-key,
+host-lock and platform driver regressions are not covered there, and this
 does not replace application or device runtime validation.
 
 The `ci` job is the one required check: it fails when a job it needs failed or
@@ -1366,8 +1356,8 @@ lane other than `full`.
 
 Locally, the pre-PR checks are the few commands in AGENTS.md's "Checking a change". No command
 mirrors the whole of CI, and CI is the proof: a contributor runs the commands of the job they
-need, which `.github/workflows/ci.yml` holds. `cargo xtask doctor full` names what the
-heavier ones need installed. One row per job:
+need, which `.github/workflows/ci.yml` holds; the job that runs a check installs what it
+needs. One row per job:
 
 | CI job | Local command | Difference, or why CI-only |
 |---|---|---|
@@ -1385,13 +1375,13 @@ heavier ones need installed. One row per job:
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |
 | `feature-matrix` | `cargo hack clippy --workspace --partition k/5 --locked --each-feature --keep-going -- -D warnings`, then with `--tests --benches --examples`; the `combinations` leg runs `cargo clippy -p flui --locked --all-targets <combination> -- -D warnings` for each combination ci.yml lists | locally, `-p <crate>` in place of `--workspace --partition k/5` lints the crates a change touched |
-| `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, its `cargo build` of the two web demos, `wasm-bindgen` over each and node's list of their import modules, then `cargo test --target wasm32-unknown-unknown` for each crate with a wasm32 `wasm-bindgen-test` dev-dependency | the tests need the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it), and a crate whose tests are `run_in_browser` a ChromeDriver (`CHROMEDRIVER=<path>`) |
+| `wasm-check` | the job's `cargo check` and `cargo clippy` lines for wasm32, its `cargo build` of the two web demos, `wasm-bindgen` over each and node's list of their import modules, then `cargo test --target wasm32-unknown-unknown` for each crate with a wasm32 `wasm-bindgen-test` dev-dependency | the tests need the `wasm-bindgen-cli` version `Cargo.lock` pins, and a crate whose tests are `run_in_browser` a ChromeDriver (`CHROMEDRIVER=<path>`) |
 | `cross-typecheck` | `cargo clippy --workspace --all-targets --locked --target <triple> -- -D warnings`, then the same command with `--all-features`, for each of `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-linux-android` and `aarch64-apple-ios` | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require; a shell step over the needed jobs' results |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main, and closes it after the next green one (`.github/actions/tracking-issue`, which `advisories.yml` shares) |
 
 The other workflows (`weekly.yml`, `release.yml`, `docs.yml`, `fuzz.yml`,
-`xtask-native.yml`) are scheduled, manual or event-driven, not per-PR gates. Release workflows build platform artifacts;
+`nightly-platforms.yml`) are scheduled, manual or event-driven, not per-PR gates. Release workflows build platform artifacts;
 they do not run native validation jobs. The native runtime suites run every
 night on main in `nightly-platforms.yml` (below) and locally through
 the `desktop` job's commands of that workflow; no pull request waits for them.

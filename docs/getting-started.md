@@ -17,10 +17,8 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |
 
 Repository tasks run as `cargo xtask <command>` (`cargo xtask --help` lists
-them); there is no other task runner to install. `cargo xtask doctor` checks
-the tools the everyday local checks need and prints the install command for each
-missing one (`cargo xtask doctor full` adds what the heavier CI jobs need: the
-cross-target and wasm checks, the feature matrix, cargo-deny and Miri).
+them); there is no other task runner to install. The tools a check needs are
+named by the CI job in `.github/workflows/ci.yml` that runs it, and that job installs them.
 
 The GPU dependency version is defined by `wgpu` in `[workspace.dependencies]`
 in `Cargo.toml`; consult that manifest when checking driver or backend requirements.
@@ -32,7 +30,7 @@ week of each new stable (Rust ships every 6 weeks); post-1.0 it follows N-2
 (tolerates the two most recent stable releases behind current). A bump
 touches `rust-toolchain.toml`, `Cargo.toml` (clippy reads the MSRV from it),
 the `flui-cli` project templates, the README badge and `llms.txt` together —
-`cargo xtask toolchain` (part of `cargo xtask checks`) fails if any of them
+the `checks` job in `.github/workflows/ci.yml` (step "The MSRV everywhere is the toolchain's") fails if any of them
 drift from `rust-toolchain.toml`'s channel. Full procedure:
 `rust-toolchain.toml`'s header comment.
 
