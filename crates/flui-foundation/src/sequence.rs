@@ -18,7 +18,7 @@
 
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The identity of one input sequence within the binding that minted it.
@@ -67,7 +67,7 @@ mod sealed {
 /// whose only source is a mint — no `Default`, no conversion from a number
 /// (`ListenerId`, `FrameCallbackId`, `PressId`, `InputSequenceId`), an id a
 /// private wire representation names back (`DragSessionId`), or the raw
-/// `NonZeroU64` issue for an identity type defined above this crate, whose
+/// `NonZeroU64` or `NonZeroU32` issue for an identity type defined above this crate, whose
 /// owner keeps its constructor private.
 pub trait MintedId: sealed::Sealed + Copy {
     /// The highest raw value a mint for this id hands out: the id type's own
@@ -133,6 +133,19 @@ impl MintedId for NonZeroU64 {
 
     fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
         raw
+    }
+}
+
+impl sealed::Sealed for NonZeroU32 {}
+
+/// The raw 32-bit issue, for an identity a packed handle carries in 32 bits
+/// (a reactive graph's id inside every `SignalSlot`). The mint stops at
+/// `u32::MAX`, so the narrowing never fails.
+impl MintedId for NonZeroU32 {
+    const MINT_CEILING: u64 = u32::MAX as u64;
+
+    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
+        Self::try_from(raw).expect("BUG: a mint never issues past MINT_CEILING")
     }
 }
 

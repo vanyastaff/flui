@@ -54,9 +54,8 @@ pub struct SignalSlot {
 }
 
 impl SignalSlot {
-    /// The graph id no graph is given: graph ids start past it, and the
-    /// counter parks at it once the id space is spent, so no live graph
-    /// accepts a slot that names it.
+    /// The graph id no graph is given: graph ids are minted from 1, so no
+    /// live graph accepts a slot that names it.
     pub const NO_GRAPH: u32 = 0;
 
     /// A slot handle. Minted by the graph that owns the arena; a handle built
