@@ -16,6 +16,7 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use wayland_client::backend::WaylandError;
 use wayland_client::protocol::wl_compositor::WlCompositor;
+#[cfg(any(test, feature = "testing"))]
 use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::protocol::wl_shm::WlShm;
 use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
