@@ -3706,6 +3706,113 @@ mod tests {
         );
     }
 
+    /// A window set up on an HDR display and moved to an SDR one resolves the
+    /// SDR display's colour at its next configuration, so its `Hdr` request
+    /// falls back; the same report again configures nothing; a released slot
+    /// takes the report without a surface to configure, and its restore
+    /// configures for the display reported by then.
+    ///
+    /// Red-check: let `WindowSlot::set_display_color` store the display
+    /// without configuring, and the slot keeps granting `Hdr`.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_slot_moved_to_an_sdr_display_reconfigures_for_its_range() {
+        use std::sync::Arc;
+
+        use flui_platform::{ColorGamut, DisplayColor, Headroom};
+
+        use crate::{
+            SurfaceColor,
+            surface::slot::{Offer, WindowSlot},
+            testing::ScriptedAcquire,
+        };
+
+        let sdr_pair = (
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::SurfaceColorSpaces::SRGB,
+        );
+        let hdr_pair = (
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR,
+        );
+        let offered = wgpu::SurfaceCapabilities {
+            formats: vec![sdr_pair.0, hdr_pair.0],
+            format_capabilities: [sdr_pair, hdr_pair]
+                .map(|(format, color_spaces)| wgpu::SurfaceFormatCapabilities {
+                    format,
+                    color_spaces,
+                })
+                .to_vec(),
+            present_modes: vec![wgpu::PresentMode::Fifo],
+            alpha_modes: vec![wgpu::CompositeAlphaMode::Opaque],
+            usages: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        };
+        let hdr_display = DisplayColor::High(
+            ColorGamut::Rec2020,
+            Ok(Headroom::from_luminance(1000.0, 200.0).expect("a positive headroom")),
+        );
+        let sdr_display = DisplayColor::Standard(ColorGamut::Srgb);
+
+        let (context, factory) = noop_context();
+        let new_surface = |id| {
+            factory
+                .create(Arc::new(crate::testing::FakeWindow::new(id)))
+                .expect("the no-op backend makes a surface for any window")
+        };
+        let mut window = WindowSlot::configured_without_capabilities(
+            new_surface(7),
+            (32, 16),
+            ScriptedAcquire::Timeout,
+        );
+        window.offered = Some(Arc::new(Offer {
+            capabilities: offered,
+            hdr: wgpu::DisplayHdrInfo::default(),
+            working_renderable: true,
+        }));
+        window.ask_for(SurfaceColor::Hdr);
+        let gpu = context.gpu();
+
+        window
+            .set_display_color(&gpu, hdr_display)
+            .expect("the surface offers an HDR pair");
+        assert_eq!(window.granted(), Some(SurfaceColor::Hdr));
+
+        window.settle_presented();
+        window
+            .set_display_color(&gpu, sdr_display)
+            .expect("the surface offers an SDR pair");
+        assert_ne!(
+            window.granted(),
+            Some(SurfaceColor::Hdr),
+            "the SDR display's range is resolved at the next configuration"
+        );
+        assert!(window.granted().is_some(), "the slot is configured");
+        assert!(window.owes_a_frame(), "the surface was configured again");
+
+        window.settle_presented();
+        window
+            .set_display_color(&gpu, sdr_display)
+            .expect("the same report configures nothing");
+        assert!(
+            !window.owes_a_frame(),
+            "a report that changes nothing leaves the surface as it was"
+        );
+
+        window.release();
+        window
+            .set_display_color(&gpu, hdr_display)
+            .expect("a released slot takes the report");
+        assert_eq!(window.granted(), None, "a released slot configures nothing");
+        window
+            .restore_unchecked(&gpu, new_surface(8))
+            .expect("the restored surface is configured");
+        assert_eq!(
+            window.granted(),
+            Some(SurfaceColor::Hdr),
+            "the restore configures for the display reported while released"
+        );
+    }
+
     /// Attach one RGBA offscreen slot of 32×16 to `sender`'s executor.
     #[cfg(not(target_arch = "wasm32"))]
     fn attach_rgba(

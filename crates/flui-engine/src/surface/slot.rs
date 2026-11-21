@@ -46,6 +46,15 @@ struct Configured {
     supports_copy_src: bool,
 }
 
+/// What a surface and its adapter report about what the surface can show.
+pub(crate) struct Offer {
+    pub(crate) capabilities: wgpu::SurfaceCapabilities,
+    /// The surface's own report of its display's range.
+    pub(crate) hdr: wgpu::DisplayHdrInfo,
+    /// Whether the adapter renders and blends the working format.
+    pub(crate) working_renderable: bool,
+}
+
 /// One window's slot.
 pub(crate) struct WindowSlot {
     lease: SurfaceLease<wgpu::Surface<'static>>,
@@ -65,6 +74,10 @@ pub(crate) struct WindowSlot {
     /// surface no GPU presents to.
     #[cfg(all(test, feature = "testing"))]
     acquire_answers: Option<ScriptedAcquire>,
+    /// What the surface offers instead of what the adapter reports, in a test
+    /// of a configuration the no-op adapter cannot offer (an HDR pair).
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) offered: Option<Arc<Offer>>,
     /// Make the next resize's configure panic, in a test.
     #[cfg(all(test, feature = "testing"))]
     pub(crate) panic_in_next_configure: bool,
@@ -99,6 +112,8 @@ impl WindowSlot {
             recovery: SurfaceRecovery::default(),
             #[cfg(all(test, feature = "testing"))]
             acquire_answers: None,
+            #[cfg(all(test, feature = "testing"))]
+            offered: None,
             #[cfg(all(test, feature = "testing"))]
             panic_in_next_configure: false,
         })
@@ -158,6 +173,8 @@ impl WindowSlot {
             recovery: SurfaceRecovery::default(),
             #[cfg(all(test, feature = "testing"))]
             acquire_answers: Some(answers),
+            #[cfg(all(test, feature = "testing"))]
+            offered: None,
             #[cfg(all(test, feature = "testing"))]
             panic_in_next_configure: false,
         }
@@ -260,8 +277,14 @@ impl WindowSlot {
         surface: UnconfiguredSurface,
     ) -> EngineResult<()> {
         self.release();
+        presentable(gpu, &surface.lease)?;
+        self.adopt(gpu, surface)
+    }
+
+    /// Hold `surface`, which the adapter presents to, configured at the
+    /// slot's size for the colour the slot last resolved against.
+    fn adopt(&mut self, gpu: &Gpu<'_>, surface: UnconfiguredSurface) -> EngineResult<()> {
         let UnconfiguredSurface { lease, target } = surface;
-        presentable(gpu, &lease)?;
         self.lease = lease;
         self.target = target;
         self.configure(gpu)
@@ -472,15 +495,36 @@ impl WindowSlot {
     /// function's warnings, which the first configure logs once (ADR-0256 §1).
     pub(crate) fn expected_format(&self, gpu: &Gpu<'_>) -> Option<wgpu::TextureFormat> {
         let surface = self.lease.surface()?;
+        let offer = self.offer(surface, gpu.adapter);
         let color = ResolvedSurfaceColor::resolve(
             self.color.requested,
-            &surface.get_capabilities(gpu.adapter),
+            &offer.capabilities,
             self.color.display,
-            &surface.display_hdr_info(gpu.adapter),
-            crate::surface::color::working_format_renderable(gpu.adapter),
+            &offer.hdr,
+            offer.working_renderable,
         )
         .ok()?;
         Some(color.working_format())
+    }
+
+    /// What `surface` offers on `adapter`.
+    #[cfg_attr(
+        not(all(test, feature = "testing")),
+        expect(
+            clippy::unused_self,
+            reason = "only a test's `offered` replaces what the adapter reports"
+        )
+    )]
+    fn offer(&self, surface: &wgpu::Surface<'_>, adapter: &wgpu::Adapter) -> Arc<Offer> {
+        #[cfg(all(test, feature = "testing"))]
+        if let Some(offered) = &self.offered {
+            return Arc::clone(offered);
+        }
+        Arc::new(Offer {
+            capabilities: surface.get_capabilities(adapter),
+            hdr: surface.display_hdr_info(adapter),
+            working_renderable: crate::surface::color::working_format_renderable(adapter),
+        })
     }
 
     /// Configure the held surface at the slot's size from its own
@@ -501,8 +545,7 @@ impl WindowSlot {
             return Err(EngineError::InvalidTargetSize { width, height });
         }
         let (config, supports_copy_src, color) = derive_surface_config(
-            surface,
-            gpu.adapter,
+            &self.offer(surface, gpu.adapter),
             self.lease.pacing(),
             width,
             height,
@@ -538,21 +581,20 @@ impl WindowSlot {
 /// `present_mode`/`alpha_mode` (see its own `# Panics` list), so every one of
 /// those is re-derived here rather than carried over.
 fn derive_surface_config(
-    surface: &wgpu::Surface<'_>,
-    adapter: &wgpu::Adapter,
+    offer: &Offer,
     pacing: FramePacing,
     width: u32,
     height: u32,
     latency: FrameLatency,
     color: ColorRequest,
 ) -> EngineResult<(wgpu::SurfaceConfiguration, bool, ResolvedSurfaceColor)> {
-    let surface_caps = surface.get_capabilities(adapter);
+    let surface_caps = &offer.capabilities;
     let surface_color = ResolvedSurfaceColor::resolve(
         color.requested,
-        &surface_caps,
+        surface_caps,
         color.display,
-        &surface.display_hdr_info(adapter),
-        crate::surface::color::working_format_renderable(adapter),
+        &offer.hdr,
+        offer.working_renderable,
     )?;
     if surface_color.is_downgraded() {
         tracing::warn!(
@@ -586,7 +628,7 @@ fn derive_surface_config(
         color_space: surface_color.color_space(),
         width,
         height,
-        present_mode: select_present_mode(&surface_caps, pacing),
+        present_mode: select_present_mode(surface_caps, pacing),
         alpha_mode: wgpu::CompositeAlphaMode::Auto,
         view_formats: vec![],
         // The window's `FrameLatency` (ADR-0347), `Balanced` unless the window asked for
@@ -699,6 +741,30 @@ impl WindowSlot {
     pub(crate) fn settle_presented(&mut self) {
         let _plan = self.frame.plan(self.uses_intermediate());
         self.frame.presented();
+    }
+
+    /// Ask for `color` from the next configuration on.
+    pub(crate) fn ask_for(&mut self, color: SurfaceColor) {
+        self.color.requested = color;
+    }
+
+    /// The colour the held configuration delivers; `None` while the slot is
+    /// unconfigured.
+    pub(crate) fn granted(&self) -> Option<SurfaceColor> {
+        self.configured
+            .as_ref()
+            .map(|configured| configured.color.granted())
+    }
+
+    /// [`Self::restore`] without the support check, which wgpu's no-op
+    /// adapter fails for every surface.
+    pub(crate) fn restore_unchecked(
+        &mut self,
+        gpu: &Gpu<'_>,
+        surface: UnconfiguredSurface,
+    ) -> EngineResult<()> {
+        self.release();
+        self.adopt(gpu, surface)
     }
 
     /// Whether the next frame of an unchanged scene would render.
