@@ -19,9 +19,11 @@
 use std::fmt;
 use std::sync::Arc;
 
+use flui_foundation::TreeError;
 use flui_foundation::geometry::Size;
-use flui_layer::Scene;
 use flui_layer::{BoundaryContent, SceneOp, SceneOwner, SceneVersion, SurfaceKey};
+use flui_layer::{Scene, SceneError};
+use flui_rendering::RenderError;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
 use flui_view::__runtime::WidgetsBinding;
@@ -30,14 +32,19 @@ use flui_view::{__runtime::BindingRuntime as _, StatelessView, View};
 /// Why [`PluginPipeline::draw_frame`] produced no scene.
 ///
 /// The plugin image has no tracing subscriber of its own, so the caller logs
-/// it where its platform shows it and hands the host an empty scene.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// it, with its [`source`](std::error::Error::source) chain, where its
+/// platform shows it and hands the host an empty scene.
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum PluginFrameError {
-    /// The render pipeline refused the frame; the text is its error's.
-    Pipeline(String),
+    /// The host asked for a frame at a size that is not finite or is
+    /// negative. Nothing was laid out: the size would have reached the root's
+    /// constraints as it came.
+    InvalidSize(Size),
+    /// The render pipeline refused the frame.
+    Pipeline(TreeError<RenderError>),
     /// The scene refused the pipeline's patch: a defect in the pipeline.
-    PatchRefused(String),
+    PatchRefused(SceneError),
     /// The frame painted nothing: the pipeline has no root, or produced no
     /// layer tree.
     NothingPainted,
@@ -46,19 +53,30 @@ pub enum PluginFrameError {
 impl fmt::Display for PluginFrameError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Pipeline(error) => write!(f, "the plugin's pipeline failed: {error}"),
-            Self::PatchRefused(error) => {
-                write!(
-                    f,
-                    "BUG: the plugin's scene refused its pipeline's patch: {error}"
-                )
+            Self::InvalidSize(size) => write!(
+                f,
+                "the host asked for a plugin frame at {} x {}, which is not a finite, \
+                 non-negative size",
+                size.width, size.height
+            ),
+            Self::Pipeline(_) => f.write_str("the plugin's pipeline failed"),
+            Self::PatchRefused(_) => {
+                f.write_str("BUG: the plugin's scene refused its pipeline's patch")
             }
             Self::NothingPainted => f.write_str("the plugin's frame painted nothing"),
         }
     }
 }
 
-impl std::error::Error for PluginFrameError {}
+impl std::error::Error for PluginFrameError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Pipeline(error) => Some(error),
+            Self::PatchRefused(error) => Some(error),
+            Self::InvalidSize(_) | Self::NothingPainted => None,
+        }
+    }
+}
 
 /// A widget pipeline of its own inside a scene plugin.
 ///
@@ -119,8 +137,7 @@ impl PluginPipeline {
         }
     }
 
-    /// Builds, lays out and paints a frame at `width` x `height` and returns
-    /// its scene.
+    /// Builds, lays out and paints a frame at `size` and returns its scene.
     ///
     /// The root is laid out tight to the size passed with each frame, so a
     /// resized surface is laid out at its new size on the next one. Every
@@ -129,9 +146,14 @@ impl PluginPipeline {
     ///
     /// # Errors
     ///
-    /// [`PluginFrameError`] when the frame produced no scene; the pipeline is
-    /// still usable and the next call draws again.
-    pub fn draw_frame(&mut self, width: f64, height: f64) -> Result<Scene, PluginFrameError> {
+    /// [`PluginFrameError::InvalidSize`] for a size that is not finite or is
+    /// negative, before anything is built; otherwise [`PluginFrameError`] when
+    /// the frame produced no scene. Either way the pipeline is still usable
+    /// and the next call draws again.
+    pub fn draw_frame(&mut self, size: Size) -> Result<Scene, PluginFrameError> {
+        if !size.is_finite() || size.width < 0.0 || size.height < 0.0 {
+            return Err(PluginFrameError::InvalidSize(size));
+        }
         let widgets = &self.widgets;
         let pipeline_owner = &self.pipeline_owner;
         widgets.with_global_key_registry(|| {
@@ -156,11 +178,11 @@ impl PluginPipeline {
                     return Err(PluginFrameError::NothingPainted);
                 };
                 guard.mark_needs_paint(root_id);
-                guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
+                guard.set_root_constraints(Some(BoxConstraints::tight(size)));
                 let mut writer = scene.writer();
                 let painted = guard
                     .run_frame_in_place(&mut writer)
-                    .map_err(|error| PluginFrameError::Pipeline(format!("{error:?}")))?;
+                    .map_err(PluginFrameError::Pipeline)?;
                 if !painted {
                     return Err(PluginFrameError::NothingPainted);
                 }
@@ -177,12 +199,12 @@ impl PluginPipeline {
                     });
                 }
                 let surface = SurfaceKey {
-                    size: (whole_pixels(width), whole_pixels(height)),
+                    size: (whole_pixels(size.width), whole_pixels(size.height)),
                     generation: flui_foundation::SurfaceGeneration::ZERO,
                 };
                 scene
                     .apply(surface)
-                    .map_err(|error| PluginFrameError::PatchRefused(error.to_string()))?;
+                    .map_err(PluginFrameError::PatchRefused)?;
                 released = guard.scene_applied(scene.current());
                 Ok(guard.scene_frame_node().map(|_| scene.current().clone()))
             });
@@ -274,7 +296,7 @@ mod tests {
             ));
         }));
 
-        let _scene = pipeline.draw_frame(320.0, 240.0);
+        let _scene = pipeline.draw_frame(Size::new(320.0, 240.0));
         assert!(
             observed.get(),
             "draw_frame keeps the plugin registry active after build releases its lock"
@@ -301,7 +323,7 @@ mod tests {
             key: GlobalKey::<()>::new(),
         };
         let mut pipeline = PluginPipeline::mount(root, TextContextHandle::standalone());
-        let _built = pipeline.draw_frame(100.0, 100.0);
+        let _built = pipeline.draw_frame(Size::new(100.0, 100.0));
         let link = LayerLink::new();
         pipeline.pipeline_owner.with_mut(|owner| {
             let (leader, _) = tree::mount(
@@ -318,7 +340,7 @@ mod tests {
             .pipeline_owner
             .watch_leader(link, frame.post_frame_handle());
 
-        let _scene = pipeline.draw_frame(100.0, 100.0);
+        let _scene = pipeline.draw_frame(Size::new(100.0, 100.0));
         assert!(
             watch.geometry().is_some(),
             "the leader the plugin frame painted is attached"
@@ -338,5 +360,49 @@ mod tests {
         for (extent, expected) in cases {
             assert_eq!(whole_pixels(extent), expected, "{extent}");
         }
+    }
+
+    /// A size the host sends that is not finite or is negative is refused
+    /// before the root is built, and the pipeline draws the next valid frame.
+    ///
+    /// Red-check: drop the size check in `draw_frame` (the refused draws
+    /// build the root and reach layout).
+    #[test]
+    fn a_frame_at_an_invalid_size_is_refused_before_anything_is_built() {
+        let mut pipeline = PluginPipeline::mount(
+            KeyedRoot {
+                key: GlobalKey::<()>::new(),
+            },
+            TextContextHandle::standalone(),
+        );
+        let refused = [
+            Size::new(f64::NAN, 100.0),
+            Size::new(100.0, f64::INFINITY),
+            Size::new(f64::NEG_INFINITY, 100.0),
+            Size::new(-1.0, 100.0),
+            Size::new(100.0, -0.5),
+        ];
+        for size in refused {
+            let result = pipeline.draw_frame(size);
+            assert!(
+                matches!(result, Err(PluginFrameError::InvalidSize(refused)) if refused.width.to_bits() == size.width.to_bits()
+                    && refused.height.to_bits() == size.height.to_bits()),
+                "{size:?} is refused as an invalid size, got {result:?}"
+            );
+            assert!(
+                pipeline.widgets.has_pending_builds(),
+                "{size:?} is refused before the root is built"
+            );
+        }
+
+        let accepted = pipeline.draw_frame(Size::new(0.0, 0.0));
+        assert!(
+            !matches!(accepted, Err(PluginFrameError::InvalidSize(_))),
+            "a zero size is a valid frame, got {accepted:?}"
+        );
+        assert!(
+            !pipeline.widgets.has_pending_builds(),
+            "the first valid frame builds the root"
+        );
     }
 }

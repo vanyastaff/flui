@@ -28,7 +28,7 @@ fn a_plugin_pipeline_measures_through_the_context_it_is_given() {
     let mut pipeline = flui_hot_reload::PluginPipeline::mount(Label, text.clone());
 
     let _scene = pipeline
-        .draw_frame(320.0, 240.0)
+        .draw_frame(flui_sdk::geometry::Size::new(320.0, 240.0))
         .expect("the frame paints its label");
 
     assert!(

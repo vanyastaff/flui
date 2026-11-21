@@ -8,25 +8,29 @@
 //! The crate is **Evolving**: it has its own `0.N` version, bumped on every
 //! train, and its surface may change on any train without a `flui` major.
 //!
-//! - **Whole modules** at the facade's paths: [`animation`], [`foundation`],
-//!   [`geometry`] and [`widgets`] are the internal crates (or, for
-//!   `geometry`, foundation's module) themselves, so `flui_sdk::widgets::Text`
-//!   and `flui::widgets::Text` are one type. [`view`] is a glob of the whole
-//!   `flui-view` crate that shadows its `__runtime` seam (ADR-0081 §4).
-//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
-//!   [`platform`], [`rendering`], [`scheduler`] and [`semantics`] hold the subset of the
-//!   facade's module that packages use, as the same items, not wrappers.
+//! - **Whole modules**: [`animation`], [`foundation`], [`geometry`] and
+//!   [`widgets`] are the internal crates (for `geometry`, foundation's module)
+//!   themselves, and [`view`] is a glob of the whole `flui-view` crate. Each
+//!   shadows its `__runtime` seam where it has one (ADR-0081 §4). An item the
+//!   facade also exposes keeps the facade's path, so `flui_sdk::widgets::Text`
+//!   and `flui::widgets::Text` are one type; the facade's `foundation` is
+//!   curated and the SDK's is not.
+//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`]
+//!   (the `paint`, `styling` and `typography` modules whole, and selected root
+//!   items), [`platform`], [`rendering`], [`scheduler`] and [`semantics`] hold
+//!   the subset of the facade's module that packages use, as the same items,
+//!   not wrappers. [`interaction`] also holds `text_input`, which the facade
+//!   does not have.
 //! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
 //!   and development hooks the facade does not expose. A package's exposure to
 //!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
 //!
-//! Each item is here because `flui-material`, `flui-cupertino` or
-//! `flui-devtools` imports it outside its tests, or because an approved
-//! feature spec places it in the package-author surface (the input
-//! completeness spec's placement table: arena observation, gesture presets,
-//! the gesture slots' locks, the swipe recognizer, system preferences, haptic
-//! feedback kinds and input regions);
-//! `tests/surface.rs` pins the list.
+//! An item is here because a package imports it, or because an accepted ADR or
+//! spec places it in the package-author surface (ADR-0088 §4): the capability
+//! seam, drag and drop, the clipboard and primary-selection handles, the
+//! recognizer extension surface, the semantics vocabulary and the system
+//! preferences have no consumer in this repository. `tests/surface.rs` pins
+//! the list.
 
 // Derive expansions use the same absolute owner path in library and integration targets.
 #[allow(
@@ -420,15 +424,15 @@ pub mod pipeline {
 /// **Evolving** (ADR-0088 §4), like [`pipeline`]:
 ///
 /// - frame telemetry that development tooling reads. No public API produces a
-///   `FrameSnapshot` yet: the presentation's frame clock is internal to the
-///   app host. A public snapshot source is the follow-up recorded in
-///   ADR-0088's move 4.
+///   `FrameSnapshot`: a UI runtime builds them crate-privately. The gap is
+///   `docs/gaps.md#development-tooling-reads-frame-snapshots-nothing-public-produces`.
 /// - the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6): the
 ///   [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its root
 ///   on and the [`Scene`](hooks::Scene) of a retained version it hands back,
 ///   the [`TextContextHandle`](hooks::TextContextHandle) it measures with, and
 ///   the [`LayerTree`](hooks::LayerTree) a scene plugin builds its image from,
-///   which `Scene::new` makes a version. They leave with that path (ADR-0311 §7).
+///   which `Scene::new` makes a version, and the [`SceneError`](hooks::SceneError)
+///   a refused frame reports as its source. They leave with that path (ADR-0311 §7).
 ///
 /// The tree-observation seam is not here; it is `foundation::observe`, at the
 /// facade's path.
@@ -437,6 +441,7 @@ pub mod hooks {
 
     pub use flui_layer::LayerTree;
     pub use flui_layer::Scene;
+    pub use flui_layer::SceneError;
     pub use flui_rendering::pipeline::TextContextHandle;
     pub use flui_scheduler::FrameSnapshot;
     pub use plugin_pipeline::PluginFrameError;

@@ -51,7 +51,7 @@ fn a_plugin_pipeline_lays_out_at_the_size_of_each_frame() {
         (200.0, 100.0),
     ] {
         let scene = pipeline
-            .draw_frame(width, height)
+            .draw_frame(Size::new(width, height))
             .expect("the frame paints its root");
         assert_eq!(
             painted_size(&scene),

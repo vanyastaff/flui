@@ -1,8 +1,6 @@
 //! The SDK's surface is the measured list, and each re-export is the item it
 //! names, not a copy.
-//!
-//! The list starts with the package imports measured in ARCHITECTURE.md and
-//! pins subsequent consumer additions and removals, plus `painting::DrawOp`,
+//! The list pins the package imports, plus `painting::DrawOp`,
 //! which the design systems' paint tests read, `painting::Shadow` and
 //! `painting::BlurSigma`, which a text style's shadows and the op a
 //! paragraph's shadow records name (ADR-0309), the four decoration types
@@ -77,7 +75,7 @@ mod measured {
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::{
         FrameSnapshot as _, LayerTree as _, PluginFrameError as _, PluginPipeline as _, Scene as _,
-        TextContextHandle as _,
+        SceneError as _, TextContextHandle as _,
     };
     use flui_sdk::interaction::{
         ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
@@ -641,6 +639,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::text_input::committed_text;",
         "pub use flui_layer::LayerTree;",
         "pub use flui_layer::Scene;",
+        "pub use flui_layer::SceneError;",
         "pub use flui_objects::CarouselLayout;",
         "pub use flui_objects::CrossAxisAlignment;",
         "pub use flui_objects::FloatingHeaderSnapConfiguration;",

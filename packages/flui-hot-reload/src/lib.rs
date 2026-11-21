@@ -180,15 +180,33 @@ mod plugin;
 #[cfg(feature = "app-plugin")]
 pub use flui_sdk::hooks::{PluginFrameError, PluginPipeline};
 
-// Re-exported so `app_plugin!`'s generated `flui_app_build` can report a frame
-// that produced no scene where the plugin's platform shows it: the host's
-// tracing subscriber does not reach a `dlopen`ed image, so this writes to
-// logcat on Android and to stderr elsewhere. `#[doc(hidden)]`, never named
-// outside this crate's own macros.
+/// Draws `app_plugin!`'s frame at the size the host passed across the ABI.
+///
+/// A frame that produced no scene still hands the host a valid scene, an
+/// empty one, and its reason with each `source` is written where the
+/// plugin's platform shows it: the host's tracing subscriber does not reach a
+/// `dlopen`ed image, so this writes to logcat on Android and to stderr
+/// elsewhere. `#[doc(hidden)]`, never named outside this crate's own macros.
 #[cfg(feature = "app-plugin")]
 #[doc(hidden)]
-pub fn __private_report_frame(error: &PluginFrameError) {
-    let message = error.to_string();
+pub fn __private_draw_frame(pipeline: &mut PluginPipeline, width: f64, height: f64) -> Scene {
+    pipeline
+        .draw_frame(flui_sdk::geometry::Size::new(width, height))
+        .unwrap_or_else(|error| {
+            report_frame(&error);
+            Scene::default()
+        })
+}
+
+#[cfg(feature = "app-plugin")]
+fn report_frame(error: &PluginFrameError) {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
     #[cfg(target_os = "android")]
     {
         let tag = c"PluginPipeline";
