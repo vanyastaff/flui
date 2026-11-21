@@ -149,7 +149,8 @@ fn run_child(kind: &str) {
     let parent = tree.mount_root_with_pipeline_owner(
         &super::Row {
             children: vec![host.clone().boxed()],
-        },
+        }
+        .boxed(),
         Some(flui_rendering::pipeline::PipelineCell::new(
             flui_rendering::pipeline::PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),

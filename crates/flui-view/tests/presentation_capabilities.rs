@@ -97,7 +97,8 @@ fn found_after(install: impl FnOnce(&mut PresentationCapabilities)) -> Present {
     let root = tree.mount_root(
         &Asker {
             found: Rc::clone(&found),
-        },
+        }
+        .boxed(),
         &mut owner.element_owner_mut(),
     );
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);

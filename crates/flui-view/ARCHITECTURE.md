@@ -128,7 +128,12 @@ returns `ViewUpdate::Unchanged` before replacing or marking dirty: no `did_updat
 render-object update, no rebuild. The element holds the allocation, so another view cannot
 take its address. Boxing a `BoxedView` returns it
 unchanged; `Child` and `Children` lend their `BoxedView`s, not the views inside, so the
-reconciler sees the identity. A parent that rebuilds for its own reasons (a focus edge, a
+reconciler sees the identity. The child accessors (`ProxyView::child`, `InheritedView::child`,
+`ParentDataView::child`) and `RenderView::visit_child_views` hand on the `&BoxedView` the view
+holds, `ChildViews` holds `BoxedView`s, and `ElementTree::insert` and `mount_root*` mount from
+one, so an element is never created from a copy of a view a parent holds shared; a `ViewSeq`
+tuple, array or `Vec` of a concrete type erases each child into a `BoxedView` of its own clone
+as it is visited. A parent that rebuilds for its own reasons (a focus edge, a
 route change) therefore rebuilds what it builds and hands the child it was given back
 as it is. Anything the child reads reaches it by its own schedule (state, an inherited
 value, a signal); a `build` reading something else no longer refreshes when an ancestor

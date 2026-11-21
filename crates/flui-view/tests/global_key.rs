@@ -18,7 +18,7 @@ use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtoco
 use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::element::StatefulElement;
 use flui_view::{
-    BuildContext, ElementBase, GlobalKey, IntoView, KeyLookup, StatefulView, StatelessView, View,
+    BoxedView, BuildContext, GlobalKey, IntoView, KeyLookup, StatefulView, StatelessView, View,
     ViewExt, ViewState,
 };
 use std::cell::RefCell;
@@ -122,7 +122,7 @@ impl flui_view::RenderView for DuplicateHost {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -163,7 +163,7 @@ fn set_sentinel(
     };
     let element = node.element_mut();
     let downcast: &mut StatefulElement<KeyedCounter> =
-        match (element as &mut dyn ElementBase).downcast_mut::<StatefulElement<KeyedCounter>>() {
+        match (element as &mut dyn std::any::Any).downcast_mut::<StatefulElement<KeyedCounter>>() {
             Some(e) => e,
             None => return false,
         };
@@ -197,9 +197,9 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     // Two distinct parents to migrate between.
     let parent_a = tree
         .borrow_mut()
-        .mount_root(&Spacer, &mut owner.borrow_mut().element_owner_mut());
+        .mount_root(&Spacer.boxed(), &mut owner.borrow_mut().element_owner_mut());
     let parent_b = tree.borrow_mut().insert(
-        &Spacer,
+        &Spacer.boxed(),
         parent_a,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -213,7 +213,7 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
 
     // Mount under parent A.
     let original_id = tree.borrow_mut().insert(
-        &counter,
+        &counter.clone().boxed(),
         parent_a,
         1,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -237,7 +237,7 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     // element must be pulled back from the inactive queue instead of a
     // fresh element being created.
     let migrated_id = tree.borrow_mut().insert(
-        &counter,
+        &counter.boxed(),
         parent_b,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -296,7 +296,8 @@ fn duplicate_global_key_panics_in_debug() {
     let root_id = tree.borrow_mut().mount_root_with_pipeline_owner(
         &DuplicateHost {
             children: vec![counter_a.boxed(), counter_b.boxed()],
-        },
+        }
+        .boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),

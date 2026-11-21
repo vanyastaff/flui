@@ -711,7 +711,7 @@ fn mounted() {
         children: vec![Leaf(Arc::clone(&a)).boxed(), Leaf(Arc::clone(&b)).boxed()],
     };
     let root = tree.mount_root_with_pipeline_owner(
-        &row,
+        &row.boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),

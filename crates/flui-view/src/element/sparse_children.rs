@@ -88,7 +88,7 @@ impl SparseChildren {
     pub(crate) fn ensure(
         &mut self,
         logical_index: usize,
-        view: &dyn View,
+        view: &BoxedView,
         host: ElementId,
         tree: &mut ElementTree,
         owner: &mut ElementOwner<'_>,
@@ -435,7 +435,6 @@ impl SparseChildren {
             let Some(view) = view else {
                 continue;
             };
-            let view: &dyn View = view;
             if let Some(pos) = matched[k] {
                 {
                     let resident = &residents[pos];
@@ -547,7 +546,7 @@ pub(crate) struct ReconcileOutcome {
 /// exactly as it does through a dense parent.
 fn mount_sparse_child(
     logical_index: usize,
-    view: &dyn View,
+    view: &BoxedView,
     host: ElementId,
     tree: &mut ElementTree,
     owner: &mut ElementOwner<'_>,
@@ -662,7 +661,7 @@ pub(crate) fn replace_failed_resident(
     host: ElementId,
     logical_index: usize,
     failed: ElementId,
-    view: &dyn View,
+    view: &BoxedView,
     tree: &mut ElementTree,
     owner: &mut ElementOwner<'_>,
 ) -> ElementId {
@@ -905,7 +904,7 @@ pub(crate) fn replace_failed_child(
     parent: ElementId,
     slot: usize,
     failed: ElementId,
-    view: &dyn View,
+    view: &BoxedView,
     tree: &mut ElementTree,
     owner: &mut ElementOwner<'_>,
 ) -> ElementId {

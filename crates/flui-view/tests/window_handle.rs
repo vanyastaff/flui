@@ -128,7 +128,8 @@ fn mount(control: Option<StubControl>) -> (Option<WindowSource>, Option<WindowHa
     let root = tree.mount_root(
         &Asker {
             taken: Rc::clone(&taken),
-        },
+        }
+        .boxed(),
         &mut owner.element_owner_mut(),
     );
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);

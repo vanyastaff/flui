@@ -11,7 +11,7 @@ use flui_painting::paint::ImageRepeat;
 use flui_painting::{Alignment, BoxFit, ImagePlacement};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{LifecycleContext, StatefulView, ViewState};
-use flui_view::{BoxedView, BuildContext, IntoView, RenderView, View, ViewExt, impl_render_view};
+use flui_view::{BoxedView, BuildContext, IntoView, RenderView, ViewExt, impl_render_view};
 
 use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};
 
@@ -452,7 +452,7 @@ impl RenderView for RawImage {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&BoxedView)) {}
 }
 
 impl_render_view!(RawImage);

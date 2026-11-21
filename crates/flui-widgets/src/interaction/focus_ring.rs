@@ -145,7 +145,7 @@ impl InheritedView for DefaultFocusRingStyle {
         &self.style
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

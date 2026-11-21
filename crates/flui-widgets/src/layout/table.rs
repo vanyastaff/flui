@@ -221,10 +221,11 @@ impl StatelessView for KeyedCell {
 #[derive(Clone, Debug)]
 pub struct Table {
     rows: Vec<TableRow>,
-    /// `rows`' cells in row-major order, each carrying its row's identity.
+    /// `rows`' cells in row-major order, each a `KeyedCell` carrying its row's
+    /// identity, held shared so the reconciler takes each one as it is.
     /// Built once with the table rather than per visit, so a rebuild costs
     /// no more cloning than the rows themselves already do.
-    cells: Vec<KeyedCell>,
+    cells: Vec<BoxedView>,
     column_widths: HashMap<usize, TableColumnWidth>,
     default_column_width: TableColumnWidth,
     default_vertical_alignment: TableCellVerticalAlignment,
@@ -345,7 +346,7 @@ fn square_up(mut rows: Vec<TableRow>) -> Vec<TableRow> {
     rows
 }
 
-fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
+fn identified_cells(rows: &[TableRow]) -> Vec<BoxedView> {
     let mut unkeyed_ordinal = 0usize;
     let mut cells = Vec::new();
     for row in rows {
@@ -364,13 +365,16 @@ fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
             let cell_part = cell.key().map_or(KeyPart::Position(column), |key| {
                 KeyPart::Keyed(key.clone_key())
             });
-            cells.push(KeyedCell::new(
-                CellKey {
-                    row: row_part.clone(),
-                    cell: cell_part,
-                },
-                cell.clone(),
-            ));
+            cells.push(
+                KeyedCell::new(
+                    CellKey {
+                        row: row_part.clone(),
+                        cell: cell_part,
+                    },
+                    cell.clone(),
+                )
+                .boxed(),
+            );
         }
     }
     cells
@@ -420,7 +424,7 @@ impl RenderView for Table {
         self.rows.iter().any(|row| !row.cells.is_empty())
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         // Row-major, the exact order `RenderTable`'s flat child list expects
         // (`row = index / column_count`, `col = index % column_count`), each
         // cell carrying its row's identity so the flat reconcile preserves
@@ -458,7 +462,7 @@ impl TableCell {
 impl ParentDataView for TableCell {
     type ParentData = TableCellParentData;
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

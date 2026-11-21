@@ -105,19 +105,20 @@ pub(crate) fn find_ancestor_view_returns_nearest_match() {
     let (tree, owner) = create_tree_and_owner();
 
     let labeled = LabeledView { value: 42 };
-    let labeled_id = tree
-        .borrow_mut()
-        .mount_root(&labeled, &mut owner.borrow_mut().element_owner_mut());
+    let labeled_id = tree.borrow_mut().mount_root(
+        &labeled.boxed(),
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
 
     let spacer_id = tree.borrow_mut().insert(
-        &Spacer,
+        &Spacer.boxed(),
         labeled_id,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
     );
 
     let child_id = tree.borrow_mut().insert(
-        &DummyChild,
+        &DummyChild.boxed(),
         spacer_id,
         0,
         &mut owner.borrow_mut().element_owner_mut(),

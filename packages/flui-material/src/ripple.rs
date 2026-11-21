@@ -183,7 +183,7 @@ impl InheritedView for RippleScope {
         &self.configuration
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

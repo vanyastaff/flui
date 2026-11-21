@@ -148,7 +148,7 @@ fn mounted(hooks: Hooks) -> (ElementTree, BuildOwner, flui_foundation::ElementId
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view.boxed(), &mut owner.element_owner_mut());
     owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     (tree, owner, root, log)

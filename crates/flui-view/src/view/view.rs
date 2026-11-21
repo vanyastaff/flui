@@ -5,10 +5,8 @@
 //! - **Short-lived**: Exist only for diffing, then dropped
 //! - **Composable**: Build trees of nested Views
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 
-use downcast_rs::{Downcast, impl_downcast};
-use dyn_clone::{DynClone, clone_trait_object};
 use flui_rendering::parent_data::SliverSlot;
 
 /// An element's depth in the element tree (root = 0), as stamped by
@@ -67,6 +65,15 @@ impl ElementDepth {
 /// This association is determined at compile time, avoiding runtime type
 /// checks.
 ///
+/// # Downcasting
+///
+/// `Any` is a supertrait, so a `&dyn View` upcasts to `&dyn Any` and
+/// downcasts from there (`let any: &dyn Any = view;`, then
+/// `any.downcast_ref::<V>()`); an `Rc<dyn View>` or `Box<dyn View>` upcasts the
+/// same way to `Rc<dyn Any>` or `Box<dyn Any>`. Upcast the trait object
+/// itself: `type_id()` called on a `&&dyn View` or a `&BoxedView` names the
+/// reference or the wrapper, not the view inside.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -88,7 +95,7 @@ impl ElementDepth {
     note = "a view is normally declared with `#[derive(Clone, StatelessView)]` plus `impl StatelessView for {Self}` (or the `StatefulView` / `InheritedView` equivalents), which generates this impl",
     note = "implement `View` by hand only for a render-object-backed view"
 )]
-pub trait View: Downcast + DynClone + 'static {
+pub trait View: Any + 'static {
     /// Create a new Element for this View.
     ///
     /// Called once when this View first appears in the tree.
@@ -224,65 +231,20 @@ pub trait View: Downcast + DynClone + 'static {
     }
 }
 
-impl_downcast!(View);
-clone_trait_object!(View);
-
 /// The child views one build of an element produced, in order.
 ///
+/// Every child is held as a [`BoxedView`](crate::BoxedView), shared with
+/// whoever else holds it: the reconciler mounts or updates an element with
+/// that very allocation, so no view is copied on the way to its element
+/// (ADR-0245), and a child the parent hands back unchanged keeps its identity.
 /// Most elements build exactly one child, and [`ChildViews::one`] holds it
-/// without a list of its own; [`ChildViews::none`] holds nothing,
-/// and a `Vec` of boxes converts for an element with several. A child
-/// given as a [`BoxedView`](crate::BoxedView) is held shared: the reconciler
-/// reads it where it is, so it costs no box of its own and keeps its
-/// identity.
+/// without a list of its own; [`ChildViews::none`] holds nothing, and a `Vec`
+/// of `BoxedView`s converts for an element with several.
 pub struct ChildViews(ChildViewsRepr);
 
 enum ChildViewsRepr {
-    One(ChildView),
-    Many(Vec<ChildView>),
-}
-
-/// One child view: shared with the parent that holds it, or owned.
-enum ChildView {
-    Shared(crate::BoxedView),
-    Owned(Box<dyn View>),
-}
-
-impl ChildView {
-    /// `view`, shared when it already is a `BoxedView`.
-    fn of<V: View>(view: V) -> Self {
-        let mut slot = Some(view);
-        // `Option<V>` is `Option<BoxedView>` only when `V` is `BoxedView`.
-        if let Some(shared) =
-            (&mut slot as &mut dyn std::any::Any).downcast_mut::<Option<crate::BoxedView>>()
-        {
-            return Self::Shared(
-                shared
-                    .take()
-                    .expect("BUG: the slot was filled one statement above"),
-            );
-        }
-        Self::Owned(Box::new(
-            slot.take()
-                .expect("BUG: the slot was filled one statement above"),
-        ))
-    }
-
-    /// A copy of `view`: the same shared view when it is a `BoxedView`,
-    /// otherwise a clone in a box of its own.
-    fn copy_of(view: &dyn View) -> Self {
-        match view.as_any().downcast_ref::<crate::BoxedView>() {
-            Some(shared) => Self::Shared(shared.clone()),
-            None => Self::Owned(dyn_clone::clone_box(view)),
-        }
-    }
-
-    fn view(&self) -> &dyn View {
-        match self {
-            Self::Shared(view) => view,
-            Self::Owned(view) => &**view,
-        }
-    }
+    One(crate::BoxedView),
+    Many(Vec<crate::BoxedView>),
 }
 
 impl ChildViews {
@@ -293,25 +255,21 @@ impl ChildViews {
     }
 
     /// Exactly one child view, taken by value: a [`BoxedView`](crate::BoxedView)
-    /// is held shared, with no box of its own; any other view is boxed.
+    /// is held as it is, shared; any other view is erased into one.
     #[must_use]
     pub fn one<V: View>(view: V) -> Self {
-        Self(ChildViewsRepr::One(ChildView::of(view)))
+        Self(ChildViewsRepr::One(crate::BoxedView::new(view)))
     }
 
-    /// Exactly one child view, a copy of `view` that shares it when it is a
-    /// `BoxedView`.
+    /// Exactly one child view, `view` shared with its holder.
     #[must_use]
-    pub(crate) fn copy_of(view: &dyn View) -> Self {
-        Self(ChildViewsRepr::One(ChildView::copy_of(view)))
+    pub(crate) fn shared(view: &crate::BoxedView) -> Self {
+        Self(ChildViewsRepr::One(view.clone()))
     }
 
-    /// Appends a copy of `view`, shared when it is a `BoxedView`.
-    pub(crate) fn push_copy_of(&mut self, view: &dyn View) {
-        self.push_child(ChildView::copy_of(view));
-    }
-
-    fn push_child(&mut self, view: ChildView) {
+    /// Appends `view`, shared with its holder.
+    pub(crate) fn push_shared(&mut self, view: &crate::BoxedView) {
+        let view = view.clone();
         let held = std::mem::replace(&mut self.0, ChildViewsRepr::Many(Vec::new()));
         self.0 = match held {
             ChildViewsRepr::Many(views) if views.is_empty() => ChildViewsRepr::One(view),
@@ -320,7 +278,7 @@ impl ChildViews {
                 ChildViewsRepr::Many(views)
             }
             ChildViewsRepr::One(first) => {
-                // The capacity a `Vec` of boxes starts with, so a third and
+                // The capacity a `Vec` of children starts with, so a third and
                 // fourth child grow nothing.
                 let mut views = Vec::with_capacity(4);
                 views.push(first);
@@ -347,22 +305,17 @@ impl ChildViews {
 
     /// The child view at `index`, if there is one.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<&dyn View> {
+    pub fn get(&self, index: usize) -> Option<&crate::BoxedView> {
         match &self.0 {
-            ChildViewsRepr::One(view) => (index == 0).then(|| view.view()),
-            ChildViewsRepr::Many(views) => views.get(index).map(ChildView::view),
+            ChildViewsRepr::One(view) => (index == 0).then_some(view),
+            ChildViewsRepr::Many(views) => views.get(index),
         }
     }
 }
 
-impl From<Vec<Box<dyn View>>> for ChildViews {
-    fn from(views: Vec<Box<dyn View>>) -> Self {
-        Self(ChildViewsRepr::Many(
-            views
-                .into_iter()
-                .map(ChildView::Owned)
-                .collect::<Vec<ChildView>>(),
-        ))
+impl From<Vec<crate::BoxedView>> for ChildViews {
+    fn from(views: Vec<crate::BoxedView>) -> Self {
+        Self(ChildViewsRepr::Many(views))
     }
 }
 
@@ -379,7 +332,7 @@ impl std::fmt::Debug for ChildViews {
 /// This is the object-safe version of Element for dynamic dispatch.
 /// Specific Element types (StatelessElement, StatefulElement, etc.)
 /// implement the full Element trait.
-pub trait ElementBase: Downcast + 'static {
+pub trait ElementBase: Any + 'static {
     // ========================================================================
     // Identity
     // ========================================================================
@@ -983,8 +936,6 @@ pub trait ElementBase: Downcast + 'static {
         false
     }
 }
-
-impl_downcast!(ElementBase);
 
 #[cfg(test)]
 mod tests {

@@ -131,7 +131,7 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
 
     let parent_a = tree
         .borrow_mut()
-        .mount_root(&Spacer, &mut owner.borrow_mut().element_owner_mut());
+        .mount_root(&Spacer.boxed(), &mut owner.borrow_mut().element_owner_mut());
     let key = GlobalKey::<CounterState>::new();
     let counter = KeyedCounter {
         key: key.clone(),
@@ -139,10 +139,7 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
     };
     let key_hash = key.key_hash();
 
-    let initial_views = ChildViews::from(vec![
-        Box::new(Spacer) as Box<dyn View>,
-        Box::new(counter.clone()),
-    ]);
+    let initial_views = ChildViews::from(vec![Spacer.boxed(), counter.clone().boxed()]);
     reconcile_children(
         &mut tree.borrow_mut(),
         parent_a,

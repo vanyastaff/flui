@@ -50,8 +50,8 @@ impl RenderView for LazyViewport {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&self.sliver);
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
+        visitor(&self.sliver.clone().boxed());
     }
 }
 
@@ -183,7 +183,7 @@ pub(crate) fn lazy_render_update_panic_substitutes_at_its_logical_index() {
     let mut tree = ElementTree::new();
     let armed = Rc::new(Cell::new(false));
     let root = tree.mount_root_with_pipeline_owner(
-        &lazy_viewport(&armed),
+        &lazy_viewport(&armed).boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );

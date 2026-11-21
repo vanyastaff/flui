@@ -128,7 +128,7 @@ pub(crate) fn test_stateful_element_multiple_deactivate_activate_cycles() {
 
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view.boxed(), &mut owner.element_owner_mut());
     // Drive the first build so `init_state` runs before the first
     // `deactivate`/`activate`: `StatefulBehavior::on_activate` is gated on a
     // completed `init_state`, so a mounted but never-built element never runs

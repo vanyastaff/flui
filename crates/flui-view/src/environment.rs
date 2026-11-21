@@ -440,7 +440,7 @@ impl InheritedView for MediaQuery {
         &self.data
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -555,7 +555,7 @@ impl InheritedView for PlatformConvention {
         &self.platform
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -927,7 +927,7 @@ impl InheritedView for ResolvedGestureArenaScope {
     fn data(&self) -> &Self::Data {
         &self.data
     }
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
     /// A consumer's recognizers join the arena and follow the policy they were
@@ -1038,7 +1038,7 @@ impl InheritedView for VsyncScope {
         &self.vsync
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

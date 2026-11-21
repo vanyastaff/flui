@@ -247,7 +247,7 @@ impl InheritedView for IconTheme {
         &self.data
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

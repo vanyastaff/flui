@@ -335,8 +335,8 @@ impl<R: Routable> InheritedView for RouterScope<R> {
         &self.shared
     }
 
-    fn child(&self) -> &dyn View {
-        &*self.child
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 
     /// A router's element keeps one shared state for its life, so this

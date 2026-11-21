@@ -378,7 +378,7 @@ impl flui_view::RenderView for ToolbarRow {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         self.children.for_each(|_index, child| visitor(child));
     }
 }

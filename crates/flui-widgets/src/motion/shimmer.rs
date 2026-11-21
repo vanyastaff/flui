@@ -284,7 +284,7 @@ impl InheritedView for ShimmerScope {
         &self.phase
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -327,7 +327,7 @@ impl RenderView for PaintAnchorView {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         visitor(&self.child);
     }
 }

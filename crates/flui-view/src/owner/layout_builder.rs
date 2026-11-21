@@ -746,7 +746,7 @@ mod tests {
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
 
-    use crate::View;
+    use crate::{View, ViewExt};
 
     /// A render-family leaf view, mirroring `build_owner.rs`'s `TestView`.
     ///
@@ -805,7 +805,7 @@ mod tests {
         tree: &mut ElementTree,
         pipeline: &PipelineCell,
     ) -> (RenderId, ElementId) {
-        let element = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        let element = tree.mount_root(&TestView.boxed(), &mut owner.element_owner_mut());
         let render_id = pipeline.with_mut(|pipeline_owner| {
             pipeline_owner.insert::<BoxProtocol>(Box::new(RenderSizedBox::shrink()))
         });

@@ -1220,7 +1220,7 @@ impl InheritedView for SelectionScope {
         &self.data
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

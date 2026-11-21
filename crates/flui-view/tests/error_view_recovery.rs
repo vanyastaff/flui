@@ -35,7 +35,7 @@ use std::{
 use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::element::Lifecycle;
 use flui_view::{
-    BuildContext, ErrorView, FrameworkError, IntoView, LifecycleContext, StatefulView,
+    BoxedView, BuildContext, ErrorView, FrameworkError, IntoView, LifecycleContext, StatefulView,
     StatelessView, View, ViewExt, ViewState,
 };
 
@@ -132,12 +132,12 @@ impl View for InitPanicView {
 // Helpers
 // ----------------------------------------------------------------------------
 
-fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, flui_foundation::ElementId) {
+fn mount_and_build(view: &BoxedView) -> (ElementTree, BuildOwner, flui_foundation::ElementId) {
     mount_and_build_with(view, None)
 }
 
 fn mount_and_build_with(
-    view: &dyn View,
+    view: &BoxedView,
     error_view_builder: Option<flui_view::ErrorViewBuilder>,
 ) -> (ElementTree, BuildOwner, flui_foundation::ElementId) {
     let mut tree = ElementTree::new();
@@ -187,7 +187,7 @@ fn stateless_build_panic_substitutes_registered_error_view() {
     };
     // The frame must NOT unwind here — build_scope catches the panic and the
     // reconciler materializes the substituted ErrorView as a child element.
-    let (tree, _owner, root_id) = mount_and_build_with(&view, Some(builder));
+    let (tree, _owner, root_id) = mount_and_build_with(&view.boxed(), Some(builder));
 
     assert_eq!(
         BUILDER_HITS.load(Ordering::SeqCst),
@@ -224,7 +224,8 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
             child: InitPanicView {
                 failed_ids: std::sync::Arc::clone(&failed_ids),
             },
-        },
+        }
+        .boxed(),
         &mut owner.element_owner_mut(),
     );
     owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
@@ -319,7 +320,7 @@ fn nested_child_build_panic_replaces_only_that_subtree() {
             message: "boom in nested child",
         },
     };
-    let (tree, _owner, root_id) = mount_and_build(&view);
+    let (tree, _owner, root_id) = mount_and_build(&view.boxed());
 
     // The parent did NOT panic — it built fine. Its direct child remains the
     // PanickingView element; only that child's own subtree is replaced.
@@ -359,7 +360,7 @@ fn repeated_build_after_panic_stays_stable() {
     let view = PanickingView {
         message: "boom — repeated",
     };
-    let (mut tree, mut owner, root_id) = mount_and_build(&view);
+    let (mut tree, mut owner, root_id) = mount_and_build(&view.boxed());
     assert_eq!(count_error_child_elements(&tree, root_id), 1);
 
     // Force a rebuild and run build_scope again: still exactly one ErrorView

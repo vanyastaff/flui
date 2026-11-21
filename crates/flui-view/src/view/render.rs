@@ -11,7 +11,6 @@ use flui_foundation::ElementId;
 use crate::context::DependentRecord;
 use crate::reactive::{Reactive, WriterSource};
 use crate::tree::{ElementNode, ElementTree};
-use crate::view::View;
 use crate::{ElementBase, InheritedView};
 
 /// Owner-runtime capabilities available while a [`RenderView`] creates or
@@ -809,10 +808,12 @@ pub trait RenderView: Clone + 'static + Sized {
     /// Visit child views for mounting.
     ///
     /// Override for single/multi child variants to provide access to children.
-    /// The visitor is called once for each child View.
+    /// The visitor is called once for each child view, handed shared as the
+    /// `BoxedView` the view holds, so the reconciler mounts or updates the
+    /// child with that very allocation instead of a copy.
     ///
     /// Default implementation does nothing (leaf widgets have no children).
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&crate::BoxedView)) {
         // Default: no children
     }
 }
@@ -854,7 +855,7 @@ macro_rules! impl_render_view {
 }
 
 /// Implements [`RenderView::has_children`] + [`RenderView::visit_child_views`]
-/// for the standard single-child widget shape (`child: Option<…>`), invoked
+/// for the standard single-child widget shape (`child: Option<BoxedView>`), invoked
 /// from *inside* the `impl RenderView for …` block:
 ///
 /// ```rust,ignore
@@ -876,7 +877,7 @@ macro_rules! single_child_view_children {
             self.$field.is_some()
         }
 
-        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn $crate::View)) {
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&$crate::BoxedView)) {
             if let Some(child) = self.$field.as_ref() {
                 visitor(child);
             }

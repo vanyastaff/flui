@@ -122,7 +122,7 @@ impl RenderView for Host {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -189,7 +189,7 @@ fn setup(unrelated_count: usize) -> Fixture {
     }));
     let root = Host::new(0, root_children);
     let root_id = tree.mount_root_with_pipeline_owner(
-        &root,
+        &root.boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );

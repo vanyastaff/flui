@@ -878,8 +878,8 @@ impl InheritedView for OverlayScope {
         &self.handle
     }
 
-    fn child(&self) -> &dyn View {
-        &*self.child
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 
     /// An `OverlayEntryView` element is reconciled in place across ordinary

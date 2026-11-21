@@ -80,7 +80,7 @@ impl InheritedView for ScrollPositionScope {
         &self.position
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

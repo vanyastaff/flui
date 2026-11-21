@@ -111,7 +111,7 @@ impl ElementTree {
     #[must_use = "a substitute mount re-points whatever id the caller was tracking"]
     pub(crate) fn mount_or_substitute(
         &mut self,
-        view: &dyn View,
+        view: &crate::BoxedView,
         parent: ElementId,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,

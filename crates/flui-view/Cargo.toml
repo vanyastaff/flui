@@ -69,10 +69,6 @@ tracing.workspace = true
 # revision.
 serde = { workspace = true, optional = true }
 
-# Trait utilities
-downcast-rs = { workspace = true }
-dyn-clone = { workspace = true }
-
 # `ReconcileEventCollector` (gated to `testing` feature
 # or `cfg(test)`) needs `tracing_subscriber::Layer` and the `registry`
 # extension trait. Optional + gated so production builds don't pull
@@ -149,11 +145,6 @@ default = []
 testing = ["dep:tracing-subscriber"]
 # Serialization of `persist::Revision`.
 serde = ["dep:serde"]
-
-# The `legacy-downcast` feature flag was retired
-# (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside
-# `ElementCore::update_view` is gone — `dispatch_view_update`
-# (TypeId-keyed `Box::downcast::<V>`) is the only path now.
 
 [[bench]]
 name = "key_storage_shape"

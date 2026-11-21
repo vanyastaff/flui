@@ -85,7 +85,7 @@ impl RenderView for RawTexture {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn flui_view::View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&flui_view::BoxedView)) {}
 }
 
 impl_render_view!(RawTexture);

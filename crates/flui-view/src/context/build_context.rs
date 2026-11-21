@@ -843,7 +843,7 @@ pub trait BuildContextExt: BuildContext {
     /// impl InheritedView for SizeProvider {
     ///     type Data = SizeData;
     ///     fn data(&self) -> &SizeData { &self.data }
-    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn child(&self) -> &BoxedView { &self.child }
     ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
     /// }
     ///
@@ -869,7 +869,7 @@ pub trait BuildContextExt: BuildContext {
     /// impl InheritedView for SizeProvider {
     ///     type Data = SizeData;
     ///     fn data(&self) -> &SizeData { &self.data }
-    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn child(&self) -> &BoxedView { &self.child }
     ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
     /// }
     ///

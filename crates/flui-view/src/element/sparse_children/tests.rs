@@ -12,7 +12,7 @@ use flui_rendering::{BoxLayoutContext, parent_data::BoxParentData, traits::Rende
 use super::SparseChildren;
 use crate::GlobalKey;
 use crate::owner::RecoveredAt;
-use crate::view::{RenderView, View};
+use crate::view::{RenderView, View, ViewExt};
 use crate::{owner::BuildOwner, tree::ElementTree};
 
 /// A minimal render-bearing leaf view used as both host and child in these
@@ -130,7 +130,7 @@ fn host_tree() -> (
     let mut build_owner = BuildOwner::new();
     let mut tree = ElementTree::new();
     let host = tree.mount_root_with_pipeline_owner(
-        &LeafBox { side: 10.0 },
+        &LeafBox { side: 10.0 }.boxed(),
         Some(pipeline.clone()),
         &mut build_owner.element_owner_mut(),
     );
@@ -145,7 +145,7 @@ fn host_tree() -> (
 fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let (mut tree, mut build_owner, pipeline, host_a) = host_tree();
     let host_b = tree.insert(
-        &LeafBox { side: 10.0 },
+        &LeafBox { side: 10.0 }.boxed(),
         host_a,
         1,
         &mut build_owner.element_owner_mut(),
@@ -160,7 +160,7 @@ fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let mut list_a = SparseChildren::new();
     let first = list_a.ensure(
         0,
-        &keyed_item,
+        &keyed_item.clone().boxed(),
         host_a,
         &mut tree,
         &mut build_owner.element_owner_mut(),
@@ -172,7 +172,7 @@ fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let mut list_b = SparseChildren::new();
     let moved = list_b.ensure(
         0,
-        &keyed_item,
+        &keyed_item.boxed(),
         host_b,
         &mut tree,
         &mut build_owner.element_owner_mut(),
@@ -249,7 +249,7 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
     let mut children = SparseChildren::new();
     let first = children.ensure(
         0,
-        &item,
+        &item.clone().boxed(),
         host,
         &mut tree,
         &mut build_owner.element_owner_mut(),
@@ -276,7 +276,7 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
     // still resolves by GlobalKey, not by index.
     let recovered = children.ensure(
         1,
-        &item,
+        &item.clone().boxed(),
         host,
         &mut tree,
         &mut build_owner.element_owner_mut(),

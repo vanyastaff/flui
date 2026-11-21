@@ -36,7 +36,7 @@
 use flui_sdk::view::BuildContextExt as _;
 use flui_sdk::view::prelude::StatelessView;
 use flui_sdk::view::{
-    BoxedView, BuildContext, InheritedView, IntoView, View, ViewExt, impl_inherited_view,
+    BoxedView, BuildContext, InheritedView, IntoView, ViewExt, impl_inherited_view,
 };
 use flui_sdk::widgets::{
     Align, DefaultTextStyle, Directionality, Opacity, Padding, Positioned, SizedBox, Stack,
@@ -92,7 +92,7 @@ impl InheritedView for FlexibleSpaceBarSettings {
         &self.data
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

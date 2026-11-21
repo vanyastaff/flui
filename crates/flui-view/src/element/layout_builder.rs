@@ -175,7 +175,7 @@ impl RenderView for LayoutBuilder {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&BoxedView)) {}
 }
 
 impl View for LayoutBuilder {
@@ -420,7 +420,7 @@ mod tests {
     }
 
     impl Harness {
-        fn mount(view: &dyn View, constraints: BoxConstraints) -> Self {
+        fn mount(view: &crate::BoxedView, constraints: BoxConstraints) -> Self {
             let pipeline = PipelineCell::new(PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),
             ));
@@ -547,7 +547,7 @@ mod tests {
         let first = tight(120.0, 80.0);
         let second = tight(60.0, 40.0);
 
-        let mut h = Harness::mount(&view, first);
+        let mut h = Harness::mount(&view.boxed(), first);
         h.frame();
         assert_eq!(log.lock().as_slice(), &[first]);
 

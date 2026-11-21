@@ -12,7 +12,7 @@ use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook};
 use flui_view::{
     BuildContext, BuildContextExt, IntoView, LifecycleContext, Provided, ProvidedValue,
     RebuildHandle, RebuildReason, RenderObjectContext, RenderView, RenderViewState,
-    StatefulRenderView, StatelessView, View,
+    StatefulRenderView, StatelessView, View, ViewExt,
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
@@ -365,7 +365,7 @@ fn a_state_hook_failure_is_recorded_against_its_hook() {
         let view = Under(Fade::new(0.5, &wires).failing(fail));
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let root = tree.mount_root(&view.boxed(), &mut owner.element_owner_mut());
         owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
         if fail == Fail::Dispose {

@@ -118,7 +118,7 @@ pub(crate) fn dispatch_child(kind: &str) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let parent = tree.mount_root_with_pipeline_owner(
-        &row,
+        &row.boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),

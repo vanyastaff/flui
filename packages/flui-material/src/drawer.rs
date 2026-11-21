@@ -143,7 +143,7 @@ impl InheritedView for DrawerSideScope {
         &self.side
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

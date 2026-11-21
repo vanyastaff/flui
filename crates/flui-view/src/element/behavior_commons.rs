@@ -36,7 +36,7 @@ use flui_foundation::panic::FirstPanic;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
-    view::{BoxedView, FrameworkError, IntoView, View},
+    view::{BoxedView, FrameworkError, IntoView},
 };
 
 // ============================================================================
@@ -318,12 +318,12 @@ where
 /// accessor on the view — i.e. `ProxyBehavior` and `InheritedBehavior`.
 ///
 /// `get_child` abstracts over `ProxyView::child` vs
-/// `InheritedView::child`: both return `&dyn View` but the trait names
+/// `InheritedView::child`: both return `&BoxedView` but the trait names
 /// differ, so each behavior passes its own closure. The body is
 /// identical otherwise:
 ///
 /// ```text
-///   guard → view.child() → share or clone → clear dirty → one child
+///   guard → view.child() → share → clear dirty → one child
 /// ```
 ///
 /// Returns `ChildViews::none()` when the guard short-circuits (clean element /
@@ -339,13 +339,13 @@ pub(crate) fn proxy_style_views<V, A, F>(
 where
     V: Clone + 'static,
     A: ElementArity,
-    F: FnOnce(&V) -> &dyn View,
+    F: FnOnce(&V) -> &crate::BoxedView,
 {
     if !should_build_with_trace(core, behavior_name) {
         return crate::view::ChildViews::none();
     }
     let child_view = get_child(core.view());
-    let child = crate::view::ChildViews::copy_of(child_view);
+    let child = crate::view::ChildViews::shared(child_view);
     core.clear_dirty();
     tracing::debug!("{}::build_into_views completed", behavior_name);
     child

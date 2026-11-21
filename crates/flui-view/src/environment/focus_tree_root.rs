@@ -105,7 +105,7 @@ impl InheritedView for RootScopeProvider {
         &self.root
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

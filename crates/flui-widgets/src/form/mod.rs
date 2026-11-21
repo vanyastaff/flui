@@ -612,7 +612,7 @@ impl InheritedView for FormScope {
         &self.handle
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

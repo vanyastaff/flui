@@ -712,7 +712,7 @@ mod tests;
 
 /// The new view at `index`; every index the reconciler reads stays below
 /// `new_views.len()`.
-fn view_at(new_views: &crate::view::ChildViews, index: usize) -> &dyn View {
+fn view_at(new_views: &crate::view::ChildViews, index: usize) -> &crate::BoxedView {
     new_views
         .get(index)
         .expect("BUG: a reconcile index stays below the new view count")

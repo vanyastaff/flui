@@ -16,7 +16,7 @@ use std::any::TypeId;
 
 use flui_foundation::ElementId;
 use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
-use flui_view::{BuildContext, IntoView, RebuildReason, StatelessView, View, ViewExt};
+use flui_view::{BoxedView, BuildContext, IntoView, RebuildReason, StatelessView, View, ViewExt};
 
 // ============================================================================
 // Test fixtures
@@ -76,7 +76,7 @@ impl View for HostView {
 // Helpers
 // ----------------------------------------------------------------------------
 
-fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, ElementId) {
+fn mount_and_build(view: &BoxedView) -> (ElementTree, BuildOwner, ElementId) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(view, &mut owner.element_owner_mut());
@@ -111,7 +111,7 @@ pub(crate) fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook
     };
 
     // build_scope must RETURN — the panic is contained, not propagated.
-    let (tree, mut owner, root_id) = mount_and_build(&host);
+    let (tree, mut owner, root_id) = mount_and_build(&host.boxed());
     let child_id = only_child(&tree, root_id);
 
     let mut recovered = owner.take_recovered_panics();
