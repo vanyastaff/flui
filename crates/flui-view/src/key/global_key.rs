@@ -7,10 +7,10 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
-    sync::atomic::{AtomicU64, Ordering},
+    num::NonZeroU64,
 };
 
-use flui_foundation::{ElementId, ViewKey};
+use flui_foundation::{AtomicIdMint, ElementId, IdExhausted, ViewKey};
 
 use crate::view::ElementBase;
 
@@ -96,29 +96,30 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// # Panics
     ///
-    /// Panics after every nonzero `u64` identity has been issued. Exhaustion
-    /// is permanent; catching this panic cannot make an old key available again.
+    /// Panics after every nonzero `u64` identity has been issued; use
+    /// [`Self::try_new`] to handle that. Exhaustion is permanent: catching the
+    /// panic cannot make an old key available again.
     pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self::new_with_counter(&COUNTER)
+        Self::try_new().expect("GlobalKey identities exhausted; try_new reports it as IdExhausted")
     }
 
-    // Zero is the permanent exhaustion sentinel; MAX itself remains assignable.
-    // The local-counter seam keeps terminal tests away from the shared allocator.
-    fn new_with_counter(counter: &AtomicU64) -> Self {
-        let id = counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                if current == 0 {
-                    None
-                } else {
-                    Some(current.wrapping_add(1))
-                }
-            })
-            .expect("GlobalKey counter exhausted: all nonzero u64 identities issued");
-        Self {
-            id,
+    /// Create a new global key, or [`IdExhausted`] once every nonzero `u64`
+    /// identity has been issued (permanently, from every thread).
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`] when the process has issued its last key identity.
+    pub fn try_new() -> Result<Self, IdExhausted> {
+        static MINT: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
+        Self::minted_from(&MINT)
+    }
+
+    /// The local-mint seam keeps terminal tests away from the shared mint.
+    fn minted_from(mint: &AtomicIdMint<NonZeroU64>) -> Result<Self, IdExhausted> {
+        mint.next().map(|id| Self {
+            id: id.get(),
             _marker: PhantomData,
-        }
+        })
     }
 
     /// Get the unique ID of this key.
@@ -305,21 +306,22 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
 #[cfg(test)]
 impl GlobalKey<()> {
     pub(crate) fn exhausted_global_key_counter_never_reissues_an_identity() {
-        let counter = AtomicU64::new(u64::MAX - 1);
-        let penultimate = Self::new_with_counter(&counter);
-        let last = Self::new_with_counter(&counter);
+        let mint = AtomicIdMint::<NonZeroU64>::starting_after(u64::MAX - 2);
+        let penultimate = Self::minted_from(&mint).expect("one identity before the last");
+        let last = Self::minted_from(&mint).expect("the last identity");
         assert_eq!(penultimate.id(), u64::MAX - 1);
         assert_eq!(last.id(), u64::MAX);
         assert_ne!(penultimate, last);
         for _ in 0..8 {
-            assert!(
-                std::panic::catch_unwind(|| Self::new_with_counter(&counter)).is_err(),
-                "catching exhaustion must never reissue zero or an earlier identity"
+            assert_eq!(
+                Self::minted_from(&mint).err(),
+                Some(IdExhausted),
+                "an exhausted mint never reissues zero or an earlier identity"
             );
         }
-        let healthy = AtomicU64::new(1);
-        let first = Self::new_with_counter(&healthy);
-        let second = Self::new_with_counter(&healthy);
+        let healthy = AtomicIdMint::<NonZeroU64>::new();
+        let first = Self::minted_from(&healthy).expect("a fresh mint issues");
+        let second = Self::minted_from(&healthy).expect("a fresh mint issues");
         assert_eq!(first.id(), 1);
         assert_eq!(second.id(), 2);
         assert_ne!(first, second);
