@@ -23,11 +23,11 @@ fn integral_hard_rect_clip_needs_no_mask_texture() {
         styling::Color,
     };
     let (device, queue) = test_device_and_queue();
-    let domain = crate::device_domain::DeviceDomain::with_limits(
+    let domain = crate::device::domain::DeviceDomain::with_limits(
         Arc::clone(&device),
         Arc::clone(&queue),
-        crate::device_domain::PreparedIrLimits {
-            cost: crate::device_domain::PreparedCost {
+        crate::device::domain::PreparedIrLimits {
+            cost: crate::device::domain::PreparedCost {
                 gpu_bytes: 512,
                 cpu_bytes: 1_000_000,
                 objects: 1000,
@@ -132,11 +132,11 @@ fn closed_form_path_fill_fits_without_ssaa_attachments() {
         styling::Color,
     };
     let (device, queue) = test_device_and_queue();
-    let domain = crate::device_domain::DeviceDomain::with_limits(
+    let domain = crate::device::domain::DeviceDomain::with_limits(
         Arc::clone(&device),
         Arc::clone(&queue),
-        crate::device_domain::PreparedIrLimits {
-            cost: crate::device_domain::PreparedCost {
+        crate::device::domain::PreparedIrLimits {
+            cost: crate::device::domain::PreparedCost {
                 gpu_bytes: 512,
                 cpu_bytes: 1_000_000,
                 objects: 1000,
@@ -367,11 +367,11 @@ fn clipped_out_ssaa_path_needs_no_tile_or_mask_allocation() {
         styling::Color,
     };
     let (device, queue) = test_device_and_queue();
-    let domain = crate::device_domain::DeviceDomain::with_limits(
+    let domain = crate::device::domain::DeviceDomain::with_limits(
         Arc::clone(&device),
         Arc::clone(&queue),
-        crate::device_domain::PreparedIrLimits {
-            cost: crate::device_domain::PreparedCost {
+        crate::device::domain::PreparedIrLimits {
+            cost: crate::device::domain::PreparedCost {
                 gpu_bytes: 512,
                 cpu_bytes: 1_000_000,
                 objects: 1000,
@@ -430,11 +430,11 @@ fn clipped_out_ssaa_path_needs_no_tile_or_mask_allocation() {
 fn shared_clip_snapshot_survives_segment_barriers_with_one_mask_budget() {
     use flui_painting::{paint::Clip, paint::Paint, styling::Color};
     let (device, queue) = test_device_and_queue();
-    let domain = crate::device_domain::DeviceDomain::with_limits(
+    let domain = crate::device::domain::DeviceDomain::with_limits(
         Arc::clone(&device),
         Arc::clone(&queue),
-        crate::device_domain::PreparedIrLimits {
-            cost: crate::device_domain::PreparedCost {
+        crate::device::domain::PreparedIrLimits {
+            cost: crate::device::domain::PreparedCost {
                 gpu_bytes: 40_000,
                 cpu_bytes: 4_000_000,
                 objects: 1000,
@@ -771,7 +771,7 @@ fn retained_presentation_preserves_bytes_and_fallbacks() {
                     &source,
                     &destination,
                     &view,
-                    crate::surface_color::OutputEncoding::Identity,
+                    crate::surface::color::OutputEncoding::Identity,
                 )
                 .expect("presentation submits");
             let actual = readback_bytes(&device, &queue, &destination, 32 * scale, 16 * scale);
@@ -1158,7 +1158,7 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
 fn offscreen_pool_reuses_a_resized_working_set() {
     let (device, _queue) = test_device_and_queue();
     // Choose the fixture's capacity explicitly, independent of renderer defaults.
-    let mut pool = crate::texture_pool::TexturePool::with_capacity(device, 4);
+    let mut pool = crate::resources::texture_pool::TexturePool::with_capacity(device, 4);
     let original: Vec<_> = (0..4)
         .map(|_| pool.acquire(16, 16, READBACK_FORMAT))
         .collect();
@@ -1645,8 +1645,8 @@ fn recording_failure_case(
     );
     painter.begin_frame().expect("painter frame must begin");
     // Private admission seam, but recording/rendering are the consumer's public API.
-    painter.current_segment = crate::command_ir::DrawSegment::with_budget(
-        crate::recording_budget::RecordingBudget::new(bytes, elements),
+    painter.current_segment = crate::record::command_ir::DrawSegment::with_budget(
+        crate::record::budget::RecordingBudget::new(bytes, elements),
     );
     draw(&mut painter);
     let mut failed = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -1741,10 +1741,10 @@ fn foreground_filter_renders_within_recording_allowance() {
     painter
         .begin_frame()
         .expect("bounded foreground frame begins");
-    painter.current_segment = crate::command_ir::DrawSegment::with_budget(
-        crate::recording_budget::RecordingBudget::new(1024 * 1024, 3),
+    painter.current_segment = crate::record::command_ir::DrawSegment::with_budget(
+        crate::record::budget::RecordingBudget::new(1024 * 1024, 3),
     );
-    painter.save_layer_with_image_filter(crate::command_ir::ImageFilterSpec::Blur {
+    painter.save_layer_with_image_filter(crate::record::command_ir::ImageFilterSpec::Blur {
         sigma_x: 1.0,
         sigma_y: 1.0,
     });
@@ -1889,10 +1889,10 @@ fn offscreen_only_flushes_freeze_viewport_after_resize() {
 
 fn cumulative_frame_submit_limit_survives_gpu_retirement() {
     let (device, queue) = test_device_and_queue();
-    let domain = crate::device_domain::DeviceDomain::with_limits(
+    let domain = crate::device::domain::DeviceDomain::with_limits(
         Arc::clone(&device),
         Arc::clone(&queue),
-        crate::device_domain::PreparedIrLimits {
+        crate::device::domain::PreparedIrLimits {
             frame_submissions: 64,
             ..Default::default()
         },
@@ -1992,8 +1992,8 @@ fn tess_merge_preserves_order_and_clip_boundaries() {
     // leaves room for one batch and one ordered run, so compatible adjacency
     // must render successfully without allocating another descriptor.
     let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
-        painter.current_segment = crate::command_ir::DrawSegment::with_budget(
-            crate::recording_budget::RecordingBudget::new(1024 * 1024, 22),
+        painter.current_segment = crate::record::command_ir::DrawSegment::with_budget(
+            crate::record::budget::RecordingBudget::new(1024 * 1024, 22),
         );
         tess_quad(painter, Rect::from_xywh(0.0, 0.0, 24.0, 64.0), Color::RED);
         tess_quad(
@@ -2120,11 +2120,11 @@ fn external_draw_sampling_overrides_registration() {
                     TextureId::new(10),
                     texture,
                     external_descriptor(
-                        crate::external_texture_registry::ExternalAlpha::Straight,
+                        crate::resources::external_textures::ExternalAlpha::Straight,
                         if default_linear {
-                            crate::external_texture_registry::ExternalSampling::Linear
+                            crate::resources::external_textures::ExternalSampling::Linear
                         } else {
-                            crate::external_texture_registry::ExternalSampling::Nearest
+                            crate::resources::external_textures::ExternalSampling::Nearest
                         },
                     ),
                 )
@@ -2160,8 +2160,8 @@ fn external_recorded_draw_survives_update_and_rebind() {
                     TextureId::new(11),
                     red,
                     external_descriptor(
-                        crate::external_texture_registry::ExternalAlpha::Straight,
-                        crate::external_texture_registry::ExternalSampling::Linear,
+                        crate::resources::external_textures::ExternalAlpha::Straight,
+                        crate::resources::external_textures::ExternalSampling::Linear,
                     ),
                 )
                 .expect("valid external texture");
@@ -2180,8 +2180,8 @@ fn external_recorded_draw_survives_update_and_rebind() {
                         TextureId::new(11),
                         blue,
                         external_descriptor(
-                            crate::external_texture_registry::ExternalAlpha::Straight,
-                            crate::external_texture_registry::ExternalSampling::Linear,
+                            crate::resources::external_textures::ExternalAlpha::Straight,
+                            crate::resources::external_textures::ExternalSampling::Linear,
                         ),
                     )
                     .expect("explicit rebind");
@@ -2212,13 +2212,13 @@ fn external_recorded_draw_survives_update_and_rebind() {
 }
 
 fn external_descriptor(
-    alpha: crate::external_texture_registry::ExternalAlpha,
-    sampling: crate::external_texture_registry::ExternalSampling,
-) -> crate::external_texture_registry::ExternalTextureDescriptor {
-    crate::external_texture_registry::ExternalTextureDescriptor {
+    alpha: crate::resources::external_textures::ExternalAlpha,
+    sampling: crate::resources::external_textures::ExternalSampling,
+) -> crate::resources::external_textures::ExternalTextureDescriptor {
+    crate::resources::external_textures::ExternalTextureDescriptor {
         sampling,
         alpha,
-        color: crate::external_texture_registry::ExternalColorEncoding::EncodedSrgb,
+        color: crate::resources::external_textures::ExternalColorEncoding::EncodedSrgb,
     }
 }
 
@@ -2227,11 +2227,11 @@ fn external_resource_sampling_survives_update() {
     let (device, queue) = test_device_and_queue();
     for (sampling, expected) in [
         (
-            crate::external_texture_registry::ExternalSampling::Nearest,
+            crate::resources::external_textures::ExternalSampling::Nearest,
             [255, 0, 0, 255],
         ),
         (
-            crate::external_texture_registry::ExternalSampling::Linear,
+            crate::resources::external_textures::ExternalSampling::Linear,
             [183, 0, 72, 255],
         ),
     ] {
@@ -2243,7 +2243,7 @@ fn external_resource_sampling_survives_update() {
                         TextureId::new(12),
                         external_pixels(&device, &queue, 2, &[255, 0, 0, 255, 0, 0, 255, 255]),
                         external_descriptor(
-                            crate::external_texture_registry::ExternalAlpha::Straight,
+                            crate::resources::external_textures::ExternalAlpha::Straight,
                             sampling,
                         ),
                     )
@@ -2282,38 +2282,38 @@ fn external_alpha_contract_scales_opacity() {
     let (device, queue) = test_device_and_queue();
     for (alpha, source_alpha, opacity, expected) in [
         (
-            crate::external_texture_registry::ExternalAlpha::Premultiplied,
+            crate::resources::external_textures::ExternalAlpha::Premultiplied,
             128,
             1.0,
             [128, 0, 127, 255],
         ),
         (
-            crate::external_texture_registry::ExternalAlpha::Premultiplied,
+            crate::resources::external_textures::ExternalAlpha::Premultiplied,
             128,
             0.5,
             [64, 0, 191, 255],
         ),
         (
-            crate::external_texture_registry::ExternalAlpha::Straight,
+            crate::resources::external_textures::ExternalAlpha::Straight,
             128,
             1.0,
             [64, 0, 127, 255],
         ),
         (
-            crate::external_texture_registry::ExternalAlpha::Straight,
+            crate::resources::external_textures::ExternalAlpha::Straight,
             128,
             0.5,
             [32, 0, 191, 255],
         ),
         // Opaque metadata means source alpha is ignored, even if its byte is zero.
         (
-            crate::external_texture_registry::ExternalAlpha::Opaque,
+            crate::resources::external_textures::ExternalAlpha::Opaque,
             0,
             1.0,
             [128, 0, 0, 255],
         ),
         (
-            crate::external_texture_registry::ExternalAlpha::Opaque,
+            crate::resources::external_textures::ExternalAlpha::Opaque,
             0,
             0.5,
             [64, 0, 128, 255],
@@ -2327,7 +2327,7 @@ fn external_alpha_contract_scales_opacity() {
                     external_pixels(&device, &queue, 1, &[128, 0, 0, source_alpha]),
                     external_descriptor(
                         alpha,
-                        crate::external_texture_registry::ExternalSampling::Nearest,
+                        crate::resources::external_textures::ExternalSampling::Nearest,
                     ),
                 )
                 .expect("alpha source registration");
@@ -2348,8 +2348,8 @@ fn external_invalid_registration_and_update_preserve_old_resource() {
     use flui_painting::paint::{FilterQuality, TextureId};
     let (device, queue) = test_device_and_queue();
     let descriptor = external_descriptor(
-        crate::external_texture_registry::ExternalAlpha::Straight,
-        crate::external_texture_registry::ExternalSampling::Nearest,
+        crate::resources::external_textures::ExternalAlpha::Straight,
+        crate::resources::external_textures::ExternalSampling::Nearest,
     );
     let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
         let registry = painter.external_texture_registry_mut();
@@ -2487,8 +2487,8 @@ fn external_missing_id_and_unregister_recover() {
             TextureId::new(16),
             external_pixels(&device, &queue, 1, &[255, 0, 0, 255]),
             external_descriptor(
-                crate::external_texture_registry::ExternalAlpha::Straight,
-                crate::external_texture_registry::ExternalSampling::Nearest,
+                crate::resources::external_textures::ExternalAlpha::Straight,
+                crate::resources::external_textures::ExternalSampling::Nearest,
             ),
         )
         .expect("initial source");
@@ -2548,8 +2548,8 @@ fn external_missing_id_and_unregister_recover() {
             TextureId::new(16),
             external_pixels(&device, &queue, 1, &[0, 0, 255, 255]),
             external_descriptor(
-                crate::external_texture_registry::ExternalAlpha::Straight,
-                crate::external_texture_registry::ExternalSampling::Nearest,
+                crate::resources::external_textures::ExternalAlpha::Straight,
+                crate::resources::external_textures::ExternalSampling::Nearest,
             ),
         )
         .expect("fresh valid registration");
@@ -2591,8 +2591,8 @@ fn external_contents_are_live_within_the_same_allocation() {
                 TextureId::new(17),
                 texture,
                 external_descriptor(
-                    crate::external_texture_registry::ExternalAlpha::Straight,
-                    crate::external_texture_registry::ExternalSampling::Nearest,
+                    crate::resources::external_textures::ExternalAlpha::Straight,
+                    crate::resources::external_textures::ExternalSampling::Nearest,
                 ),
             )
             .expect("live source registration");
@@ -2646,8 +2646,8 @@ fn external_nested_opacity_preserves_recorded_allocation() {
                 TextureId::new(18),
                 red,
                 external_descriptor(
-                    crate::external_texture_registry::ExternalAlpha::Straight,
-                    crate::external_texture_registry::ExternalSampling::Nearest,
+                    crate::resources::external_textures::ExternalAlpha::Straight,
+                    crate::resources::external_textures::ExternalSampling::Nearest,
                 ),
             )
             .expect("nested source registration");
@@ -2757,8 +2757,8 @@ fn external_repeated_submission_keeps_allocation() {
             id,
             external_pixels(&device, &queue, 1, &[255, 0, 0, 255]),
             external_descriptor(
-                crate::external_texture_registry::ExternalAlpha::Straight,
-                crate::external_texture_registry::ExternalSampling::Nearest,
+                crate::resources::external_textures::ExternalAlpha::Straight,
+                crate::resources::external_textures::ExternalSampling::Nearest,
             ),
         )
         .expect("external allocation");
@@ -2816,23 +2816,23 @@ fn external_straight_linear_filtering_has_no_halo() {
         for (opacity, expected_red) in [(1.0, 183), (0.5, 92)] {
             for (alpha, transparent_rgb) in [
                 (
-                    crate::external_texture_registry::ExternalAlpha::Premultiplied,
+                    crate::resources::external_textures::ExternalAlpha::Premultiplied,
                     [0, 0, 0],
                 ),
                 (
-                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    crate::resources::external_textures::ExternalAlpha::Straight,
                     [0, 0, 0],
                 ),
                 (
-                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    crate::resources::external_textures::ExternalAlpha::Straight,
                     [0, 0, 255],
                 ),
                 (
-                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    crate::resources::external_textures::ExternalAlpha::Straight,
                     [0, 255, 0],
                 ),
                 (
-                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    crate::resources::external_textures::ExternalAlpha::Straight,
                     [255, 255, 255],
                 ),
             ] {
@@ -2860,7 +2860,7 @@ fn external_straight_linear_filtering_has_no_halo() {
                             source,
                             external_descriptor(
                                 alpha,
-                                crate::external_texture_registry::ExternalSampling::Linear,
+                                crate::resources::external_textures::ExternalSampling::Linear,
                             ),
                         )
                         .expect("filtered alpha source registration");
@@ -3248,35 +3248,35 @@ fn invalid_texture_target_recovers() {
 
 fn plugin_fonts_survive_format_replacement() {
     window_keeps_its_font_policy(
-        crate::frame_protocol::FontSource::Plugin,
+        crate::frame::protocol::FontSource::Plugin,
         FontsDisplaced::FormatChanged,
     );
 }
 
 fn plugin_fonts_survive_domain_replacement() {
     window_keeps_its_font_policy(
-        crate::frame_protocol::FontSource::Plugin,
+        crate::frame::protocol::FontSource::Plugin,
         FontsDisplaced::DomainReplaced,
     );
 }
 
 fn ordinary_fonts_retain_sources_after_replacement() {
     window_keeps_its_font_policy(
-        crate::frame_protocol::FontSource::Ordinary,
+        crate::frame::protocol::FontSource::Ordinary,
         FontsDisplaced::DomainReplaced,
     );
 }
 
 fn plugin_fonts_survive_another_windows_ordinary_frame() {
     window_keeps_its_font_policy(
-        crate::frame_protocol::FontSource::Plugin,
+        crate::frame::protocol::FontSource::Plugin,
         FontsDisplaced::OtherWindow,
     );
 }
 
 fn ordinary_fonts_survive_another_windows_plugin_frame() {
     window_keeps_its_font_policy(
-        crate::frame_protocol::FontSource::Ordinary,
+        crate::frame::protocol::FontSource::Ordinary,
         FontsDisplaced::OtherWindow,
     );
 }
@@ -3378,7 +3378,7 @@ enum FontsDisplaced {
 /// its own namespace's policy, though the frame asks for no reset: its real
 /// atlas, including opaque source retirement.
 fn window_keeps_its_font_policy(
-    source: crate::frame_protocol::FontSource,
+    source: crate::frame::protocol::FontSource,
     displaced: FontsDisplaced,
 ) {
     use flui_painting::glyphs::GlyphRasterizer;
@@ -3403,8 +3403,8 @@ fn window_keeps_its_font_policy(
     }
 
     let (device, queue) = test_device_and_queue();
-    let domain = crate::device_domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
-    let mut frame = crate::frame_protocol::FrameProtocol::new();
+    let domain = crate::device::domain::DeviceDomain::new(Arc::clone(&device), Arc::clone(&queue));
+    let mut frame = crate::frame::protocol::FrameProtocol::new();
     let mut painter = WgpuPainter::with_domain(Arc::clone(&domain), READBACK_FORMAT, (32, 32));
     frame.select_font_source(&mut painter, source, false);
     let face = FaceKey {
@@ -3425,7 +3425,7 @@ fn window_keeps_its_font_policy(
         FontsDisplaced::DomainReplaced | FontsDisplaced::FormatChanged => {
             let (replacement_domain, format) = if displaced == FontsDisplaced::DomainReplaced {
                 (
-                    crate::device_domain::DeviceDomain::new(device, queue),
+                    crate::device::domain::DeviceDomain::new(device, queue),
                     READBACK_FORMAT,
                 )
             } else {
@@ -3437,14 +3437,14 @@ fn window_keeps_its_font_policy(
         // through the same painter.
         FontsDisplaced::OtherWindow => {
             let other = match source {
-                crate::frame_protocol::FontSource::Ordinary => {
-                    crate::frame_protocol::FontSource::Plugin
+                crate::frame::protocol::FontSource::Ordinary => {
+                    crate::frame::protocol::FontSource::Plugin
                 }
-                crate::frame_protocol::FontSource::Plugin => {
-                    crate::frame_protocol::FontSource::Ordinary
+                crate::frame::protocol::FontSource::Plugin => {
+                    crate::frame::protocol::FontSource::Ordinary
                 }
             };
-            crate::frame_protocol::FrameProtocol::new().select_font_source(
+            crate::frame::protocol::FrameProtocol::new().select_font_source(
                 &mut painter,
                 other,
                 false,
@@ -3494,7 +3494,7 @@ fn window_keeps_its_font_policy(
         .expect("replacement atlas uploads the glyph");
     assert_eq!(slot.size, [expected.width(), expected.height()]);
     match source {
-        crate::frame_protocol::FontSource::Plugin => {
+        crate::frame::protocol::FontSource::Plugin => {
             assert_eq!(
                 drops.load(Ordering::Relaxed),
                 1,
@@ -3506,7 +3506,7 @@ fn window_keeps_its_font_policy(
                 "glyph reads use host-owned bytes"
             );
         }
-        crate::frame_protocol::FontSource::Ordinary => {
+        crate::frame::protocol::FontSource::Ordinary => {
             assert_eq!(
                 drops.load(Ordering::Relaxed),
                 0,
@@ -3719,8 +3719,8 @@ fn repeat_refusal(
     if matches!(input, RepeatInput::Quota) {
         // Public painter limits cannot select a tiny arena; this admission seam
         // tests the production budget shared by isolated repeat segments.
-        painter.current_segment = crate::command_ir::DrawSegment::with_budget(
-            crate::recording_budget::RecordingBudget::new(0, 0),
+        painter.current_segment = crate::record::command_ir::DrawSegment::with_budget(
+            crate::record::budget::RecordingBudget::new(0, 0),
         );
     } else {
         painter.draw_rect(
@@ -4035,7 +4035,7 @@ fn trim_evicts_free_buffers_by_level() {
 /// releases the atlas texture, freeing the pixels the cache pinned.
 #[test]
 fn trim_evicts_image_textures_by_level() {
-    use crate::texture_cache::TextureKey;
+    use crate::resources::texture_cache::TextureKey;
     use flui_foundation::memory::MemoryPressureLevel;
     use flui_painting::paint::Image;
 

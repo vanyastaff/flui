@@ -40,8 +40,8 @@ and the readers of it in `flui-rendering` and `flui-engine`. At `e5ba8fe8f`:
 | `DrawOp` is therefore 216 to 224 bytes (by where the compiler puts the discriminant) and a command 344 to 352, against ADR-0066's 128 and 192; 200,000 recorded operations hold about 70 MB of commands. No `size_of` assertion exists, and the crate's architecture document still states 128, 192 and a `Vec`-backed path | `rg 'size_of::<(DrawOp\|DrawCommand)>'` finds none; `crates/flui-painting/ARCHITECTURE.md:55-57` |
 | Render objects already draw in local coordinates: the paint recorder translates each fresh canvas to the render object's origin in its layer, so the origin reaches every command through that command's own copy of the CTM | `crates/flui-rendering/src/context/paint.rs:300-308`; `crates/flui-rendering/src/pipeline/owner/paint.rs:771-772`, `:874-882` |
 | The runs of inline render objects merge into one picture per boundary, so nothing holds a render object's position once | `paint.rs:804`, `:1501-1503` |
-| The engine reinstalls the CTM unless the matrix equals the previous command's (16 comparisons per command); it composes in `f64` and narrows to `f32` after composing | `crates/flui-engine/src/layer_dispatcher.rs:134-161`; `crates/flui-engine/src/batches/shapes.rs:35`, `:60`, `:69`; `crates/flui-engine/src/batches/text.rs:67-83` |
-| A non-finite rectangle is recorded as given; the engine refuses it with `GeometryError::NonFinite`, and the layer walk returns that error, so the frame is not drawn | `drawing.rs:42-46`; `crates/flui-engine/src/clip_geometry.rs:257-275`; `crates/flui-engine/src/layer_walk.rs:105-108`, `:186` |
+| The engine reinstalls the CTM unless the matrix equals the previous command's (16 comparisons per command); it composes in `f64` and narrows to `f32` after composing | `crates/flui-engine/src/layers/dispatcher.rs:134-161`; `crates/flui-engine/src/record/batches/shapes.rs:35`, `:60`, `:69`; `crates/flui-engine/src/record/batches/text.rs:67-83` |
+| A non-finite rectangle is recorded as given; the engine refuses it with `GeometryError::NonFinite`, and the layer walk returns that error, so the frame is not drawn | `drawing.rs:42-46`; `crates/flui-engine/src/record/clip_geometry.rs:257-275`; `crates/flui-engine/src/layers/walk.rs:105-108`, `:186` |
 | `Canvas::draw_picture` has no production caller: one bench and one engine readback test | `drawing.rs:358-380`; `crates/flui-painting/benches/display_list_record.rs:82-95`; `crates/flui-engine/src/clip_layer_readback_tests.rs:726` |
 
 How is a recorded command represented so that its size is a checked bound, a render object's
@@ -356,7 +356,7 @@ code, after the list is complete.
   (`PaintContext::dpr`, `paint.rs:437`) but not its ancestors' transforms; the engine composes in
   `f64` first, so what it narrows is a visible coordinate of target size (`shapes.rs:35`, `:69`).
 - Bad, because rebasing an op past the bound has to move what lies outside the op in the same
-  frame: a paint's shader coordinates (`crates/flui-engine/src/batches/gradients.rs:403-404`), an
+  frame: a paint's shader coordinates (`crates/flui-engine/src/record/batches/gradients.rs:403-404`), an
   atlas's sprite transforms, a path's `f64` points. Either the paint is interned again with shifted
   coordinates for every rebased cell, or such ops stay under the unrebased entry beside rebased
   neighbours.

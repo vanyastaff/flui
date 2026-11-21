@@ -75,7 +75,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
 
 1. **`Renderer::new(target: impl WindowTarget)`** with
    `pub trait WindowTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static {}`,
-   blanket-implemented (`flui-engine/src/window_target.rs`). The renderer wraps the target once
+   blanket-implemented (`flui-engine/src/surface/target.rs`). The renderer wraps the target once
    (`Arc<dyn WindowTarget>`) and hands a clone to wgpu's safe `create_surface`. The borrowed escape
    no longer type-checks; the owned form is sound because the surface keeps its owner alive. The
    constructor stays `#[doc(hidden)]` until ADR-0045's windowed `GpuServices` path replaces it.
@@ -89,7 +89,7 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
    (owner suspended or closing; the runners' backoff retries), fatal otherwise. The probe duplicates
    wgpu's own call because `wgpu::CreateSurfaceError` exposes the `HandleError` only as text;
    without it "the window is gone" and "the driver refused" are one undifferentiated error.
-4. **The protocol lives in a GPU-free seam.** `SurfaceLease<S>` (`flui-engine/src/surface_lease.rs`:
+4. **The protocol lives in a GPU-free seam.** `SurfaceLease<S>` (`flui-engine/src/surface/lease.rs`:
    surface declared before target; `probe`, `release() -> Released`,
    `replace_surface(Released, S)`, `surface()`, `has_surface()`) is generic over the surface, so
    retention, drop order, cancellation of a half-built `Renderer::new`, and the `Unavailable` path

@@ -1,8 +1,13 @@
+//! Ordered replay of one sealed segment: `flush_segment` walks the segment's
+//! typed runs in recorded order and replays each over the immutable arena
+//! slices, keeping contiguous geometry runs in one render pass and starting a
+//! fresh pass state (`QuadReplayState`) at every barrier.
+
 use super::{
     Arc, DrawRun, DrawSegment, GpuResources, GradientKind, GradientMesh, PipelineSet, ScissorRect,
     clamp_scissor_to_attachment,
 };
-use crate::{command_ir::spans_within, replay::clip::MaskFootprint};
+use crate::{record::command_ir::spans_within, replay::clip::MaskFootprint};
 
 // Render-pass state is local: barriers start a fresh cache. Pipeline families
 // share group zero, while glyph and gradient group one have distinct layouts.
@@ -80,7 +85,7 @@ impl super::GpuReplay {
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
-        target: crate::render_target::RenderTarget<'_>,
+        target: crate::frame::render_target::RenderTarget<'_>,
         mut initial_load: wgpu::LoadOp<wgpu::Color>,
     ) -> crate::error::EngineResult<()> {
         segment.recording_result()?;
@@ -92,7 +97,7 @@ impl super::GpuReplay {
                         let texture = target
                             .texture
                             .ok_or(crate::error::EngineError::UnsupportedCoverageBlend { mode })?;
-                        crate::portable_coverage::PortableCoveragePipeline::validate_device_limits(
+                        crate::replay::portable_coverage::PortableCoveragePipeline::validate_device_limits(
                             device,
                             texture.format(),
                         )?;
@@ -109,7 +114,7 @@ impl super::GpuReplay {
                                         mode: *mode,
                                     },
                                 )?;
-                                crate::portable_coverage::PortableCoveragePipeline::validate_device_limits(device, texture.format())?;
+                                crate::replay::portable_coverage::PortableCoveragePipeline::validate_device_limits(device, texture.format())?;
                             }
                         }
                     }
@@ -152,15 +157,16 @@ impl super::GpuReplay {
             None
         } else {
             let max_rows = device.limits().max_texture_dimension_2d;
-            let Some(rows) = crate::pipeline_set::gradient_stop_rows(stops.len(), max_rows) else {
+            let Some(rows) = crate::pipelines::set::gradient_stop_rows(stops.len(), max_rows)
+            else {
                 return Err(crate::error::EngineError::PreparedResourceLimit {
                     resource: "gradient stop bytes",
                     requested: stops.len(),
-                    limit: max_rows as usize * crate::pipeline_set::GRADIENT_STOP_ROW_BYTES,
+                    limit: max_rows as usize * crate::pipelines::set::GRADIENT_STOP_ROW_BYTES,
                 });
             };
-            resources.reserve_prepared(crate::device_domain::PreparedCost {
-                gpu_bytes: rows as usize * crate::pipeline_set::GRADIENT_STOP_ROW_BYTES,
+            resources.reserve_prepared(crate::device::domain::PreparedCost {
+                gpu_bytes: rows as usize * crate::pipelines::set::GRADIENT_STOP_ROW_BYTES,
                 cpu_bytes: stops.len(),
                 objects: 2,
             })?;
@@ -214,7 +220,7 @@ impl super::GpuReplay {
             .and_then(|buckets| {
                 buckets
                     .checked_mul(
-                        std::mem::size_of::<(crate::clip_chain::ClipChain, bool)>()
+                        std::mem::size_of::<(crate::record::clip_chain::ClipChain, bool)>()
                             + std::mem::size_of::<ClipUse>()
                             + 32,
                     )
@@ -231,7 +237,7 @@ impl super::GpuReplay {
                 requested: usize::MAX,
                 limit: usize::MAX - 1,
             })?;
-        resources.reserve_prepared(crate::device_domain::PreparedCost {
+        resources.reserve_prepared(crate::device::domain::PreparedCost {
             gpu_bytes: 0,
             cpu_bytes: metadata_bytes,
             objects: 0,
@@ -242,7 +248,8 @@ impl super::GpuReplay {
             reason = "Hash and equality use immutable Arc identity; budget atomics are not key state"
         )]
         let mut uses =
-            rustc_hash::FxHashMap::<(crate::clip_chain::ClipChain, bool), ClipUse>::default();
+            rustc_hash::FxHashMap::<(crate::record::clip_chain::ClipChain, bool), ClipUse>::default(
+            );
         bindings
             .try_reserve_exact(segment.runs.len())
             .map_err(
@@ -492,7 +499,7 @@ impl super::GpuReplay {
     ) {
         let (pipeline, regions, range): (
             &wgpu::RenderPipeline,
-            &[crate::command_ir::ScissorRegion],
+            &[crate::record::command_ir::ScissorRegion],
             &std::ops::Range<usize>,
         ) = match run {
             DrawRun::Rect(r) => (&pipelines.instanced_rect, &segment.rect_scissors, r),

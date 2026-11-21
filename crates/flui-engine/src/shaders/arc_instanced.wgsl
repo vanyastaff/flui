@@ -13,7 +13,7 @@
 //   device     = M * local_pos + transform_translate.xy
 //
 // The device CENTER lives in `transform_translate` (added after M), so M never
-// scales it — same contract as circle_instanced (the PR-2 double-scale fix).
+// scales it — same contract as circle_instanced.
 //
 // For the baked fast path (axis-aligned SrcOver arcs):
 //   center_radius       = [0, 0, radius, 0]

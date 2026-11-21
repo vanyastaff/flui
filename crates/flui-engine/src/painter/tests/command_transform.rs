@@ -24,8 +24,8 @@ fn commands_under_one_entry_reuse_the_installed_transform_by_address() {
     canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), &paint);
     let list = canvas.finish();
 
-    let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(&mut painter);
-    crate::dispatch::dispatch_commands(&list, &mut dispatcher);
+    let mut dispatcher = crate::layers::dispatcher::LayerDispatcher::new(&mut painter);
+    crate::layers::dispatch::dispatch_commands(&list, &mut dispatcher);
     // The second and third rectangles name the first one's entry; the fourth
     // names another entry and is compared by value once.
     assert_eq!(dispatcher.value_comparisons(), 1);

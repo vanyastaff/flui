@@ -42,7 +42,7 @@ disjoint set of borrowed parameters they need (`&mut DrawSegment`, `&GpuStateSta
 
 **4. One `Matrix4` ↔ glam edge.** `GpuStateStack` stores `glam::Mat4`, which matches the GPU
 buffer layout. `flui_types::Matrix4` is converted once, where the layer dispatcher hands a
-transform to the command renderer; `batches/`, `pipeline_set.rs` and `replay/` never name
+transform to the command renderer; `record/batches/`, `pipelines/set.rs` and `replay/` never name
 `Matrix4`.
 
 **5. wgpu stays concrete.** There is no device or backend trait. A second GPU backend, if one

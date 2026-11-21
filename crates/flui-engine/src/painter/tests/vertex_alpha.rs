@@ -24,8 +24,8 @@ fn draw_mesh(painter: &mut WgpuPainter, colors: Option<&[Color]>, paint: &Paint,
             paint,
         );
         let list = recording.finish();
-        let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
-        crate::dispatch::dispatch_commands(&list, &mut dispatcher);
+        let mut dispatcher = crate::layers::dispatcher::LayerDispatcher::new(painter);
+        crate::layers::dispatch::dispatch_commands(&list, &mut dispatcher);
     } else {
         painter.draw_vertices(&triangle(), colors, None, &INDICES, paint);
     }
@@ -184,8 +184,8 @@ fn opaque_under_fractional_clip(supplied_colors: bool) {
         );
         recording.restore();
         let list = recording.finish();
-        let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
-        crate::dispatch::dispatch_commands(&list, &mut dispatcher);
+        let mut dispatcher = crate::layers::dispatcher::LayerDispatcher::new(painter);
+        crate::layers::dispatch::dispatch_commands(&list, &mut dispatcher);
     });
     // The fragment center lies exactly on the clip edge: half coverage must
     // composite red over blue and keep the opaque destination's alpha.

@@ -25,7 +25,9 @@ mod gpu_tests {
     use flui_painting::paint::Paint;
     use flui_painting::{paint::ColorMatrix, styling::Color};
 
-    use crate::{command_ir::LayerFilter, painter::WgpuPainter, render_target::RenderTarget};
+    use crate::{
+        frame::render_target::RenderTarget, painter::WgpuPainter, record::command_ir::LayerFilter,
+    };
 
     // ── Harness constants ─────────────────────────────────────────────────────
 

@@ -3,12 +3,12 @@ use super::{
     GpuReplay, GradientMesh, PreparedTess, clamp_scissor_to_attachment, set_clamped_scissor,
 };
 use crate::{
-    command_ir::{DrawRun, DrawSegment, RecordedRun, ScissorRect},
-    effects_pipeline::GradientKind,
     error::EngineResult,
-    pipeline_set::PipelineSet,
-    portable_coverage::PreparedCoverage,
-    render_target::RenderTarget,
+    frame::render_target::RenderTarget,
+    pipelines::effects::GradientKind,
+    pipelines::set::PipelineSet,
+    record::command_ir::{DrawRun, DrawSegment, RecordedRun, ScissorRect},
+    replay::portable_coverage::PreparedCoverage,
     resources::GpuResources,
 };
 use flui_painting::paint::{BlendMode, CoverageClass};
@@ -32,7 +32,7 @@ pub(super) fn needs_portable(device: &wgpu::Device, mode: BlendMode) -> bool {
 // Decoded image pipelines have one color output. Even on dual-source devices,
 // destination-sensitive image coverage uses the shared portable compositor.
 pub(super) fn image_needs_portable(mode: BlendMode) -> bool {
-    crate::pipeline_cache::coverage_must_not_fold(mode)
+    crate::pipelines::variants::coverage_must_not_fold(mode)
 }
 
 pub(super) fn run_needs_portable(
@@ -69,7 +69,7 @@ pub(super) fn run_needs_portable(
 fn gradient_needs_portable(
     device: &wgpu::Device,
     range: &std::ops::Range<usize>,
-    runs: &[crate::command_ir::GradientRun],
+    runs: &[crate::record::command_ir::GradientRun],
 ) -> bool {
     // All gradient shaders apply SDF edge AA, including zero-radius rectangles.
     // Neither corner radii nor the clip chain can rule out partial coverage;
@@ -234,7 +234,7 @@ impl GpuReplay {
     ) -> EngineResult<()> {
         if let DrawRun::CachedImage(range) = run {
             for draw in &segment.cached_images[range.clone()] {
-                let crate::command_ir::CachedImageDraw {
+                let crate::record::command_ir::CachedImageDraw {
                     key,
                     instance,
                     scissor,
@@ -260,7 +260,7 @@ impl GpuReplay {
                 let scratch =
                     PreparedCoverage::prepare(device, resources, target, crop.region, encoder)?;
                 let bytes = bytemuck::bytes_of(instance);
-                resources.reserve_prepared(crate::device_domain::PreparedCost {
+                resources.reserve_prepared(crate::device::domain::PreparedCost {
                     gpu_bytes: bytes.len(),
                     cpu_bytes: bytes.len(),
                     objects: 2,
@@ -414,7 +414,7 @@ impl GpuReplay {
         let (Some(buffer), Some(stops)) = (buffer, stops) else {
             return Ok(());
         };
-        for (piece, run) in crate::command_ir::spans_within(runs, range.clone()) {
+        for (piece, run) in crate::record::command_ir::spans_within(runs, range.clone()) {
             let (start, end) = (piece.start, piece.end);
             // Isolation is per instance: a shared mode does not make overlapping
             // operations one operator. Native runs retain their instancing.
@@ -511,7 +511,7 @@ impl GpuReplay {
     fn bind_gradient_geometry(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        run: &crate::command_ir::GradientRun,
+        run: &crate::record::command_ir::GradientRun,
         mesh: Option<&GradientMesh>,
     ) -> std::ops::Range<u32> {
         if let Some(range) = &run.mesh {

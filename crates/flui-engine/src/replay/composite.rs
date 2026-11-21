@@ -1,14 +1,14 @@
 //! Group coverage belongs to the finished effect, not its isolated input.
 use super::GpuReplay;
 use crate::{
-    advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
-    clip_chain::ClipChain,
-    command_ir::{DrawSegment, GroupClip},
     error::{EngineError, EngineResult},
-    pipeline_set::PipelineSet,
-    render_target::RenderTarget,
+    filters::advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
+    frame::render_target::RenderTarget,
+    pipelines::set::PipelineSet,
+    record::clip_chain::ClipChain,
+    record::command_ir::{DrawSegment, GroupClip},
     resources::GpuResources,
-    texture_pool::PooledTexture,
+    resources::texture_pool::PooledTexture,
 };
 use flui_foundation::geometry::Rect;
 use flui_painting::paint::BlendMode;
@@ -38,7 +38,7 @@ impl GpuReplay {
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
-        scissor: crate::command_ir::ScissorRect,
+        scissor: crate::record::command_ir::ScissorRect,
     ) -> EngineResult<()> {
         let (bounds, uv) = if let Some((x, y, w, h)) = scissor {
             let cut = Rect::from_xywh(x as f64, y as f64, f64::from(w), f64::from(h));
@@ -93,7 +93,7 @@ impl GpuReplay {
         // coverage into source alpha. Binary masks instead discard the outside
         // and use fixed-function blending, including on view-only targets.
         let reads_destination = mode.is_advanced()
-            || (chain.has_antialias() && crate::pipeline_cache::coverage_must_not_fold(mode));
+            || (chain.has_antialias() && crate::pipelines::variants::coverage_must_not_fold(mode));
         if reads_destination {
             let destination = target
                 .texture
@@ -129,7 +129,7 @@ impl GpuReplay {
             return Ok(());
         }
         let o = opacity.clamp(0.0, 1.0);
-        let mut instance = crate::instancing::TextureInstance::with_uv_tint_f32(
+        let mut instance = crate::record::instancing::TextureInstance::with_uv_tint_f32(
             bounds,
             uv,
             [tint[0] * o, tint[1] * o, tint[2] * o, o],
@@ -137,7 +137,7 @@ impl GpuReplay {
         if chain.is_unclipped()
             && let Some(clip) = clip
         {
-            use crate::instancing::ClippableInstance as _;
+            use crate::record::instancing::ClippableInstance as _;
             instance = instance.with_clip(clip.legacy);
         }
         let _ = self.texture_batch.add(instance);
@@ -179,7 +179,7 @@ fn admit_destination_copy(
         .checked_mul(span(covered.top(), covered.bottom(), size.height))
         .and_then(|texels| texels.checked_mul(texel))
         .ok_or_else(overflow)?;
-    resources.reserve_prepared(crate::device_domain::PreparedCost {
+    resources.reserve_prepared(crate::device::domain::PreparedCost {
         gpu_bytes: bytes,
         cpu_bytes: 0,
         objects: 2,

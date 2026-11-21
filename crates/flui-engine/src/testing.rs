@@ -731,7 +731,7 @@ pub fn noop_probe(
 pub(crate) fn noop_instance(
     display: &std::sync::Arc<dyn flui_platform::DisplayConnection>,
 ) -> wgpu::Instance {
-    wgpu::Instance::new(crate::surface_factory::instance_descriptor(
+    wgpu::Instance::new(crate::surface::factory::instance_descriptor(
         display,
         wgpu::Backends::NOOP,
         wgpu::BackendOptions {

@@ -93,7 +93,7 @@ render tree. The catalog guard for those lives in `flui-objects`
 (`cargo test -p flui-objects --test render_object_harness`), which verifies
 every exported render object appears in `RENDER_OBJECT_TYPES` with a matching
 `harness_*` test. If your change adds a *layer* to `flui-layer`, the compiler
-is the guard instead: `layer_render.rs`'s exhaustive match over `Layer` will
+is the guard instead: `layers/render.rs`'s exhaustive match over `Layer` will
 not compile until the new variant is handled. See
 [`crates/flui-rendering/docs/TESTING.md`](../flui-rendering/docs/TESTING.md)
 for the harness API.
@@ -126,11 +126,11 @@ For a change confined to this crate, the parts that matter most:
   0-based slot itself (`new_gen(slab_index, generation)`, `.index()`).
   Getting this wrong is an off-by-one that only shows up at runtime.
 - **`Matrix4` → `glam` at one boundary.** `Matrix4`-to-`glam` conversion
-  happens in `layer_dispatcher.rs` and nowhere else. The record path
-  (`batches/`), the pipeline set, and `replay/` are glam-only.
-- **`lyon` lives in `tessellator.rs`.** The tessellator is the
+  happens in `layers/dispatcher.rs` and nowhere else. The record path
+  (`record/batches/`), the pipeline set, and `replay/` are glam-only.
+- **`lyon` lives in `record/tessellator.rs`.** The tessellator is the
   one adapter over that crate, so a lyon type never leaks into the Command
-  IR or a pipeline layout — the same reason `etagere` stays behind `glyph_atlas.rs`.
+  IR or a pipeline layout — the same reason `etagere` stays behind `resources/glyph_atlas.rs`.
 - **No `async fn` on the hot path.** Async is for the acquisition edges
   (`GpuContext::bootstrap`, a device rebuild, `HeadlessRenderer::new`) only. The layer walk,
   the dispatch, and the replay path are sync.
@@ -152,12 +152,12 @@ The crate is ~40k non-test lines. The densest files, and what each owns:
 
 | Area | Files | Owns |
 |---|---|---|
-| Top-level entry | `renderer.rs`, `headless.rs` | The windowed and headless renderers; device/surface lifecycle, recovery |
-| Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs` | Iterative layer traversal; per-layer rendering; `DrawCommand` → painter routing |
-| Recording | `batches/`, `command_ir.rs` | Batched command IR — the record half |
+| Top-level entry | `gpu_context.rs`, `headless.rs` | The windowed and headless renderers; device/surface lifecycle, recovery |
+| Frame walk | `layers/walk.rs`, `layers/render.rs`, `layers/dispatcher.rs` | Iterative layer traversal; per-layer rendering; `DrawCommand` → painter routing |
+| Recording | `record/batches/`, `record/command_ir.rs` | Batched command IR — the record half |
 | Replay | `replay/` | Command IR → wgpu encoding — the replay half |
-| State | `state_stack.rs`, `layer_compositor.rs` | Transform/clip/opacity stacks; layer save-state |
-| GPU resources | `{texture_pool,texture_cache,path_cache,buffer_pool}.rs` | Pooling and caching |
+| State | `record/state_stack.rs`, `layers/compositor.rs` | Transform/clip/opacity stacks; layer save-state |
+| GPU resources | `resources/{texture_pool,texture_cache,buffer_pool}.rs`, `record/path_cache.rs` | Pooling and caching |
 | Filters | `{blur,mode,gamma,color_matrix,morphology}/` | The offscreen filter passes, each with its own pipeline |
 | Raster boundary | `raster_executor/`, `raster.rs` | The command protocol between the app and the GPU |
 

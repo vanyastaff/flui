@@ -5,7 +5,7 @@
 //! atlas, image and path caches every slot shares, and the presentation blit
 //! pipelines (one per surface format). What is keyed by the presentation is
 //! the slot's: an offscreen slot's target texture, or a window slot's
-//! surface, configuration and frame protocol (`window_slot`).
+//! surface, configuration and frame protocol (`surface::slot`).
 //!
 //! Slots render one at a time on the context's one mutator, so sharing the
 //! caches takes no lock: the context is `Send`, so a raster thread can own it,
@@ -25,25 +25,25 @@ use flui_platform::{DisplayColor, DisplayConnection, SurfaceTarget};
 use rustc_hash::FxHashMap;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::pipeline_store::PipelineStore;
+use crate::pipelines::store::PipelineStore;
 use crate::{
     FrameLatency,
-    device_domain::DeviceDomain,
+    device::backend::Attempt,
+    device::domain::DeviceDomain,
+    device::probe::{GpuProbe, ProbedDevice},
     error::{EngineError, EngineResult},
-    external_texture_registry::{ExternalTextureRegistry, KeptTextures},
-    gpu_backend::Attempt,
-    gpu_probe::{GpuProbe, ProbedDevice},
-    layer_dispatcher::LayerDispatcher,
+    layers::dispatcher::LayerDispatcher,
     offscreen::OffscreenRenderer,
     painter::WgpuPainter,
-    pipeline_device::PipelineDevice,
-    pipeline_set::PipelineLibrary,
+    pipelines::device::PipelineDevice,
+    pipelines::set::PipelineLibrary,
     raster::PresentDisposition,
     raster_executor::{
         DeviceAnswered, DeviceTicket, RasterBackend, SlotConfig, SlotId, SlotTarget,
     },
-    surface_factory::{SurfaceFactory, UnconfiguredSurface},
-    window_slot::{Gpu, WindowSlot},
+    resources::external_textures::{ExternalTextureRegistry, KeptTextures},
+    surface::factory::{SurfaceFactory, UnconfiguredSurface},
+    surface::slot::{Gpu, WindowSlot},
 };
 
 #[cfg(test)]
@@ -208,9 +208,11 @@ impl DeviceRecipe {
         surface: Option<&wgpu::Surface<'static>>,
     ) -> EngineResult<wgpu::Adapter> {
         match self {
-            Self::Probed(attempt) => crate::adapter::adapter_for(instance, attempt, surface).await,
+            Self::Probed(attempt) => {
+                crate::device::adapter::adapter_for(instance, attempt, surface).await
+            }
             Self::Offscreen(_) => instance
-                .request_adapter(&crate::adapter::trusted_adapter_options(
+                .request_adapter(&crate::device::adapter::trusted_adapter_options(
                     wgpu::PowerPreference::HighPerformance,
                     surface,
                 ))
@@ -223,7 +225,7 @@ impl DeviceRecipe {
     /// since the driver may take hundreds of milliseconds to answer it.
     async fn device(self, adapter: &wgpu::Adapter) -> EngineResult<(wgpu::Device, wgpu::Queue)> {
         match self {
-            Self::Probed(_) => crate::adapter::device_on(adapter)
+            Self::Probed(_) => crate::device::adapter::device_on(adapter)
                 .await
                 .map(|(_, device, queue)| (device, queue)),
             Self::Offscreen(wanted_features) => offscreen_device(adapter, wanted_features).await,
@@ -306,7 +308,7 @@ pub struct GpuContext {
     /// until the executor installs it (ADR-0305 §8).
     #[cfg(not(target_arch = "wasm32"))]
     requested:
-        Option<crate::device_worker::DeviceWorker<(wgpu::Adapter, wgpu::Device, wgpu::Queue)>>,
+        Option<crate::device::worker::DeviceWorker<(wgpu::Adapter, wgpu::Device, wgpu::Queue)>>,
     /// What the attempts of the rebuild under way refused.
     refusals: RebuildRefusals,
     /// The painter every slot records and replays with: its pipelines per
@@ -323,7 +325,7 @@ pub struct GpuContext {
     /// The library of the first format a slot named, built on a worker until
     /// a frame takes it (ADR-0305 §1).
     #[cfg(not(target_arch = "wasm32"))]
-    warmup: Option<crate::pipeline_warmup::PipelineWarmup>,
+    warmup: Option<crate::pipelines::warmup::PipelineWarmup>,
     /// The driver's pipeline cache every pipeline of the device is created
     /// through, and the storage it is saved in between runs; `None` until
     /// [`Self::load_pipeline_cache`], and where the device has none.
@@ -341,11 +343,11 @@ pub struct GpuContext {
     textures: FxHashMap<SlotId, KeptTextures>,
     /// The lineage each slot last drew a version of: the painter's
     /// recordings of one no slot draws any more are dropped.
-    lineages: crate::recording_cache::DrawnLineages<SlotId>,
+    lineages: crate::record::cache::DrawnLineages<SlotId>,
     /// Each slot's frame timer, built at its first timed frame on a device
     /// with timestamp queries and dropped with the slot or the device
     /// (ADR-0388).
-    gpu_timers: FxHashMap<SlotId, crate::gpu_timer::FrameGpuTimer>,
+    gpu_timers: FxHashMap<SlotId, crate::device::timer::FrameGpuTimer>,
     /// What the driver's report of a lost device wakes, besides marking the
     /// device lost: the owner that replaces the context (the web).
     loss_wake: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -372,7 +374,7 @@ pub struct GpuContext {
     panic_in_next_cleanup: bool,
     /// What the last offscreen frame's walk and recording did.
     #[cfg(test)]
-    slot_counters: crate::frame_protocol::RasterCounters,
+    slot_counters: crate::frame::protocol::RasterCounters,
     /// How many of the next device rebuilds fail.
     #[cfg(test)]
     rebuilds_failing: u32,
@@ -510,7 +512,7 @@ impl GpuContext {
             blit: None,
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
-            lineages: crate::recording_cache::DrawnLineages::new(),
+            lineages: crate::record::cache::DrawnLineages::new(),
             gpu_timers: FxHashMap::default(),
             loss_wake: None,
             #[cfg(test)]
@@ -528,7 +530,7 @@ impl GpuContext {
             #[cfg(test)]
             panic_in_next_cleanup: false,
             #[cfg(test)]
-            slot_counters: crate::frame_protocol::RasterCounters::default(),
+            slot_counters: crate::frame::protocol::RasterCounters::default(),
             #[cfg(test)]
             panic_in_next_setup: false,
             #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -571,7 +573,7 @@ impl GpuContext {
             let recipe = self.recipe;
             #[cfg(test)]
             let hold = self.request_hold.take();
-            self.requested = Some(crate::device_worker::DeviceWorker::start(
+            self.requested = Some(crate::device::worker::DeviceWorker::start(
                 ticket,
                 answered,
                 move || {
@@ -1093,7 +1095,7 @@ impl GpuContext {
         &mut self,
         slot: SlotId,
         scene: &flui_layer::SceneVersion,
-        reads: crate::recording_cache::CacheReads,
+        reads: crate::record::cache::CacheReads,
         epoch: Option<flui_foundation::FrameEpoch>,
     ) -> EngineResult<()> {
         let (texture, format, size) = {
@@ -1119,7 +1121,7 @@ impl GpuContext {
                 domain.poll()?;
                 let counters = {
                     let mut backend = LayerDispatcher::new(&mut painter);
-                    crate::layer_walk::record_scene(scene, None, reads, &mut backend)?
+                    crate::layers::walk::record_scene(scene, None, reads, &mut backend)?
                 };
                 painter.settle_recording_cache();
                 let mut encoder =
@@ -1191,7 +1193,7 @@ impl GpuContext {
 
     /// What the last offscreen frame's walk and recording did.
     #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn slot_counters(&self) -> crate::frame_protocol::RasterCounters {
+    pub(crate) fn slot_counters(&self) -> crate::frame::protocol::RasterCounters {
         self.slot_counters
     }
 
@@ -1363,7 +1365,7 @@ impl GpuContext {
     pub(crate) fn warming_up(&self) -> bool {
         self.warmup
             .as_ref()
-            .is_some_and(crate::pipeline_warmup::PipelineWarmup::is_pending)
+            .is_some_and(crate::pipelines::warmup::PipelineWarmup::is_pending)
     }
 
     /// Wait for a warm-up's worker, its save included.
@@ -1377,9 +1379,9 @@ impl GpuContext {
     /// frame and every flush, as a GPU that retires nothing does.
     #[cfg(all(test, feature = "testing"))]
     pub(crate) fn limit_submissions(&mut self, submissions: usize) {
-        let limits = crate::device_domain::PreparedIrLimits {
+        let limits = crate::device::domain::PreparedIrLimits {
             submissions,
-            ..crate::device_domain::PreparedIrLimits::default()
+            ..crate::device::domain::PreparedIrLimits::default()
         };
         self.domain = DeviceDomain::with_limits(
             Arc::clone(self.domain.device()),
@@ -1494,7 +1496,7 @@ impl GpuContext {
             let store = self.pipeline_store.clone();
             #[cfg(test)]
             let panics = std::mem::take(&mut self.panic_in_warmup);
-            self.warmup = crate::pipeline_warmup::PipelineWarmup::start(
+            self.warmup = crate::pipelines::warmup::PipelineWarmup::start(
                 {
                     let domain = Arc::clone(&domain);
                     let store = store.clone();
@@ -1539,7 +1541,7 @@ impl GpuContext {
     fn take_warmed(&mut self) -> Option<PipelineLibrary> {
         self.warmup
             .as_mut()
-            .and_then(crate::pipeline_warmup::PipelineWarmup::take)
+            .and_then(crate::pipelines::warmup::PipelineWarmup::take)
     }
 
     /// wasm32 warms nothing up: the frame builds the library.
@@ -1655,14 +1657,14 @@ fn gpu_of<'a>(adapter: &'a wgpu::Adapter, domain: &'a DeviceDomain) -> Gpu<'a> {
 /// `slot`'s frame timer, built at its first timed frame; `None` on a device
 /// without timestamp queries, where no frame is timed (ADR-0388).
 fn frame_timer<'t>(
-    timers: &'t mut FxHashMap<SlotId, crate::gpu_timer::FrameGpuTimer>,
+    timers: &'t mut FxHashMap<SlotId, crate::device::timer::FrameGpuTimer>,
     slot: SlotId,
     domain: &DeviceDomain,
-) -> Option<&'t mut crate::gpu_timer::FrameGpuTimer> {
+) -> Option<&'t mut crate::device::timer::FrameGpuTimer> {
     match timers.entry(slot) {
         std::collections::hash_map::Entry::Occupied(timer) => Some(timer.into_mut()),
         std::collections::hash_map::Entry::Vacant(vacant) => Some(vacant.insert(
-            crate::gpu_timer::FrameGpuTimer::try_new(domain.device(), domain.queue())?,
+            crate::device::timer::FrameGpuTimer::try_new(domain.device(), domain.queue())?,
         )),
     }
 }
@@ -1804,7 +1806,7 @@ impl RasterBackend for GpuContext {
                 self.render_slot(
                     slot,
                     scene.version(),
-                    crate::recording_cache::CacheReads::for_damage(&damage),
+                    crate::record::cache::CacheReads::for_damage(&damage),
                     Some(frame.epoch),
                 )?;
                 Ok(PresentDisposition::Presented)
@@ -2079,7 +2081,7 @@ mod tests {
             let counters = context.slot_counters();
             (counters.chunks_recorded, counters.recording_cache_hits)
         };
-        for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
+        for _ in 0..crate::record::cache::admission::DRAWS_TO_ADMIT {
             assert_eq!(
                 draw(FullReason::FirstFrame),
                 (1, 0),
@@ -2119,7 +2121,7 @@ mod tests {
         attach(&mut context, bgra, wgpu::TextureFormat::Bgra8Unorm);
         attach(&mut fresh, bgra, wgpu::TextureFormat::Bgra8Unorm);
         // On the frames that admit its chunk.
-        for _ in 0..crate::recording_cache::admission::DRAWS_TO_ADMIT {
+        for _ in 0..crate::record::cache::admission::DRAWS_TO_ADMIT {
             context
                 .render(rgba, drawn_frame(), &scene, full())
                 .expect("the first slot draws");
@@ -3332,7 +3334,7 @@ mod tests {
     fn a_failed_window_frame_keeps_the_shared_caches() {
         use std::sync::Arc;
 
-        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+        use crate::{surface::slot::WindowSlot, testing::ScriptedAcquire};
 
         let (mut context, factory) = noop_context();
         let surface = factory
@@ -3392,7 +3394,7 @@ mod tests {
         use flui_painting::paint::Image;
 
         use crate::raster_executor::RasterBackend;
-        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+        use crate::{surface::slot::WindowSlot, testing::ScriptedAcquire};
 
         for window in [true, false] {
             let (mut context, factory) = noop_context();
@@ -3449,7 +3451,7 @@ mod tests {
                     context.render_slot(
                         slot,
                         scene.version(),
-                        crate::recording_cache::CacheReads::On,
+                        crate::record::cache::CacheReads::On,
                         None,
                     )
                 };
@@ -3478,7 +3480,7 @@ mod tests {
     fn a_window_frame_with_nothing_to_upload_keeps_its_verdict_under_a_refusing_ledger() {
         use std::sync::Arc;
 
-        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+        use crate::{surface::slot::WindowSlot, testing::ScriptedAcquire};
 
         let verdict = |refusing: bool| {
             let (mut context, factory) = noop_context();
@@ -3535,7 +3537,7 @@ mod tests {
     fn a_lost_window_surface_is_left_for_its_owner_to_replace() {
         use std::sync::Arc;
 
-        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+        use crate::{surface::slot::WindowSlot, testing::ScriptedAcquire};
 
         let (mut context, factory) = noop_context();
         let surface = factory
@@ -3581,7 +3583,7 @@ mod tests {
     fn adopting_a_probed_device_drops_every_window_surface() {
         use std::sync::Arc;
 
-        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+        use crate::{surface::slot::WindowSlot, testing::ScriptedAcquire};
 
         let (mut context, factory) = noop_context();
         let surface = factory
@@ -3640,7 +3642,7 @@ mod tests {
 
         use flui_foundation::panic::FirstPanic;
 
-        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+        use crate::{surface::slot::WindowSlot, testing::ScriptedAcquire};
 
         let (context, factory) = noop_context();
         let surface = factory
@@ -3684,7 +3686,7 @@ mod tests {
     fn a_latency_change_repaints_the_next_frame() {
         use std::sync::Arc;
 
-        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+        use crate::{surface::slot::WindowSlot, testing::ScriptedAcquire};
 
         let (context, factory) = noop_context();
         let surface = factory
@@ -3913,7 +3915,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn a_corrupt_stored_pipeline_cache_is_emptied_and_the_context_starts_cold() {
-        use crate::pipeline_store::{PIPELINE_CACHE, encode};
+        use crate::pipelines::store::{PIPELINE_CACHE, encode};
 
         let storage = flui_testing::storage::MemoryStorage::new();
         // A payload wgpu's own header check accepts: data a cache returned.
@@ -3967,7 +3969,7 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn a_finished_warm_up_saves_the_pipeline_cache_for_this_adapter() {
-        use crate::pipeline_store::{PIPELINE_CACHE, decode};
+        use crate::pipelines::store::{PIPELINE_CACHE, decode};
 
         let storage = flui_testing::storage::MemoryStorage::new();
         let Some((context, key)) = cached_context_or_skip(&storage) else {

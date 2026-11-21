@@ -1,12 +1,14 @@
-// ===== Drawing API =====
-//
-// Inherent methods, not a trait: `LayerDispatcher` (the `CommandRenderer`
-// impl), the engine's tests and its benches are the callers, and there is no
-// second painter for a trait to abstract.
-//
-// GPU rendering routinely converts between f32/u8/u32/i32 for pixel
-// coordinates, color channels, and buffer indices. These truncations are
-// intentional.
+//! The drawing API of `WgpuPainter`: one `draw_*` method per primitive (rect,
+//! rrect, circle, oval, arc, line, path, paragraph, image, shadow, vertices,
+//! texture), each recording into the current segment through `DrawBatcher`.
+//!
+//! These are inherent methods, not a trait: `LayerDispatcher` (the
+//! `CommandRenderer` impl), the engine's tests and its benches are the callers,
+//! and there is no second painter for a trait to abstract.
+//!
+//! GPU rendering routinely converts between f32/u8/u32/i32 for pixel
+//! coordinates, color channels, and buffer indices. These truncations are
+//! intentional.
 
 use std::sync::Arc;
 
@@ -247,7 +249,7 @@ impl super::WgpuPainter {
         );
         let opacity = self.compositor.current_opacity();
         let cull = self.glyph_cull();
-        crate::batches::DrawBatcher::draw_paragraph(
+        crate::record::batches::DrawBatcher::draw_paragraph(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -256,7 +258,7 @@ impl super::WgpuPainter {
             &paragraph,
             position,
             color,
-            crate::batches::GlyphInk::Text,
+            crate::record::batches::GlyphInk::Text,
             cull,
         );
     }
@@ -291,7 +293,7 @@ impl super::WgpuPainter {
         }
         let opacity = self.compositor.current_opacity();
         let cull = self.glyph_cull();
-        crate::batches::DrawBatcher::draw_paragraph(
+        crate::record::batches::DrawBatcher::draw_paragraph(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -300,7 +302,7 @@ impl super::WgpuPainter {
             paragraph,
             position,
             color,
-            crate::batches::GlyphInk::Silhouette,
+            crate::record::batches::GlyphInk::Silhouette,
             cull,
         );
         if blur.is_some() {
@@ -388,7 +390,7 @@ impl super::WgpuPainter {
         dst_rect: flui_foundation::geometry::Rect<f64>,
         blend_mode: flui_painting::paint::BlendMode,
     ) {
-        crate::batches::DrawBatcher::draw_image(
+        crate::record::batches::DrawBatcher::draw_image(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -418,7 +420,7 @@ impl super::WgpuPainter {
         filter: Option<flui_painting::paint::ColorFilter>,
         paint: Option<&flui_painting::paint::Paint>,
     ) {
-        crate::batches::DrawBatcher::draw_image_region(
+        crate::record::batches::DrawBatcher::draw_image_region(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -440,7 +442,7 @@ impl super::WgpuPainter {
         dst: flui_foundation::geometry::Rect<f64>,
         paint: Option<&flui_painting::paint::Paint>,
     ) {
-        crate::batches::DrawBatcher::draw_image_nine_slice_painted(
+        crate::record::batches::DrawBatcher::draw_image_nine_slice_painted(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -460,7 +462,7 @@ impl super::WgpuPainter {
         colors: Option<&[flui_painting::styling::Color]>,
         paint: Option<&flui_painting::paint::Paint>,
     ) {
-        crate::batches::DrawBatcher::draw_atlas_painted(
+        crate::record::batches::DrawBatcher::draw_atlas_painted(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -487,7 +489,7 @@ impl super::WgpuPainter {
         repeat: flui_painting::paint::ImageRepeat,
         blend_mode: flui_painting::paint::BlendMode,
     ) {
-        crate::batches::DrawBatcher::draw_image_repeat(
+        crate::record::batches::DrawBatcher::draw_image_repeat(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -513,7 +515,7 @@ impl super::WgpuPainter {
         filter: flui_painting::paint::ColorFilter,
         blend_mode: flui_painting::paint::BlendMode,
     ) {
-        crate::batches::DrawBatcher::draw_image_filtered(
+        crate::record::batches::DrawBatcher::draw_image_filtered(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -578,7 +580,7 @@ impl super::WgpuPainter {
         indices: &[u16],
         paint: &flui_painting::paint::Paint,
     ) {
-        crate::batches::DrawBatcher::draw_vertices(
+        crate::record::batches::DrawBatcher::draw_vertices(
             &mut self.current_segment,
             &mut self.draw_order,
             &self.state,
@@ -618,13 +620,13 @@ impl super::WgpuPainter {
         src: Option<flui_foundation::geometry::Rect<f64>>,
         filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
-        registry: Option<&crate::external_texture_registry::ExternalTextureRegistry>,
+        registry: Option<&crate::resources::external_textures::ExternalTextureRegistry>,
     ) {
         let sampling = match filter_quality {
             flui_painting::paint::FilterQuality::None => {
-                crate::external_texture_registry::ExternalSampling::Nearest
+                crate::resources::external_textures::ExternalSampling::Nearest
             }
-            _ => crate::external_texture_registry::ExternalSampling::Linear,
+            _ => crate::resources::external_textures::ExternalSampling::Linear,
         };
         self.record_external_texture(texture_id, dst, src, Some(sampling), opacity, registry);
     }
@@ -648,9 +650,9 @@ impl super::WgpuPainter {
         texture_id: flui_painting::paint::TextureId,
         dst: flui_foundation::geometry::Rect<f64>,
         src: Option<flui_foundation::geometry::Rect<f64>>,
-        sampling: Option<crate::external_texture_registry::ExternalSampling>,
+        sampling: Option<crate::resources::external_textures::ExternalSampling>,
         opacity: f32,
-        registry: Option<&crate::external_texture_registry::ExternalTextureRegistry>,
+        registry: Option<&crate::resources::external_textures::ExternalTextureRegistry>,
     ) {
         use crate::error::ExternalTextureError;
         if self.current_segment.recording_result().is_err() {
@@ -697,7 +699,7 @@ impl super::WgpuPainter {
             Ok((lease, effective))
         })();
         match result {
-            Ok((lease, effective)) => crate::batches::DrawBatcher::draw_texture(
+            Ok((lease, effective)) => crate::record::batches::DrawBatcher::draw_texture(
                 &mut self.current_segment,
                 &self.state,
                 lease,
@@ -727,12 +729,12 @@ const MAX_TEXT_SHADOW_DEVICE_SIGMA: f32 = 64.0;
 fn text_shadow_blur(
     sigma: flui_painting::BlurSigma,
     scale: f32,
-) -> Option<crate::command_ir::ImageFilterSpec> {
+) -> Option<crate::record::command_ir::ImageFilterSpec> {
     let device = (sigma.get() * scale).min(MAX_TEXT_SHADOW_DEVICE_SIGMA);
     if !(device > 0.0 && (device * device).is_normal()) {
         return None;
     }
-    let spec = crate::command_ir::ImageFilterSpec::Blur {
+    let spec = crate::record::command_ir::ImageFilterSpec::Blur {
         sigma_x: device,
         sigma_y: device,
     };

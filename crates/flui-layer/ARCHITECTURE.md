@@ -64,7 +64,7 @@ is a widget-tree error; a debug build trips, a release build keeps the later one
 
 Tests: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`),
 `tests/follower.rs` (`linked_across_offset_branches_sums_both_chains`, which finds a leader pushed under a
-branch through the index), `flui-engine/src/layer_walk.rs` (`a_deep_chain_survives_a_small_stack`).
+branch through the index), `flui-engine/src/layers/walk.rs` (`a_deep_chain_survives_a_small_stack`).
 That `push_child` under an unknown parent panics: **Unasserted:** no test pins this.
 
 ### 3. One `Layer::local_translation`, read by the walk and the resolver
@@ -105,7 +105,7 @@ Tests: `tests/follower.rs`, run as `follower_resolution` in `tests/main.rs`
 
 `flui-rendering`'s `FragmentComposer` writes each repainted boundary's content through
 `ContentBuilder` into a `SceneWriter` patch (decision 9), and the engine walks the applied version in place
-(`flui-engine`'s `layer_walk`). `SceneBuilder` is the push/pop shape for a hand-authored scene
+(`flui-engine`'s `layers::walk`). `SceneBuilder` is the push/pop shape for a hand-authored scene
 (hot-reload plugins, examples, the GPU readback tests), as `dart:ui`'s `SceneBuilder` is: `push`,
 `add` and `pop` return the builder for chaining and no layer ids, since `build` hands back a
 `Scene` whose version names its own nodes; a caller that keeps ids builds a `LayerTree` with
@@ -126,7 +126,7 @@ form (`SceneVersion::close_damage`) and keeps no tree walk, no tree-side backdro
 straddle self-heal for trees whose damage carries no such closure (ADR-0304 §9). A version from
 `from_tree` comes from an owner of its own, so its lineage pairs with no other scene's and its
 first frame on any target is full. The conversion's equivalence is pinned by
-`flui-engine`'s `layer_walk::tests::a_version_walks_as_its_flattened_tree` (a version's walk
+`flui-engine`'s `layers::walk::tests::a_version_walks_as_its_flattened_tree` (a version's walk
 equals the walk of its flattened tree's version) and by `SceneVersion::from_tree`'s doctest.
 
 Its former `size`, `root` and `frame_number` fields had no reader that did not already hold the
@@ -139,7 +139,7 @@ set.
 ### 7. Runtime state lives with its owner
 
 `DamageTracker` (the renderer's per-frame dirty accumulator, ADR-0061's consuming half) lives in
-`flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, the footprint of a scene patch
+`flui-engine/src/frame/damage.rs`; the seam message `DamageRegion` and its producer, the footprint of a scene patch
 (decision 9), are defined here. The tracker keeps the seam's `Region` (up to eight disjoint rects,
 ADR-0304 §5), merged as `Region::insert` merges, and the engine redraws it rect by rect or under its bounding box (ADR-0304 §9, the engine's
 `ARCHITECTURE.md`). The performance overlay has no layer of its own: `flui-runtime`, beside the
@@ -351,7 +351,7 @@ damages those users (`SceneVersion::texture_damage`), while the host hands each 
 form in the scene: the ADR that brings one decides its compositing, hit-testing and semantics
 ([`docs/gaps.md`](../../docs/gaps.md)). `Picture` is what a hand-built tree and
 `SceneVersion::flatten` draw a chunk as. `ColorFilter` and
-`ImageFilter` are lowered by `flui-engine` (`layer_render.rs`), but no `FragmentScope` produces
+`ImageFilter` are lowered by `flui-engine` (`layers/render.rs`), but no `FragmentScope` produces
 them ([`docs/gaps.md`](../../docs/gaps.md), "No widget filters its subtree's colours or pixels"): a
 widget's color filter reaches the GPU as a draw command (`DrawOp::ImageFiltered` in
 `flui-painting`) inside a picture. `AnnotatedRegion` has both halves: the writer above and the

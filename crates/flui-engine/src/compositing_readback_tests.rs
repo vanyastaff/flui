@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use crate::error::EngineError;
-use crate::surface_color::OutputEncoding;
+use crate::surface::color::OutputEncoding;
 
 fn surface_caps(
     pairs: &[(wgpu::TextureFormat, wgpu::SurfaceColorSpaces)],
@@ -34,7 +34,7 @@ fn sdr_surface_selection_rejects_incompatible_pairs() {
         vec![(Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR)],
         vec![(Format::Bgra8Unorm, Spaces::EXTENDED_SRGB_LINEAR)],
     ] {
-        let error = crate::surface_color::select_sdr(&surface_caps(&pairs))
+        let error = crate::surface::color::select_sdr(&surface_caps(&pairs))
             .expect_err("unsupported color contract");
         assert_eq!(
             error.recoverability(),
@@ -49,7 +49,7 @@ fn sdr_surface_selection_rejects_incompatible_pairs() {
         (Format::Rgba8Unorm, Spaces::SRGB),
     ]);
     assert_eq!(
-        crate::surface_color::select_sdr(&caps)
+        crate::surface::color::select_sdr(&caps)
             .expect("RGBA alternative")
             .format,
         Format::Rgba8Unorm
@@ -69,7 +69,7 @@ fn sdr_surface_selection_painter_readback_preserves_swatches_and_blending() {
             (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
             (alternative, Spaces::SRGB),
         ]);
-        let choice = crate::surface_color::select_sdr(&caps).expect("SDR pair");
+        let choice = crate::surface::color::select_sdr(&caps).expect("SDR pair");
         let format = choice.format;
         assert_eq!(choice.output, OutputEncoding::Identity);
         let size = 64;
@@ -217,7 +217,7 @@ fn readback_rgba_pixel(
 //
 // Render-object-harness-level testing cannot check on-screen positioning
 // (explicitly out of harness scope) — these
-// tests exercise the REAL layer walk's (`layer_walk::record_scene`) Follower special case
+// tests exercise the REAL layer walk's (`layers::walk::record_scene`) Follower special case
 // (not a hand-rolled stand-in) against a real GPU texture, reading back
 // actual rendered pixels.
 // =========================================================================
@@ -264,9 +264,9 @@ fn clear_texture(
 /// render its subtree at the LEADER's resolved position, not at its own
 /// natural (pre-resolution) tree position.
 fn follower_gpu_renders_at_resolved_position_across_repaint_boundaries() {
-    use crate::layer_dispatcher::LayerDispatcher;
+    use crate::frame::render_target::RenderTarget;
+    use crate::layers::dispatcher::LayerDispatcher;
     use crate::painter::WgpuPainter;
-    use crate::render_target::RenderTarget;
     use flui_foundation::geometry::{Offset, Rect, Size};
     use flui_layer::{
         FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer, PictureLayer,
@@ -348,10 +348,10 @@ fn follower_gpu_renders_at_resolved_position_across_repaint_boundaries() {
     );
     let mut backend = LayerDispatcher::new(&mut painter);
 
-    crate::layer_walk::record_scene(
+    crate::layers::walk::record_scene(
         &flui_layer::SceneVersion::from_tree(&tree),
         None,
-        crate::recording_cache::CacheReads::On,
+        crate::record::cache::CacheReads::On,
         &mut backend,
     )
     .expect("layer tree records");
@@ -390,22 +390,19 @@ fn follower_gpu_renders_at_resolved_position_across_repaint_boundaries() {
 }
 
 // =========================================================================
-// `Layer::ShaderMask` engine visual-rendering fix — GPU-level, end-to-end
-// pixel-readback proof.
-//
-// `Layer::ShaderMask` previously fell through to the generic
-// `LayerRender` dispatch (`layer_render.rs`), which pushes an inert
-// `save_layer`/`push_clip_rect` pair that never reads the layer's
-// `shader()`/`blend_mode()` — masking silently never applied. These
-// tests exercise the REAL `render_layer_recursive` special case (not a
-// hand-rolled stand-in) against a real GPU texture, reading back actual
-// rendered pixels, the same style as the Follower Tier-2 tests above.
+// `Layer::ShaderMask` GPU readback: the layer's shader and blend mode must
+// reach the pixels. The generic `LayerRender` dispatch (`layers/render.rs`)
+// pushes an inert `save_layer`/`push_clip_rect` pair that never reads them,
+// so `ShaderMask` has a special case of its own. These tests exercise the
+// REAL `render_layer_recursive` special case (not a hand-rolled stand-in)
+// against a real GPU texture, reading back actual rendered pixels, the same
+// style as the Follower Tier-2 tests above.
 // =========================================================================
 
 fn shader_mask_layer_root_gpu_pixel_readback_reflects_mask() {
-    use crate::layer_dispatcher::LayerDispatcher;
+    use crate::frame::render_target::RenderTarget;
+    use crate::layers::dispatcher::LayerDispatcher;
     use crate::painter::WgpuPainter;
-    use crate::render_target::RenderTarget;
     use flui_foundation::geometry::Rect;
     use flui_layer::{Layer, LayerTree, PictureLayer, ShaderMaskLayer};
     use flui_painting::{Canvas, paint::Paint, paint::Shader};
@@ -460,10 +457,10 @@ fn shader_mask_layer_root_gpu_pixel_readback_reflects_mask() {
     );
     let mut backend = LayerDispatcher::new(&mut painter);
 
-    crate::layer_walk::record_scene(
+    crate::layers::walk::record_scene(
         &flui_layer::SceneVersion::from_tree(&tree),
         None,
-        crate::recording_cache::CacheReads::On,
+        crate::record::cache::CacheReads::On,
         &mut backend,
     )
     .expect("layer tree records");
@@ -533,12 +530,15 @@ fn optimized_fxc_tessellated_clip_readback() {
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = pollster::block_on(instance.request_adapter(
-        &crate::adapter::trusted_adapter_options(wgpu::PowerPreference::HighPerformance, None),
+        &crate::device::adapter::trusted_adapter_options(
+            wgpu::PowerPreference::HighPerformance,
+            None,
+        ),
     ))
     .expect("optimized FXC contract requires an actual DX12 adapter");
     assert_eq!(adapter.get_info().backend, wgpu::Backend::Dx12);
-    let capabilities = crate::adapter::GpuCapabilities::detect(&adapter);
-    let (device, queue) = pollster::block_on(crate::adapter::request_flui_device(
+    let capabilities = crate::device::adapter::GpuCapabilities::detect(&adapter);
+    let (device, queue) = pollster::block_on(crate::device::adapter::request_flui_device(
         &adapter,
         &capabilities,
         "optimized FXC clip contract",
@@ -659,12 +659,12 @@ fn optimized_fxc_tessellated_clip_readback() {
         builder.add(PictureLayer::new(canvas.finish()));
         let scene = builder.build();
         painter.begin_frame().expect("optimized FXC frame opens");
-        let _recorded: crate::frame_protocol::RasterCounters =
-            crate::frame_protocol::record_frame_content(
+        let _recorded: crate::frame::protocol::RasterCounters =
+            crate::frame::protocol::record_frame_content(
                 &mut painter,
                 &scene,
                 None,
-                crate::recording_cache::CacheReads::On,
+                crate::record::cache::CacheReads::On,
             )
             .expect("optimized FXC scene records through the window frame path");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {

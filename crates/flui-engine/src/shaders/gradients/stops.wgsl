@@ -7,7 +7,7 @@
 // segment holds any number of gradients, and a uniform array a fixed number
 // of stops. `textureLoad` reads a texel exactly, so nothing is filtered.
 //
-// The row width is `GRADIENT_STOP_TEXTURE_WIDTH` in `pipeline_set.rs`.
+// The row width is `GRADIENT_STOP_TEXTURE_WIDTH` in `pipelines/set.rs`.
 const GRADIENT_STOP_ROW_TEXELS: u32 = 1024u;
 
 struct GradientStop {

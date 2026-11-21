@@ -24,8 +24,8 @@ use flui_painting::{
 
 use crate::{
     blend_oracle::{PORTER_DUFF_MODES, SIDE, as_bytes, assert_pixel, blend, premultiplied},
-    effects_pipeline::GradientKind,
     headless::HeadlessRenderer,
+    pipelines::effects::GradientKind,
 };
 
 /// The destination every oracle blends into.
@@ -513,7 +513,7 @@ fn gradient_stops_past_the_first_texture_row_read_back() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    let full = crate::batches::MAX_GRADIENT_STOPS;
+    let full = crate::record::batches::MAX_GRADIENT_STOPS;
     let column = |index: u32| Rect::from_xywh(f64::from(index * 20), 0.0, 20.0, f64::from(SIDE));
     let mut builder = SceneBuilder::new();
     let mut canvas = Canvas::new();

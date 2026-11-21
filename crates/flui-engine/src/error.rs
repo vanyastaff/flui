@@ -397,7 +397,7 @@ pub enum EngineError {
     )]
     NoSupportedGpu {
         /// Each backend tried, in order, with why it failed.
-        tried: Vec<crate::gpu_backend::BackendFailure>,
+        tried: Vec<crate::device::backend::BackendFailure>,
     },
 
     /// Failed to create GPU device
@@ -584,9 +584,9 @@ impl EngineError {
 /// A Result type alias for engine operations.
 pub type EngineResult<T> = Result<T, EngineError>;
 
-impl From<crate::device_domain::DomainError> for EngineError {
-    fn from(error: crate::device_domain::DomainError) -> Self {
-        use crate::device_domain::DomainError;
+impl From<crate::device::domain::DomainError> for EngineError {
+    fn from(error: crate::device::domain::DomainError) -> Self {
+        use crate::device::domain::DomainError;
         match error {
             DomainError::Overflow => Self::PreparedResourceOverflow,
             DomainError::Budget {

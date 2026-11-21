@@ -18,8 +18,8 @@ use flui_painting::{
 };
 
 use crate::{
-    command_ir::{ImageFilterPass, ImageFilterSpec, MorphOp},
     painter::WgpuPainter,
+    record::command_ir::{ImageFilterPass, ImageFilterSpec, MorphOp},
 };
 
 #[derive(Clone, Copy)]
@@ -532,10 +532,10 @@ fn draw_source(painter: &mut WgpuPainter, c: Case) {
                     .register(
                         id,
                         texture,
-                        crate::external_texture_registry::ExternalTextureDescriptor {
-                            sampling: crate::external_texture_registry::ExternalSampling::Nearest,
-                            alpha: crate::external_texture_registry::ExternalAlpha::Straight,
-                            color: crate::external_texture_registry::ExternalColorEncoding::EncodedSrgb,
+                        crate::resources::external_textures::ExternalTextureDescriptor {
+                            sampling: crate::resources::external_textures::ExternalSampling::Nearest,
+                            alpha: crate::resources::external_textures::ExternalAlpha::Straight,
+                            color: crate::resources::external_textures::ExternalColorEncoding::EncodedSrgb,
                         },
                     )
                     .expect("valid external source admitted");
@@ -1003,7 +1003,7 @@ fn foreground_filter_invalid_parameters_refuse_and_recover() {
 
 #[test]
 fn foreground_filter_prepared_quota_refusal_keeps_next_frame_deliverable() {
-    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::device::domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
     let (device, queue) = crate::test_support::test_device_and_queue("Foreground Quota Device");
     let domain = DeviceDomain::with_limits(
         Arc::clone(&device),

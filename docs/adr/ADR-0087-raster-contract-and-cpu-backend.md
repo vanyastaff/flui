@@ -56,9 +56,9 @@ the former `raster_backpressure_allocation.rs:95`), plus a bench and a compile-f
 
 The GPU-free half of lowering a `Scene` — traversal order, clip and opacity discipline, effect
 decomposition — lives in the engine as crate-private traits: `CommandRenderer`
-(`crates/flui-engine/src/command_renderer.rs:31`), `LayerStateStack`
-(`crates/flui-engine/src/layer_state_stack.rs:41`) and `SceneVisitor`
-(`crates/flui-engine/src/layer_walk.rs:94`). A second walker already exists and has diverged:
+(`crates/flui-engine/src/layers/command_renderer.rs:31`), `LayerStateStack`
+(`crates/flui-engine/src/layers/state_stack.rs:41`) and `SceneVisitor`
+(`crates/flui-engine/src/layers/walk.rs:94`). A second walker already exists and has diverged:
 `HeadlessRenderer` (`crates/flui-engine/src/headless.rs:54`) documents that it only approximates
 `BackdropFilter`, `ShaderMask` and `Follower` (`headless.rs:15-27`).
 
@@ -80,7 +80,7 @@ That half of ADR-0061's context is now stale. `LayerNode` carries `render_id: Op
 on every repaint-boundary layer (`crates/flui-rendering/src/pipeline/owner/paint.rs:1186`,
 `:1258`, `:1422`). What is still missing is the producer: nothing retains a boundary's subtree
 across frames or compares it. The consumer is written: `DamageTracker` is crate-private in the
-engine (`crates/flui-engine/src/damage.rs:22`) with `mark_dirty`, `mark_full_repaint` and
+engine (`crates/flui-engine/src/frame/damage.rs:22`) with `mark_dirty`, `mark_full_repaint` and
 `damage_rect` (`damage.rs:38`, `:49`, `:62`), and `damage_scissor`
 (`crates/flui-engine/benches/render_throughput.rs:282`) is the baseline a producer must beat.
 
@@ -262,7 +262,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `a_removed_destination_affecting_layer_leaves_nothing_behind`,
   `a_damage_edge_through_an_advanced_blend_matches_a_full_frame`,
   `a_frame_outside_the_protocol_is_followed_by_a_full_one`), which drive the same
-  `FrameProtocol` the windowed renderer runs; `damage::tests::plan_frame_table`; and the
+  `FrameProtocol` the windowed renderer runs; `frame::damage::tests::plan_frame_table`; and the
   raster executor test `latest_frame_wins_and_superseded_damage_folds_into_the_survivor`. The windowed swapchain path runs only on a developer machine.
 - Benches: `flui-layer`'s `damage_diff`; `render_throughput`'s `damage_retained_target`,
   collected with `cargo bench -p flui-engine --bench render_throughput --features testing -- --save-baseline <name>`

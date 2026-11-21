@@ -58,8 +58,8 @@ and production ran inline:
 - No production raster thread existed; the Wayland host draws on one now (§5).
 - The web's canvas is a slot on the same inline executor, attached once the page's GPU context
   has been awaited (`crates/flui-app/src/app/runner/web.rs`).
-- Every renderer creates its own `wgpu::Instance`, surface and adapter
-  (`crates/flui-engine/src/renderer.rs:1140-1168`), and every painter builds its own glyph atlas
+- Every renderer creates its own `wgpu::Instance`, surface and adapter,
+  and every painter builds its own glyph atlas
   over the process-wide font system (`crates/flui-engine/src/painter/mod.rs:73`, `:163-167`).
 
 ADR-0045 decision 2 scoped GPU services to one owner thread, shared only the `ShaderCache`, kept

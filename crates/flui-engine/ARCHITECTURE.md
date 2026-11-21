@@ -54,20 +54,26 @@ and translucent drawing in the painter readback table.
 `degenerate_rounded_paths_preserve_contour_coverage` compares negative and
 oversized radii against the same public path commands without a shape hint.
 
+`src/` groups its modules by concept: `device/`, `surface/`, `pipelines/`,
+`filters/`, `layers/`, `frame/`, `record/`, `replay/` and `resources/`, each
+group's `mod.rs` stating what it holds. The entry points (`gpu_context.rs`,
+`headless.rs`, `raster_executor/`), `painter/`, `offscreen/`, `shaders/` and the
+readback suites stay at the root.
+
 | Concern | Files | What lives there |
 |---|---|---|
-| Entry points | `gpu_context.rs`, `adapter.rs`, `surface_factory.rs`, `window_slot.rs`, `surface_present.rs`, `headless.rs` | `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; each slot's external textures kept apart, since each presentation mints its own `TextureId`s, uploaded only when the slot draws (a frame that wrote and submitted nothing flushes the writes, since `write_texture` holds staging memory until a submission), lent to the painter for the slot's frame and uploaded again on a rebuilt device; `bootstrap` probes the backends over the host's `DisplayConnection` and the first window, and the raster executor's backend); `SurfaceFactory` (the owner thread's `!Send` maker of `UnconfiguredSurface`s on the context's instance, which refuses a target on another display before wgpu sees it, §2); `WindowSlot` (a window's surface, configuration, frame protocol and recovery inside the context; it attaches unconfigured and its first size configures it, and a surface still lost after a reconfigure is dropped for the owner to replace through the factory and `Restore`, never made again by the executor); the acquire and present path of a window slot (`surface_present`, its escalation pinned GPU-free through the `SurfaceAcquireBackend` seam); the adapter and negotiated device a probed backend attempt asks for (`adapter`, with `GpuCapabilities`); `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
-| Window ownership | `window_target.rs`, `surface_lease.rs`, `adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
-| Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
-| Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs`, `recording_cache.rs`, `recency.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks, the recordings of unchanged chunks kept across frames and the recency order they are evicted in |
-| Replay | `replay/`, `pipeline_cache.rs`, `pipeline_set.rs`, `instancing.rs`, `vertex.rs`, `shaders/` | Command IR → wgpu encoding; pipeline caching keyed by blend/coverage state; instance layouts; WGSL |
-| Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
+| Entry points | `gpu_context.rs`, `device/adapter.rs`, `surface/factory.rs`, `surface/slot.rs`, `surface/present.rs`, `headless.rs` | `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; each slot's external textures kept apart, since each presentation mints its own `TextureId`s, uploaded only when the slot draws (a frame that wrote and submitted nothing flushes the writes, since `write_texture` holds staging memory until a submission), lent to the painter for the slot's frame and uploaded again on a rebuilt device; `bootstrap` probes the backends over the host's `DisplayConnection` and the first window, and the raster executor's backend); `SurfaceFactory` (the owner thread's `!Send` maker of `UnconfiguredSurface`s on the context's instance, which refuses a target on another display before wgpu sees it, §2); `WindowSlot` (a window's surface, configuration, frame protocol and recovery inside the context; it attaches unconfigured and its first size configures it, and a surface still lost after a reconfigure is dropped for the owner to replace through the factory and `Restore`, never made again by the executor); the acquire and present path of a window slot (`surface_present`, its escalation pinned GPU-free through the `SurfaceAcquireBackend` seam); the adapter and negotiated device a probed backend attempt asks for (`adapter`, with `GpuCapabilities`); `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
+| Window ownership | `surface/target.rs`, `surface/lease.rs`, `device/adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
+| Frame walk | `layers/walk.rs`, `layers/render.rs`, `layers/dispatcher.rs`, `layers/offscreen.rs`, `layers/compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
+| Recording | `painter/`, `record/batches/`, `record/command_ir.rs`, `record/state_stack.rs`, `record/cache.rs`, `record/recency.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks, the recordings of unchanged chunks kept across frames and the recency order they are evicted in |
+| Replay | `replay/`, `pipelines/variants.rs`, `pipelines/set.rs`, `record/instancing.rs`, `record/vertex.rs`, `shaders/` | Command IR → wgpu encoding; pipeline caching keyed by blend/coverage state; instance layouts; WGSL |
+| Offscreen effects | `filters/`, `pipelines/effects.rs`, `replay/ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
-| GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
-| Raster protocol | `raster_executor/`, `device_worker.rs`, `raster.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; a frame's GPU time (`flui_foundation::GpuFrameTime`), which `RasterSender::drain_gpu_times` hands the owner |
-| GPU frame time | `gpu_timer.rs` | `FrameGpuTimer` (ADR-0388): per slot, a ring of three timestamp query sets around a frame's encoder, read back after the GPU finished; absent without `TIMESTAMP_QUERY` |
-| Damage | `damage.rs`, `region_cost.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders), `region_cost.rs` (whether a partial frame redraws its region in one pass per rect or one under its bounding box, by their predicted cost, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
-| Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
+| GPU resources | `resources/texture_pool.rs`, `resources/texture_cache.rs`, `resources/buffer_pool.rs`, `resources/uniform_pool.rs`, `record/path_cache.rs`, `resources/external_textures.rs`, `resources/mod.rs`, `resources/atlas.rs`, `resources/glyph_atlas.rs`, `record/tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
+| Raster protocol | `raster_executor/`, `device/worker.rs`, `raster.rs` | `RasterExecutor` (ADR-0305 §3–§6, §8 for the device request a worker answers under a `DeviceTicket`): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; a frame's GPU time (`flui_foundation::GpuFrameTime`), which `RasterSender::drain_gpu_times` hands the owner |
+| GPU frame time | `device/timer.rs` | `FrameGpuTimer` (ADR-0388): per slot, a ring of three timestamp query sets around a frame's encoder, read back after the GPU finished; absent without `TIMESTAMP_QUERY` |
+| Damage | `frame/damage.rs`, `frame/region_cost.rs`, `frame/retained_target.rs`, `frame/protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders), `frame/region_cost.rs` (whether a partial frame redraws its region in one pass per rect or one under its bounding box, by their predicted cost, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
+| Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `surface/fake_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
 into `OUT_DIR` from `build.rs`; each `<filter>/generated.rs` is the committed
@@ -131,7 +137,7 @@ Scene (flui-layer)                the retained version (a hand-built tree is
 WindowSlot::present               plans the frame from its damage (skip, direct,
     │                             or into the retained target), acquires the
     │                             surface texture, clears (in full, or inside each
-    │                             pass's rect), walks the scene per pass (layer_walk,
+    │                             pass's rect), walks the scene per pass (layers::walk,
     │                             explicit stack); a retained frame is blitted
     │                             to the surface texture at the end
     ▼
@@ -167,7 +173,7 @@ Two IRs sit in a strict producer/consumer chain (governing decision:
 | Level | Types | Written by | Read by |
 |---|---|---|---|
 | Scene IR | `flui_painting::DisplayList` / `DrawCommand { transform, op: DrawOp }` | the widget tree's `Canvas` | `LayerDispatcher` |
-| Command IR | `command_ir::{DrawSegment, DrawItem}` | `DrawBatcher` (`batches/`) | `GpuReplay::submit` (`replay/`) |
+| Command IR | `record::command_ir::{DrawSegment, DrawItem}` | `DrawBatcher` (`record/batches/`) | `GpuReplay::submit` (`replay/`) |
 
 Recording appends typed `DrawRun` ranges in painter order. Sealing consumes the
 mutable segment into `SealedSegment`; nested filters, opacity, advanced shapes
@@ -184,12 +190,12 @@ image decoding and separate painters. `DeviceDomain` separately admits the
 listed prepared GPU payloads and retains submission charges until callbacks.
 Neither quota is a whole-process memory or physical VRAM limit.
 
-`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) captures a chunk's
+`RecordingCache` (`record/cache.rs`, ADR-0304 §9) captures a chunk's
 recording only on the second frame that draws it under one key, as Flutter's
 raster cache admits a picture after `access_threshold` frames: a chunk drawn
 once, every chunk of a first frame and content that changes each frame, is
 recorded and never copied (`a_chunk_drawn_once_is_not_captured`). Until then
-its key is a candidate (`recording_cache/admission.rs`): at most 4096, in a
+its key is a candidate (`record/cache/admission.rs`): at most 4096, in a
 `RecencyList` by last draw and found through a `TalliedMap`. When the table
 is full a new key displaces the least recently drawn candidate if that one
 was drawn on an earlier frame, and is not tracked if it was drawn on this
@@ -217,7 +223,7 @@ device pixels hits when the fraction of its translation keeps its bits, as a
 translation on a dyadic grid (whole or quarter pixels) does at every magnitude
 below 2^23; a non-dyadic fraction can round to other bits as the translation
 crosses a power of two, and that move records again. The splice adds the
-difference to every device position the recording holds (`pixel_shift.rs`, one
+difference to every device position the recording holds (`record/pixel_shift.rs`, one
 exhaustive destructure per instance type and for tessellated vertices). Text
 on the device grid is placed from the translation's whole pixels and, apart,
 an offset of its fraction plus the linear part's image of the paragraph's
@@ -246,9 +252,9 @@ which drops every entry, as a raster panic does (ADR-0304 §10). The target
 format is not among them: no recording names a pipeline. A hit marks its glyphs
 used for the frame (`GlyphAtlas::retain`), and a glyph gone since is a miss.
 Entries over 64 MiB, or past two per chunk, are evicted least recently
-rastered first. Each entry is boxed in a `RecencyList` (`recency.rs`) in the
+rastered first. Each entry is boxed in a `RecencyList` (`record/recency.rs`) in the
 order it was last rastered, and two indexes name its place: one by content
-version, one by lineage. Both are `TalliedMap`s (`tallied_map.rs`), which the
+version, one by lineage. Both are `TalliedMap`s (`record/tallied_map.rs`), which the
 cache reaches only through methods that count, in a test build, every entry
 they touch, as the list counts every node. A frame's eviction takes the oldest
 and touches no entry it keeps, whatever the cache holds
@@ -297,19 +303,19 @@ borrow checker is what keeps record logic out of the coordinator.
 
 `GpuStateStack` stores transforms as `glam::Mat4`; the conversion from
 `flui_foundation::geometry::Matrix4` happens once, at `LayerDispatcher`'s `CommandRenderer`
-implementation, and `Matrix4` never appears in `batches/`, `pipeline_set.rs`,
+implementation, and `Matrix4` never appears in `record/batches/`, `pipelines/set.rs`,
 or `replay/`. Direct `glam` is expected in the GPU modules and kept out of
-the GPU-free ones (`raster*`, `dispatch`, `error`, `fonts`,
-`layer_state_stack`, `superellipse`).
+the GPU-free ones (`raster*`, `layers::dispatch`, `error`, `fonts`,
+`layers::state_stack`, `superellipse`).
 
 ### Layer traversal is iterative and reads the scene in place
 
 A window slot's and `HeadlessRenderer`'s walkers share the explicit-stack
-traversal in `layer_walk.rs`, parameterised by a two-step visitor (`enter`
+traversal in `layers/walk.rs`, parameterised by a two-step visitor (`enter`
 answers `Descend` or `SkipSubtree`; `exit` runs the node's post-children
 cleanup). A Rust stack overflow is a process abort, not a panic, so one frame
 per layer would take the render path down on a deep-but-valid chain;
-`a_deep_chain_survives_a_small_stack` in `layer_walk.rs` pins a 10 000-deep
+`a_deep_chain_survives_a_small_stack` in `layers/walk.rs` pins a 10 000-deep
 walk on a small stack.
 
 A scene's retained `SceneVersion` is walked without building a tree
@@ -338,13 +344,13 @@ and one damage closure.
 
 | FLUI module | wgpu API surface |
 |---|---|
-| `gpu_context.rs` `GpuContext`, `surface_factory.rs`, `window_slot.rs` | `Instance`, `Adapter`, `Device`, `Queue`, `Surface<'static>`, `SurfaceConfiguration`, `TextureFormat`, `PresentMode`, `CurrentSurfaceTexture`, `CompositeAlphaMode` |
+| `gpu_context.rs` `GpuContext`, `surface/factory.rs`, `surface/slot.rs` | `Instance`, `Adapter`, `Device`, `Queue`, `Surface<'static>`, `SurfaceConfiguration`, `TextureFormat`, `PresentMode`, `CurrentSurfaceTexture`, `CompositeAlphaMode` |
 | `painter/` `WgpuPainter`, `replay/` `GpuReplay` | `Buffer`, `RenderPipeline`, `BindGroup`, `ShaderModule`, `Texture`, `TextureView`, `Sampler`, render-pass descriptors |
 | `offscreen/`, the filter pipelines | `RenderPipeline`, `BindGroupLayout`, `BindGroup`, `Sampler` over pooled textures |
-| `pipeline_cache.rs` / `pipeline_set.rs` | `RenderPipelineDescriptor`, `VertexBufferLayout`, `ColorTargetState`, `BlendState`; `Features::DUAL_SOURCE_BLENDING` gates the coverage-correct variants |
-| `texture_pool.rs` | `TextureDescriptor`, `TextureUsages` |
-| `tessellator.rs` | none — the adapter over `lyon` |
-| `glyph_atlas.rs` | `Texture`, `TextureView`, `Sampler`, `BindGroup` for the two pages; `etagere` packs them |
+| `pipelines/variants.rs` / `pipelines/set.rs` | `RenderPipelineDescriptor`, `VertexBufferLayout`, `ColorTargetState`, `BlendState`; `Features::DUAL_SOURCE_BLENDING` gates the coverage-correct variants |
+| `resources/texture_pool.rs` | `TextureDescriptor`, `TextureUsages` |
+| `record/tessellator.rs` | none — the adapter over `lyon` |
+| `resources/glyph_atlas.rs` | `Texture`, `TextureView`, `Sampler`, `BindGroup` for the two pages; `etagere` packs them |
 
 **Surface acquisition escalates.** `Outdated`, `Lost` and `Validation`
 reconfigure and retry once; a surface still `Lost` after that is gone for
@@ -352,7 +358,7 @@ good, so the window slot drops it and its frame answers
 `SurfaceReplacementNeeded`: the executor never makes a surface, and the owner
 makes the replacement with its `SurfaceFactory` and sends it in a `Restore`
 (ADR-0305 §2, §8). The escalation itself is the seam's
-(`surface_present::acquire_surface_texture_with` over a
+(`surface::present::acquire_surface_texture_with` over a
 `SurfaceAcquireBackend`), which also keeps the obligation a failed
 recreation leaves, so the next acquire recreates again before anything else
 instead of skipping frames as if released; a slot's recreation cannot fail.
@@ -373,7 +379,7 @@ pass-throughs to wgpu's own backend features, not selectors**. Nobody
 normally names them: the per-target dependency entries in `Cargo.toml` unify
 the right backends into every build (`dx12` on Windows, `metal` on
 macOS/iOS, `vulkan` + `gles` on Linux/Android, `webgpu` + `gles` on wasm32),
-and `gpu_backend::Family::order` decides at runtime which to try, preferred
+and `device::backend::Family::order` decides at runtime which to try, preferred
 first (ADR-0244 §1): Vulkan then GLES 3.0, WebGPU then WebGL2, Direct3D 12
 then WARP, Metal alone. Each attempt gets an instance of its own for that one
 backend, because a combined mask does not retry (on the web wgpu commits to
@@ -425,9 +431,9 @@ shared handle is a wgpu ref-count.
 | `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics take no lock, and the executor only `try_recv`s the queue and waits on no lock |
 
 **Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and two
-production exceptions, each with its own `expect`. `pipeline_store::create_cache`
+production exceptions, each with its own `expect`. `pipelines::store::create_cache`
 creates the driver's pipeline cache from stored bytes, which wgpu offers only as
-an `unsafe fn` whose precondition is that the bytes are ones `PipelineCache::get_data`
+an `unsafe fn` whose precondition is that the bytes are ones `PipelineVariants::get_data`
 returned on an adapter with the same `pipeline_cache_key`; the bytes reach it only
 through the store's envelope, which names that key and carries a 64-bit `FxHasher` digest of
 key and payload, so a torn, foreign or corrupted value is refused before wgpu sees
@@ -445,7 +451,7 @@ wgpu's safe `create_surface` over an owned surface target
 ([ADR-0063](../../docs/adr/ADR-0063-the-renderer-owns-its-surface-target.md)),
 and there is no manual `Send`/`Sync` impl. `deny` rather than `forbid` because
 `wgsl_bindgen`'s generated wrappers declare an `unsafe fn from_raw` the crate
-never calls and `allow` it locally. `fake_window_target.rs` uses test-only
+never calls and `allow` it locally. `surface/fake_target.rs` uses test-only
 raw-handle borrows for synthetic window and display handles.
 
 ---
@@ -593,7 +599,7 @@ Decoded image filters retain the original texture allocation and floating
 parameters in `CachedImageDraw`. Each guarded mip-zero texel is transformed
 before premultiplication, bilinear interpolation and Paint tint. Consecutive
 draws batch only when texture, scissor, blend and effective filter agree.
-`image_source_filter.rs` uses the generated uniform type and binding layout;
+`filters/image_source.rs` uses the generated uniform type and binding layout;
 the standalone schema generates group zero, and image pipelines bind that
 layout at group three, after viewport, source and optional isolation mapping.
 Ordinary replay and portable coverage isolation both prepare the same filter.
@@ -634,7 +640,7 @@ to preserve `Send` without a mutex in the successful recording path; exact-size
 index batches charge once. The first failed admission remains authoritative.
 
 A slot's frame is timed on the GPU where the device has `TIMESTAMP_QUERY`
-(ADR-0388): `gpu_timer.rs` brackets the frame's encoder with two empty
+(ADR-0388): `device/timer.rs` brackets the frame's encoder with two empty
 timestamp passes and reads the pair back once the GPU finished, at the slot's
 next frame. `a_slot_frame_is_timed_on_the_gpu_under_its_epoch` checks the time
 reaches the backend under the frame's epoch;
@@ -785,10 +791,10 @@ called once per slot operation, never per layer.
 guarantees the surface drops before the target it borrows. The lease also
 keeps who paces the surface, `SurfaceTarget::frame_pacing` read once when it
 is made, which picks the present mode at every configuration
-(`surface_pacing::present_mode`, ADR-0356): `Fifo` for a surface its display
+(`surface::pacing::present_mode`, ADR-0356): `Fifo` for a surface its display
 paces, `Mailbox` or else `Immediate` for one its compositor paces (Wayland).
 The compile-fail fixture `surface_factory_rejects_borrowed_window` pins that
-a borrow cannot be handed in; `surface_lease.rs`'s
+a borrow cannot be handed in; `surface/lease.rs`'s
 `drop_order_is_surface_before_target` pins the drop order.
 
 ### 4. Clip coverage mixes the complete operator result with the destination
@@ -832,7 +838,7 @@ runtime execution remain separate evidence from native runs and cross-typechecks
 ### 5. A gradient's blend mode is pipeline state, keyed per draw run
 
 `GradientPipelines` caches one pipeline per `(GradientKind, BlendMode)` and a
-gradient run (`command_ir::GradientRun`) carries the mode beside the scissor,
+gradient run (`record::command_ir::GradientRun`) carries the mode beside the scissor,
 so a run ends when either changes. Before this the three gradient pipelines
 were built with a hard-coded `ALPHA_BLENDING`, and every non-advanced mode a
 caller set was accepted and discarded. Consequence: the gradient fragment
@@ -1022,7 +1028,7 @@ the glyphs: each quad carries the CTM's linear part over the raster scale.
 The engine names no shaper and depends on none: no cosmic-text, Parley,
 fontique, skrifa or swash type or crate, and no text context, font collection
 or paragraph spec either (`the_engine_does_not_shape`). `etagere` stays
-behind `glyph_atlas.rs` the way `lyon` stays behind `tessellator.rs`.
+behind `resources/glyph_atlas.rs` the way `lyon` stays behind `record/tessellator.rs`.
 
 A text shadow (`DrawOp::ParagraphShadow`, ADR-0309 §3) goes through the same
 batcher with `GlyphInk::Silhouette`: every glyph is filled with the shadow's
@@ -1153,7 +1159,7 @@ here. The tracker keeps the region's rects (a further one merges the cheapest
 pair, as `Region` does), and a partial frame redraws them rect by rect or
 under their bounding box (ADR-0304 §9), counted as `region_passes`: each
 pass clears its own rect under its own scissor and walks the scene culled
-by that rect. `region_cost.rs` picks the shape each time the damage is
+by that rect. `frame/region_cost.rs` picks the shape each time the damage is
 closed, at most `Region::MAX` rounds a frame, from a walk of the version
 culled by the box: per rect costs each reached
 chunk's commands times the rects it meets, plus `PIXEL_COST` a pixel and
@@ -1222,7 +1228,7 @@ a pass's rect is redrawn whole, because the damage is closed over its chunk
 (ADR-0304 §6, `a_destination_reading_shape_across_a_region_pass_is_redrawn_whole`),
 so no pass draws it cut by a scissor and no next frame owes a repaint for
 it. The full clear and the
-partial clear paint one constant, `frame_protocol::BACKGROUND`.
+partial clear paint one constant, `frame::protocol::BACKGROUND`.
 
 Every window, the web's canvas included, draws through a slot of the raster
 executor (`RasterBackend`), whose frames apply the damage the retained scene
@@ -1389,7 +1395,7 @@ The native Windows GPU suite passes with `FLUI_REQUIRE_GPU=1` (59 tests, no
 skips). This is execution evidence for this host, not every target/backend.
 
 A layer that changes nothing where it composites (opacity 1, no tint,
-`SrcOver`, no filter and no clip of its own, as `layer_compositor::composites`
+`SrcOver`, no filter and no clip of its own, as `layers::compositor::composites`
 reads it, under no inherited clip coverage) splices its
 children into its parent in every frame. They keep the hardware scissor in
 force, which with no clip coverage behind it is a partial frame's damage and
@@ -1402,7 +1408,7 @@ may read past the scissor, and cuts its composite instead.
 Future optimizations include bounded mask atlases, reuse keyed by immutable
 expression plus target mapping, and workload benchmarks. These require measured
 benefit and completion-safe resource ownership. The clip quotas do not constitute
-a whole-engine memory cap: DrawItem allocation metadata and other previously
+a whole-engine memory cap: DrawItem allocation metadata and other
 excluded recording payloads remain known admission limits to address.
 
 ### 21. Layer effects record once and replay against their containing target

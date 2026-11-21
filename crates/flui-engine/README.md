@@ -14,7 +14,7 @@ RasterExecutor (flui-engine)          renders every slot of one GpuContext
     |                                 window's slot holds its surface
     v
 Scene walk -> LayerDispatcher -> WgpuPainter
-    |                                 record: batched Command IR (command_ir.rs)
+    |                                 record: batched Command IR (record/command_ir.rs)
     v
 GpuReplay                             replay: Command IR -> wgpu draw calls
     v
