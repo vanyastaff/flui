@@ -11,7 +11,7 @@
 //! | [`macro@Inspect`] | `impl Inspect` for a struct or an enum | `flui_foundation::inspect::Inspect` |
 //! | [`macro@MotionValue`] | `impl MotionValue` from each field's vector | `flui_animation::MotionValue` |
 //! | [`macro@Lerp`] | a fieldwise `impl Lerp` | `flui_foundation::geometry::Lerp` |
-//! | [`macro@Routable`] | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router::Routable` |
+//! | [`macro@Routable`] | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::Routable` |
 //! | [`macro@main`] | the entry every platform starts an application from | `flui::main` |
 //!
 //! ## Paths in generated code

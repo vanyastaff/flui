@@ -33,7 +33,7 @@ use flui_sdk::scheduler::{AsyncDriver, TaskToken};
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{Signal, WriterSource};
-use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::IconData;
 use flui_sdk::widgets::{Column, Icon, PageHandle, Routable, Router, Text};
 use flui_testing::control_cost::{
     ControlCost, control_alone_under, control_over_text, control_over_text_under,

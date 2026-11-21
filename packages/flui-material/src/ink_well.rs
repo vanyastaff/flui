@@ -94,17 +94,16 @@ use flui_sdk::animation::{
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::Point;
 use flui_sdk::interaction::FocusNode;
+use flui_sdk::interaction::{ButtonChange, PointerDispatch, PointerEvent};
 use flui_sdk::painting::Color;
+use flui_sdk::rendering::HitTestBehavior;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::interaction::node::{
-    ActionBinding, ControlTap, Description, InteractiveNode,
-};
+use flui_sdk::widgets::__private::node::{ActionBinding, ControlTap, Description, InteractiveNode};
 use flui_sdk::widgets::{
-    Action, ActionOutcome, ActivateIntent, ButtonActivateIntent, ButtonChange, CustomPaint,
-    HitTestBehavior, PointerDispatch, PointerEvent, PressHold, WidgetState, WidgetStateProperty,
-    WidgetStatesController,
+    Action, ActionOutcome, ActivateIntent, ButtonActivateIntent, CustomPaint, PressHold,
+    WidgetState, WidgetStateProperty, WidgetStatesController,
 };
 
 use crate::ripple::{Indication, IndicationPainter, IndicationStyle, RippleScope};

@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::ui_runtime::UiRuntime;
+use flui_semantics::{Announcer, Urgency};
 use flui_view::prelude::*;
-use flui_widgets::{Announcer, Urgency};
 
 type Slot = Arc<parking_lot::Mutex<Option<Announcer>>>;
 

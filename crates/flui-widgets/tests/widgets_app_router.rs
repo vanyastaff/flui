@@ -21,7 +21,7 @@ use flui_view::environment::VsyncScope;
 use flui_widgets::__test_access::NavigatorHandle;
 
 use crate::widgets_app::OnNavigator;
-use flui_widgets::interaction::Focus;
+use flui_widgets::Focus;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Directionality, FocusScope, Localizations, RouterError, Row, SizedBox, Text,

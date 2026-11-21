@@ -12,7 +12,7 @@ use flui_view::prelude::*;
 use flui_widgets::__test_access::{BackGestureController, RouteProbe as _};
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{PageRoute, RouteId};
+use flui_widgets::{PageRoute, RouteId};
 
 use crate::common::harness::{Harness, mount};
 

@@ -1190,7 +1190,7 @@ pub(crate) fn viewer_key_sequence_ends_when_focus_moves_before_the_release() {
                 photo(&transform).boundary_margin(EdgeInsets::all(100.0)),
             ))
             .boxed(),
-        flui_widgets::interaction::Focus::new(SizedBox::new(40.0, 40.0))
+        flui_widgets::Focus::new(SizedBox::new(40.0, 40.0))
             .focus_node(Rc::clone(&elsewhere))
             .boxed(),
     ]);

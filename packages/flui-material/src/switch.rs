@@ -90,14 +90,16 @@ use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, RRect, Rect, Size};
 use flui_sdk::painting::Canvas;
 use flui_sdk::painting::Color;
+use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::Paint;
 use flui_sdk::painting::TextDirection;
+use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::interaction::node::Description;
+use flui_sdk::widgets::__private::node::Description;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Directionality, MotionBuilder, SemanticsRole, Toggled, WidgetState,
-    WidgetStateProperty, WidgetStates, WidgetStatesController,
+    CustomPaint, Directionality, MotionBuilder, WidgetState, WidgetStateProperty, WidgetStates,
+    WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;

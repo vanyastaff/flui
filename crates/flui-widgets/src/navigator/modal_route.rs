@@ -98,9 +98,11 @@ use super::transition_route::{
 };
 use flui_interaction::focus::FocusScopeNode;
 
+use flui_objects::StackFit;
+
 use crate::{
     AbsorbPointer, AnimatedBuilder, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox,
-    Stack, StackFit,
+    Stack,
 };
 
 /// The curve the barrier's colour fades in along (Flutter's

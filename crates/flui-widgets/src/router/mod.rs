@@ -2,8 +2,8 @@
 //! top is the current location (ADR-0330).
 //!
 //! An application declares its locations as a [`Routable`] type — a value per
-//! screen, printed to and parsed from a [`RoutePath`] — and builds a
-//! `Router<R>` that places one page per value on a navigator it owns. A
+//! screen, printed to and parsed from a
+//! [`RoutePath`](flui_view::navigation::RoutePath) — and builds a `Router<R>` that places one page per value on a navigator it owns. A
 //! descendant reaches a [`RouterHandle`] with `Router::of(ctx)` and drives the
 //! stack with values (`push`, `replace`, `pop`) or with a location (`go`), and
 //! reads the location back.
@@ -33,9 +33,6 @@ pub mod __derive;
 /// `#[derive(Routable)]`: `to_path` and `from_path` from one
 /// `#[route("…")]` pattern per variant (ADR-0330 §1).
 pub use flui_macros::Routable;
-pub use flui_view::navigation::{
-    NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath,
-};
 pub use handle::{RouterError, RouterHandle};
 pub use routable::Routable;
 pub use router::{Router, RouterState};

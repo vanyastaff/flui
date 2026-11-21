@@ -26,7 +26,7 @@ use std::cell::RefCell;
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorRoute, SimpleRoute};
 use flui_widgets::__test_access::{NavigatorProbe as _, OverlayProbe as _};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{Route, RouteContentBuilder, RouteSettings};
+use flui_widgets::{Route, RouteContentBuilder, RouteSettings};
 
 use crate::common::harness::{Harness, mount};
 
@@ -207,8 +207,8 @@ pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
     use std::cell::Cell;
 
+    use flui_widgets::PageRoute;
     use flui_widgets::PopScope;
-    use flui_widgets::navigator::PageRoute;
 
     let outcomes: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
     let blocking = Rc::new(Cell::new(true));
@@ -264,8 +264,8 @@ pub(crate) mod local_history {
     use flui_widgets::__test_access::{LocalHistoryEntry, LocalHistoryHandle};
 
     use flui_widgets::__test_access::NavigatorObserver;
-    use flui_widgets::navigator::PageRoute;
-    use flui_widgets::navigator::RouteId;
+    use flui_widgets::PageRoute;
+    use flui_widgets::RouteId;
 
     /// Captures the ambient [`LocalHistoryHandle`] in `init_state`, exactly
     /// where a real consumer acquires it (trigger-#22 discipline). The scope
@@ -797,7 +797,7 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
         HeroControllerProbe as _, OverlayEntryProbe as _, RouteProbe as _,
     };
     use flui_widgets::Center;
-    use flui_widgets::navigator::{Hero, HeroController, PageRoute};
+    use flui_widgets::{Hero, HeroController, PageRoute};
 
     use crate::common::{lay_out_animated, tight};
 

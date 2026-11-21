@@ -15,7 +15,8 @@ use flui_material::{
     DataCell, DataColumn, DataRow, DataTable, DataTableThemeData, Theme, ThemeData,
 };
 use flui_sdk::foundation::RenderId;
-use flui_sdk::widgets::{TableColumnWidth, Text};
+use flui_sdk::rendering::objects::TableColumnWidth;
+use flui_sdk::widgets::Text;
 
 fn text_column(label: &str) -> DataColumn {
     DataColumn::new(Text::new(label.to_string()))

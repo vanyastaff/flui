@@ -14,9 +14,7 @@ use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
-use flui_widgets::interaction::{
-    Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
-};
+use flui_widgets::{Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator};
 
 use crate::common::harness::{Harness, mount};
 use crate::common::{ProbeSignals, SignalProbe};

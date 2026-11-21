@@ -15,7 +15,8 @@ use flui_view::prelude::*;
 use super::atlas::Atlas;
 use super::config::ParticleConfig;
 use super::system::ParticleSystem;
-use crate::{CustomPaint, CustomPainter, TickerMode};
+use crate::{CustomPaint, TickerMode};
+use flui_rendering::delegates::CustomPainter;
 use flui_view::environment::MediaQuery;
 use flui_view::environment::VsyncScope;
 

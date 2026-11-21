@@ -50,7 +50,8 @@ pub(crate) fn wrap_three_boxes_form_two_runs_when_width_is_narrow() {
 pub(crate) fn wrap_axes_follow_the_reading_and_vertical_directions() {
     use flui_foundation::TextDirection;
     use flui_foundation::geometry::Axis;
-    use flui_widgets::{Directionality, VerticalDirection};
+    use flui_objects::VerticalDirection;
+    use flui_widgets::Directionality;
 
     // Three 40×40 boxes in a 100-wide (or 100-tall) space: two in the first
     // run, one in the second, in an 80×80 wrap.
@@ -113,7 +114,8 @@ pub(crate) fn wrap_axes_follow_the_reading_and_vertical_directions() {
 pub(crate) fn wrap_alignment_names_the_reading_edges() {
     use crate::common::tight;
     use flui_foundation::TextDirection;
-    use flui_widgets::{Directionality, WrapAlignment};
+    use flui_objects::WrapAlignment;
+    use flui_widgets::Directionality;
 
     for (text, alignment, x) in [
         (TextDirection::Rtl, WrapAlignment::Start, 60.0),

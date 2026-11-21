@@ -21,8 +21,9 @@ use crate::support::{ValueCallback, value_callback};
 use crate::{
     Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, ClipRect, Column,
     CustomPaint, Directionality, Flexible, Focus, GestureDetector, Intent, LayoutBuilder,
-    MergeSemantics, Row, Semantics, SemanticsAnchor, SemanticsRole,
+    MergeSemantics, Row, Semantics,
 };
+use flui_semantics::{SemanticsAnchor, SemanticsRole};
 
 /// The application-owned state of a [`Disclosure`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -366,7 +367,7 @@ impl ViewState<Disclosure> for DisclosureState {
             };
             let expanded = snapshot.state == ExpansionState::Expanded;
             let mut semantics = Semantics::new()
-                .role(crate::SemanticsRole::Button)
+                .role(flui_semantics::SemanticsRole::Button)
                 .enabled(enabled)
                 .expanded(expanded)
                 .anchor(header_anchor.clone())

@@ -127,7 +127,7 @@ impl_inherited_view!(Directionality);
 /// and the viewports' cross axis share its horizontal arm, the reading-direction
 /// rule, from their render views.
 #[must_use]
-pub fn axis_direction_from_axis_reverse_and_directionality(
+pub(crate) fn axis_direction_from_axis_reverse_and_directionality(
     ctx: &dyn BuildContext,
     axis: Axis,
     reverse: bool,

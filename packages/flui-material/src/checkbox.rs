@@ -77,13 +77,14 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Canvas;
+use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::{BorderSide, BorderStyle};
 use flui_sdk::painting::{Paint, Path};
+use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::interaction::node::Description;
+use flui_sdk::widgets::__private::node::Description;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Semantics, SemanticsRole, Toggled, WidgetState,
-    WidgetStateProperty, WidgetStates, WidgetStatesController,
+    CustomPaint, Semantics, WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 use flui_sdk::{
     geometry::{Point, RRect, Rect, Size},

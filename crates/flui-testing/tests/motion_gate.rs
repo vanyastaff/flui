@@ -10,6 +10,7 @@ use flui_animation::{SpringDescription, Vsync};
 use flui_foundation::ValueKey;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Rect, Size};
 use flui_interaction::events::PointerEvent;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
@@ -23,12 +24,11 @@ use flui_testing::widgets::{LaidOut, lay_out_animated, loose};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{IntoView, View, ViewExt};
-use flui_widgets::navigator::{PageHandle, PopupRoute};
 use flui_widgets::{
     Align, AnimatedLerp, AnimatedOpacity, AnimatedPadding, ClipRect, ColoredBox, Column, Container,
-    Flow, HitTestBehavior, Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox,
-    WidgetsApp,
+    Flow, Listener, MotionBuilder, Opacity, Padding, SizedBox, UnconstrainedBox, WidgetsApp,
 };
+use flui_widgets::{PageHandle, PopupRoute};
 
 const FRAME: Duration = Duration::from_millis(16);
 const RUN: Duration = Duration::from_millis(200);

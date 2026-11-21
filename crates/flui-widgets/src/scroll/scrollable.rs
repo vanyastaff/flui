@@ -1867,7 +1867,7 @@ fn scroll_semantics(
     let (axis, reversed) = (direction.axis(), direction.is_reversed());
     let mut semantics = Semantics::new()
         .container(true)
-        .role(crate::SemanticsRole::ScrollView)
+        .role(flui_semantics::SemanticsRole::ScrollView)
         .scroll_source(controller.position(), direction);
     if let Some(label) = label {
         semantics = semantics.label(label);
@@ -1876,7 +1876,7 @@ fn scroll_semantics(
     let adjustment = Semantics::new()
         .container(true)
         .explicit_child_nodes(true)
-        .role(crate::SemanticsRole::Slider)
+        .role(flui_semantics::SemanticsRole::Slider)
         .label(position_label)
         .scroll_source(controller.position(), direction);
     let reveal_controller = controller.clone();

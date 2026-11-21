@@ -55,12 +55,11 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::{ChangeNotifier, Listenable, Subscription};
 use flui_sdk::geometry::{Point, Rect, Size};
+use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::{Canvas, Clip, ClipOp, Color, Paint};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, RebuildHandle, impl_inherited_view};
-use flui_sdk::widgets::{
-    CustomPainter, WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController,
-};
+use flui_sdk::widgets::{WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController};
 
 use crate::shape::MaterialShape;
 

@@ -17,11 +17,11 @@ use flui_testing::MouseScript;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute};
-use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
-use flui_widgets::navigator::{
+use flui_widgets::{Actions, ActivateIntent, CallbackAction, Focus};
+use flui_widgets::{Align, AnimatedBuilder, Column, RawTextField, SizedBox, TextEditingController};
+use flui_widgets::{
     PageRoute, PopupRoute, Route, RouteAnimation, RouteContentBuilder, RouteId, RouteSettings,
 };
-use flui_widgets::{Align, AnimatedBuilder, Column, RawTextField, SizedBox, TextEditingController};
 
 use super::{chord, down, press, tab, up};
 use crate::common::harness::{Harness, mount};

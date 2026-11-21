@@ -43,7 +43,7 @@ pub trait PreferredSizeView: View {
 ///
 /// ```rust
 /// use flui_foundation::geometry::Size;
-/// use flui_widgets::layout::PreferredSize;
+/// use flui_widgets::PreferredSize;
 /// use flui_widgets::SizedBox;
 ///
 /// let _bar = PreferredSize::new(Size::new((f64::INFINITY), 80.0), SizedBox::shrink());

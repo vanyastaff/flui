@@ -45,10 +45,8 @@ use super::scroll_owner::{SharedSnapPolicy, settle_spring, snap_target};
 use super::scroll_physics::rest_slop;
 use super::{ClampingScrollPhysics, ScrollMetrics, ScrollPhysics};
 use crate::interaction::focus_reveal::{FocusRevealScope, RevealTarget, SharedRevealTarget};
-use crate::{
-    AnimatedBuilder, ClipRect, Column, Expanded, Focus, OverflowBox, Semantics, SemanticsRole,
-    SizedBox,
-};
+use crate::{AnimatedBuilder, ClipRect, Column, Expanded, Focus, OverflowBox, Semantics, SizedBox};
+use flui_semantics::SemanticsRole;
 use flui_view::environment::VsyncScope;
 
 /// Why [`HeaderExtents::try_new`] refused a pair of extents.

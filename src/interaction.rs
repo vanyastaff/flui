@@ -197,8 +197,8 @@ pub use flui_interaction::focus::{
 };
 pub use flui_interaction::ids::FocusNodeId;
 pub use flui_interaction::pointer::{
-    HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError, PointerCapture,
-    PointerCaptureError, PointerDispatch,
+    EventPropagation, HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError,
+    PointerCapture, PointerCaptureError, PointerDispatch,
 };
 pub use flui_interaction::text_input::{
     ClientToken, ClipboardBackend, ClipboardCapability, ClipboardHandle, DetachOutcome,

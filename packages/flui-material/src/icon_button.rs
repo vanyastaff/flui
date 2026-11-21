@@ -101,7 +101,7 @@
 //!
 //! [`IconButton::selected`] makes the button a toggle: `Selected` joins the
 //! states every property resolves against, and the node reports
-//! [`Toggled`](flui_sdk::widgets::Toggled). [`IconButton::selected_icon`]
+//! [`Toggled`](flui_sdk::semantics::Toggled). [`IconButton::selected_icon`]
 //! names the icon shown while selected; the swap runs through the ambient
 //! [`SymbolEffect::replace`], so two glyph `Icon`s cross-fade and only the
 //! new label is heard. Two icons of different view types swap at once, and

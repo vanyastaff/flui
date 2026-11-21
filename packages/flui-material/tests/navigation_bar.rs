@@ -40,7 +40,7 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::widgets::Icon;
-use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::IconData;
 use flui_testing::a11y::Role;
 
 /// Tight width, loose (`0..height`) height — see the module docs' note on

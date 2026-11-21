@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{EdgeInsets, Offset, Point};
 use flui_interaction::focus::FocusNode;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::RenderEditable;
 use flui_painting::Alignment;
 use flui_painting::typography::TextStyle;
@@ -21,7 +22,7 @@ use flui_platform::text::store::{
 use flui_testing::replay::PointerScript;
 use flui_view::ViewExt;
 use flui_widgets::{
-    ClipRect, Column, ContactAdmission, DragSlot, EditableText, GestureDetector, HitTestBehavior,
+    ClipRect, Column, ContactAdmission, DragSlot, EditableText, GestureDetector,
     LongPressSelection, Offstage, OverflowBox, Padding, Positioned, RawTextField, ScrollController,
     ScrollView, Scrollbar, SingleChildScrollView, SizedBox, Stack, TextEditingController,
     WidgetsApp,

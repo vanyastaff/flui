@@ -15,7 +15,7 @@ recorded so far.
 ### `InkWell` owns its ripple; no ink-feature registry
 
 `InkWell` mounts the catalogs' interactive node (ADR-0322 §1,
-`flui_widgets::interaction::node`, doc-hidden): one element and one render
+`flui_widgets::__private::node`, doc-hidden): one element and one render
 object carry its tap (`ControlTap`, the tap family of `GestureDetector` and the
 raw contact ends), its focus node and ring, its activation bindings and the
 five interaction states, where it nested a `GestureDetector`, a `Listener`, a

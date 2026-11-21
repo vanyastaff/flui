@@ -4,9 +4,10 @@ use std::any::Any;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use flui_sdk::geometry::{Rect, Size};
+use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::{Canvas, Color, Paint, StrokeCap};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{ActivityIndicator, CustomPaint, CustomPainter};
+use flui_sdk::widgets::{ActivityIndicator, CustomPaint};
 
 use super::{Fraction, GAP, STROKE, progress_semantics};
 use crate::theme::Theme;

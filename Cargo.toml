@@ -505,7 +505,7 @@ cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
 bitflags = "2.10"
-# Percent-encoding of route path segments (`flui_widgets::RoutePath`): the
+# Percent-encoding of route path segments (`flui_view::navigation::RoutePath`): the
 # servo/rust-url implementation of the URL path-segment set. Already in the
 # graph through `url`.
 percent-encoding = "2"

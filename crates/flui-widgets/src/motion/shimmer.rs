@@ -28,7 +28,8 @@ use flui_view::{
     InheritedView, RenderObjectContext, RenderView, impl_inherited_view, impl_render_view,
 };
 
-use crate::{Column, CrossAxisAlignment, MainAxisSize, Semantics, SizedBox, TickerMode};
+use crate::{Column, Semantics, SizedBox, TickerMode};
+use flui_objects::{CrossAxisAlignment, MainAxisSize};
 use flui_view::environment::MediaQuery;
 use flui_view::environment::VsyncScope;
 
@@ -56,7 +57,7 @@ const DEFAULT_HIGHLIGHT: Color = Color::rgb(245, 245, 245);
 ///
 /// ```rust
 /// # use flui_widgets::prelude::*;
-/// use flui_widgets::motion::{Shimmer, Skeleton};
+/// use flui_widgets::{Shimmer, Skeleton};
 ///
 /// let card = Shimmer::new(Column::new((
 ///     Skeleton::circle(40.0),

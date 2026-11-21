@@ -9,8 +9,8 @@ use flui_interaction::focus::{FocusNode, FocusScopeNode};
 use flui_view::ViewExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_widgets::interaction::{Focus, FocusChangeHandler, FocusScope};
 use flui_widgets::{Directionality, Positioned, SizedBox, Stack};
+use flui_widgets::{Focus, FocusChangeHandler, FocusScope};
 
 use crate::common::harness::mount;
 
@@ -29,7 +29,7 @@ pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
     use flui_interaction::focus::{
         FocusTraversalPolicy, ReadingOrderPolicy, TraversalEdgeBehavior,
     };
-    use flui_widgets::interaction::FocusTraversalGroup;
+    use flui_widgets::FocusTraversalGroup;
     #[derive(Debug)]
     struct Reverse;
     impl FocusTraversalPolicy for Reverse {
@@ -81,7 +81,7 @@ pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_ord
     use flui_interaction::focus::{
         FocusTraversalPolicy, KeyEventResult, ReadingOrderPolicy, TraversalEdgeBehavior,
     };
-    use flui_widgets::interaction::FocusTraversalGroup;
+    use flui_widgets::FocusTraversalGroup;
     use std::cell::Cell;
     #[derive(Debug)]
     struct CountingPolicy(Rc<Cell<usize>>);
@@ -199,7 +199,7 @@ pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
         EventTime,
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
-    use flui_widgets::interaction::FocusTraversalGroup;
+    use flui_widgets::FocusTraversalGroup;
     let origin = FocusNode::new();
     let diagonal = FocusNode::new();
     let beam = FocusNode::new();
@@ -901,8 +901,8 @@ pub(crate) mod event_context {
 
     use flui_interaction::focus::FocusNode;
     use flui_view::prelude::*;
+    use flui_widgets::Focus;
     use flui_widgets::SizedBox;
-    use flui_widgets::interaction::Focus;
 
     use crate::common::harness::mount;
     use crate::common::{ProbeSignals, SignalProbe};
@@ -1198,7 +1198,7 @@ pub(crate) fn a_superseded_focus_takes_its_record_and_callbacks_when_disposed() 
         EventTime,
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
-    use flui_widgets::interaction::{Actions, CallbackAction, Intent, Shortcuts, SingleActivator};
+    use flui_widgets::{Actions, CallbackAction, Intent, Shortcuts, SingleActivator};
 
     struct SaveIntent;
     impl Intent for SaveIntent {}

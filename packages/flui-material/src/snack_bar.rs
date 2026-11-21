@@ -52,11 +52,12 @@ use std::time::Duration;
 use flui_sdk::animation::{Animation, AnimationController, Curve, curves};
 use flui_sdk::foundation::Listenable;
 use flui_sdk::painting::Clip;
+use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, MouseRegion, Padding, Row,
-    SafeArea, Semantics, SemanticsRole, WidgetStateProperty,
+    SafeArea, Semantics, WidgetStateProperty,
 };
 use flui_sdk::{
     geometry::EdgeInsets,

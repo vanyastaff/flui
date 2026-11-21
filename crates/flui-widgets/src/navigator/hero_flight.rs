@@ -60,8 +60,9 @@ use super::hero_controller::{FlightDirection, HeroFlightManifest};
 use super::hero_tags::{HeroTags, TagSeat};
 use super::lifecycle::{RetiredValues, Terminal};
 use super::navigator::UserGestureSignal;
-use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
+use crate::{IgnorePointer, Opacity, Positioned, Stack};
 use crate::{InsertPosition, OverlayEntry, OverlayHandle};
+use flui_objects::StackFit;
 
 /// The manifest-derived facts a divert can replace: which way the
 /// flight runs, which two heroes it connects, and the coordinate space its
