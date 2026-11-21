@@ -816,7 +816,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** every native host · **Who it hurts:** Developers whose app failed a frame before a scene plugin took its windows · **Parity:** none yet (hot reload has no row)
 
-- A widget frame that fails leaves its presentation a retry deadline that only a later widget frame clears (`PresentationState::failure_retry_at` in `crates/flui-runtime/src/presentation.rs`). While a scene plugin owns the presentation's frames, no widget frame runs (ADR-0391 §3), so the deadline stays due, every wake finds it, and the window draws the plugin's scene again at the present rate until the plugin draws nothing.
+- A widget frame that fails leaves its presentation a retry deadline that only a later widget frame clears (`PresentationState::failure_retry_at` in `crates/flui-runtime/src/presentation/frame_failure.rs`). While a scene plugin owns the presentation's frames, no widget frame runs (ADR-0391 §3), so the deadline stays due, every wake finds it, and the window draws the plugin's scene again at the present rate until the plugin draws nothing.
 - The likely shape is a frame the plugin owned settling the widget retry, since the widget tree it replaces is not shown.
 - The check is a frame that fails, then a scene plugin that takes the window: the loop goes quiet once the plugin's scene is shown.
 
