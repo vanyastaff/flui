@@ -83,7 +83,7 @@ this one path (ADR-0151 §9).
   `docs/gaps.md`. The menu model's area lands with its first implementation
   and its consumer (ADR-0151 §2's table). `testing` exists only under
   the `testing` feature and in this crate's own unit tests: the doubles of its contracts, among them the
-  one window double, `MockWindow` (`flui-testing` re-exports it; no crate
+  one window double, `MockWindow` (no crate
   outside the core host and the kits implements `PlatformWindow`), and
   `NoNativeSurface`, the surface target of a window with no native surface.
   Production code uses none of it.

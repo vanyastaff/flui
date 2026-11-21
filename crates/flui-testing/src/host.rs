@@ -88,6 +88,10 @@ pub use clock::HostClock;
 pub use dev_agent::HeadlessDevAgent;
 pub use errors::{NotSettled, WindowSystemMismatch};
 pub use os_drag::{HeadlessOsDrags, StartedOsDrag};
+// The kit's doubles this host's API hands out, beside it (ADR-0264 §4):
+// `HeadlessHost::http` returns a `ScriptedHttp`, scripted with
+// `ScriptedResponse`, and `HeadlessWindow::haptic_actuator` is a `FakeHaptics`.
+pub use flui_platform::testing::{FakeHaptics, ScriptedHttp, ScriptedResponse};
 pub(crate) use registrations::AppRegistrations;
 use registrations::{Registry, compose_registry};
 use scripted_built_ins::ScriptedBuiltIns;
@@ -872,7 +876,7 @@ impl HeadlessHost {
     /// runner registers HTTP only with its own.
     #[cfg(feature = "http")]
     #[must_use]
-    pub fn http(&self) -> flui_platform::testing::ScriptedHttp {
+    pub fn http(&self) -> ScriptedHttp {
         self.scripted.http.clone()
     }
 
