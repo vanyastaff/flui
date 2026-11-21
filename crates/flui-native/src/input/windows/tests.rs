@@ -39,8 +39,7 @@ fn open(platform: &WindowsPlatform, title: &str) -> Rc<dyn HostWindow> {
 }
 
 fn window_ref(window: &Rc<dyn HostWindow>) -> WindowRef {
-    let window = window
-        .as_any()
+    let window = (&**window as &dyn std::any::Any)
         .downcast_ref::<WindowsWindow>()
         .expect("Win32 window");
     WindowRef::new(window.hwnd(), window.identity)

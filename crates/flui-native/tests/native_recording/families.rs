@@ -415,8 +415,7 @@ pub(crate) fn headless_window(
         .expect("a headless window opens")
         .try_ready()
         .expect("at once");
-    let mock = window
-        .as_any()
+    let mock = (&*window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("a headless window")
         .clone();

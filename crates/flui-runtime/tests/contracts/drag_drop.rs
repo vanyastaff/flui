@@ -496,8 +496,7 @@ fn side_by_side(first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
 }
 
 fn headless(window: &Rc<dyn HostWindow>) -> &HeadlessHostWindow {
-    window
-        .as_any()
+    (&**window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("a headless window")
 }

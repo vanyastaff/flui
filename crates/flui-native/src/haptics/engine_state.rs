@@ -103,6 +103,7 @@ impl EngineState {
     /// restart, which outdates any restart already in flight.
     pub(crate) fn down(&self) {
         self.0.update(Ordering::AcqRel, Ordering::Acquire, |word| {
+            // Wraps after 2^56 stops, as `EPOCH_MASK` says: no restart is in flight that long.
             pack(epoch_of(word).wrapping_add(1), Engine::Restarting)
         });
     }

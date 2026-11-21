@@ -52,9 +52,11 @@ use crate::text::{TextInput, WindowTextInput};
 mod bus;
 #[cfg(test)]
 mod bus_tests;
+mod fence;
 mod xim;
 
 use bus::{Bus, ContextId, Heard, Reach, Request};
+use fence::{Fence, Fences};
 
 /// How soon a focus the bus could not take is sent again.
 const FOCUS_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
@@ -155,12 +157,11 @@ struct BusWire {
     /// The last focus asked of the input method, and the last it answered:
     /// until they match, what it sends was for the field it served before,
     /// and reaches none.
-    fence: Cell<u64>,
-    fenced: Cell<u64>,
+    fences: Fences,
     /// The fence of a focus the bus could not take yet: the owner sends it
     /// again in its turn, and until the daemon answers it, what it sends
     /// stays the field's before.
-    unsent: Cell<Option<u64>>,
+    unsent: Cell<Option<Fence>>,
     /// The field has the input method's focus: keys are asked of it.
     focused: Cell<bool>,
     /// The context was asked for.
@@ -178,7 +179,7 @@ impl BusWire {
     /// Whether what the input method sends now is for the field served now:
     /// it answered the last focus asked of it.
     fn current(&self) -> bool {
-        self.fenced.get() == self.fence.get()
+        self.fences.current()
     }
 
     /// The composition ended (the field changed, or the window lost the
@@ -198,11 +199,20 @@ impl TextInputWire for BusWire {
         // forgets it too. A focus alone would not reach an engine already
         // focused, and one that keeps its composition across a focus out
         // would bring it to the next field.
-        self.focused.set(true);
         self.batch.borrow_mut().push(Request::Reset);
         self.forget_preedit();
-        let fence = self.fence.get().wrapping_add(1);
-        self.fence.set(fence);
+        // Out of fences, no focus can be told from the one before: the
+        // input method is told the window has none, its keys go as typed,
+        // and what it sends is never current again.
+        let Ok(fence) = self.fences.ask() else {
+            self.focused.set(false);
+            self.batch.borrow_mut().push(Request::FocusOut);
+            tracing::warn!(
+                "the input method's focus fences are exhausted: the field goes without it"
+            );
+            return;
+        };
+        self.focused.set(true);
         self.batch.borrow_mut().push(Request::FocusIn { fence });
     }
 
@@ -271,6 +281,7 @@ impl TextInputWire for BusWire {
                 }
             }
         }
+        // Wraps, as the wire's `commits` says.
         self.commits.set(self.commits.get().wrapping_add(1));
     }
 
@@ -567,7 +578,7 @@ impl X11Ime {
             let old = wire.context.replace(next);
             // The keys the old context still holds go as typed too.
             ime.hold.release_where(|key| key.window.id == id);
-            wire.fenced.set(wire.fence.get());
+            wire.fences.settle();
             wire.unsent.set(None);
             wire.forget_preedit();
             Some((old, next, wire, client))
@@ -633,7 +644,7 @@ impl X11Ime {
                     return client.map(|client| (client, wire));
                 }
                 Heard::Fenced(_, fence) => {
-                    ime.by_context(context)?.wire.fenced.set(*fence);
+                    ime.by_context(context)?.wire.fences.answer(*fence);
                     return None;
                 }
                 Heard::Ready(_) => return None,
@@ -733,8 +744,7 @@ impl LoopText for X11Ime {
                 told: RefCell::new(Told::default()),
                 preedit: RefCell::new((String::new(), 0)),
                 commits: Cell::new(0),
-                fence: Cell::new(0),
-                fenced: Cell::new(0),
+                fences: Fences::default(),
                 unsent: Cell::new(None),
                 focused: Cell::new(false),
                 opened: Cell::new(false),

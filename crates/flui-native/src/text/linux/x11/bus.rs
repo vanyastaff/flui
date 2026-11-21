@@ -26,6 +26,7 @@ use zbus::message::Type as MessageType;
 use zbus::{Connection, Message, MessageStream};
 use zbus::{OwnedObjectPath, Variant as Value};
 
+use super::Fence;
 use super::xim::{self, XimReach};
 use crate::text::linux::input_context::{
     ANSWER_TIMEOUT, Daemon, Endpoint, IBUS_CAPABILITIES, IBUS_RELEASE, Ticket, X_KEYCODE_OFFSET,
@@ -98,7 +99,7 @@ pub(crate) enum Request {
     FocusIn {
         /// Named again by [`Heard::Fenced`] once the daemon answered it:
         /// what it sent before is the earlier field's.
-        fence: u64,
+        fence: Fence,
     },
     /// It lost the focus.
     FocusOut,
@@ -153,7 +154,7 @@ pub(crate) enum Heard {
     Spilled(ContextId),
     /// The daemon answered the [`Request::FocusIn`] of this fence, or its
     /// context went: what it sends from here is for the field it names.
-    Fenced(ContextId, u64),
+    Fenced(ContextId, Fence),
     /// The context is gone (the daemon refused it, or the bus went): what
     /// waits on it is answered as not taken.
     Lost(ContextId),
@@ -525,7 +526,7 @@ struct Context {
 enum Awaited {
     Create(ContextId),
     Key(ContextId, Ticket),
-    Focus(ContextId, u64),
+    Focus(ContextId, Fence),
 }
 
 impl Awaited {

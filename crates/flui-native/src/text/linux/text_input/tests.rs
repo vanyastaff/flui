@@ -138,6 +138,33 @@ fn a_field_with_a_seat_in_its_window_is_enabled_with_its_state() {
     );
 }
 
+/// A client whose sessions ran out enables no field again: the wire it
+/// enabled under the last session is disabled when the seat comes back, and
+/// no `enable` follows. Red-check: wrap or saturate the session, and the
+/// second `enable` goes out under a session an earlier grant still names.
+#[test]
+fn an_exhausted_session_mint_enables_no_field() {
+    let store = InMemoryTextStore::new("ab");
+    let client = TextInputClient::new();
+    client.sessions.reserve_through(u64::MAX - 1);
+    let wire = Rc::new(Wire::default());
+    client.focus_store(Some(as_store(&store)));
+    client.entered(Rc::clone(&wire) as Rc<dyn TextInputWire>);
+    assert_eq!(
+        wire.take().first(),
+        Some(&Sent::Enable),
+        "the last session enables"
+    );
+
+    client.entered(Rc::clone(&wire) as Rc<dyn TextInputWire>);
+    let sent = wire.take();
+    assert!(sent.contains(&Sent::Disable), "the enabled wire is let go");
+    assert!(
+        !sent.contains(&Sent::Enable),
+        "no session is left to enable under"
+    );
+}
+
 #[test]
 fn a_preedit_composes_and_a_commit_replaces_it() {
     let store = InMemoryTextStore::new("ab");

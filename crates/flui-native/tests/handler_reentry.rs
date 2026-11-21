@@ -387,8 +387,7 @@ fn running_headless() -> (Rc<AppLog>, Rc<OwnerPlatform>) {
 }
 
 fn mock(window: &Rc<dyn HostWindow>) -> flui_native::HeadlessHostWindow {
-    window
-        .as_any()
+    (&**window as &dyn std::any::Any)
         .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("a headless window")
         .clone()

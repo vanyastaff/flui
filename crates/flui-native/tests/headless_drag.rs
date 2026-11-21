@@ -169,8 +169,7 @@ impl Desktop {
                     .with_press(press),
             )
         };
-        self.window
-            .as_any()
+        (&*self.window as &dyn std::any::Any)
             .downcast_ref::<flui_native::HeadlessHostWindow>()
             .expect("a headless window")
             .inject_event(PlatformInput::Pointer(event));

@@ -42,8 +42,7 @@ fn open(platform: &WindowsPlatform, frame: WindowFrame) -> Rc<dyn HostWindow> {
 }
 
 fn hwnd_of(window: &Rc<dyn HostWindow>) -> HWND {
-    window
-        .as_any()
+    (&**window as &dyn std::any::Any)
         .downcast_ref::<WindowsWindow>()
         .expect("Win32 backend")
         .hwnd()

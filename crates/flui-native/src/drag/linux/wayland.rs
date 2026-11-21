@@ -43,15 +43,16 @@
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
+use std::num::NonZeroU64;
 
 use rustc_hash::FxHashMap;
 use std::os::fd::AsFd as _;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
 use flui_foundation::panic::{FirstPanic, discard_payload};
+use flui_foundation::{DataTransferId, IdMint};
 use flui_platform::transfer::data::{
     DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferCompleter, TransferError, TransferLimits, TransferPayload,
@@ -205,10 +206,15 @@ struct Wanted {
     completer: TransferCompleter,
 }
 
+/// The identity of one fetch, minted by the transfer's [`State::tickets`]:
+/// the answer its thread sends back finds its fetch by it, never by place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FetchTicket(NonZeroU64);
+
 /// A fetch whose thread reads the pipe.
 #[derive(Debug)]
 struct Fetch {
-    ticket: u64,
+    ticket: FetchTicket,
     id: DataTransferId,
     /// `None` once its offer retired and the request was answered.
     completer: Option<TransferCompleter>,
@@ -225,8 +231,9 @@ struct State {
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.
     waiting: VecDeque<Wanted>,
-    /// The last fetch's ticket.
-    tickets: u64,
+    /// The fetches' tickets. Exhausted, it starts no fetch: a request that
+    /// gets no ticket is answered as one whose `receive` could not be made.
+    tickets: IdMint<NonZeroU64>,
 }
 
 /// What a step leaves to do once the lock is let go: completers to resolve,
@@ -668,6 +675,12 @@ impl SeatDrag {
                 after.gone(wanted.completer);
                 continue;
             };
+            // Minted before the request goes out, so a source is never asked
+            // for bytes no fetch would read.
+            let Ok(ticket) = state.tickets.next().map(FetchTicket) else {
+                after.gone(wanted.completer);
+                continue;
+            };
             let (reader, writer) = match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
                 Ok(ends) => ends,
                 Err(error) => {
@@ -681,8 +694,6 @@ impl SeatDrag {
             // The source holds the write end once the request is sent.
             drop(writer);
             after.sent = true;
-            state.tickets = state.tickets.wrapping_add(1);
-            let ticket = state.tickets;
             let shared = Arc::downgrade(&self.shared);
             let (kind, limit) = (wanted.kind, wanted.limit);
             let spawned = std::thread::Builder::new()
@@ -744,7 +755,11 @@ fn outcome(
 
 /// The fetch `ticket` ended with `outcome`, on its thread: its request is
 /// answered unless its offer retired first, and its place goes to the next.
-fn fetched(shared: &Weak<Shared>, ticket: u64, outcome: Result<TransferPayload, TransferError>) {
+fn fetched(
+    shared: &Weak<Shared>,
+    ticket: FetchTicket,
+    outcome: Result<TransferPayload, TransferError>,
+) {
     let Some(shared) = shared.upgrade() else {
         return;
     };

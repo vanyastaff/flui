@@ -96,6 +96,7 @@ mod v3 {
         fn set_cursor_rectangle(&self, _rect: Bounds<f64>) {}
 
         fn commit(&self) {
+            // Wraps, as the protocol's commit serial does.
             self.commits.set(self.commits.get().wrapping_add(1));
         }
 

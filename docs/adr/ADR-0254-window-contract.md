@@ -510,8 +510,9 @@ seam.
 
 ### 8. The escape hatch is published, typed and total
 
-- `as_any` moves from `PlatformWindow` to `HostWindow`, so the concrete type of a window is no
-  longer exposed to every implementor of the open trait.
+- The downcast moves from `PlatformWindow` to `HostWindow`, whose `Any` supertrait a window
+  upcasts to, so the concrete type of a window is no longer exposed to every implementor of the
+  open trait.
 - Per-OS extension modules are published by the facade as `flui::native::<os>`, behind `cfg` and a
   `native` feature, as an Evolving surface (ADR-0089 decision 5). Their methods take and return
   FLUI types only, answer `Option` or `Unsupported`, and never panic on a window of a foreign

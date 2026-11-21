@@ -26,6 +26,7 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _};
 
 use self::link::{Display, Link, Received};
 use self::wire::{AttrDecl, AttrValue, FORWARD_SYNCHRONOUS, KEY_PRESS, KEY_RELEASE, Message};
+use super::Fence;
 use super::bus::{
     CREATE_TIMEOUT, Command, ContextId, Heard, Inbox, KEY_CALL_TIMEOUT, MAX_WAITING, Request,
 };
@@ -277,7 +278,7 @@ enum Entry {
         forwarded_back: bool,
     },
     /// A focus told.
-    Fence(u64),
+    Fence(Fence),
 }
 
 /// One context as the session holds it.
@@ -510,6 +511,7 @@ impl Session {
                 if !self.push(context, entry) {
                     return true;
                 }
+                // Wraps: the protocol carries the serial in 16 bits.
                 self.serial = self.serial.wrapping_add(1);
                 let event = key_event(
                     self.serial,

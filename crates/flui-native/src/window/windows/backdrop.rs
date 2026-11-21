@@ -15,6 +15,7 @@
 //! pairs its ordinal with the type of its value, and each mapping between a
 //! FLUI value and the system's is one table read both ways.
 
+use std::any::Any;
 use std::marker::PhantomData;
 
 use flui_painting::styling::Color;
@@ -79,7 +80,8 @@ pub trait WindowsWindowExt {
 
 impl WindowsWindowExt for dyn HostWindow + '_ {
     fn win32(&self) -> Option<Win32Window<'_>> {
-        self.as_any().downcast_ref().map(Win32Window)
+        let window: &dyn Any = self;
+        window.downcast_ref::<WindowsWindow>().map(Win32Window)
     }
 }
 
@@ -634,8 +636,7 @@ mod material_tests {
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("a Win32 window opens");
-        let hwnd = window
-            .as_any()
+        let hwnd = (&*window as &dyn std::any::Any)
             .downcast_ref::<WindowsWindow>()
             .expect("a Win32 platform opens Win32 windows")
             .hwnd();

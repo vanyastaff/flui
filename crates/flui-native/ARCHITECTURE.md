@@ -147,7 +147,7 @@ trait depends on `flui-platform` instead.
   one OS offers beyond the window contract is an extension implemented for
   `dyn HostWindow` (`os::windows::WindowsWindowExt::win32`,
   `os::macos::MacOSWindowExt::appkit`) over
-  `HostWindow::as_any`, whose one body every window gets through the seal: it
+  the upcast of a `&dyn HostWindow` to `&dyn Any`, its supertrait: it
   answers `None` for another host's window, and otherwise a view of the OS's
   window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
   host's. The facade publishes the `os` modules, through `flui_app::native`,

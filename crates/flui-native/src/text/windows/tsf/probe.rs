@@ -446,8 +446,7 @@ fn text_services_probe() {
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
-    let hwnd = window
-        .as_any()
+    let hwnd = (&*window as &dyn std::any::Any)
         .downcast_ref::<crate::window::windows::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
@@ -472,8 +471,7 @@ fn text_services_probe() {
     // and offers it as its text-store host, as the presentation reads it.
     let host = {
         use crate::host_window::{HostWindow as _, OwnerThreadToken};
-        window
-            .as_any()
+        (&*window as &dyn std::any::Any)
             .downcast_ref::<crate::window::windows::WindowsWindow>()
             .expect("Win32 window")
             .text_store_host(OwnerThreadToken::new())
