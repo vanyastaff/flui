@@ -14,8 +14,8 @@
   An Android app is a project `flui create` generates, built with `flui build android` and run
   with `flui run --device <id>`.
 - **Per-crate `CHANGELOG.md` files** of flui-animation, flui-engine, flui-interaction,
-  flui-painting, flui-scheduler, flui-view and flui-widgets: the root changelog is the record
-  (flui-cli keeps its own, which its release archives ship).
+  flui-painting, flui-scheduler, flui-view, flui-widgets and flui-cli: the root changelog is
+  the record for all of them.
 - **The root `platforms/` tree**, a Flutter project template with committed Gradle output that
   nothing built, and the project-wide `.mcp.json` and `.lsp.json`.
 - **Historical planning records**: `.rust-studio/`, `docs/{archive,audits,brainstorms,ideation,superpowers}`,
