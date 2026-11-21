@@ -77,7 +77,7 @@ mod measured {
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::{
         FrameSnapshot as _, LayerTree as _, PluginFrameError as _, PluginPipeline as _, Scene as _,
-        TextContextHandle as _,
+        SceneError as _, TextContextHandle as _,
     };
     use flui_sdk::interaction::{
         ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
@@ -641,6 +641,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::text_input::committed_text;",
         "pub use flui_layer::LayerTree;",
         "pub use flui_layer::Scene;",
+        "pub use flui_layer::SceneError;",
         "pub use flui_objects::CarouselLayout;",
         "pub use flui_objects::CrossAxisAlignment;",
         "pub use flui_objects::FloatingHeaderSnapConfiguration;",

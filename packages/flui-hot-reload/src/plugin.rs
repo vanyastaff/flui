@@ -426,12 +426,10 @@ macro_rules! app_plugin {
                         $crate::__private_text::TextContextHandle::standalone(),
                     ))
                 });
-                // A frame that produced no scene still hands the host a valid
-                // pointer: an empty scene, with the reason reported.
-                let scene = pipeline.draw_frame(width, height).unwrap_or_else(|error| {
-                    $crate::__private_report_frame(&error);
-                    $crate::Scene::default()
-                });
+                // A frame that produced no scene, a size the host sent that
+                // is not finite or is negative included, still hands the host
+                // a valid pointer: an empty scene, with the reason reported.
+                let scene = $crate::__private_draw_frame(pipeline, width, height);
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
                     .cast::<::std::ffi::c_void>()
             })

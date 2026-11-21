@@ -428,7 +428,8 @@ pub mod pipeline {
 ///   on and the [`Scene`](hooks::Scene) of a retained version it hands back,
 ///   the [`TextContextHandle`](hooks::TextContextHandle) it measures with, and
 ///   the [`LayerTree`](hooks::LayerTree) a scene plugin builds its image from,
-///   which `Scene::new` makes a version. They leave with that path (ADR-0311 §7).
+///   which `Scene::new` makes a version, and the [`SceneError`](hooks::SceneError)
+///   a refused frame reports as its source. They leave with that path (ADR-0311 §7).
 ///
 /// The tree-observation seam is not here; it is `foundation::observe`, at the
 /// facade's path.
@@ -437,6 +438,7 @@ pub mod hooks {
 
     pub use flui_layer::LayerTree;
     pub use flui_layer::Scene;
+    pub use flui_layer::SceneError;
     pub use flui_rendering::pipeline::TextContextHandle;
     pub use flui_scheduler::FrameSnapshot;
     pub use plugin_pipeline::PluginFrameError;
