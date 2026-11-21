@@ -28,9 +28,9 @@ pub use shared_signal::SharedSignal;
 pub use signal_probe::{ProbeRoot, ProbeRootState, ProbeSignals, SignalProbe};
 pub use state_creations::{StateCreations, StateCreationsState};
 
+use rustc_hash::FxHashSet;
 use std::any::TypeId;
 use std::cell::Cell;
-use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1609,7 +1609,7 @@ impl LaidOut {
         let logical_root = self.current_root();
         self.pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut logical_ids = HashSet::new();
+            let mut logical_ids = FxHashSet::default();
             let mut pending = vec![logical_root];
             while let Some(id) = pending.pop() {
                 logical_ids.insert(id);

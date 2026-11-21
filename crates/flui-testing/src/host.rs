@@ -34,6 +34,7 @@
 //! raised by the next pump, before it frames. A lifecycle panic the tree recovered from (an `ErrorView`
 //! substitution) is not raised: the frame it happened in completed.
 
+use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
@@ -82,6 +83,7 @@ use flui_view::__runtime::{FlushHost, FlushWrite, OwnerNotify};
 use flui_view::CloseReason;
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
+use rustc_hash::FxHashSet;
 
 use crate::a11y::A11yTree;
 use crate::text_store_host::RecordingTextStoreHost;
@@ -107,8 +109,8 @@ pub use text_sizing::ScriptedTextSizing;
 pub struct HeadlessWindow {
     id: WindowId,
     size: flui_platform::WindowExtent,
-    scale_factor: Mutex<DevicePixelRatio>,
-    cursor: Mutex<Cursor>,
+    scale_factor: Cell<DevicePixelRatio>,
+    cursor: RefCell<Cursor>,
     text_input: Option<Arc<RecordingTextInput>>,
     /// The pull host to offer, by who it says draws the selection UI.
     text_store_host: Option<SelectionUi>,
@@ -119,21 +121,21 @@ pub struct HeadlessWindow {
     /// The application's assets its widgets read (ADR-0384 §5): none
     /// unless the test names them.
     assets: flui_platform::assets::AssetBundle,
-    display: Mutex<Option<DisplayId>>,
+    display: Cell<Option<DisplayId>>,
     /// Whether the platform lets the window run, as the test last reported it.
-    execution: Mutex<flui_platform::WindowExecutionState>,
+    execution: Cell<flui_platform::WindowExecutionState>,
     /// Whether the window system keeps the window off the screen, as the test
     /// last reported it ([`HeadlessHost::set_window_occluded`]).
-    occluded: Mutex<bool>,
+    occluded: Cell<bool>,
     /// What the simulated window system does with the window's last frame
     /// while it is off the screen ([`HeadlessWindow::with_occlusion_reports`]).
     occluded_surface: flui_platform::OccludedSurface,
     /// What covers the window, as the test last reported it.
-    insets: Mutex<flui_platform::WindowInsets>,
+    insets: Cell<flui_platform::WindowInsets>,
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
     /// every change this double makes to it.
-    revision: Mutex<flui_platform::WindowRevision>,
-    input_regions: Mutex<SentInputRegions>,
+    revision: Cell<flui_platform::WindowRevision>,
+    input_regions: RefCell<SentInputRegions>,
     haptics: Arc<flui_platform::testing::FakeHaptics>,
     os_drags: Arc<HeadlessOsDrags>,
     /// Whether the simulated platform reports when frames reached the screen
@@ -145,9 +147,9 @@ pub struct HeadlessWindow {
     capabilities: flui_platform::WindowCapabilities,
     /// The frame and mode the window was set to and the close requests it received,
     /// through its `WindowHandle` or a command applied to it.
-    chrome: Mutex<KitChrome>,
+    chrome: RefCell<KitChrome>,
     /// Whether the host closed the window: its commands answer `Closed`.
-    closed: AtomicBool,
+    closed: Cell<bool>,
     /// How the window is named to a portal, when it plays an exported
     /// Wayland window ([`HeadlessWindow::with_portal_export`]).
     portal_exports: Option<HeadlessPortalExports>,
@@ -265,7 +267,7 @@ impl HeadlessWindow {
     /// command its capabilities honour that this double has no arm for; its
     /// capabilities name none today.
     fn take(&self, command: flui_platform::WindowCommand) -> Result<(), flui_platform::ApplyError> {
-        let mut chrome = self.chrome.lock();
+        let mut chrome = self.chrome.borrow_mut();
         match command {
             flui_platform::WindowCommand::SetFrame(frame) => chrome.frame = frame,
             flui_platform::WindowCommand::SetMode(mode) => chrome.mode = mode,
@@ -284,15 +286,17 @@ impl HeadlessWindow {
     /// The window's state changed: what [`PlatformWindow::state`] reports is
     /// at the next revision.
     fn advance_revision(&self) {
-        let mut revision = self.revision.lock();
-        *revision = revision
-            .next()
-            .expect("BUG: a test changes a window far fewer than u64::MAX times");
+        self.revision.set(
+            self.revision
+                .get()
+                .next()
+                .expect("BUG: a test changes a window far fewer than u64::MAX times"),
+        );
     }
 
     /// Whether the window changed since the host last told the UI runtime, forgotten.
     fn take_unobserved(&self) -> bool {
-        std::mem::take(&mut self.chrome.lock().unobserved)
+        std::mem::take(&mut self.chrome.borrow_mut().unobserved)
     }
 
     /// How many times the window was asked to close through its
@@ -301,7 +305,7 @@ impl HeadlessWindow {
     /// observes them.
     #[must_use]
     pub fn close_requests(&self) -> usize {
-        self.chrome.lock().close_requests
+        self.chrome.borrow().close_requests
     }
 
     /// Every timed frame request the window took
@@ -310,25 +314,25 @@ impl HeadlessWindow {
     /// covered window owes its surface is asked for this way (ADR-0389).
     #[must_use]
     pub fn timed_frame_requests(&self) -> Vec<Option<flui_platform::EventTime>> {
-        self.chrome.lock().timed_frame_requests.clone()
+        self.chrome.borrow().timed_frame_requests.clone()
     }
 
     /// The instant of the window's timed frame request the host has not
     /// served yet.
     fn pending_timed_frame(&self) -> Option<flui_platform::EventTime> {
-        self.chrome.lock().timed_frame
+        self.chrome.borrow().timed_frame
     }
 
     /// Serve the window's timed frame request if its instant is not later
     /// than `now`: it is asked once. Whether it was served.
     fn serve_timed_frame(&self, now: flui_platform::EventTime) -> bool {
-        let mut chrome = self.chrome.lock();
+        let mut chrome = self.chrome.borrow_mut();
         chrome.timed_frame.take_if(|at| *at <= now).is_some()
     }
 
     /// Whether the host closed the window.
     fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Relaxed)
+        self.closed.get()
     }
 }
 impl HeadlessWindow {
@@ -345,8 +349,8 @@ impl HeadlessWindow {
                 f64::from(height),
             ))
             .expect("BUG: a side in whole pixels is finite and not negative"),
-            scale_factor: Mutex::new(DevicePixelRatio::ONE),
-            cursor: Mutex::new(Cursor::Icon(CursorIcon::Default)),
+            scale_factor: Cell::new(DevicePixelRatio::ONE),
+            cursor: RefCell::new(Cursor::Icon(CursorIcon::Default)),
             text_input: None,
             text_store_host: None,
             gesture_preset: flui_interaction::gesture::GestureSettings::default().into(),
@@ -355,19 +359,19 @@ impl HeadlessWindow {
             assets: flui_platform::assets::AssetBundle::new(Arc::new(
                 flui_platform::testing::MemoryAssets::new(),
             )),
-            display: Mutex::new(None),
-            execution: Mutex::new(flui_platform::WindowExecutionState::Running),
-            occluded: Mutex::new(false),
+            display: Cell::new(None),
+            execution: Cell::new(flui_platform::WindowExecutionState::Running),
+            occluded: Cell::new(false),
             occluded_surface: flui_platform::OccludedSurface::Discarded,
-            insets: Mutex::new(flui_platform::WindowInsets::ZERO),
-            revision: Mutex::new(flui_platform::WindowRevision::ZERO),
-            input_regions: Mutex::default(),
+            insets: Cell::new(flui_platform::WindowInsets::ZERO),
+            revision: Cell::new(flui_platform::WindowRevision::ZERO),
+            input_regions: RefCell::default(),
             haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
             reports_presentation: false,
             capabilities: Self::published_capabilities(),
-            chrome: Mutex::default(),
-            closed: AtomicBool::new(false),
+            chrome: RefCell::default(),
+            closed: Cell::new(false),
             portal_exports: None,
             fails_cursor_images: false,
             close_request_handler: None,
@@ -491,7 +495,7 @@ impl HeadlessWindow {
     /// [`HeadlessHost::set_window_insets`] reports a later one.
     #[must_use]
     pub fn with_insets(self, insets: flui_platform::WindowInsets) -> Self {
-        *self.insets.lock() = insets;
+        self.insets.set(insets);
         self
     }
 
@@ -579,7 +583,7 @@ impl HeadlessWindow {
     /// The last cursor the UI runtime set on this window.
     #[must_use]
     pub fn cursor(&self) -> Cursor {
-        self.cursor.lock().clone()
+        self.cursor.borrow().clone()
     }
 
     /// Every IME cursor area the UI runtime reported, in delivery order; `None`
@@ -615,13 +619,13 @@ impl HeadlessWindow {
     /// saw, none for a frame that re-sent an unchanged set (ADR-0217 §5).
     #[must_use]
     pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
-        self.input_regions.lock().updates.clone()
+        self.input_regions.borrow().updates.clone()
     }
 
     /// The logical size in device pixels at the current scale factor: a
     /// window moved to another monitor keeps its logical size.
     fn physical_size_i32(&self) -> Size<i32> {
-        let scale = self.scale_factor.lock().get();
+        let scale = self.scale_factor.get().get();
         #[expect(
             clippy::cast_possible_truncation,
             reason = "built from u32 pixel counts at a test's small scale factor, far below \
@@ -661,7 +665,7 @@ impl PlatformWindow for HeadlessWindow {
     /// it serves the request, once. Recorded for the test
     /// ([`HeadlessWindow::timed_frame_requests`]).
     fn request_frame_at(&self, at: Option<flui_platform::EventTime>) {
-        let mut chrome = self.chrome.lock();
+        let mut chrome = self.chrome.borrow_mut();
         chrome.timed_frame = at;
         chrome.timed_frame_requests.push(at);
     }
@@ -700,7 +704,7 @@ impl PlatformWindow for HeadlessWindow {
                 ));
             }
         }
-        cursor.clone_into(&mut self.cursor.lock());
+        cursor.clone_into(&mut self.cursor.borrow_mut());
         Ok(())
     }
 
@@ -717,9 +721,11 @@ impl PlatformWindow for HeadlessWindow {
     }
 
     fn set_input_regions(&self, regions: &[InputRegion]) -> Result<(), flui_platform::Unsupported> {
-        let scale = *self.scale_factor.lock();
-        let display = *self.display.lock();
-        self.input_regions.lock().update(regions, scale, display);
+        let scale = self.scale_factor.get();
+        let display = self.display.get();
+        self.input_regions
+            .borrow_mut()
+            .update(regions, scale, display);
         Ok(())
     }
 
@@ -742,7 +748,7 @@ impl PlatformWindow for HeadlessWindow {
     ) {
         // A closed window names nothing, as on every host.
         let parent = match &self.portal_exports {
-            Some(exports) if !self.closed.load(Ordering::Relaxed) => exports.export(),
+            Some(exports) if !self.closed.get() => exports.export(),
             _ => flui_platform::capability::PortalParent::none(),
         };
         // The owner retiring first leaves nothing waiting for the answer.
@@ -762,23 +768,23 @@ impl PlatformWindow for HeadlessWindow {
             extent,
         )
         .with_focus(flui_platform::WindowFocus::Focused)
-        .with_display(*self.display.lock())
-        .with_insets(*self.insets.lock())
-        .with_execution(*self.execution.lock())
-        .with_occluded(*self.occluded.lock())
+        .with_display(self.display.get())
+        .with_insets(self.insets.get())
+        .with_execution(self.execution.get())
+        .with_occluded(self.occluded.get())
         .with_metrics(
             flui_foundation::geometry::WindowMetrics::from_logical(
                 extent.get(),
-                *self.scale_factor.lock(),
+                self.scale_factor.get(),
             )
             .ok(),
         );
         state = state.with_capabilities(self.capabilities());
-        let chrome = self.chrome.lock();
+        let chrome = self.chrome.borrow();
         state.frame = chrome.frame;
         state.mode = chrome.mode;
         drop(chrome);
-        state.revision = *self.revision.lock();
+        state.revision = self.revision.get();
         state
     }
 
@@ -796,6 +802,7 @@ impl PlatformWindow for HeadlessWindow {
 /// the way a test chose with [`end_with`](Self::end_with). Until a test
 /// chooses, the OS refuses every session and the drag stays in its window.
 #[derive(Debug, Default)]
+// `Mutex` fields: `PlatformDragSource` is `Send + Sync`.
 pub struct HeadlessOsDrags {
     end: Mutex<Option<OsDragEnd>>,
     started: Mutex<Vec<StartedOsDrag>>,
@@ -847,6 +854,7 @@ impl PlatformDragSource for HeadlessOsDrags {
 
 /// The IME capability of a [`HeadlessWindow`] built with a text input.
 #[derive(Debug, Default)]
+// `Mutex` fields: `PlatformTextInput` is `Send + Sync`.
 struct RecordingTextInput {
     cursor_areas: Mutex<Vec<Bounds<f64>>>,
     ime_allowed: Mutex<Vec<bool>>,
@@ -875,6 +883,7 @@ impl PlatformTextInput for RecordingTextInput {
 /// the tree an adapter would hold, and the action listener the UI runtime
 /// registers is handed to a test that plays the adapter.
 #[derive(Default)]
+// `Mutex` and atomic fields: `PlatformAccessibility` is `Send + Sync`.
 struct HeadlessAccessibility {
     active: AtomicBool,
     activation: Mutex<Option<AccessibilityActivationListener>>,
@@ -928,7 +937,7 @@ impl PlatformAccessibility for HeadlessAccessibility {
                 // root, so the kept tree tracks the live one instead of
                 // accumulating every node ever published.
                 if let Some(root) = tree.tree.as_ref().map(|data| data.root) {
-                    let mut reachable = std::collections::HashSet::from([root]);
+                    let mut reachable = FxHashSet::<accesskit::NodeId>::from_iter([root]);
                     let mut pending = vec![root];
                     while let Some(id) = pending.pop() {
                         if let Some((_, node)) = tree.nodes.iter().find(|(known, _)| *known == id) {
@@ -1205,7 +1214,7 @@ pub struct HeadlessHost {
     /// Dropped-frame reports not yet raised, as the text a raised failure
     /// carries: those of the pump in progress, and any the UI runtime made
     /// between pumps, which the next pump raises before it frames.
-    failures: Arc<Mutex<Vec<String>>>,
+    failures: Rc<RefCell<Vec<String>>>,
     /// The presentation report the next pump's frame requests carry
     /// ([`Self::report_presented`]).
     presented: Option<flui_platform::FramePresented>,
@@ -1214,6 +1223,7 @@ pub struct HeadlessHost {
     flush: Option<FlushHost>,
     /// The registry's writes waiting for the next pump to run them, as a
     /// runner's IO pool runs them.
+    // `Arc<Mutex>`: the writer closure `FlushHost::new` takes is `Send + Sync`.
     flush_writes: Arc<Mutex<Vec<FlushWrite>>>,
     /// The closes the windows' widgets asked for, which the next turn
     /// carries out.
@@ -1506,12 +1516,12 @@ impl HeadlessHost {
             &window,
             close_handler,
         );
-        let failures = Arc::new(Mutex::new(Vec::new()));
+        let failures = Rc::new(RefCell::new(Vec::new()));
         ui_runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
-        let recorded = Arc::clone(&failures);
+        let recorded = Rc::clone(&failures);
         ui_runtime.set_frame_failure_handler(Some(FrameFailureHandler::new(move |report| {
             if let Some(text) = dropped_frame_text(report) {
-                recorded.lock().push(text);
+                recorded.borrow_mut().push(text);
             }
         })));
         let primary = HostWindow {
@@ -1681,7 +1691,7 @@ impl HeadlessHost {
     /// a frame that failed otherwise drops its findings with it. See the
     /// [module docs](self#failures).
     pub fn pump(&mut self, dt: Duration) -> FrameOutcome {
-        let pending = std::mem::take(&mut *self.failures.lock());
+        let pending = std::mem::take(&mut *self.failures.borrow_mut());
         if let Some(failure) = pending.into_iter().next() {
             panic!("{failure}");
         }
@@ -1762,7 +1772,7 @@ impl HeadlessHost {
         self.track_textures();
         self.sink.claim_textures();
         let first_failure = {
-            let mut failures = self.failures.lock();
+            let mut failures = self.failures.borrow_mut();
             let first = failures.first().cloned();
             failures.clear();
             first
@@ -2455,14 +2465,10 @@ impl HeadlessHost {
     /// If `window` was not opened by this host.
     pub fn move_to_display(&mut self, window: HeadlessWindowId, display: Option<DisplayId>) {
         let native = self.window_of(window);
-        if std::mem::replace(&mut *native.display.lock(), display) == display {
+        if native.display.replace(display) == display {
             return;
         }
-        let mut revision = native.revision.lock();
-        *revision = revision
-            .next()
-            .expect("BUG: a test moves a window far fewer than u64::MAX times");
-        drop(revision);
+        native.advance_revision();
         self.observe(window.0, flui_runtime::owner::WindowObservation::State);
     }
 
@@ -2558,7 +2564,7 @@ impl HeadlessHost {
         let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
             return;
         };
-        *open.window.execution.lock() = execution;
+        open.window.execution.set(execution);
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Execution(execution),
@@ -2580,7 +2586,7 @@ impl HeadlessHost {
             return;
         };
         let was_seen = open.window.state().is_seen();
-        if std::mem::replace(&mut *open.window.occluded.lock(), occluded) == occluded {
+        if open.window.occluded.replace(occluded) == occluded {
             return;
         }
         open.window.advance_revision();
@@ -2622,7 +2628,7 @@ impl HeadlessHost {
         let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
             return;
         };
-        *open.window.insets.lock() = insets;
+        open.window.insets.set(insets);
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Insets(insets),
@@ -2649,7 +2655,7 @@ impl HeadlessHost {
         curve: flui_platform::InsetCurve,
     ) -> flui_platform::SoftKeyboard {
         let now = self.event_now();
-        let insets = *self.window_of(window).insets.lock();
+        let insets = self.window_of(window).insets.get();
         let motion =
             flui_platform::InsetMotion::try_new(insets.keyboard().at(now), now, duration, curve)
                 .expect("a keyboard motion with a duration and a valid curve");
@@ -2786,7 +2792,7 @@ impl HeadlessHost {
         for window in &header.windows {
             let presentation = self.presentation_of(window.window);
             let id = HeadlessWindowId(presentation);
-            if *self.window_of(id).scale_factor.lock() != window.scale_factor {
+            if self.window_of(id).scale_factor.get() != window.scale_factor {
                 self.set_scale_factor(id, window.scale_factor);
             }
             if let Some(profiles) = &window.gesture_profiles {
@@ -2901,7 +2907,7 @@ impl HeadlessHost {
         let bounds = tree
             .window_bounds(&node)
             .expect("a laid-out semantics node carries bounds");
-        let scale = *self.window_of(window).scale_factor.lock();
+        let scale = self.window_of(window).scale_factor.get();
         Ok(flui_foundation::geometry::Offset::new(
             scale.to_logical(bounds.x0.midpoint(bounds.x1)),
             scale.to_logical(bounds.y0.midpoint(bounds.y1)),
@@ -3032,7 +3038,7 @@ impl HeadlessHost {
         self.presentation_ids().into_iter().any(|presentation| {
             self.window_of(HeadlessWindowId(presentation))
                 .chrome
-                .lock()
+                .borrow()
                 .unobserved
         })
     }
@@ -3114,10 +3120,9 @@ impl HeadlessHost {
             return;
         }
         if let flui_runtime::owner::WindowObservation::Metrics(metrics) = observation {
-            *self
-                .window_of(HeadlessWindowId(presentation))
+            self.window_of(HeadlessWindowId(presentation))
                 .scale_factor
-                .lock() = metrics.scale();
+                .set(metrics.scale());
         }
         let address = flui_foundation::PresentationAddress {
             ui_runtime_id: self.ui_runtime().id(),
@@ -3276,7 +3281,7 @@ impl HeadlessHost {
             return false;
         };
         let closed = self.open.remove(position);
-        closed.window.closed.store(true, Ordering::Relaxed);
+        closed.window.closed.set(true);
         if let Some(exports) = &closed.window.portal_exports {
             exports.release_all();
         }
@@ -3435,7 +3440,7 @@ impl flui_platform::WindowControl for HeadlessWindowControl {
     /// turn, which asks the window's guard and closes it (a window already
     /// gone has nothing left to close), as a runner's window queue does.
     fn request_close(&self) {
-        self.window.chrome.lock().close_requests += 1;
+        self.window.chrome.borrow_mut().close_requests += 1;
         if !self.window.is_closed() {
             self.close_asks.borrow_mut().push(self.presentation);
         }
@@ -3569,7 +3574,7 @@ mod tests {
         let mut ui_runtime = HeadlessHost::new(HeadlessWindow::new(40, 24));
         ui_runtime
             .failures
-            .lock()
+            .borrow_mut()
             .push("frame dropped: reported between pumps".to_owned());
         let before = flui_foundation::MonotonicClock::now(ui_runtime.clock());
 
