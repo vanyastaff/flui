@@ -161,7 +161,7 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// The framework normalizes the opaque return via
     /// [`IntoView::into_view`] inside the build call site (see
     /// `element/behavior.rs`), boxing the concrete `'static` value
-    /// into `Box<dyn View>` before the closure / catch-unwind
+    /// into a `BoxedView` before the closure / catch-unwind
     /// boundary. See `StatelessView::build` for the rationale.
     fn build(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView;
 

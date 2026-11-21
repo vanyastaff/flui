@@ -271,12 +271,11 @@ fn children_of(tree: &Rc<RefCell<ElementTree>>, parent: ElementId) -> Vec<Elemen
 /// The graft happens first and only *afterwards*, at end of frame, is the tree
 /// judged illegal. This test pins the graft half; the verdict half is pinned by
 /// the tug-of-war test below.
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_another() {
     let (tree, owner) = fresh_tree();
     // `GlobalKey::current_element` reads a ui_runtime-scoped registry that is
     // inactive in unit tests driving `ElementTree` directly.
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let _registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
     let parents = tree_with_parents(&tree, &owner, 2);
     let key = GlobalKey::<KeyedState>::new();
 
@@ -309,8 +308,6 @@ pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_anoth
         KeyLookup::Mounted(first),
         "the registry points at the single surviving element",
     );
-
-    flui_view::test_only_clear_global_key_registry();
 }
 
 /// A parent whose *build output* carries the key, expressed through the build
@@ -352,11 +349,10 @@ impl View for KeyedParent {
 /// before relinking it, so raw inserts never leave two parents claiming the
 /// key and never cross a frame boundary. Here both parents genuinely declare
 /// the key in one frame, so the check must see the conflict.
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     let (tree, owner) = fresh_tree();
     CREATED_BY.set(None);
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let _registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
     let key = GlobalKey::<KeyedState>::new();
 
     let root = tree
@@ -471,8 +467,6 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
         owner.borrow_mut().take_global_key_diagnostics().is_empty(),
         "the duplicate must not be re-reported every subsequent frame",
     );
-
-    flui_view::test_only_clear_global_key_registry();
 }
 
 // ============================================================================

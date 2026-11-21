@@ -31,8 +31,8 @@ struct PanicBuildView {
 
 impl StatelessView for PanicBuildView {
     // `!` does not implement `IntoView` — bind the panic through an
-    // explicit `Box<dyn View>` so inference uses the `IntoView for
-    // Box<dyn View>` shim (same anchor as `error_view_recovery.rs`'s
+    // explicit `BoxedView` so inference has a concrete `IntoView` type (same
+    // anchor as `error_view_recovery.rs`'s
     // `PanickingView`). The line still panics; the bind exists purely to
     // fix a concrete `impl IntoView`-satisfying type.
     #[expect(
@@ -41,7 +41,7 @@ impl StatelessView for PanicBuildView {
         reason = "panic body — see comment above"
     )]
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let v: Box<dyn View> = panic!("{}", self.message);
+        let v: BoxedView = panic!("{}", self.message);
         v
     }
 }

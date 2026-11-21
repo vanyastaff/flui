@@ -176,9 +176,9 @@ impl flui_view::StatefulView for Removable {
 impl flui_view::ViewState<Removable> for RemovableState {
     fn build(&self, view: &Removable, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
         if view.shown.get() {
-            Box::new(view.receiver.clone()) as Box<dyn flui_view::View>
+            flui_view::BoxedView::new(view.receiver.clone())
         } else {
-            Box::new(SizedBox::new(300.0, 200.0))
+            flui_view::BoxedView::new(SizedBox::new(300.0, 200.0))
         }
     }
 }

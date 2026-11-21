@@ -24,7 +24,7 @@ use super::stateful::StatefulView;
 /// #[derive(Clone)]
 /// struct FadeTransition {
 ///     opacity: Rc<dyn Animation<f64>>,
-///     child: Box<dyn View>,
+///     child: BoxedView,
 /// }
 ///
 /// impl AnimatedView for FadeTransition {

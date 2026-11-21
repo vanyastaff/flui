@@ -7,7 +7,7 @@ use flui_foundation::panic::payload_text;
 use super::*;
 use crate::view::FrameworkError;
 
-fn recovery_factory_panics(_error: &FrameworkError) -> Box<dyn View> {
+fn recovery_factory_panics(_error: &FrameworkError) -> BoxedView {
     panic!("activation recovery factory panic");
 }
 

@@ -190,7 +190,6 @@ fn set_sentinel(
 ///
 /// The previously-keyed element is pulled out of the inactive queue and
 /// re-mounted under the new parent.
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     let (tree, owner) = fresh_tree();
 
@@ -225,7 +224,7 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
         .schedule_build_for(original_id, 2, flui_view::RebuildReason::InitialMount);
     owner.borrow_mut().build_scope(&mut tree.borrow_mut());
     // Make state mutation observable via sentinel.
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let _registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
     assert!(set_sentinel(&tree, &key, 0xCAFE_BABE));
 
     // Soft-remove from parent A — should push to inactive,
@@ -261,8 +260,6 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
         Some(0xCAFE_BABE),
         "sentinel mutation written before migration must survive"
     );
-
-    flui_view::test_only_clear_global_key_registry();
 }
 
 // ============================================================================

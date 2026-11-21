@@ -62,9 +62,9 @@ fn frame(runtime: &mut UiRuntime, clock: &ManualClock) {
 #[test]
 fn the_error_view_factory_reaches_every_presentation_of_its_runtime_only() {
     static CONFIGURED: AtomicUsize = AtomicUsize::new(0);
-    fn configured(error: &FrameworkError) -> Box<dyn View> {
+    fn configured(error: &FrameworkError) -> BoxedView {
         CONFIGURED.fetch_add(1, Ordering::SeqCst);
-        Box::new(ErrorView::new(format!("configured: {}", error.message)))
+        BoxedView::new(ErrorView::new(format!("configured: {}", error.message)))
     }
 
     let clock = ManualClock::new();
