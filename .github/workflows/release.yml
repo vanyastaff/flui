@@ -7,7 +7,7 @@ name: Release
 #              unit; `cargo install` from crates.io does not see that profile,
 #              these archives are the smaller build), packed as
 #              `flui-<target>.tar.gz` (`.zip` on Windows) with `flui`,
-#              `cargo-flui`, the CLI README and CHANGELOG and both licenses.
+#              `cargo-flui`, the CLI README and both licenses.
 #   release  — a DRAFT GitHub release for the tag with every archive and a
 #              `SHA256SUMS` file. Publishing the draft is a human step; a tag
 #              that contains `-` (beta, rc) is marked as a pre-release.
@@ -84,7 +84,7 @@ jobs:
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/flui" \
              "target/${{ matrix.target }}/release/cargo-flui" \
-             crates/flui-cli/README.md crates/flui-cli/CHANGELOG.md \
+             crates/flui-cli/README.md \
              LICENSE LICENSE-APACHE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -r "dist/$name"
@@ -97,7 +97,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/flui.exe", `
                     "target/${{ matrix.target }}/release/cargo-flui.exe", `
-                    "crates/flui-cli/README.md", "crates/flui-cli/CHANGELOG.md", `
+                    "crates/flui-cli/README.md", `
                     "LICENSE", "LICENSE-APACHE" -Destination "dist/$name/"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
           Remove-Item -Recurse -Force "dist/$name"
@@ -142,5 +142,5 @@ jobs:
           case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
           gh release create "$TAG" --draft --verify-tag "${prerelease[@]}" \
             --title "flui-cli $TAG" \
-            --notes "Prebuilt \`flui\` and \`cargo-flui\` binaries. Install with \`cargo binstall flui-cli\` or unpack the archive for your platform; verify with \`SHA256SUMS\`. Changes: crates/flui-cli/CHANGELOG.md." \
+            --notes "Prebuilt \`flui\` and \`cargo-flui\` binaries. Install with \`cargo binstall flui-cli\` or unpack the archive for your platform; verify with \`SHA256SUMS\`. Changes: https://github.com/vanyastaff/flui/blob/main/CHANGELOG.md." \
             dist/*
