@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 pub struct HeadlessPortalExports {
     handle: Arc<str>,
     /// Each export a request may still hold; one released is `true`.
+    // `Arc` and atomics: `PortalParent::wayland` takes an `Any + Send` export.
     exports: Arc<Mutex<Vec<Weak<AtomicBool>>>>,
 }
 

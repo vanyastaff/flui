@@ -82,6 +82,7 @@
 )]
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
+#![warn(clippy::disallowed_types)]
 
 pub mod a11y;
 pub mod agent_service;

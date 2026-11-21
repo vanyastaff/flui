@@ -385,6 +385,7 @@ impl From<ErrorObject> for TestError {
 }
 
 /// Keeps the windows the host hands its development agent.
+// `Arc<Mutex>`: `DevAgentHook` is `Send`.
 struct Windows(Arc<Mutex<Vec<AgentWindow>>>);
 
 impl DevAgentHook for Windows {
