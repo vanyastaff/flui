@@ -1,0 +1,425 @@
+//! [`MediaQuery`] and [`MediaQueryData`]: the ambient logical-screen data.
+
+use std::sync::Arc;
+
+use flui_animation::MotionPolicy;
+use flui_foundation::geometry::{EdgeInsets, Edges, Rect, Size};
+use flui_painting::TextSizing;
+use flui_painting::styling::Color;
+use flui_platform::{Brightness, Locale, RegionalFormats, ScrollBarPreferences};
+
+use super::FloatingKeyboard;
+use crate::prelude::*;
+use crate::{FieldMask, impl_inherited_view};
+
+/// Ambient logical-screen data provided to descendants by a [`MediaQuery`]
+/// ancestor.
+///
+/// Construct with individual pub fields
+/// directly, or start from [`Default`] and override:
+///
+/// ```rust,ignore
+/// use flui_view::environment::MediaQueryData;
+///
+/// let data = MediaQueryData {
+///     device_pixel_ratio: 2.0,
+///     ..MediaQueryData::default()
+/// };
+/// ```
+///
+/// ## Implemented subset
+///
+/// - [`size`](Self::size)
+/// - [`device_pixel_ratio`](Self::device_pixel_ratio)
+/// - [`text_sizing`](Self::text_sizing)
+/// - [`font_weight_adjustment`](Self::font_weight_adjustment)
+/// - [`view_padding`](Self::view_padding)
+/// - [`padding`](Self::padding)
+/// - [`view_insets`](Self::view_insets)
+/// - [`system_gesture_insets`](Self::system_gesture_insets)
+/// - [`platform_brightness`](Self::platform_brightness)
+/// - [`high_contrast`](Self::high_contrast)
+/// - [`motion`](Self::motion)
+/// - [`preferred_locales`](Self::preferred_locales)
+/// - [`regional_formats`](Self::regional_formats)
+/// - [`accent_color`](Self::accent_color)
+/// - [`scroll_bars`](Self::scroll_bars)
+#[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
+pub struct MediaQueryData {
+    /// Logical size of the current display surface (window or full screen).
+    ///
+    /// In logical pixels: multiply by [`device_pixel_ratio`](Self::device_pixel_ratio)
+    /// to get physical pixels.
+    pub size: Size,
+
+    /// Physical pixels per logical pixel (e.g. `2.0` on a Retina display,
+    /// `3.0` on some high-DPI phones). Always positive and finite.
+    pub device_pixel_ratio: f64,
+
+    /// Numeric sizing authority applied after authored span inheritance.
+    /// The nearest provider replaces the outer policy, including when fixed.
+    /// Copy the parent data to preserve its policy while overriding another field.
+    pub text_sizing: TextSizing,
+
+    /// Signed adjustment applied after authored text-style inheritance. Zero
+    /// preserves authored weights. Text shaping bounds adjusted weights to
+    /// `1..=1000`, including for explicitly authored nested providers.
+    pub font_weight_adjustment: i32,
+
+    /// Safe-area insets reserved by the OS (notch, home indicator, status
+    /// bar), whether or not other system UI covers them. Unlike
+    /// [`padding`](Self::padding) it is not reduced by
+    /// [`view_insets`](Self::view_insets).
+    pub view_padding: EdgeInsets,
+
+    /// Insets occupied by system UI that fully obscures part of the window,
+    /// such as the software keyboard when it is docked. Unlike
+    /// [`padding`](Self::padding), these areas are hidden, not just reserved.
+    /// While the keyboard moves, each frame carries its inset at that
+    /// frame's time. A keyboard that floats covers no edge and is not here:
+    /// [`MediaQuery::floating_keyboard_of`] reads its frame.
+    pub view_insets: EdgeInsets,
+
+    /// Edges where a system gesture (back, home, the notification shade)
+    /// takes precedence over the application's own drag: a horizontal drag or
+    /// an edge slider pads itself away from them. Zero where the platform
+    /// reports none.
+    pub system_gesture_insets: EdgeInsets,
+
+    /// The OS-level light/dark preference as reported by the platform.
+    /// An app-level `Theme` (e.g. `flui_material::Theme`) may override this
+    /// for its subtree; this field reflects the platform signal only.
+    pub platform_brightness: Brightness,
+
+    /// Whether the user requests a higher-contrast palette. An unavailable
+    /// platform observation projects to `false`; nested providers may override it.
+    pub high_contrast: bool,
+
+    /// Resolved application motion policy. Controllers obey the presentation
+    /// clock; this inherited value lets widgets choose a static composition.
+    pub motion: MotionPolicy,
+
+    /// Ordered preferred UI languages observed by the host. `None` means
+    /// unavailable; an empty list is an observed empty preference list.
+    /// Application locale overrides and resource fallback belong to the
+    /// application's `WidgetsApp`. Like the other fields, a nested
+    /// `MediaQuery` replaces this value; copy parent data to preserve it when
+    /// overriding another field.
+    pub preferred_locales: Option<Arc<[Locale]>>,
+
+    /// The user's regional formats observed by the host: first weekday,
+    /// hour cycle, measurement, numbering system and region override
+    /// (ADR-0278). Empty when the host reported none. A date, time or number
+    /// formatter takes the resolved locale through
+    /// [`RegionalFormats::apply_to`]; the locale `Localizations` resolver
+    /// stays without these keys, so delegates match it as declared.
+    pub regional_formats: RegionalFormats,
+
+    /// The colour the user chose to tint controls with, observed by the host
+    /// (ADR-0359). `None` when the platform has no such setting or the user
+    /// set none: a design system then uses its own primary colour.
+    pub accent_color: Option<Color>,
+
+    /// When the system shows a scroll bar and what a click in its track does,
+    /// observed by the host (ADR-0359); each part unknown until a host reads
+    /// it. A `Scrollbar` whose author chose neither follows them.
+    pub scroll_bars: ScrollBarPreferences,
+}
+
+impl Default for MediaQueryData {
+    fn default() -> Self {
+        Self {
+            size: Size::new(800.0, 600.0),
+            device_pixel_ratio: 1.0,
+            text_sizing: TextSizing::fixed(),
+            font_weight_adjustment: 0,
+            view_padding: EdgeInsets::ZERO,
+            view_insets: EdgeInsets::ZERO,
+            system_gesture_insets: EdgeInsets::ZERO,
+            platform_brightness: Brightness::Light,
+            high_contrast: false,
+            motion: MotionPolicy::Full,
+            preferred_locales: None,
+            regional_formats: RegionalFormats::default(),
+            accent_color: None,
+            scroll_bars: ScrollBarPreferences::default(),
+        }
+    }
+}
+
+impl MediaQueryData {
+    /// The part of [`view_padding`](Self::view_padding) that
+    /// [`view_insets`](Self::view_insets) do not already cover, per edge: with
+    /// the keyboard up over the home-indicator area the bottom value is zero.
+    /// App content avoids these areas and a `SafeArea` consumes them.
+    /// Computed, so it cannot disagree with its sources.
+    #[must_use]
+    pub fn padding(&self) -> EdgeInsets {
+        (self.view_padding - self.view_insets).clamp_non_negative()
+    }
+
+    /// Mark the bottom view inset as consumed by a descendant that resizes
+    /// around it (a scaffold body above the keyboard): the inset becomes zero
+    /// and `view_padding.bottom` shrinks by what the inset covered, leaving
+    /// [`padding`](Self::padding) unchanged.
+    pub fn remove_bottom_view_inset(&mut self) {
+        self.view_padding.bottom = (self.view_padding.bottom - self.view_insets.bottom).max(0.0);
+        self.view_insets.bottom = 0.0;
+    }
+
+    /// Mark the flagged edges of [`padding`](Self::padding) as consumed by a
+    /// descendant that reserves them itself (a `SafeArea`, an app bar): their
+    /// padding becomes zero and `view_padding` shrinks by what was consumed.
+    pub fn remove_padding(&mut self, edges: Edges<bool>) {
+        let padding = self.padding();
+        if edges.top {
+            self.view_padding.top -= padding.top;
+        }
+        if edges.right {
+            self.view_padding.right -= padding.right;
+        }
+        if edges.bottom {
+            self.view_padding.bottom -= padding.bottom;
+        }
+        if edges.left {
+            self.view_padding.left -= padding.left;
+        }
+    }
+
+    /// [`remove_padding`](Self::remove_padding) for the top edge alone.
+    pub fn remove_top_padding(&mut self) {
+        self.remove_padding(Edges::new(true, false, false, false));
+    }
+
+    /// [`remove_padding`](Self::remove_padding) for the bottom edge alone.
+    pub fn remove_bottom_padding(&mut self) {
+        self.remove_padding(Edges::new(false, false, true, false));
+    }
+
+    /// Make the bottom [`padding`](Self::padding) exactly `bottom`, for a
+    /// descendant that reports an area it obstructs itself (a translucent tab
+    /// bar), by raising `view_padding.bottom` above the covered inset.
+    pub fn set_padding_bottom(&mut self, bottom: f64) {
+        self.view_padding.bottom = self.view_insets.bottom + bottom;
+    }
+}
+
+/// Provides [`MediaQueryData`] to its subtree via FLUI's inherited-data
+/// mechanism.
+///
+/// Place a `MediaQuery` near the root of the application subtree (or wrap the
+/// top-level route) and read ambient media information from any descendant
+/// with [`MediaQuery::of`].
+///
+/// ## Bootstrapping
+///
+/// Data derived from the platform window is platform-specific: the app runner
+/// constructs [`MediaQueryData`] and provides it here.
+///
+/// ## Example
+///
+/// ```rust,ignore
+/// use flui_view::environment::{MediaQuery, MediaQueryData};
+///
+/// MediaQuery::new(
+///     MediaQueryData::default(),
+///     child.into_view(),
+/// )
+/// ```
+#[derive(Clone)]
+pub struct MediaQuery {
+    /// The data this node provides to descendants.
+    data: MediaQueryData,
+    /// The single child subtree this node wraps.
+    child: BoxedView,
+}
+
+impl MediaQuery {
+    /// Depend on the resolved presentation motion policy.
+    pub fn motion_of(ctx: &dyn BuildContext) -> Option<MotionPolicy> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_MOTION, |data| data.motion)
+    }
+    /// Wrap `child` in a `MediaQuery` that provides `data` to all descendants.
+    #[must_use]
+    pub fn new(data: MediaQueryData, child: impl IntoView) -> Self {
+        Self {
+            data,
+            child: BoxedView::new(child.into_view()),
+        }
+    }
+
+    /// Access the [`MediaQueryData`] from the nearest ancestor [`MediaQuery`],
+    /// registering a dependency so this element rebuilds when the data
+    /// changes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no [`MediaQuery`] ancestor. Use
+    /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
+    #[must_use]
+    pub fn of(ctx: &dyn BuildContext) -> MediaQueryData {
+        ctx.depend_on::<Self, _>(|mq| mq.data.clone())
+            .expect("MediaQuery::of called with no MediaQuery ancestor in the tree")
+    }
+
+    /// Look up the nearest ancestor [`MediaQuery`]'s data, registering a
+    /// dependency. Returns `None` if there is no [`MediaQuery`] ancestor.
+    #[must_use]
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<MediaQueryData> {
+        ctx.depend_on::<Self, _>(|mq| mq.data.clone())
+    }
+
+    /// Depend on **one field group** of the nearest `MediaQuery` (issue
+    /// #1090): `mask` is one or more `MediaQueryData::FIELD_*` constants, and
+    /// this element rebuilds only when a masked field changes. `None` without
+    /// a `MediaQuery` ancestor. The `*_of` accessors below are the common
+    /// single-field forms.
+    pub fn depend_on_fields<R>(
+        ctx: &dyn BuildContext,
+        mask: FieldMask<MediaQueryData>,
+        f: impl FnOnce(&MediaQueryData) -> R,
+    ) -> Option<R> {
+        ctx.depend_on_field::<Self, _>(mask, |mq| f(&mq.data))
+    }
+
+    /// The window size, depending on `size` only.
+    #[must_use]
+    pub fn size_of(ctx: &dyn BuildContext) -> Option<Size> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_SIZE, |d| d.size)
+    }
+
+    /// The device pixel ratio, depending on `device_pixel_ratio` only.
+    #[must_use]
+    pub fn device_pixel_ratio_of(ctx: &dyn BuildContext) -> Option<f64> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_DEVICE_PIXEL_RATIO, |d| {
+            d.device_pixel_ratio
+        })
+    }
+
+    /// The nearest numeric sizing policy, depending on `text_sizing` only.
+    /// No provider means that the render pipeline's policy is inherited.
+    #[must_use]
+    pub fn text_sizing_of(ctx: &dyn BuildContext) -> Option<TextSizing> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_TEXT_SIZING, |d| {
+            d.text_sizing.clone()
+        })
+    }
+
+    /// The signed weight adjustment, depending only on that media field.
+    #[must_use]
+    pub fn font_weight_adjustment_of(ctx: &dyn BuildContext) -> Option<i32> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_FONT_WEIGHT_ADJUSTMENT, |d| {
+            d.font_weight_adjustment
+        })
+    }
+
+    /// The safe-area padding, depending on `view_padding` and `view_insets` only.
+    #[must_use]
+    pub fn padding_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
+        Self::depend_on_fields(
+            ctx,
+            MediaQueryData::FIELD_VIEW_PADDING | MediaQueryData::FIELD_VIEW_INSETS,
+            MediaQueryData::padding,
+        )
+    }
+
+    /// The view insets (keyboard), depending on `view_insets` only.
+    #[must_use]
+    pub fn view_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_VIEW_INSETS, |d| d.view_insets)
+    }
+
+    /// The frame of the soft keyboard floating over the window (an iPad's
+    /// floating, undocked or split keyboard), in logical pixels in the
+    /// window's content coordinates; `None` while no keyboard floats or no
+    /// ancestor publishes one (ADR-0373). A floating keyboard covers no edge,
+    /// so it is not in [`view_insets_of`](Self::view_insets_of): a widget that
+    /// must stay in view (a focused field, a toolbar) reads this and moves out
+    /// from under the frame.
+    ///
+    /// The frame is the window's and its root publishes it as a
+    /// [`FloatingKeyboard`], not as a field of [`MediaQueryData`]: every
+    /// `MediaQuery` a widget nests would copy it. The dependency is on the
+    /// frame alone, and a widget that read `None` rebuilds when a keyboard
+    /// starts floating.
+    #[must_use]
+    pub fn floating_keyboard_of(ctx: &dyn BuildContext) -> Option<Rect> {
+        ctx.depend_on::<FloatingKeyboard, _>(FloatingKeyboard::frame)
+    }
+
+    /// The system-gesture edges, depending on `system_gesture_insets` only.
+    #[must_use]
+    pub fn system_gesture_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_SYSTEM_GESTURE_INSETS, |d| {
+            d.system_gesture_insets
+        })
+    }
+
+    /// The platform brightness, depending on `platform_brightness` only.
+    #[must_use]
+    pub fn platform_brightness_of(ctx: &dyn BuildContext) -> Option<Brightness> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_PLATFORM_BRIGHTNESS, |d| {
+            d.platform_brightness
+        })
+    }
+
+    /// The contrast preference, depending on `high_contrast` only.
+    #[must_use]
+    pub fn high_contrast_of(ctx: &dyn BuildContext) -> Option<bool> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_HIGH_CONTRAST, |d| {
+            d.high_contrast
+        })
+    }
+
+    /// The user's regional formats, depending on `regional_formats` only.
+    pub fn regional_formats_of(ctx: &dyn BuildContext) -> Option<RegionalFormats> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_REGIONAL_FORMATS, |d| {
+            d.regional_formats.clone()
+        })
+    }
+
+    /// The system's accent colour, depending on `accent_color` only; `None`
+    /// without a `MediaQuery` ancestor as when the host observed no accent.
+    #[must_use]
+    pub fn accent_color_of(ctx: &dyn BuildContext) -> Option<Color> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_ACCENT_COLOR, |d| d.accent_color)
+            .flatten()
+    }
+
+    /// The system's scroll-bar preferences, depending on `scroll_bars` only.
+    #[must_use]
+    pub fn scroll_bars_of(ctx: &dyn BuildContext) -> Option<ScrollBarPreferences> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_SCROLL_BARS, |d| d.scroll_bars)
+    }
+}
+
+impl std::fmt::Debug for MediaQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaQuery")
+            .field("data", &self.data)
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for MediaQuery {
+    type Data = MediaQueryData;
+
+    fn data(&self) -> &Self::Data {
+        &self.data
+    }
+
+    fn child(&self) -> &BoxedView {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        // Rebuild descendants when any field of the media data changes.
+        self.data != old.data
+    }
+
+    fn changed_fields(&self, old: &Self) -> FieldMask<MediaQueryData> {
+        self.data.field_mask_diff(&old.data)
+    }
+}
+
+impl_inherited_view!(MediaQuery);

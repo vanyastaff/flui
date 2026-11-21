@@ -6,7 +6,7 @@
 //! (`ElementTree::mount_or_substitute`); a `GlobalKey` retake's two
 //! windows, `activate_subtree` and the retake's own `update`
 //! (`ElementTree::update_or_substitute` and the retake fns in
-//! `tree/element_tree.rs`); the removal-path hooks `dispose`,
+//! `tree/element_tree/global_key_retake.rs`); the removal-path hooks `dispose`,
 //! bounded-retake `activate`, `deactivate`, and `did_unmount_render_object`
 //! (`StatefulBehavior`/`RenderBehavior` in `element/behavior.rs`; a direct
 //! public activation remains unbounded and unrecorded); and a
