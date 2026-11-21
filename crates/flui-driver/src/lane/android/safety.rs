@@ -17,12 +17,14 @@
 //!
 //! Before every press, key and text the app's window must hold the input focus
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
-//! there.
+//! there. Before every `uiautomator dump`, no screen reader may run ([`check_dump`]): the dump
+//! suspends the accessibility services while it runs, TalkBack among them.
 
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::session::Isolation;
 
 use super::LANE;
+use super::device::{ScreenReader, parse_screen_reader};
 use super::keys::{self, Keycode};
 use crate::coordinates::DevicePoint;
 use crate::error::Error;
@@ -104,7 +106,16 @@ pub enum Refusal {
         /// The mode.
         isolation: Isolation,
     },
+    /// A screen reader runs, which `uiautomator dump` would suspend while it dumps.
+    ScreenReaderOn {
+        /// What is on.
+        reader: ScreenReader,
+    },
 }
+
+/// The capability a refused dump names: a window located, or the tree read, through
+/// `uiautomator dump`.
+pub const WINDOW_DUMP: &str = "android_window_dump";
 
 /// The capability a device without root `uinput` lacks, which its pen and touchpad rows name.
 pub const UINPUT_DEVICE: &str = "uinput_device";
@@ -192,7 +203,28 @@ impl Refusal {
                 "{} is no isolation mode of an Android device: it is an emulator or a device",
                 isolation.name()
             )),
+            Self::ScreenReaderOn { reader } => Error::not_supported(
+                WINDOW_DUMP,
+                format!(
+                    "{} is on, and `uiautomator dump` suspends the accessibility services while it \
+                     dumps: the lane neither locates the window nor reads the tree while a screen \
+                     reader reads; locate the window before the screen reader is turned on",
+                    reader.describe()
+                ),
+            ),
         }
+    }
+}
+
+/// Whether the lane may dump the window: no screen reader runs, as `settings` printed it.
+///
+/// # Errors
+///
+/// [`Refusal::ScreenReaderOn`] naming the screen reader.
+pub fn check_dump(settings: &str) -> Result<(), Refusal> {
+    match parse_screen_reader(settings) {
+        Some(reader) => Err(Refusal::ScreenReaderOn { reader }),
+        None => Ok(()),
     }
 }
 
