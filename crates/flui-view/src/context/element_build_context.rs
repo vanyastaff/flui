@@ -91,7 +91,7 @@ pub(crate) struct LiveBuildContext<'b> {
     element_id: ElementId,
     depth: usize,
     tree: &'b ElementTree,
-    dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+    dep_sink: &'b std::cell::RefCell<Vec<DependentRecord>>,
     /// Owned rebuild capability for `element_id`, minted by `make_build_ctx`
     /// from the element's own core. Cloned out by
     /// [`LifecycleContext::rebuild_handle`]; the build itself never schedules —
@@ -109,7 +109,7 @@ impl<'b> LiveBuildContext<'b> {
         element_id: ElementId,
         depth: usize,
         tree: &'b ElementTree,
-        dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+        dep_sink: &'b std::cell::RefCell<Vec<DependentRecord>>,
         rebuild: crate::RebuildHandle,
         capabilities: BuildCapabilities,
     ) -> Self {
@@ -226,7 +226,7 @@ impl BuildContext for LiveBuildContext<'_> {
         // dependent, so a later inherited change reschedules it and it recovers.
         // Recording only after the callback would drop the registration on that
         // panic and strand the element on the `ErrorView`.
-        self.dep_sink.lock().push(DependentRecord {
+        self.dep_sink.borrow_mut().push(DependentRecord {
             provider: provider_id,
             dependent: self.element_id,
             depth: self.depth,

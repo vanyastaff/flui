@@ -1794,8 +1794,8 @@ impl BuildOwner {
             // `&` borrow, so the element's `build()` can resolve InheritedView
             // / ancestor lookups against the REAL tree (via the `LiveBuildContext`
             // the behaviour builds from `ElementOwner::build_view`) — no empty
-            // dummy, and no deadlock against the `Arc<RwLock>` write lock the
-            // frame driver holds (the borrowed view sidesteps the lock).
+            // dummy: the build reads a shared reborrow of the tree the frame
+            // driver already holds, never a second borrow of its cell.
             // Inherited dependents are buffered (the tree is read-only here)
             // and applied below once `&mut tree` is free again.
             let Some(mut element) = tree.take_element(id) else {
@@ -1804,8 +1804,8 @@ impl BuildOwner {
             let replacement_location = tree
                 .get(id)
                 .and_then(|node| node.parent().map(|parent| (parent, node.slot())));
-            let dep_sink: parking_lot::Mutex<Vec<crate::context::DependentRecord>> =
-                parking_lot::Mutex::new(std::mem::take(&mut dependent_records));
+            let dep_sink: std::cell::RefCell<Vec<crate::context::DependentRecord>> =
+                std::cell::RefCell::new(std::mem::take(&mut dependent_records));
 
             // Run the build half under `catch_unwind` so the extracted element
             // is ALWAYS restored to its slot before this seam decides whether

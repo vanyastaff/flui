@@ -74,7 +74,7 @@ use rustc_hash::FxHashMap;
 #[derive(Clone, Copy)]
 pub(crate) struct BuildHandle<'a> {
     pub(crate) tree: &'a crate::tree::ElementTree,
-    pub(crate) dep_sink: &'a parking_lot::Mutex<Vec<crate::context::DependentRecord>>,
+    pub(crate) dep_sink: &'a std::cell::RefCell<Vec<crate::context::DependentRecord>>,
 }
 
 /// When [`ElementOwner::schedule_build_for`] requests the frame its fresh

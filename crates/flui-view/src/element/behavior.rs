@@ -61,7 +61,9 @@ impl LiveBuildContextChoice<'_> {
 /// Length of the drain's dependency sink before a lifecycle hook runs (`None`
 /// outside a drain, where reads are recorded directly as lifecycle reads).
 fn lifecycle_sink_len(owner: &crate::ElementOwner<'_>) -> Option<usize> {
-    owner.build_view.map(|handle| handle.dep_sink.lock().len())
+    owner
+        .build_view
+        .map(|handle| handle.dep_sink.borrow().len())
 }
 
 /// Tag every dependency record a lifecycle hook pushed since `start` so the
@@ -71,7 +73,7 @@ fn mark_lifecycle_records(owner: &crate::ElementOwner<'_>, start: Option<usize>)
     let (Some(handle), Some(start)) = (owner.build_view, start) else {
         return;
     };
-    let mut sink = handle.dep_sink.lock();
+    let mut sink = handle.dep_sink.borrow_mut();
     for record in sink.iter_mut().skip(start) {
         record.lifecycle = true;
     }
