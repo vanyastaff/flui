@@ -1275,7 +1275,8 @@ mod tests {
 
     use std::sync::atomic::AtomicUsize;
 
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use flui_testing::window_commands::AdmitAndApply as _;
 
     use crate::app::runtime::ExitPolicy;

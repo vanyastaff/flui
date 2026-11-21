@@ -114,9 +114,10 @@ trait depends on `flui-platform` instead.
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
   whose loop it is. The headless host's name, window, doubles (`FakeTextInput`,
-  `FakeAccessibility`) and test controls are public only with the `scripted` feature: without it
-  the host still runs under `FLUI_HEADLESS` as a `dyn Platform`, and no public path names a
-  double. The launch values (an Android intent's extras, the
+  `FakeAccessibility`) and test controls are named only at `flui_native::testing`, which the
+  `scripted` feature compiles: without it the host still runs under `FLUI_HEADLESS` as a
+  `dyn Platform`, and no public path names a double. The crate root names none of them. The
+  launch values (an Android intent's extras, the
   environment elsewhere; ADR-0288 §7) and the page's origin are no position:
   the loop answers them (`host::Launch`). Opening a URL or a path, the file
   dialogs and the user's folders are not the core host's at all: they are

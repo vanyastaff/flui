@@ -8,10 +8,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Point;
-use flui_native::{
-    HeadlessHostWindow, HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPlatform, HostWindow,
-    OwnerPlatform, Platform as _,
+use flui_native::testing::{
+    HeadlessHostWindow, HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPlatform,
 };
+use flui_native::{HostWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::WindowOptions;
 use flui_platform::input::capabilities::{InputCapabilities, PointerKindSet};

@@ -981,7 +981,7 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
 
     let owner = OwnerHost::new();
     let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
-        std::sync::Arc::new(flui_native::FakeTextInput::new());
+        std::sync::Arc::new(flui_native::testing::FakeTextInput::new());
     let mut runtime = UiRuntime::for_test_with_text_input(Some(text_input));
     let store = InMemoryTextStore::new("ab");
     let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.

@@ -21,8 +21,9 @@ use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::Duration;
 
 use flui_native::host::Host;
+use flui_native::testing::HeadlessPlatform;
 use flui_native::testing::keyboard_layout;
-use flui_native::{HeadlessPlatform, HostPlatform, HostWindow, OwnerPlatform, Platform};
+use flui_native::{HostPlatform, HostWindow, OwnerPlatform, Platform};
 use flui_platform::{
     CloseDecision, DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice,
     WindowCommand, WindowOptions,
@@ -178,7 +179,7 @@ impl Reentry {
     fn new(platform: &Rc<dyn Reach>, options: fn() -> WindowOptions) -> Rc<Self> {
         Rc::new(Self {
             platform: Rc::downgrade(platform),
-            window: RefCell::new(RcWeak::<flui_native::HeadlessHostWindow>::new()),
+            window: RefCell::new(RcWeak::<flui_native::testing::HeadlessHostWindow>::new()),
             options,
             opened: RefCell::new(Vec::new()),
             done: Cell::new(false),
@@ -331,7 +332,7 @@ fn a_close_request_raised_inside_input_waits_for_it(
 ) {
     let handler = RecordingWindowHandler::new();
     let own: Rc<RefCell<RcWeak<dyn HostWindow>>> = Rc::new(RefCell::new(RcWeak::<
-        flui_native::HeadlessHostWindow,
+        flui_native::testing::HeadlessHostWindow,
     >::new()));
     let in_input = Rc::new(Cell::new(false));
     let asked_inside = Rc::new(Cell::new(false));
@@ -386,9 +387,9 @@ fn running_headless() -> (Rc<AppLog>, Rc<OwnerPlatform>) {
     (log, Rc::new(owner))
 }
 
-fn mock(window: &Rc<dyn HostWindow>) -> flui_native::HeadlessHostWindow {
+fn mock(window: &Rc<dyn HostWindow>) -> flui_native::testing::HeadlessHostWindow {
     (&**window as &dyn std::any::Any)
-        .downcast_ref::<flui_native::HeadlessHostWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
         .expect("a headless window")
         .clone()
 }
@@ -485,7 +486,7 @@ fn headless_close_request_inside_input_waits_for_it() {
 }
 
 /// Makes the platform call one method of the application's handler.
-type AppTrigger = fn(&flui_native::HeadlessHostEvents, &OwnerPlatform);
+type AppTrigger = fn(&flui_native::testing::HeadlessHostEvents, &OwnerPlatform);
 
 /// Each method of the application's handler the headless host calls opens a
 /// window, reports a notice and quits from inside its call: the window opens

@@ -17,9 +17,8 @@ use flui_interaction::drag::{
     ProcessNonce,
 };
 use flui_interaction::pointer::LocalPayloadTarget;
-use flui_native::{
-    HeadlessDragAndDrop, HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform,
-};
+use flui_native::testing::{HeadlessDragAndDrop, HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, Platform};
 use flui_objects::RenderMetaData;
 use flui_platform::WindowOptions;
 use flui_platform::transfer::data::{

@@ -732,7 +732,8 @@ pub(crate) fn contain(body: impl FnOnce()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use std::{cell::RefCell, rc::Rc};
 
     fn ingress() -> (Arc<Ingress>, flui_native::OwnerPlatform) {

@@ -22,7 +22,7 @@ fn an_orphan_dropped_while_the_owner_reads_its_platform_may_ask_the_signal_again
     std::thread::spawn(move || {
         let signal = OwnerSignal::new(Arc::new(|| Ok(())));
         let platform: std::rc::Rc<dyn crate::platform::Platform> =
-            std::rc::Rc::new(crate::HeadlessPlatform::new());
+            std::rc::Rc::new(crate::testing::HeadlessPlatform::new());
         signal.serve_platform(&platform);
         let orphan = crate::owner::slot::OwnerSlot::new();
         assert!(

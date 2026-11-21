@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::DevicePixelRatio;
-use flui_native::{
+use flui_native::Platform as _;
+use flui_native::testing::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessHostWindow, HeadlessPlatform,
-    Platform as _,
 };
 use flui_platform::WindowOptions;
 

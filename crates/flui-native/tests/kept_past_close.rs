@@ -10,7 +10,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform as _};
+use flui_native::testing::{HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, Platform as _};
 use flui_platform::{
     DispatchEventResult, ImeEvent, PlatformInput, SurfaceTarget, WindowCommand, WindowOptions,
 };

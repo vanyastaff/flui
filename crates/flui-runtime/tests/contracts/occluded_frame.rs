@@ -9,7 +9,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use flui_foundation::{FrameEpoch, ManualClock, MonotonicClock as _, PresentationAddress};
-use flui_native::{HeadlessHostWindow, HostWindow};
+use flui_native::HostWindow;
+use flui_native::testing::HeadlessHostWindow;
 use flui_platform::{EventTime, OccludedSurface, PlatformWindow as _, WindowCapability};
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::sink::{FrameSettlement, FrameSink, SubmitVerdict};

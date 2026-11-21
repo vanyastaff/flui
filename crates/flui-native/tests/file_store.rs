@@ -8,8 +8,9 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
+use flui_native::Platform;
 use flui_native::storage::{DataDirs, FileStore, data_dirs};
-use flui_native::{HeadlessPlatform, Platform};
+use flui_native::testing::HeadlessPlatform;
 use flui_platform::{AppDataDir, StorageError, StorageName, StoredVersion, WriteMode};
 
 use crate::run_table;

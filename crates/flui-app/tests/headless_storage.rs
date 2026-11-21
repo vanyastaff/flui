@@ -6,7 +6,8 @@ use std::task::{Context, Poll, Waker};
 
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit};
 use flui_app::{AppConfig, AppId, AppIdentity, Application, DeterministicExecutors};
-use flui_native::{HeadlessPlatform, Platform};
+use flui_native::Platform;
+use flui_native::testing::HeadlessPlatform;
 use flui_platform::{
     AppDataDir, StorageError, StorageFuture, StorageName, StoredVersion, Unsupported,
     UnsupportedReason, WriteMode,

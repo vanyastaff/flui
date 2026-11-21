@@ -28,7 +28,7 @@ impl Bound {
 
 /// `delivery` bound to `handler` on this thread, over a headless platform.
 pub(crate) fn bind(delivery: Arc<AppDelivery>, handler: Rc<dyn AppHandler>) -> Bound {
-    let platform: Rc<dyn Platform> = Rc::new(crate::HeadlessPlatform::new());
+    let platform: Rc<dyn Platform> = Rc::new(crate::testing::HeadlessPlatform::new());
     let signal = OwnerSignal::new(Arc::new(|| Ok(())));
     let hooks: Rc<dyn OwnerHooks> = Rc::new(DirectOwnerHooks::with_signal(
         Rc::clone(&platform),

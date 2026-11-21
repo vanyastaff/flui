@@ -181,7 +181,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 .expect("headless native window");
                 let window: Rc<dyn PlatformWindow> = host.clone();
                 let native = (&*host as &dyn std::any::Any)
-                    .downcast_ref::<flui_native::HeadlessHostWindow>()
+                    .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
                     .expect("headless window");
                 if matches!(change, NativeChange::InitiallyUnfocused) {
                     native.simulate_focus(false);
@@ -476,7 +476,7 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
 #[cfg(not(target_os = "ios"))]
 fn explicit_platform_quit_detaches_every_installed_ui_runtime() {
     let _clear = OwnerHostClearGuard::arm();
-    let platform = flui_native::HeadlessPlatform::new();
+    let platform = flui_native::testing::HeadlessPlatform::new();
     let reevaluation = platform.exit_reevaluation();
     let platform: Box<dyn flui_native::Platform> = Box::new(platform);
     let installed = Rc::new(RefCell::new(Vec::new()));
@@ -676,7 +676,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
         install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window);
     install_input_wiring(dispatcher, window.as_ref());
     let native = (&*host as &dyn std::any::Any)
-        .downcast_ref::<flui_native::HeadlessHostWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
         .expect("headless test window");
     let alt_f4 = || {
         PlatformInput::Keyboard(
@@ -716,7 +716,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
                 },
             ));
             let native = (&*turn_window as &dyn std::any::Any)
-                .downcast_ref::<flui_native::HeadlessHostWindow>()
+                .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
                 .expect("headless test window");
             in_turn_result.set(Some((
                 native.inject_event(alt_f4()).default_prevented,
@@ -973,7 +973,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
         assert!(trace.borrow().is_empty());
         with_owner_callback(|_| {
             let native = (&*host as &dyn std::any::Any)
-                .downcast_ref::<flui_native::HeadlessHostWindow>()
+                .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
                 .expect("the window is a headless one");
             let result = native.inject_event(PlatformInput::Keyboard(
                 KeyEventBuilder::new(Code::F5).build(),
@@ -1276,7 +1276,8 @@ fn an_accepted_locale_reaches_the_host_font_feed() {
 
 fn preferences_wake_each_isolated_window() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
@@ -1444,8 +1445,8 @@ fn present_built_sizing_reader(
 /// A headless owner whose preference source feeds a mounted text-sizing reader. The
 /// owner turns the source asks for run only when a row drives them.
 struct SourceDrivenReader {
-    source: flui_native::HeadlessPreferences,
-    turns: flui_native::HeadlessOwnerTurns,
+    source: flui_native::testing::HeadlessPreferences,
+    turns: flui_native::testing::HeadlessOwnerTurns,
     presented: Presented,
     log: SizingLog,
 }
@@ -1454,10 +1455,10 @@ impl SourceDrivenReader {
     /// Runs `platform`; `bootstrap` receives the loop's owner, the platform's
     /// preference source and the log, and installs the owner and presents the reader.
     fn boot(
-        platform: flui_native::HeadlessPlatform,
+        platform: flui_native::testing::HeadlessPlatform,
         bootstrap: impl FnOnce(
             flui_native::OwnerPlatform,
-            &flui_native::HeadlessPreferences,
+            &flui_native::testing::HeadlessPreferences,
             &SizingLog,
         ) -> Result<Presented, flui_native::BootstrapError>
         + 'static,
@@ -1507,7 +1508,7 @@ impl SourceDrivenReader {
 fn the_platform_preference_source_reaches_installed_consumers() {
     let _clear = OwnerHostClearGuard::arm();
     let reader = SourceDrivenReader::boot(
-        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        flui_native::testing::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
         |owner, _, log| {
             install_owner_platform(owner)?;
             Ok(present_built_sizing_reader(log)?)
@@ -1546,7 +1547,7 @@ fn the_platform_preference_source_reaches_installed_consumers() {
 fn a_change_before_the_first_owner_turn_reaches_consumers_once() {
     let _clear = OwnerHostClearGuard::arm();
     let reader = SourceDrivenReader::boot(
-        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        flui_native::testing::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
         |owner, source, log| {
             install_owner_platform(owner)?;
             // The hook is installed and the first value accepted, but the loop has
@@ -1579,7 +1580,7 @@ fn a_change_before_the_first_owner_turn_reaches_consumers_once() {
 fn a_change_before_the_wake_hook_exists_reaches_consumers_once() {
     let _clear = OwnerHostClearGuard::arm();
     let reader = SourceDrivenReader::boot(
-        flui_native::HeadlessPlatform::new(),
+        flui_native::testing::HeadlessPlatform::new(),
         |owner, source, log| {
             // Both wakes are raised with no hook to receive them. The failed read is
             // the installation's own sample, so only the debt they leave can bring
@@ -1616,7 +1617,7 @@ fn a_replaced_wake_hook_is_the_only_one_later_changes_reach() {
 
     let _clear = OwnerHostClearGuard::arm();
     let reader = SourceDrivenReader::boot(
-        flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+        flui_native::testing::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
         |owner, _, log| {
             install_owner_platform(owner)?;
             Ok(present_built_sizing_reader(log)?)
@@ -1705,7 +1706,8 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
         let redraw = Arc::new(AtomicBool::new(false));
         let woken = Arc::clone(&redraw);
         let reader = SourceDrivenReader::boot(
-            flui_native::HeadlessPlatform::new().with_preferences(text_scale_preferences(2.0)),
+            flui_native::testing::HeadlessPlatform::new()
+                .with_preferences(text_scale_preferences(2.0)),
             move |owner, _, log| {
                 install_owner_platform(owner)?;
                 if matches!(failure, Failure::WakeHook) {
@@ -1803,7 +1805,8 @@ fn a_panicking_preference_delivery_does_not_stop_later_changes() {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
 
     let _clear = OwnerHostClearGuard::arm();
     let platform = HeadlessPlatform::new();
@@ -1874,7 +1877,8 @@ fn a_frame_turn_applies_queued_window_commands_after_its_frame() {
 
 fn platform_brightness_follows_the_window_appearance() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use flui_platform::Brightness;
     use flui_view::prelude::*;
 
@@ -1893,7 +1897,7 @@ fn platform_brightness_follows_the_window_appearance() {
     let _clear = OwnerHostClearGuard::arm();
     let (host, window) = test_host_window();
     let native = (&*host as &dyn std::any::Any)
-        .downcast_ref::<flui_native::HeadlessHostWindow>()
+        .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
         .expect("headless window")
         .clone();
     // The desktop is already dark when the window opens.
@@ -2532,7 +2536,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
     Rc<dyn flui_platform::PlatformWindow>,
     Arc<std::sync::atomic::AtomicUsize>,
     OwnerHostClearGuard,
-    flui_native::HeadlessExitReevaluation,
+    flui_native::testing::HeadlessExitReevaluation,
 ) {
     use std::{cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 
@@ -2542,7 +2546,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
     );
 
     let clear_guard = OwnerHostClearGuard::arm();
-    let platform = flui_native::HeadlessPlatform::new();
+    let platform = flui_native::testing::HeadlessPlatform::new();
     let reevaluation = platform.exit_reevaluation();
     let platform: Box<dyn flui_native::Platform> = Box::new(platform);
     let quit_calls = Arc::new(AtomicUsize::new(0));

@@ -1270,7 +1270,8 @@ mod tests {
     use super::super::owner_dispatch::{RuntimeTask, dispatch_platform_ui_runtime};
     use super::*;
     use crate::app::runner::window_routes::OwnerOpenRouted as _;
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
     use flui_testing::window_commands::AdmitAndApply as _;
     use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};

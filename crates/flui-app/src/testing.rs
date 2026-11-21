@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
-use flui_native::{
+use flui_native::testing::{
     HeadlessExitReevaluation, HeadlessHostEvents, HeadlessHostWindow, HeadlessOpenWindows,
     HeadlessOwnerTurns, HeadlessPlatform,
 };

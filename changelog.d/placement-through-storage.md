@@ -16,7 +16,7 @@
 - Agent protocol 0.13: a recorded window state carries `user_placing`, an
   optional field absent where the host cannot tell, so a 0.12 reader still
   reads it.
-- `flui_native::HeadlessOwnerTurns::drive_at` and
+- `flui_native::testing::HeadlessOwnerTurns::drive_at` and
   `HeadlessHostWindow::simulate_interaction`, and the app test kit's
   `HeadlessRunHandle::turn_deadline` and `run_owner_turn_at`: a test serves the
   turn deadline on its manual clock.

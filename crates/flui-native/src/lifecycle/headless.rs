@@ -81,7 +81,7 @@ impl host::Lifecycle<HeadlessLoop> for HeadlessHostEvents {
 /// Reports session ends, system notices, reopens and what the operating
 /// system opened to the application's
 /// handler of the headless platform after `run` has consumed it — obtained
-/// from [`HeadlessPlatform::host_events`](crate::HeadlessPlatform::host_events)
+/// from [`HeadlessPlatform::host_events`](crate::testing::HeadlessPlatform::host_events)
 /// before `run`.
 ///
 /// The test thread is the headless platform's owner thread. Each report goes
@@ -112,7 +112,7 @@ impl HeadlessHostEvents {
     /// ([`AppHandler::session_end`](crate::AppHandler::session_end)) and its
     /// answer returned; [`SessionEndAnswer::Proceed`] when no handler can be
     /// asked or the platform is gone. Like
-    /// [`HeadlessHostWindow::simulate_close`](crate::HeadlessHostWindow::simulate_close), it
+    /// [`HeadlessHostWindow::simulate_close`](crate::testing::HeadlessHostWindow::simulate_close), it
     /// may be called from inside another method, as a session end arriving in
     /// a nested native loop is.
     pub fn session_end(&self, phase: SessionEndPhase) -> SessionEndAnswer {

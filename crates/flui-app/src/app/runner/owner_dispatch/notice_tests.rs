@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
-use flui_native::{HeadlessHostEvents, HeadlessPlatform, Platform as _};
+use flui_native::Platform as _;
+use flui_native::testing::{HeadlessHostEvents, HeadlessPlatform};
 use flui_platform::PlatformWindow;
 use flui_platform::{
     HostNotice, SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndPhase,

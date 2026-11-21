@@ -12,7 +12,7 @@ path), then compile-time `#[cfg]` picks the OS backend:
 |---------|--------|--------|
 | Win32 (`WindowsPlatform`) | Windows | Native, full featured |
 | AppKit (`MacOSPlatform`) | macOS | Native, in progress |
-| Headless (`HeadlessPlatform`, named with `scripted`) | any (`FLUI_HEADLESS=1`) | Simulated backend for CI and tests |
+| Headless (`testing::HeadlessPlatform`, named with `scripted`) | any (`FLUI_HEADLESS=1`) | Simulated backend for CI and tests |
 | X11 (`X11Platform`), Wayland (`WaylandPlatform`) | Linux | Native; Wayland when `WAYLAND_DISPLAY` names a compositor, X11 otherwise |
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
@@ -64,8 +64,8 @@ Activity `android_main` is handed, through `android_platform(app)`.
 The headless backend provides headless windows (`HeadlessHostWindow`), an in-memory clipboard, and a
 virtual 1920x1080 display so tests run without a display server or GPU —
 set `FLUI_HEADLESS=1` or call `headless_platform()` directly. Its type, its windows, its doubles
-and the controls a test drives it with are public with the `scripted` feature (which `testing`
-includes); without it no public path names a test double.
+and the controls a test drives it with are named at `flui_native::testing`, compiled with the
+`scripted` feature (which `testing` includes); without it no public path names a test double.
 
 ## Sanctioned unsafe boundary
 

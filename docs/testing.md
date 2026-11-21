@@ -927,7 +927,7 @@ The constitution requires `///` doc comments on every public item and `//!` over
   lists the failing row names. The rows keep their own assertions; the table keeps the
   set small enough that a refactor touches a table, not a hundred tests.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
-- **No mocking frameworks.** Use trait-based test doubles. The headless host is the canonical test surface for platform-dependent code; its type (`HeadlessPlatform`), its window, its doubles (`FakeTextInput`, `FakeAccessibility`) and its `Headless*` controls are named with `flui-native`'s `scripted` feature, which a crate whose tests drive it turns on in its dev-dependency.
+- **No mocking frameworks.** Use trait-based test doubles. The headless host is the canonical test surface for platform-dependent code; its type (`HeadlessPlatform`), its window, its doubles (`FakeTextInput`, `FakeAccessibility`) and its `Headless*` controls are named at `flui_native::testing`, which `flui-native`'s `scripted` feature compiles and a crate whose tests drive it turns on in its dev-dependency.
 - **One window double.** A test that needs a window and not a host builds `flui_platform::testing::MockWindow` (the kit does not re-export it): standalone or over a host's window, with builders for what the test sets, recordings for what it reads back, an observer for code it runs at each call, and values it keeps that drop with the window. No test implements `PlatformWindow` itself; a test that needs something the double lacks adds a builder to it.
 
 ## Test Harnesses (`testing` feature)

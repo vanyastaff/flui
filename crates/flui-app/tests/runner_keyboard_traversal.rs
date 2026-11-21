@@ -56,7 +56,7 @@ impl Fields {
 }
 
 /// Press and release Tab in `window`, with `modifiers` held.
-fn tab(window: &flui_native::HeadlessHostWindow, modifiers: Modifiers) {
+fn tab(window: &flui_native::testing::HeadlessHostWindow, modifiers: Modifiers) {
     for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let _ = window.inject_event(PlatformInput::Keyboard(
             KeyEvent::new(

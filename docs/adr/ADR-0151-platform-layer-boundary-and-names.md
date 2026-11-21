@@ -766,7 +766,7 @@ secrets in diagnostics) are decided by the records the table cites.
   window double is one: `flui_platform::testing::MockWindow`, the double of the contract crate's
   own trait (ADR-0243), which `flui-testing` no longer re-exports; no crate
   outside the core host and the kits implements `PlatformWindow`. The core host's doubles and
-  the headless host's controls are named at its root only with its own `scripted` feature.
+  the headless host's controls are named at `flui_native::testing` only with its own `scripted` feature.
 
 These are properties of areas already on the closed list (displays, input, text, lifecycle, data
 directories). They add no area to it.

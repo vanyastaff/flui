@@ -7,7 +7,8 @@
 use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
-use flui_native::{HeadlessPlatform, HostWindow, Platform as _};
+use flui_native::testing::HeadlessPlatform;
+use flui_native::{HostWindow, Platform as _};
 use flui_platform::PlatformWindow;
 
 use super::super::host::{

@@ -13,7 +13,8 @@ use std::{
     time::Duration,
 };
 
-use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform as _};
+use flui_native::testing::{HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, Platform as _};
 use flui_platform::{CloseDecision, WindowCommand, WindowOptions};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 

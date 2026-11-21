@@ -411,7 +411,7 @@ fn after_bootstrap(
 
     let kept = Rc::new(std::cell::RefCell::new(None));
     let keep = Rc::clone(&kept);
-    Box::new(flui_native::HeadlessPlatform::new())
+    Box::new(flui_native::testing::HeadlessPlatform::new())
         .run(crate::app::runner::app_handler(move |owner| {
             keep.replace(Some(owner));
             Ok(())
@@ -1913,7 +1913,7 @@ fn agent_notification_follows_live_native_initialization() {
         /// The window to close from the agent's hook. The hook is `Send` and
         /// the window is the owner thread's, so the hook finds it here, on the
         /// owner thread it runs on.
-        static CLOSE_FROM_AGENT: std::cell::RefCell<Option<flui_native::HeadlessHostWindow>> =
+        static CLOSE_FROM_AGENT: std::cell::RefCell<Option<flui_native::testing::HeadlessHostWindow>> =
             const { std::cell::RefCell::new(None) };
     }
 
@@ -1947,7 +1947,7 @@ fn agent_notification_follows_live_native_initialization() {
         let _clear = OwnerHostClearGuard::arm();
         let host = crate::app::window_test_support::headless_test_host_window();
         let mock = (&*host as &dyn std::any::Any)
-            .downcast_ref::<flui_native::HeadlessHostWindow>()
+            .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
             .expect("a headless window")
             .clone();
         let window: Rc<dyn PlatformWindow> = host;
