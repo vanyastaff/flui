@@ -70,7 +70,7 @@ pub trait Notification: Any + 'static {
 /// [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
 /// `(TypeId, &dyn Any) -> bool` handler, which translates the typed
 /// callback to the object-safe shape at the impl site. This keeps the
-/// single-`dyn`-boundary discipline (Constitution Principle 4; plan §D3).
+/// single-`dyn`-boundary discipline.
 ///
 /// Default impl returns `false` (no-op), so Elements only need to
 /// override when they actually want to intercept notifications of type

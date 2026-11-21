@@ -1,13 +1,13 @@
 //! S2 static-path tuple-permutation algorithm sketch bench.
 //!
-//! Resolves the spec's Deferred S2 question against a synthetic mock: does a
+//! Answers the "S2" question against a synthetic mock: does a
 //! compile-time-specialised reconciliation algorithm for the static-tuple
-//! `ViewSeq` path (`(A, B, ..., P)`, fixed arity 16 per FR-013) beat the
-//! linear keyed algorithm FR-016 commits both paths to?
+//! `ViewSeq` path (`(A, B, ..., P)`, fixed arity 16) beat the
+//! linear keyed algorithm both paths share?
 //!
-//! Phase 0 (this bench) does **not** modify production reconciliation code —
-//! the spec FR-016 commits to "both paths share the same algorithm" absent a
-//! strong S2 inversion.
+//! This bench does **not** modify production reconciliation code: both paths
+//! share the same algorithm, and this measures whether a specialised one would
+//! be worth giving up that sharing.
 //!
 //! # The static-path observation
 //!
@@ -24,7 +24,7 @@
 //!
 //! - **`s2_static_path/linear_keyed/full_reverse`** — placeholder linear
 //!   keyed reconcile workload over the 16-tuple, full-reverse permutation.
-//!   This is the FR-016 baseline shape applied at the 16-tuple scale.
+//!   This is the shared linear shape applied at the 16-tuple scale.
 //! - **`s2_static_path/positional_specialised/full_reverse`** — pure
 //!   static-path shape: walk 16 positions, compare `TypeId` per slot, no
 //!   cross-position lookup. The shape a real
@@ -36,10 +36,9 @@
 //!
 //! # Why a placeholder reconciler
 //!
-//! Same justification as the S1 storage-shape bench: the production keyed reconciler
-//! does not land until a later phase (and its callers don't get rewired until
-//! still later). The S2 question is an *algorithm-shape* question at the static-tuple
-//! grain, not a *production-reconciler* question. The minimal kernel that
+//! The S2 question is an *algorithm-shape* question at the static-tuple
+//! grain, not a *production-reconciler* question, so the bench does not run
+//! the production keyed reconciler. The minimal kernel that
 //! isolates algorithm-shape cost is a per-position TypeId-comparison loop
 //! (specialised) vs a HashMap-build-and-probe loop (linear). That is what we
 //! measure.
@@ -60,11 +59,11 @@ use crate::mock_tuple::{
 };
 
 // ----------------------------------------------------------------------------
-// Reconcile latency benches — linear keyed (FR-016 baseline)
+// Reconcile latency benches — linear keyed (the shared algorithm)
 // ----------------------------------------------------------------------------
 
 /// Reconcile workload over 16-tuple full-reverse permutation through the
-/// linear keyed algorithm — the FR-016 baseline shape. Per iteration we
+/// linear keyed algorithm — the shared shape. Per iteration we
 /// reconstruct the old + new slot arrays via `iter_batched` so the HashMap
 /// allocation cost is included; that is the cost a frame actually pays.
 fn bench_static_path_keyed_linear(c: &mut Criterion) {
@@ -114,8 +113,8 @@ fn bench_static_path_specialised(c: &mut Criterion) {
 /// Reconcile workload over 16-tuple full-reverse permutation through the
 /// reorder-aware specialised algorithm — same O(N) big-O as the linear
 /// keyed algorithm, but stack-allocated `[Option<u8>; 16]` index instead of
-/// `HashMap<u64, u8>`. This is the apples-to-apples comparison the verdict
-/// cares about.
+/// `HashMap<u64, u8>`. This is the apples-to-apples comparison the S2
+/// question needs.
 fn bench_static_path_specialised_reorder(c: &mut Criterion) {
     c.bench_function("s2_static_path/reorder_specialised/full_reverse", |b| {
         b.iter_batched(

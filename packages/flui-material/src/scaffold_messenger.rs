@@ -58,7 +58,7 @@
 //! "remove twice rapidly" test below asserts on this), and from the status
 //! listeners, in the animation tick that settled a controller with no
 //! explicit API call in between. Never from `build`: reconciling drives the
-//! controllers, which refuse mutation while the tree builds (ADR-0086 §7).
+//! controllers, which refuse mutation while the tree builds (ADR-0074 §5.2).
 //! A listener fired by a reconcile's own command returns at once
 //! (`MessengerCore::reconciling`); the running loop polls that change.
 //! `reconcile` loops until a full pass
@@ -399,7 +399,7 @@ struct MessengerCore {
     /// This core, for the controllers' status listeners: a purely
     /// tick-driven settle (no explicit API call in between) reaches
     /// [`Self::reconcile`] from the tick that settled it, never from `build`,
-    /// where the controllers refuse mutation (ADR-0086 §7).
+    /// where the controllers refuse mutation (ADR-0074 §5.2).
     this: Weak<MessengerCore>,
     /// Set while [`Self::reconcile`] runs: a status listener a reconcile's
     /// own command fires returns at once, and the running loop polls the

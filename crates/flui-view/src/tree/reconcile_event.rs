@@ -1,7 +1,7 @@
 //! `ReconcileEvent` — structured trace stream for the keyed
 //! child reconciler.
 //!
-//! FR-035. Emitted on the PRODUCTION path: the slab
+//! Emitted on the PRODUCTION path: the slab
 //! reconciler `reconcile_children_by_id` emits `Reuse` / `Reorder` /
 //! `Unmount` per child, while the single child-minting site
 //! [`ElementTree::insert`](super::ElementTree::insert) emits `Mount` for
@@ -24,7 +24,7 @@
 //! # Stability boundary
 //!
 //! The `target: "flui.tree.reconcile"` string is a **stability boundary**
-//! per FR-035. Renaming or relocating it requires a `#[deprecated]`
+//! because trace tooling filters on it. Renaming or relocating it requires a `#[deprecated]`
 //! alias period for one release — trace-tooling and test subscribers filter
 //! by exactly this target string.
 //!
@@ -43,7 +43,7 @@
 //! | `slot`                 | `u64`  | Old vacated slot for `Unmount`; new/final slot for every other kind |
 //! | `view_type_id`         | `str`  | `format!("{:?}", TypeId)` — Debug is the only stable identifier   |
 //! | `from_parent`          | `u64`  | `0` when absent (paired with `from_parent_present`)               |
-//! | `from_parent_present`  | `bool` | `true` only on cross-parent reparent (FR-030)                     |
+//! | `from_parent_present`  | `bool` | `true` only on cross-parent reparent                              |
 
 use std::any::TypeId;
 
@@ -51,7 +51,7 @@ use flui_foundation::ElementId;
 
 /// One child-reconciliation disposition. When emitted during one keyed
 /// reconcile invocation, these records form that invocation's disposition
-/// multiset. `#[non_exhaustive]` per FR-035 so adding a new disposition (e.g.
+/// multiset. `#[non_exhaustive]` so adding a new disposition (e.g.
 /// an `Async` suspend variant) is not a breaking change.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,7 +101,7 @@ impl ReconcileEventKind {
 
 /// One structured trace record from the keyed child reconciler.
 ///
-/// `#[non_exhaustive]` per FR-035 — future fields (e.g. a build-
+/// `#[non_exhaustive]`: future fields (e.g. a build-
 /// timing measurement) can land without breaking match consumers.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -219,7 +219,7 @@ impl ReconcileEvent {
     }
 }
 
-/// Tracing target — **stability boundary** per FR-035. Subscribers
+/// Tracing target — **stability boundary**. Subscribers
 /// filter by this exact string.
 pub const RECONCILE_TARGET: &str = "flui.tree.reconcile";
 

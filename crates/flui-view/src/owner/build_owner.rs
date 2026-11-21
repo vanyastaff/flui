@@ -198,7 +198,7 @@ pub struct BuildOwner {
     /// distinct causes. Absorbed onto [`Self::dirty_elements`] (or a
     /// layout-builder scope bucket) at the top of every heap pop in
     /// [`Self::drain_build_scope`] — not only once at frame start — where
-    /// each id's tree depth is looked up (issue #1180). Shared (`Arc`) so
+    /// each id's tree depth is looked up. Shared (`Arc`) so
     /// the listener callbacks and the owner reference the same queue.
     pub(crate) external_inbox: Arc<ExternalBuildInbox>,
 
@@ -207,7 +207,7 @@ pub struct BuildOwner {
     landed_builds: Vec<(ElementId, RebuildReasons)>,
 
     /// Remaining RE-ENTRY mid-drain absorb budget for the current frame
-    /// (issue #1180, [`MAX_MID_DRAIN_ABSORBS`]). Reset at every
+    /// ([`MAX_MID_DRAIN_ABSORBS`]). Reset at every
     /// [`Self::build_scope`] entry and shared by every drain that frame
     /// runs — including the layout-builder fixpoint's own
     /// `drain_prepared_build_target` calls AND
@@ -1294,7 +1294,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Issue #1180: mid-drain external-build absorption
+    // Mid-drain external-build absorption
     // ========================================================================
 
     /// A render-family leaf, identical to `TestView` in every other respect,
@@ -1304,7 +1304,7 @@ mod tests {
     /// skip, a parent rebuilding and re-declaring the same leaf every time
     /// would reschedule that hidden leaf too (and re-fire `on_build_scheduled`)
     /// on every one of the PARENT's own rebuilds — noise unrelated to
-    /// whatever a #1180 test is actually driving. Scoped to this dedicated
+    /// whatever an absorption test is actually driving. Scoped to this dedicated
     /// type, rather than added to `TestView` itself, because `TestView` is
     /// also the leaf ~50 pre-existing tests elsewhere in this module mount:
     /// putting the override there would silently change what code path those

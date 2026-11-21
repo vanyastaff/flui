@@ -2097,7 +2097,7 @@ pub(crate) fn a_popup_pushed_from_a_page_resolves_to_its_value() {
 /// without one, once that entrance settles; the added page then covers Home.
 /// The add lands in the very frame the entrance settles in: the navigator
 /// settles the push in that frame's animation tick, not in a later `build`,
-/// where ADR-0086 §7 refuses controller mutation.
+/// where ADR-0074 §5.2 refuses controller mutation.
 pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
     const TICK: Duration = Duration::from_millis(16);
     let frame = Rc::new(Cell::new(0_usize));

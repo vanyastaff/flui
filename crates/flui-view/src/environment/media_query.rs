@@ -269,8 +269,8 @@ impl MediaQuery {
         ctx.depend_on::<Self, _>(|mq| mq.data.clone())
     }
 
-    /// Depend on **one field group** of the nearest `MediaQuery` (issue
-    /// #1090): `mask` is one or more `MediaQueryData::FIELD_*` constants, and
+    /// Depend on **one field group** of the nearest `MediaQuery`:
+    /// `mask` is one or more `MediaQueryData::FIELD_*` constants, and
     /// this element rebuilds only when a masked field changes. `None` without
     /// a `MediaQuery` ancestor. The `*_of` accessors below are the common
     /// single-field forms.

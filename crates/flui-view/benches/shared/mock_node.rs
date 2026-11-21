@@ -7,11 +7,11 @@
 //!
 //! # What this models
 //!
-//! This prototype must not modify production storage. We are measuring two candidate storage *shapes* for the `key` field on
+//! This prototype does not modify production storage. It measures two candidate storage *shapes* for the `key` field on
 //! `ElementNode` independently of the rest of the production lifecycle:
 //!
-//! - **Baseline** — `key: Option<Box<dyn ViewKey>>`. The shape spec FR-022
-//!   commits to. `Option<Box<dyn ViewKey>>` is a fat-pointer 16 bytes
+//! - **Baseline** — `key: Option<Box<dyn ViewKey>>`. The shape production
+//!   `ElementNode` stores. `Option<Box<dyn ViewKey>>` is a fat-pointer 16 bytes
 //!   (data pointer + vtable pointer) per `ElementNode`, with a heap allocation
 //!   for every keyed node.
 //! - **Interned** — `key: Option<KeyId>` where `KeyId = NonZeroU64`. Niche
@@ -59,7 +59,7 @@ use flui_foundation::{ValueKey, ViewKey};
 
 /// Fixed at 10K nodes. The bench scales workload size only via
 /// permutation pattern — node count stays fixed so the memory column in the
-/// gate report is comparable shape-to-shape.
+/// report is comparable shape-to-shape.
 pub const NODE_COUNT: usize = 10_000;
 
 /// 80% unkeyed leaf, 20% keyed branch. A node is "keyed" iff its
@@ -116,7 +116,7 @@ impl KeyId {
 #[derive(Debug, Default)]
 pub struct KeyInterner {
     /// Hash-to-bucket index. Bucket-per-hash with `key_eq` resolution on hit —
-    /// mirrors the production FR-024 hash+eq discipline so the bench faithfully
+    /// mirrors the production hash+eq discipline so the bench faithfully
     /// models the same contract. Hash-only dedup would silently merge distinct
     /// keys whose hashes collide, skewing the bench's memory accounting
     /// downward; bucket-per-hash with `key_eq` keeps the accounting honest.
@@ -142,7 +142,7 @@ impl KeyInterner {
     /// matching `key_eq` already exists in the hash bucket; otherwise mints
     /// a fresh one and appends to the bucket.
     ///
-    /// Bucket-with-`key_eq` resolution (per spec FR-024 — distinct keys with
+    /// Bucket-with-`key_eq` resolution (distinct keys with
     /// the same hash must NOT silently merge). Hash collisions are rare in
     /// practice (the production `ViewKey` hashers are well-distributed), so
     /// buckets are typically size-1; the additional cost is negligible vs
@@ -206,8 +206,8 @@ impl KeyInterner {
 /// `Option<Box<dyn ViewKey>>` per node; keyed nodes additionally pay a heap
 /// allocation for the boxed `ValueKey<u64>` payload.
 ///
-/// `kind` carries the same 1-byte `ElementKind` discriminant the spec FR-020
-/// closed enum will host, padded out by the alignment of the
+/// `kind` carries the same 1-byte `ElementKind` discriminant a closed
+/// enum would host, padded out by the alignment of the
 /// following fields. We model it as a `u8` so the shape comparison is honest:
 /// both `MockNode` and `MockNodeInterned` carry the same `kind` representation,
 /// and the only field that differs is `key`.
@@ -228,8 +228,7 @@ pub struct MockNode {
     )]
     pub kind: u8,
     /// `Option<Box<dyn ViewKey>>` — 16 bytes, fat pointer, heap-backed when
-    /// `Some`. This is the baseline shape spec FR-022 commits to, pending
-    /// this prototype's storage-shape verdict.
+    /// `Some`. This is the shape production `ElementNode` stores.
     pub key: Option<Box<dyn ViewKey>>,
     /// Position-based child slots. Empty for leaves; populated for branches.
     /// `Vec` so the mock matches the production `Variable`-arity shape — the
@@ -313,8 +312,8 @@ impl MockNodeInterned {
 
 /// Three canonical permutations exercised by the reconcile workload.
 ///
-/// The plan calls for at minimum full-reverse + single-rotate +
-/// swap-first-last. We ship all three so each Criterion group emits three
+/// Full-reverse, single-rotate and
+/// swap-first-last. All three ship so each Criterion group emits three
 /// scenarios and the per-permutation memory cost is held constant across
 /// shapes.
 #[derive(Clone, Copy, Debug)]
@@ -380,7 +379,7 @@ pub struct MemoryAccounting {
 }
 
 impl MemoryAccounting {
-    /// Total resident bytes — the column the gate report compares shape-to-shape.
+    /// Total resident bytes — the column that compares shape-to-shape.
     #[inline]
     #[must_use]
     pub const fn total(&self) -> usize {
@@ -423,7 +422,7 @@ impl MemoryAccounting {
     /// size 1, no separate heap alloc beyond the Vec header. The hashbrown
     /// per-entry overhead estimate (~40 bytes) is a hand-rolled approximation
     /// that may drift against stdlib internal layout changes; conservative
-    /// upper bound suitable for the gate-report-level comparison.
+    /// upper bound suitable for a shape-level comparison.
     #[must_use]
     pub fn for_interned(node_count: usize) -> Self {
         let node_struct_bytes = core::mem::size_of::<MockNodeInterned>() * node_count;
@@ -527,13 +526,12 @@ pub fn identity_order() -> Vec<usize> {
 }
 
 // ----------------------------------------------------------------------------
-// Hash-lookup-only kernels (Codex review #5 fix)
+// Hash-lookup-only kernels
 // ----------------------------------------------------------------------------
 
 /// Pre-build the keyed `HashMap<u64, usize>` from old baseline nodes. Called
 /// once outside `b.iter` so the hash-lookup probe measures lookup latency in
-/// isolation, NOT lookup + map-construction (which was the Codex review #5
-/// finding on the original `s1_hash_lookup/*` probes).
+/// isolation, NOT lookup + map-construction.
 #[must_use]
 pub fn build_keyed_map_baseline(old: &[MockNode]) -> HashMap<u64, usize> {
     let mut m = HashMap::with_capacity(old.len() / 5);

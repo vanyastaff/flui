@@ -43,9 +43,8 @@ impl<V: View + Clone> ViewSeq for Vec<V> {
 
 // `Vec<BoxedView>` is covered by the `impl<V: View> ViewSeq for Vec<V>`
 // blanket above (`BoxedView: View`). No standalone impl is needed —
-// FR-015 lists `Vec<BoxedView>` explicitly because it is the
-// canonical heterogeneous-dynamic shape (every catalog scrollable
-// widget sits on it), but the trait machinery treats it as a
+// `Vec<BoxedView>` is the canonical heterogeneous-dynamic shape (every
+// catalog scrollable widget sits on it), but the trait machinery treats it as a
 // special case of the blanket. The `into_boxed_vec` path is the
 // less-efficient general path (one round-trip per element via
 // `ViewExt::boxed()` returning a fresh `BoxedView` per item) rather

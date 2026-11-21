@@ -24,13 +24,10 @@ pub use flui_foundation::{Arity, Leaf, Optional, Single, Variable};
 
 /// Element-specific arity marker trait.
 ///
-/// E3 (atomic box→arena swap): this used to carry a `type Storage:
-/// ElementChildStorage` associated type that owned the per-element box
-/// child graph. The slab-resident [`ElementTree`](crate::tree::ElementTree)
-/// is now the single element graph, so there is no per-element storage to
-/// associate. The trait remains as the compile-time child-count constraint
-/// (`Single` = 1, `Variable` = N) layered over `flui_foundation::Arity`; it
-/// simply no longer carries storage.
+/// The slab-resident [`ElementTree`](crate::tree::ElementTree) is the single
+/// element graph, so an element carries no per-element child storage. The
+/// trait is the compile-time child-count constraint
+/// (`Single` = 1, `Variable` = N) layered over `flui_foundation::Arity`.
 ///
 /// `Leaf` and `Optional` are render-object arity only: no element instantiates
 /// them, so they do not implement `ElementArity`.

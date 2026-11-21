@@ -17,8 +17,8 @@
 //!   per-behavior overrides we need to keep (mounting a `RenderObject`,
 //!   subscribing to a `Listenable`, etc.).
 //!
-//! Per *Rust for Rustaceans* §"Composition and Helpers" and Constitution
-//! Principle 4 (no `dyn` by default), free functions taking the minimal
+//! Per *Rust for Rustaceans* §"Composition and Helpers" and the crate's
+//! rule of no `dyn` by default, free functions taking the minimal
 //! slice of state composes cleanly with the existing trait surface.
 //!
 //! ## Recovery ownership
@@ -134,7 +134,7 @@ pub(crate) fn stamp_sliver_slot(
 ///
 /// # Recovery on a caught panic
 ///
-/// E3 (atomic box→arena swap): the element no longer owns a child graph,
+/// The element does not own a child graph,
 /// so there is no half-built child subtree to tear down here. On a caught
 /// panic this returns the substituted `ErrorView` box; the caller
 /// (`build_into_views`) returns it as the single child view, and the slab
@@ -288,13 +288,12 @@ where
 /// body inline so the tracing strings can interpolate the active
 /// `RenderId`.
 ///
-/// E3 (atomic box→arena swap): this no longer reconciles a child into box
-/// storage — it just hands the owned child view back. The reconcile
-/// against the slab runs in `BuildOwner::build_scope`. `core` is cleared
-/// of its dirty flag here because the build half is complete (the seam
-/// that used to clear it after `update_or_create_child`).
+/// The element does not reconcile a child into storage: it just hands the
+/// owned child view back. The reconcile against the slab runs in
+/// `BuildOwner::build_scope`. `core` is cleared of its dirty flag here
+/// because the build half is complete.
 //
-// FR-007: accepts `impl IntoView` from authoring-side callers and
+// Accepts `impl IntoView` from authoring-side callers and
 // normalizes via `IntoView::into_view` inside the helper. The generic
 // `R` parameter keeps the child type static rather than a `Box<dyn View>`.
 #[must_use]

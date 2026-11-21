@@ -4,7 +4,7 @@
 //! catch the unwind and substitute the registered `ErrorView` instead of
 //! letting the panic abort the frame.
 //!
-//! E3 + H3: the element no longer owns its children, and component
+//! The element does not own its children, and component
 //! builds require the live tree-backed `LiveBuildContext` supplied by
 //! `BuildOwner::build_scope`. These tests drive the production
 //! mount/schedule/build-scope path and inspect the materialized slab
@@ -312,7 +312,7 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
 
 fn nested_child_build_panic_replaces_only_that_subtree() {
     // Parent is a well-behaved wrapper; its child is a PanickingView.
-    // E3: the parent's build returns its child view, and the slab
+    // The parent's build returns its child view, and the slab
     // id-reconciler builds that child as its own drain entry, where the
     // child's panic is caught.
     let view = WrapperView {

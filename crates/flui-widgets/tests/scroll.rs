@@ -5016,7 +5016,7 @@ impl flui_view::ViewState<ScrollInBuild> for ScrollInBuildState {
 
 /// `jump_to` and `animate_to` called from `build` are refused with a typed
 /// error and move nothing; the same calls from outside a build land
-/// (ADR-0086 §7).
+/// (ADR-0074 §5.2).
 pub(crate) fn controller_mutation_during_build_is_refused() {
     let scroll = ScrollController::new();
     let vsync = Vsync::new();

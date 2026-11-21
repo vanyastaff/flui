@@ -179,7 +179,7 @@ pub trait View: Any + 'static {
     /// # Object-safety
     ///
     /// The `where Self: Sized` bound excludes this method from the `dyn View`
-    /// vtable, keeping `View` object-safe (Constitution C4).
+    /// vtable, keeping `View` object-safe.
     fn should_skip_rebuild(&self, prev: &Self) -> bool
     where
         Self: Sized,
@@ -390,7 +390,7 @@ pub trait ElementBase: Any + 'static {
     /// `u64`. This accessor surfaces the underlying
     /// [`flui_foundation::ViewKey`] so the reconciler can call
     /// [`flui_foundation::ViewKey::key_eq`] on a hash hit and reject
-    /// silent collisions. FR-024 work item (c).
+    /// silent collisions.
     ///
     /// The default impl returns `None`; the unified `Element<V, A, B>`
     /// overrides it to forward to `core.view().key()`. The borrow is
@@ -538,18 +538,15 @@ pub trait ElementBase: Any + 'static {
 
     /// Run this element's build half and return its OWNED child view(s).
     ///
-    /// E3 (atomic box→arena swap): this replaces the old
-    /// `perform_build(&mut self, owner)` that reconciled children against
-    /// box storage in place. The build seam is now cut so that
-    /// `build_into_views` runs the behavior's `build()` (today's
-    /// `build_or_recover` / `build_proxy_style` half) and returns the
-    /// owned child views WITHOUT touching any child storage — there is no
-    /// child storage on the element any more. The reconcile half is
-    /// hoisted out to [`BuildOwner::build_scope`](crate::owner::BuildOwner),
+    /// The build seam is cut so that
+    /// `build_into_views` runs the behavior's `build()` and returns the
+    /// owned child views WITHOUT touching any child storage: the element
+    /// holds none. The reconcile half is run by
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner),
     /// which feeds the returned views to `reconcile_children_by_id` against
     /// the slab-resident [`ElementTree`](crate::tree::ElementTree) with a
     /// fresh `&mut tree` borrow. No `&mut element` is ever live across a
-    /// `&mut tree` child mutation — see the E3 design.
+    /// `&mut tree` child mutation.
     ///
     /// Return contract by behavior:
     /// - Stateless / Stateful → `ChildViews::one(child_view)`.
@@ -588,8 +585,7 @@ pub trait ElementBase: Any + 'static {
     /// behavior-side hook to forward to the state.
     ///
     /// `owner` carries the split-borrow build handle so the typed hook can
-    /// resolve the same live tree-backed `BuildContext` the rebuild uses
-    /// (PR-K).
+    /// resolve the same live tree-backed `BuildContext` the rebuild uses.
     #[expect(
         unused_variables,
         reason = "the default body ignores its arguments; their names document the signature an override receives"
@@ -611,16 +607,12 @@ pub trait ElementBase: Any + 'static {
     // Child Management
     // ========================================================================
 
-    // E3 (atomic box→arena swap): `visit_children` is deleted. Elements
-    // no longer own a child graph — the slab-resident
+    // Elements do not own a child graph: the slab-resident
     // [`ElementTree`](crate::tree::ElementTree) is the single element
     // graph, and a node's children are its
     // [`ElementNode::child_ids`](crate::tree::ElementNode) list. All
     // child traversal goes through `tree.get(id).child_ids()`, where both
-    // the id and a `&ElementTree` are in scope. The old per-element
-    // `visit_children` was a no-op on every unified `Element<V, A, B>`
-    // anyway (children lived inside `ElementCore`, invisible to the slab
-    // walk), which is exactly why production `setState` was inert.
+    // the id and a `&ElementTree` are in scope.
 
     /// Deactivate a child Element.
     ///
@@ -664,9 +656,7 @@ pub trait ElementBase: Any + 'static {
     /// (a cheap `Rc` clone) so the slab `insert` path can propagate it to a
     /// freshly-inserted child BEFORE the child mounts.
     ///
-    /// E3 (atomic box→arena swap): in the old box graph the parent
-    /// propagated the owner to its children inside
-    /// `update_or_create_child(ren)`. Children are now slab-resident, so
+    /// Children are slab-resident, so
     /// [`ElementTree::insert`](crate::tree::ElementTree) reads this from
     /// the parent and threads it (plus [`Self::child_render_id`]) into the
     /// child's `set_pipeline_owner` / `set_parent_render_id` before
@@ -683,7 +673,7 @@ pub trait ElementBase: Any + 'static {
     /// The `RenderId` that this element's *children* should attach their
     /// `RenderObject`s under.
     ///
-    /// E3 propagation contract (companion to [`Self::pipeline_owner`]):
+    /// Propagation contract (companion to [`Self::pipeline_owner`]):
     /// for a `RenderObjectElement` this is its own `render_id` (children
     /// attach under it); for a component element it is the
     /// `parent_render_id` the element itself received (the nearest
@@ -914,7 +904,7 @@ pub trait ElementBase: Any + 'static {
     /// `type_id` is `TypeId::of::<N>()` for the static notification type
     /// `N` captured at the dispatch call-site. `notification` is the
     /// notification value coerced to `&dyn Any` so this method can stay
-    /// object-safe (Constitution Principle 4: single `dyn` boundary at
+    /// object-safe (single `dyn` boundary at
     /// dispatch — not `dyn`-everywhere). Implementations must:
     ///
     /// 1. Check `type_id` against the static `TypeId::of::<N>()` of the

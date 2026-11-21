@@ -294,7 +294,7 @@ mod emission {
             .set_child_ids(&ids);
     }
 
-    /// The S_3 permutation corpus (FR-024(b)) on the slab:
+    /// The S_3 permutation corpus on the slab:
     /// for each of the 6 permutations of keyed `[1, 2, 3]`, the
     /// disposition multiset matches the keyed-reconcile contract AND
     /// every key's element moves to its permuted slot (never rebuilt).

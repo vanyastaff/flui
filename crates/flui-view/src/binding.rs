@@ -665,7 +665,7 @@ impl WidgetsBinding {
                 continue;
             };
 
-            // E3 (atomic box→arena swap): children come from the slab
+            // Children come from the slab
             // node's `child_ids` list — the single element graph. They
             // are already in forward slot order; we collect into a scratch
             // buffer so we can push them back onto the LIFO stack in
@@ -1372,15 +1372,6 @@ mod tests {
     // 3. Order is deterministic across runs.
     // 4. Deep linear chains do not exhaust the stack (the walk is
     //    iterative).
-
-    // ========================================================================
-    // Snapshot-then-fire fix — regression tests for sync handle_* event
-    // handlers
-    // ========================================================================
-
-    // ========================================================================
-    // E0a — deadlock-safe wake chain
-    // ========================================================================
 
     // ========================================================================
     // did_change_app_lifecycle_state dispatch

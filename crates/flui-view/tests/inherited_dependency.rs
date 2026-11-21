@@ -55,10 +55,9 @@ struct MyTheme {
 struct DummyChild;
 
 impl StatelessView for DummyChild {
-    // Bottom out at the shared terminal leaf. This used to recurse on
-    // `self.clone().boxed()`, which no test observed because no fixture ever
-    // built a `DummyChild` element — the render-root helper below does, and a
-    // self-recursive build drives `build_scope`'s drain forever. The file's
+    // Bottom out at the shared terminal leaf: a self-recursive build
+    // (`self.clone().boxed()`) would drive `build_scope`'s drain forever once
+    // the render-root helper below builds a `DummyChild` element. The file's
     // terminal-leaf rule says build chains bottom out in `LeafView`.
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         LeafView.boxed()
@@ -878,14 +877,13 @@ mod did_change_dependencies_on_inherited_update {
 }
 
 // ============================================================================
-// PR-K keystone: a consumer's REAL build() resolves an inherited value two
+// A consumer's REAL build() resolves an inherited value two
 // hops up through the LIVE element tree, and the dependency it records there
 // drives its rebuild when the value later changes.
 //
-// Before PR-K, `build_into_views` handed user `build()` an empty process-
-// shared dummy context, so `depend_on` inside a real build returned `None`
-// and recorded nothing — inherited data was unreachable from the very place
-// it should be reachable. This module pins the
+// `depend_on` inside a real build must reach the live tree rather than an
+// empty context, or inherited data is unreachable from the very place it
+// should be reachable. This module pins the
 // wired behavior end to end: read-during-build → record → notify-on-update.
 // ============================================================================
 

@@ -214,7 +214,7 @@ impl Shared {
     }
 
     /// Whether a widget that bound this controller to its clock is building
-    /// (ADR-0086 §7).
+    /// (ADR-0074 §5.2).
     fn building(&self) -> bool {
         self.clocks
             .borrow()

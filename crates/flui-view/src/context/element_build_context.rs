@@ -26,7 +26,7 @@ pub(crate) struct DependentRecord {
     pub(crate) dependent: ElementId,
     /// The dependent's tree depth (for dirty-heap ordering).
     pub(crate) depth: usize,
-    /// The provider fields the dependent read (#1090).
+    /// The provider fields the dependent read.
     pub(crate) mask: crate::view::FieldSet,
     /// Recorded from `init_state` / `did_change_dependencies` rather than
     /// `build`: such reads are kept until unmount (they accumulate),

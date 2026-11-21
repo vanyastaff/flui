@@ -1,4 +1,4 @@
-//! Whether a `build` is running on this UI runtime (ADR-0086 §7).
+//! Whether a `build` is running on this UI runtime (ADR-0074 §5.2).
 //!
 //! The signal graph that knows when an element builds lives in `flui-view`,
 //! above the crates that define controllers (`flui-animation`, the scroll and

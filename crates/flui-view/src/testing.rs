@@ -154,8 +154,7 @@ impl ElementBuildContext {
     ///
     /// The tree read-lock is held for the duration of the walk so the
     /// `&dyn ElementBase` reference handed to `predicate` cannot escape
-    /// the closure — preserves the declarative-build invariant
-    /// (Constitution Principle 5).
+    /// the closure, which preserves the declarative-build invariant.
     fn walk_strict_ancestors<R>(
         &self,
         mut predicate: impl FnMut(&dyn crate::view::ElementBase) -> std::ops::ControlFlow<R>,
@@ -237,7 +236,7 @@ impl BuildContext for ElementBuildContext {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
         //
-        // Records this element (with the fields it read, #1090) in the
+        // Records this element (with the fields it read) in the
         // matched InheritedElement's dependent map so a later provider update
         // whose `changed_fields` intersects that mask schedules us for rebuild.
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
@@ -513,8 +512,8 @@ impl BuildContext for ElementBuildContext {
             );
         }
 
-        // E3 (atomic box→arena swap): a node's children are its
-        // slab-resident `child_ids` list — the single element graph.
+        // A node's children are its slab-resident `child_ids` list, the single
+        // element graph.
         let tree = self.tree.borrow();
         if let Some(node) = tree.get(self.element_id) {
             for child_id in node.child_ids() {
@@ -551,8 +550,7 @@ impl BuildContext for ElementBuildContext {
         // listener's handler with the typed notification and stopping when
         // one returns `true`.
         //
-        // Single-`dyn`-boundary discipline per
-        // Constitution Principle 4: the walk uses `&dyn ElementBase` (the
+        // Single-`dyn`-boundary discipline: the walk uses `&dyn ElementBase` (the
         // existing tree shape) but the handler call site is the only
         // place a typed downcast happens, in the listener Element's own
         // `on_notification` body.

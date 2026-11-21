@@ -40,7 +40,7 @@ use crate::context::BuildContext;
 /// `StatelessView` **non-object-safe** — no `dyn StatelessView` use
 /// exists or is needed. The `View` trait
 /// (super::view::View) is the object-safe boundary;
-/// `StatelessView` is implementation-side (FR-007).
+/// `StatelessView` is implementation-side.
 ///
 /// # Note
 ///

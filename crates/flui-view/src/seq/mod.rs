@@ -18,7 +18,7 @@
 //!   child on shared, so a child the parent hands back unchanged keeps
 //!   its identity and is not built again.
 //!
-//! Both paths share the same keyed reconciler algorithm (FR-016);
+//! Both paths share the same keyed reconciler algorithm;
 //! the difference is the per-position monomorphism the tuple path
 //! retains at the outer `match self.kind { … }` dispatch in the
 //! element-storage layer.
@@ -48,7 +48,7 @@ use crate::view::BoxedView;
 ///
 /// Multi-child widgets bind `C: ViewSeq` (`struct Column<C: ViewSeq>
 /// { children: C }`) rather than specialize over `Vec<BoxedView>`
-/// directly (FR-018) — this is what makes the tuple-static-path
+/// directly — this is what makes the tuple-static-path
 /// monomorphism benefits actually land.
 ///
 /// # Object safety

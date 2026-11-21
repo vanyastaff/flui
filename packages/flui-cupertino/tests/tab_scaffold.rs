@@ -196,7 +196,7 @@ pub fn tab_controller_relays_keep_failure_custody() {
 
 /// `set_index` called from the scaffold's build (here, its tab builder) is
 /// refused with a typed error: the index stays and no listener hears of it.
-/// The same call from outside a build lands (ADR-0086 §7).
+/// The same call from outside a build lands (ADR-0074 §5.2).
 pub fn controller_mutation_during_build_is_refused() {
     let controller = CupertinoTabController::new(0);
     let outcome = Rc::new(std::cell::RefCell::new(Vec::new()));

@@ -10,7 +10,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ElementId, SlotSet};
 use std::sync::Arc;
 
-/// Upper bound on RE-ENTRY mid-drain absorbs per frame (issue #1180).
+/// Upper bound on RE-ENTRY mid-drain absorbs per frame.
 ///
 /// A "re-entry" is a `Vacant` landing for an id that already completed a
 /// build in this `build_scope` call — most often that same element
@@ -308,15 +308,11 @@ impl BuildOwner {
         // `absorb_mid_drain_inbox` uses for a freshly-absorbed id.
         self.rekey_dirty_depths(tree);
 
-        // Process dirty elements in depth order, extract-then-apply
-        // (E3 — atomic box→arena swap).
+        // Process dirty elements in depth order, extract-then-apply.
         //
-        // The hard problem: the old loop held `&mut tree.get_mut(id).element`
-        // while calling `perform_build`, so `perform_build` could not also
-        // take `&mut ElementTree` to reconcile slab-resident children —
-        // the exact double-borrow that cost the render-tree PRs. The fix
-        // is the same extract-then-apply discipline E2.5 proves out, lifted
-        // to the build seam:
+        // `build_into_views` takes `&mut` of the element out of the slab while
+        // the behavior builds, and reconciling the slab-resident children
+        // needs `&mut ElementTree` too, so the two accesses must not overlap:
         //
         //   1. Take a `&mut element` borrowed FROM the tree, run the
         //      behavior's build half (`build_into_views`), capture the
@@ -328,7 +324,7 @@ impl BuildOwner {
         // No `&mut` into the slab is ever live across a second slab access.
         //
         // Absorb the out-of-frame inbox BEFORE every pop, not only once
-        // before the first one (issue #1180): a build below can call another
+        // before the first one: a build below can call another
         // element's `RebuildHandle::schedule` synchronously (the inbox is the
         // only route a cross-thread or listener-driven rebuild has), and that
         // schedule must join THIS drain rather than sit until the next
@@ -813,7 +809,7 @@ impl BuildOwner {
     /// accumulator), not absorbed.
     ///
     /// Called at the top of every [`Self::drain_build_scope`] pop, not once
-    /// at drain start (issue #1180): `BuildOwner`'s own
+    /// at drain start: `BuildOwner`'s own
     /// synchronous `schedule` — a build calling another element's
     /// [`RebuildHandle`](super::super::RebuildHandle) on the owner thread — joins
     /// THIS SAME drain instead of waiting for the next `build_scope` call,
@@ -908,8 +904,8 @@ impl BuildOwner {
         let mut absorbed = 0usize;
         let mut newly_capped_ids: Vec<ElementId> = Vec::new();
         for (id, reasons) in landed.drain(..) {
-            // Mark dirty unconditionally, Occupied or Vacant — matching the
-            // pre-#1180 drain's own unconditional call. A `RebuildHandle`
+            // Mark dirty unconditionally, Occupied or Vacant, as the
+            // drain's own call does. A `RebuildHandle`
             // carries no reference to the element's dirty flag (a plain
             // `(inbox, ElementId)` pair), so this is the one place that both
             // knows the id and holds `&mut tree`. A node since unmounted is a

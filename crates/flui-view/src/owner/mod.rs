@@ -60,10 +60,10 @@ pub use element_owner::ElementOwner;
 #[cfg(test)]
 pub(crate) use external_build_inbox::ExternalBuildInbox;
 // Build-time live-tree handle carried on `ElementOwner` during a
-// `build_scope` drain (PR-K). Crate-internal.
+// `build_scope` drain. Crate-internal.
 pub(crate) use element_owner::BuildHandle;
-// A per-child containment seam's caught-and-substituted panic (issue
-// #561), what it happened to, and the enum naming which lifecycle hook it
+// A per-child containment seam's caught-and-substituted panic,
+// what it happened to, and the enum naming which lifecycle hook it
 // was caught inside.
 pub use recovered_panic::{LifecycleHook, RecoveredAt, RecoveredPanic};
 pub(crate) use recovered_panic::{LifecyclePanicHandoff, StagedRecoveredPanic};

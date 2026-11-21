@@ -119,7 +119,7 @@ impl ElementTree {
         }
 
         let mut node = ElementNode::new(element, None, 0);
-        // FR-022: store the cloned `View::key()` on the
+        // Store the cloned `View::key()` on the
         // node so the keyed reconciler can index by it without
         // crossing the typed-`V` boundary.
         node.set_key(view.key().map(ViewKey::clone_key));
@@ -371,12 +371,11 @@ impl ElementTree {
             // immediately-dropped `&ElementTree` borrow, then apply it to the
             // freshly-created child BEFORE mount.
             //
-            // E3 (atomic box→arena swap): the old box graph propagated the
-            // `PipelineOwner` + parent `RenderId` to children inside
-            // `update_or_create_child(ren)`, *before* `mount_children`, because
+            // A child needs the `PipelineOwner` + parent `RenderId` set
+            // *before* it mounts, because
             // `RenderBehavior::on_mount` creates its `RenderObject` only when a
-            // `PipelineOwner` is already in scope. Children are now
-            // slab-resident, so that propagate-before-mount ordering moves
+            // `PipelineOwner` is already in scope. Children are
+            // slab-resident, so that propagate-before-mount ordering lives
             // here: read `pipeline_owner()` / `child_render_id()` off the
             // parent node, hand them to the child, then mount.
             let (
@@ -406,7 +405,6 @@ impl ElementTree {
 
             let mut node = ElementNode::new(element, Some(parent), slot);
             node.set_depth(parent_depth + 1);
-            // FR-022.
             node.set_key(view.key().map(ViewKey::clone_key));
 
             let slab_index = self.nodes.insert(node);

@@ -293,9 +293,9 @@ impl ElementTree {
     /// element. Threads the split-borrow owner handle into the
     /// update call.
     ///
-    /// FR-022: re-clones `View::key()` into the node so the
+    /// Re-clones `View::key()` into the node so the
     /// stored key tracks whatever the new view carries. `View::can_update`
-    /// (FR-028) already ensures the keys match on a successful
+    /// already ensures the keys match on a successful
     /// update — the re-clone preserves that invariant explicitly rather
     /// than relying on the caller having already filtered by it.
     ///
@@ -818,7 +818,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Inherited scope (PR-2): the per-node `inherited` map gives O(1)
+    // Inherited scope: the per-node `inherited` map gives O(1)
     // `depend_on` resolution. These exercise the map directly (it is
     // `pub(crate)`), independent of the build pipeline.
     // ========================================================================

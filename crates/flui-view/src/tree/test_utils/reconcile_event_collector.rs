@@ -3,8 +3,6 @@
 //! emissions into an `Arc<Mutex<Vec<CollectedEvent>>>` so tests can
 //! assert on the reconciler's trace stream.
 //!
-//! FR-035.
-//!
 //! # Why a parallel `CollectedEvent` type?
 //!
 //! The emitted [`tracing::Event`] carries the `view_type_id` as a

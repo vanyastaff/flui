@@ -74,7 +74,7 @@ pub struct RootRenderElement {
     depth: usize,
     /// Whether this element needs a rebuild (its child reconcile must run).
     ///
-    /// E3 (atomic box→arena swap): the root's single child is a
+    /// The root's single child is a
     /// slab-resident node reconciled by `BuildOwner::build_scope`, which
     /// SKIPS any popped dirty entry whose `is_dirty()` is false (a clean
     /// element's empty build would otherwise make the reconcile wrongly
@@ -190,8 +190,8 @@ impl ElementBase for RootRenderElement {
             );
         }
 
-        // E3 (atomic box→arena swap): the child is NOT built here. It is a
-        // slab-resident node now — `build_into_views` returns the child
+        // The child is NOT built here. It is a
+        // slab-resident node: `build_into_views` returns the child
         // view and the slab id-reconciler in `BuildOwner::build_scope`
         // creates / updates it (and schedules it for its own build). The
         // RenderObject bootstrap above is the only mount-time work.
@@ -215,10 +215,10 @@ impl ElementBase for RootRenderElement {
         }
         self.render_id = None;
 
-        // E3: the child is a slab-resident node; the
+        // The child is a slab-resident node; the
         // [`ElementTree`](crate::tree::ElementTree) unmounts it
         // deepest-first via `child_ids`, so the root does not recurse into
-        // a box child here.
+        // it here.
         self.lifecycle = Lifecycle::Defunct;
     }
 
@@ -262,8 +262,8 @@ impl ElementBase for RootRenderElement {
         &mut self,
         _element_owner: &mut crate::ElementOwner<'_>,
     ) -> crate::view::ChildViews {
-        // E3 (atomic box→arena swap): the root's single child is now a
-        // slab-resident node. Return the child view; the slab
+        // The root's single child is a slab-resident node. Return the child
+        // view; the slab
         // id-reconciler in `BuildOwner::build_scope` creates / updates the
         // child element under this root (propagating this element's
         // `PipelineOwner` + `render_id` via `ElementTree::insert`, so the
@@ -334,10 +334,5 @@ impl RenderTreeRootElement for RootRenderElement {
     // Attach / detach to the PipelineOwner is handled inline in `mount()`
     // and `unmount()` above: mount inserts the `RenderView` into
     // the render tree (`PipelineOwner::insert_render_node`), calls `set_root_id`, and
-    // requests a visual update; unmount inverts that sequence. The
-    // pre-Mythos `attach_to_pipeline_owner` / `detach_from_pipeline_owner`
-    // trait stubs were removed during the framework spine repair because
-    // their bodies were panicking placeholders (Constitution Principle 6
-    // forbids panic in production paths) and they had zero callers in
-    // the workspace.
+    // requests a visual update; unmount inverts that sequence.
 }
