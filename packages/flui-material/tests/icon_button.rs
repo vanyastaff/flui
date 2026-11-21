@@ -22,7 +22,7 @@ use common::{lay_out, tight};
 use flui_material::{
     ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{IconTheme, IconThemeData, SizedBox, WidgetStateProperty};
 

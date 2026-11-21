@@ -55,8 +55,10 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::{ChangeNotifier, Listenable, Subscription};
 use flui_sdk::geometry::{Point, Rect, Size};
+use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::{Canvas, Clip, ClipOp, Color, Paint};
+use flui_sdk::painting::paint::{Clip, ClipOp, Paint};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController};
@@ -135,7 +137,7 @@ pub struct RippleConfiguration {
 ///
 /// ```rust
 /// use flui_material::{RippleConfiguration, RippleScope};
-/// use flui_sdk::painting::Color;
+/// use flui_sdk::painting::styling::Color;
 /// use flui_sdk::widgets::SizedBox;
 ///
 /// let tinted = RippleConfiguration { color: Some(Color::RED), ..Default::default() };

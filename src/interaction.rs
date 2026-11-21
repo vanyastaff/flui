@@ -116,7 +116,7 @@ pub use flui_interaction::gesture::DoubleTapDetails;
 pub use flui_interaction::gesture::GestureSettingsProvider;
 pub use flui_interaction::gesture::MultiTapDetails;
 pub use flui_interaction::gesture::{
-    ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
+    ArenaMembership, BeginContactError, CancelOutcome, ContactEnd, ContactId, ContactSnapshot,
     GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all,
 };
 pub use flui_interaction::gesture::{

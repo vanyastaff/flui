@@ -239,7 +239,7 @@ impl StatelessView for FlexibleSpaceBar {
             // leading-aligned title sits at the RIGHT edge under RTL, and
             // its 72px leading inset moves with it.
             let rtl = Directionality::maybe_of(ctx)
-                .is_some_and(|direction| direction == flui_sdk::painting::TextDirection::Rtl);
+                .is_some_and(|direction| direction == flui_sdk::foundation::TextDirection::Rtl);
             let alignment = if self.center_title {
                 Alignment::BOTTOM_CENTER
             } else if rtl {

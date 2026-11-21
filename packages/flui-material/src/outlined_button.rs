@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::geometry::{EdgeInsets, Size};
-use flui_sdk::painting::{BorderSide, BorderStyle};
+use flui_sdk::painting::styling::{BorderSide, BorderStyle};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
@@ -131,7 +131,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             theme.text_theme.label_large.clone(),
         )),
         background_color: Some(WidgetStateProperty::all(Some(
-            flui_sdk::painting::Color::TRANSPARENT,
+            flui_sdk::painting::styling::Color::TRANSPARENT,
         ))),
         foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {
             Some(if states.contains_state(WidgetState::Disabled) {

@@ -84,8 +84,8 @@
 use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::RebuildHandle;

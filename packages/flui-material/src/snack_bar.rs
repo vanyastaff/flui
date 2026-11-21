@@ -51,7 +51,7 @@ use std::time::Duration;
 
 use flui_sdk::animation::{Animation, AnimationController, Curve, curves};
 use flui_sdk::foundation::Listenable;
-use flui_sdk::painting::Clip;
+use flui_sdk::painting::paint::Clip;
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
@@ -61,7 +61,7 @@ use flui_sdk::widgets::{
 };
 use flui_sdk::{
     geometry::EdgeInsets,
-    painting::{Alignment, Color},
+    painting::{Alignment, styling::Color},
 };
 
 use crate::button_style::ButtonStyle;

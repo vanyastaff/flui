@@ -4,8 +4,10 @@ use std::any::Any;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use flui_sdk::geometry::{Rect, Size};
+use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::{Canvas, Color, Paint, StrokeCap};
+use flui_sdk::painting::paint::{Paint, StrokeCap};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ActivityIndicator, CustomPaint};
 

@@ -67,6 +67,7 @@ mod measured {
         SnapshotError as _, SnapshotNode as _, SnapshotQuery as _, ToValue as _, Unit as _,
         Value as _, diff as _, render as _, snapshot as _,
     };
+    use flui_sdk::foundation::memory::MemoryPressureLevel as _;
     use flui_sdk::foundation::panic::{PanicRecovery as _, RecoveryScope as _};
     use flui_sdk::foundation::{
         ChangeNotifier as _, ElementId as _, Listenable as _, ListenerCallback as _,
@@ -108,24 +109,27 @@ mod measured {
     use flui_sdk::painting::Alignment as _;
     // The start and end alignment a table cell resolves against the reading direction.
     use flui_sdk::painting::AlignmentDirectional as _;
-    use flui_sdk::painting::{
+    use flui_sdk::painting::styling::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
         BoxDecoration as _, BoxShadow as _, Color as _,
     };
     // A text style's shadows and the op a paragraph's shadow records (ADR-0309).
-    use flui_sdk::painting::{BlurSigma as _, Shadow as _};
+    use flui_sdk::painting::BlurSigma as _;
+    use flui_sdk::painting::styling::Shadow as _;
     // A text style's decoration (ADR-0310).
-    use flui_sdk::painting::{Canvas as _, DrawOp as _};
-    use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _, StrokeCap as _};
-    use flui_sdk::painting::{
+    use flui_sdk::foundation::TextDirection as _;
+    use flui_sdk::painting::TextSizing as _;
+    use flui_sdk::painting::paint::{
+        Clip as _, ClipOp as _, Paint as _, Path as _, StrokeCap as _,
+    };
+    use flui_sdk::painting::typography::{
         DecorationThickness as _, TextDecoration as _, TextDecorationLines as _,
         TextDecorationStyle as _,
     };
+    use flui_sdk::painting::typography::{FontWeight as _, TextStyle as _};
+    use flui_sdk::painting::{Canvas as _, DrawOp as _};
     // The shapes the Material 3 Expressive loading indicators morph between.
-    use flui_sdk::painting::{
-        FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
-    };
-    use flui_sdk::painting::{
+    use flui_sdk::painting::paint::{
         Morph as _, PathCommand as _, RoundedPolygon as _, material_shapes as _,
     };
     use flui_sdk::painting::{SemanticsRegion as _, SemanticsRegionKey as _};
@@ -161,11 +165,10 @@ mod measured {
     use flui_sdk::platform::{
         AdmissionError as _, Brightness as _, ClipboardError as _, DurationScale as _,
         GesturePreferences as _, HapticFeedback as _, HostNotice as _, InvalidLocale as _,
-        InvalidPreference as _, Locale as _, MemoryPressureLevel as _, MotionPreference as _,
-        NativeMouseGeometry as _, NativeTouchGeometry as _, SessionEndBlock as _,
-        SessionEndRequest as _, SubmitError as _, SystemPreferences as _, TargetPlatform as _,
-        TextWeightPreference as _, WheelPreferences as _, WheelStep as _, WindowMode as _,
-        WindowState as _,
+        InvalidPreference as _, Locale as _, MotionPreference as _, NativeMouseGeometry as _,
+        NativeTouchGeometry as _, SessionEndBlock as _, SessionEndRequest as _, SubmitError as _,
+        SystemPreferences as _, TargetPlatform as _, TextWeightPreference as _,
+        WheelPreferences as _, WheelStep as _, WindowMode as _, WindowState as _,
     };
     use flui_sdk::rendering::objects::{
         CarouselLayout as _, CrossAxisAlignment as _, FloatingHeaderSnapConfiguration as _,
@@ -309,7 +312,7 @@ mod measured {
         geometry::{
             EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,
         },
-        painting::{Alignment as _, Color as _},
+        painting::{Alignment as _, styling::Color as _},
     };
 }
 
@@ -332,7 +335,12 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::animation::Keyframes<f64>) -> flui_sdk::animation::Keyframes<f64> = |x| x;
     let _: fn(flui::foundation::ElementId) -> flui_sdk::foundation::ElementId = |x| x;
     let _: fn(flui::geometry::Rect) -> flui_sdk::geometry::Rect = |x| x;
-    let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::Color = |x| x;
+    let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::styling::Color = |x| x;
+    let _: fn(flui::foundation::TextDirection) -> flui_sdk::foundation::TextDirection = |x| x;
+    let _: fn(
+        flui::foundation::memory::MemoryPressureLevel,
+    ) -> flui_sdk::foundation::memory::MemoryPressureLevel = |x| x;
+    let _: fn(flui::interaction::ContactEnd) -> flui_sdk::interaction::ContactEnd = |x| x;
     let _: fn(flui::view::RebuildHandle) -> flui_sdk::view::RebuildHandle = |x| x;
     let _: fn(flui::scheduler::PostFrameHandle) -> flui_sdk::scheduler::PostFrameHandle = |x| x;
     let _: fn(flui::view::dev_reload::ReloadWake) -> flui_sdk::view::dev_reload::ReloadWake = |x| x;
@@ -406,18 +414,19 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::painting::SemanticsRegionKey) -> flui_sdk::painting::SemanticsRegionKey = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::painting::BlurSigma) -> flui_sdk::painting::BlurSigma = |x| x;
-    let _: fn(flui::painting::styling::Shadow) -> flui_sdk::painting::Shadow = |x| x;
-    let _: fn(flui::painting::typography::TextDecoration) -> flui_sdk::painting::TextDecoration =
-        |x| x;
+    let _: fn(flui::painting::styling::Shadow) -> flui_sdk::painting::styling::Shadow = |x| x;
+    let _: fn(
+        flui::painting::typography::TextDecoration,
+    ) -> flui_sdk::painting::typography::TextDecoration = |x| x;
     let _: fn(
         flui::painting::typography::TextDecorationLines,
-    ) -> flui_sdk::painting::TextDecorationLines = |x| x;
+    ) -> flui_sdk::painting::typography::TextDecorationLines = |x| x;
     let _: fn(
         flui::painting::typography::TextDecorationStyle,
-    ) -> flui_sdk::painting::TextDecorationStyle = |x| x;
+    ) -> flui_sdk::painting::typography::TextDecorationStyle = |x| x;
     let _: fn(
         flui::painting::typography::DecorationThickness,
-    ) -> flui_sdk::painting::DecorationThickness = |x| x;
+    ) -> flui_sdk::painting::typography::DecorationThickness = |x| x;
     let _: fn(flui::painting::TextSizing) -> flui_sdk::painting::TextSizing = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
     let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
@@ -540,10 +549,10 @@ fn the_public_surface_is_the_measured_list() {
         "pub mod scheduler {",
         "pub mod semantics {",
         "pub mod text_input {",
+        "pub mod text_store {",
         "pub mod view {",
         "pub use flui_animation::*;",
         "pub use flui_foundation as foundation;",
-        "pub use flui_foundation::TextDirection;",
         "pub use flui_foundation::geometry;",
         "pub use flui_interaction::drag::AllowedActions;",
         "pub use flui_interaction::drag::Autoscroll;",
@@ -648,30 +657,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::Canvas;",
         "pub use flui_painting::DrawOp;",
         "pub use flui_painting::TextSizing;",
-        "pub use flui_painting::paint::Clip;",
-        "pub use flui_painting::paint::ClipOp;",
-        "pub use flui_painting::paint::Morph;",
-        "pub use flui_painting::paint::Paint;",
-        "pub use flui_painting::paint::Path;",
-        "pub use flui_painting::paint::PathCommand;",
-        "pub use flui_painting::paint::RoundedPolygon;",
-        "pub use flui_painting::paint::StrokeCap;",
-        "pub use flui_painting::paint::material_shapes;",
-        "pub use flui_painting::styling::Border;",
-        "pub use flui_painting::styling::BorderRadius;",
-        "pub use flui_painting::styling::BorderRadiusExt;",
-        "pub use flui_painting::styling::BorderSide;",
-        "pub use flui_painting::styling::BorderStyle;",
-        "pub use flui_painting::styling::BoxDecoration;",
-        "pub use flui_painting::styling::BoxShadow;",
-        "pub use flui_painting::styling::Color;",
-        "pub use flui_painting::styling::Shadow;",
-        "pub use flui_painting::typography::DecorationThickness;",
-        "pub use flui_painting::typography::FontWeight;",
-        "pub use flui_painting::typography::TextDecoration;",
-        "pub use flui_painting::typography::TextDecorationLines;",
-        "pub use flui_painting::typography::TextDecorationStyle;",
-        "pub use flui_painting::typography::TextStyle;",
+        "pub use flui_painting::{paint, styling, typography};",
         "pub use flui_platform::AdmissionError;",
         "pub use flui_platform::Availability;",
         "pub use flui_platform::Brightness;",
@@ -694,7 +680,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::InvalidRegionalFormat;",
         "pub use flui_platform::Locale;",
         "pub use flui_platform::MeasurementSystem;",
-        "pub use flui_platform::MemoryPressureLevel;",
         "pub use flui_platform::MotionPreference;",
         "pub use flui_platform::NativeMouseGeometry;",
         "pub use flui_platform::NativeTouchGeometry;",

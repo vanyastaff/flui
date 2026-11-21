@@ -11,7 +11,7 @@ use crate::common;
 use common::{lay_out, rgba, tight};
 use flui_material::{Card, CardThemeData, Theme, ThemeData, ThemeDataOverrides};
 use flui_sdk::foundation::inspect::Rgba;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::widgets::ColoredBox;
 
 /// The middle cascade tier, proven end to end: a `ThemeData.card_theme` with

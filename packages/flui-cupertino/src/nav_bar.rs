@@ -73,7 +73,7 @@
 //! grow wide enough to visually collide with it.
 
 use flui_sdk::geometry::Size;
-use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::semantics::HeadingLevel;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::MediaQuery;

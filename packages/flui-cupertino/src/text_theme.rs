@@ -27,8 +27,8 @@
 //! what makes the rest of the chain do its job.
 
 use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
-use flui_sdk::painting::Color;
-use flui_sdk::painting::{FontWeight, TextStyle};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::{FontWeight, TextStyle};
 use flui_sdk::view::prelude::BuildContext;
 
 use crate::colors::{CupertinoColors, CupertinoDynamicColor};

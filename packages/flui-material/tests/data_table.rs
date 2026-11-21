@@ -117,7 +117,7 @@ pub fn checkbox_margin_override_beats_the_theme_without_changing_default_spacing
 /// padding, and a numeric label its end padding in from the other edge. In RTL
 /// every inset lands on the mirrored side.
 pub fn a_data_table_lays_out_from_the_reading_start_edge() {
-    use flui_sdk::painting::TextDirection;
+    use flui_sdk::foundation::TextDirection;
     use flui_sdk::widgets::Directionality;
 
     // Per direction: whether the checkbox column is left of the text column,

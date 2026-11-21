@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use flui_sdk::geometry::{Axis, Offset, Size};
 use flui_sdk::interaction::DragEndDetails;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, ViewExt};

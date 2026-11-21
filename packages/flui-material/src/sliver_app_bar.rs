@@ -22,7 +22,7 @@
 //!   available to a delegate as `shrink_offset`; the `FlexibleSpaceBar`
 //!   treatment of it is its own widget.
 
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::element::SliverPersistentHeaderDelegate;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::StatelessView;

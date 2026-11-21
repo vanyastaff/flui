@@ -60,8 +60,8 @@
 use std::fmt;
 use std::rc::Rc;
 
-use flui_sdk::painting::Color;
-use flui_sdk::painting::{FontWeight, TextStyle};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::{FontWeight, TextStyle};
 use flui_sdk::platform::{Brightness, Locale};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::{MediaQuery, PlatformConvention};

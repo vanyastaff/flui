@@ -20,8 +20,10 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
+use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::{Canvas, Color, Paint};
+use flui_sdk::painting::paint::Paint;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;

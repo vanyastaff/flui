@@ -24,7 +24,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 use flui_sdk::{
     geometry::{EdgeInsets, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
 use crate::ThemeData;

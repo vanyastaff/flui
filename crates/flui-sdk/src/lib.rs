@@ -117,7 +117,6 @@ pub mod platform {
     pub use flui_platform::InvalidRegionalFormat;
     pub use flui_platform::Locale;
     pub use flui_platform::MeasurementSystem;
-    pub use flui_platform::MemoryPressureLevel;
     pub use flui_platform::MotionPreference;
     pub use flui_platform::NativeMouseGeometry;
     pub use flui_platform::NativeTouchGeometry;
@@ -141,13 +140,17 @@ pub mod platform {
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;
-    pub use flui_platform::text::store::Autofill;
-    pub use flui_platform::text::store::Capitalization;
-    pub use flui_platform::text::store::Correction;
-    pub use flui_platform::text::store::EnterAction;
-    pub use flui_platform::text::store::NumberFormat;
-    pub use flui_platform::text::store::TextInputOptions;
-    pub use flui_platform::text::store::TextInputPurpose;
+
+    /// The text store a text field shares with the system's input method.
+    pub mod text_store {
+        pub use flui_platform::text::store::Autofill;
+        pub use flui_platform::text::store::Capitalization;
+        pub use flui_platform::text::store::Correction;
+        pub use flui_platform::text::store::EnterAction;
+        pub use flui_platform::text::store::NumberFormat;
+        pub use flui_platform::text::store::TextInputOptions;
+        pub use flui_platform::text::store::TextInputPurpose;
+    }
 
     /// The capability seam (ADR-0152): what a package declares, provides and
     /// registers a platform capability with, and the owner-thread result of a
@@ -341,37 +344,13 @@ pub mod interaction {
 /// `DrawOp` is here for packages' paint tests, which read back the recorded
 /// operations; no package names it outside its tests.
 pub mod painting {
-    pub use flui_foundation::TextDirection;
     pub use flui_painting::Alignment;
     pub use flui_painting::AlignmentDirectional;
     pub use flui_painting::BlurSigma;
     pub use flui_painting::Canvas;
     pub use flui_painting::DrawOp;
     pub use flui_painting::TextSizing;
-    pub use flui_painting::paint::Clip;
-    pub use flui_painting::paint::ClipOp;
-    pub use flui_painting::paint::Morph;
-    pub use flui_painting::paint::Paint;
-    pub use flui_painting::paint::Path;
-    pub use flui_painting::paint::PathCommand;
-    pub use flui_painting::paint::RoundedPolygon;
-    pub use flui_painting::paint::StrokeCap;
-    pub use flui_painting::paint::material_shapes;
-    pub use flui_painting::styling::Border;
-    pub use flui_painting::styling::BorderRadius;
-    pub use flui_painting::styling::BorderRadiusExt;
-    pub use flui_painting::styling::BorderSide;
-    pub use flui_painting::styling::BorderStyle;
-    pub use flui_painting::styling::BoxDecoration;
-    pub use flui_painting::styling::BoxShadow;
-    pub use flui_painting::styling::Color;
-    pub use flui_painting::styling::Shadow;
-    pub use flui_painting::typography::DecorationThickness;
-    pub use flui_painting::typography::FontWeight;
-    pub use flui_painting::typography::TextDecoration;
-    pub use flui_painting::typography::TextDecorationLines;
-    pub use flui_painting::typography::TextDecorationStyle;
-    pub use flui_painting::typography::TextStyle;
+    pub use flui_painting::{paint, styling, typography};
     pub use flui_rendering::delegates::CustomPainter;
     pub use flui_semantics::SemanticsRegion;
     pub use flui_semantics::SemanticsRegionKey;

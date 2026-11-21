@@ -98,7 +98,7 @@ their tests, measured at `431c8757c` (2026-09-26):
 | Crate | Leaf paths | SDK path |
 |---|---|---|
 | `flui_widgets` | 90 | `widgets` (whole crate) |
-| `flui_types` (split by owner, ADR-0098 §8) | 37 | `geometry` (the whole `flui_foundation::geometry` module); `painting::{Alignment, Clip, Paint, Path, Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, FontWeight, TextDirection, TextStyle}` from `flui_painting`; `platform::{Brightness, Locale}` from `flui_platform` |
+| `flui_types` (split by owner, ADR-0098 §8) | 37 | `geometry` (the whole `flui_foundation::geometry` module); `painting::{paint, styling, typography}` (the three modules of `flui_painting` whole, as the facade has them), `painting::Alignment`, `foundation::TextDirection`; `platform::{Brightness, Locale}` from `flui_platform` |
 | `flui_view` | 29 | `view` (glob of the whole crate, `__runtime` shadowed); its macros expand through `$crate::`, so they work through the re-export |
 | `flui_animation` | 19 | `animation` (whole crate) |
 | `flui_foundation` | 7 | `foundation` (whole crate) |
@@ -109,12 +109,12 @@ their tests, measured at `431c8757c` (2026-09-26):
 | `flui_scheduler` | 1 | `LocalPostFrameHandle`, which `flui_view` already re-exports: `view::LocalPostFrameHandle` |
 
 `painting::DrawOp` is added for the packages' paint tests, the only place they name it.
-`painting::ClipOp` is added for `flui-material`'s ink, which clips its ripple anti-aliased.
-`painting::Shadow` and `painting::BlurSigma` are added because `TextStyle::shadows` and
+`painting::paint::ClipOp` is added for `flui-material`'s ink, which clips its ripple anti-aliased.
+`painting::styling::Shadow` and `painting::BlurSigma` are added because `typography::TextStyle::shadows` and
 `DrawOp::ParagraphShadow` name them (ADR-0309): a package styles shadowed text and its paint
 tests read the shadow op.
-`painting::{TextDecoration, TextDecorationLines, TextDecorationStyle, DecorationThickness}`
-are added because `TextStyle::decoration` names them (ADR-0310): a package underlines a link
+`painting::typography::{TextDecoration, TextDecorationLines, TextDecorationStyle, DecorationThickness}`
+are added because `typography::TextStyle::decoration` names them (ADR-0310): a package underlines a link
 or strikes through a price.
 `painting::AlignmentDirectional` is added for `flui-material`'s `DataTable`, whose cells align
 to the start or end edge of the ambient `Directionality`.

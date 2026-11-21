@@ -61,8 +61,10 @@ use flui_sdk::foundation::Listenable;
 use flui_sdk::foundation::Subscription;
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::geometry::Radius;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::styling::{
+    Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color,
+};
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::platform::Brightness;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisSize};
 use flui_sdk::semantics::LiveSetting;

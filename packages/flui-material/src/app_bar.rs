@@ -120,8 +120,8 @@
 
 use flui_sdk::geometry::Size;
 use flui_sdk::painting::AlignmentDirectional;
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisAlignment};
 use flui_sdk::semantics::HeadingLevel;

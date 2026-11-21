@@ -12,8 +12,10 @@ use flui_material::{
 };
 use flui_painting::paint::PathCommand;
 use flui_sdk::animation::{MotionOverride, Vsync};
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::Point;
-use flui_sdk::painting::{Color, DrawOp, TextDirection};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{

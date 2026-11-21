@@ -84,10 +84,10 @@ impl Lerp for ColorScheme {
 /// A role set on both ends interpolates; one set on one end only switches
 /// half way.
 fn lerp_role(
-    from: Option<&flui_sdk::painting::TextStyle>,
-    to: Option<&flui_sdk::painting::TextStyle>,
+    from: Option<&flui_sdk::painting::typography::TextStyle>,
+    to: Option<&flui_sdk::painting::typography::TextStyle>,
     t: f64,
-) -> Option<flui_sdk::painting::TextStyle> {
+) -> Option<flui_sdk::painting::typography::TextStyle> {
     match (from, to) {
         (Some(from), Some(to)) => Some(from.lerp_to(to, t)),
         _ if t < 0.5 => from.cloned(),

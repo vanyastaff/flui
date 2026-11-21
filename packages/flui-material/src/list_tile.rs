@@ -133,8 +133,8 @@
 //!   resolved icon color.
 
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisSize};
 use flui_sdk::semantics::SemanticsRole;

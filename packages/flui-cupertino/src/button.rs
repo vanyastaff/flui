@@ -49,8 +49,8 @@ use flui_sdk::animation::{
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
+use flui_sdk::painting::styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::platform::Brightness;
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::RebuildHandle;
