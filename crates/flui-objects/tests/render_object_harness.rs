@@ -6730,7 +6730,7 @@ fn harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callback
         assert_eq!(
             parent_dropped.load(Ordering::Relaxed),
             usize::from(matches!(host, Host::AuthoredMerge)),
-            "overwritten receiver callbacks are destroyed too"
+            "the merging receiver's own callback is destroyed too"
         );
         assert_eq!(semantics_content(&run), original);
         assert!(!run.owner().debug_doing_semantics());
@@ -6804,8 +6804,11 @@ fn harness_a_moved_region_painter_retires_its_draft_handlers_after_the_phase() {
 
 fn harness_accepted_semantics_drafts_retire_filtered_callbacks() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    // Both regions register Click under one merge: the first in reading order
+    // keeps it, so the second region's handler is the one the fold leaves
+    // behind and retires after the phase.
     for (custom, blocked, expected) in [
-        (false, false, [1, 0]),
+        (false, false, [0, 1]),
         (false, true, [1, 1]),
         (true, false, [0, 0]),
         (true, true, [1, 1]),

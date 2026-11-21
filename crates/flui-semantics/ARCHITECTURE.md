@@ -19,11 +19,11 @@ existing `RecoveryScope`. Configuration attributes and storage buffers are
 ordinary destruction; handler destructors run under that scope (ADR-0281). Rendering
 uses this operation after a draft validation failure, whose typed error stays
 authoritative. `harness_rejected_semantics_drafts_preserve_the_error_and_destroy_the_callbacks`
-in flui-objects checks single and competing capture risks, forced merge, overwritten
-receiver actions, blocked/custom actions, unchanged publication and subsequent
+in flui-objects checks single and competing capture risks, forced merge, skipped
+contributor actions, blocked/custom actions, unchanged publication and subsequent
 retry through the real frame pipeline. `registered_action_handlers` lends all raw
 handler ownership to assembly, independent of dispatch authorization. Rendering
-pins those handles before any fold can overwrite or filter them, through the
+pins those handles before any fold can skip or filter them, through the
 complete pass verdict and across a graft fallback. Healthy temporary pins retire
 after publication and phase completion; arbitrary description before return and
 old published-tree destruction retain their existing boundaries (ADR-0223).
@@ -189,6 +189,12 @@ A scrollable's metrics (position, axis, extents) are one group: either side decl
 conflicts with the other declaring any, and a forced merge keeps the receiver's group whole or
 takes the contributor's whole. A node's place in a set merges per field ([Where a node sits in a
 set, a tree and a table](#where-a-node-sits-in-a-set-a-tree-and-a-table)).
+A standard action (tap, long press, increase, …) has one handler on a node, and a merge keeps
+the first: the receiver's own, else the first contributor's in the order assembly folds them,
+which is reading order (a sort key first, then tree order, the order merged labels join in). So
+a merged node's tap runs the first descendant in reading order that handles it, never a later
+one; paint order plays no part, so in a stack the back-most tappable child reads first. A
+contributor that blocks user actions drops the blocked ones before they can claim the action.
 A node offers any number of custom actions, each added with its label and
 its own handler, and two sets of them share a node. Their `CustomActionId` is the action's place
 in the node's list: a merge appends the contributor's after the receiver's and so renumbers them,
@@ -225,7 +231,8 @@ reader stop on the tile inside it.
 and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
 `custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
 `custom_actions_run_their_own_handler_until_stale` in `owner.rs`;
-`merged_custom_actions_each_reach_their_own_handler` in `crates/flui-widgets/tests/semantics.rs`;
+`merged_custom_actions_each_reach_their_own_handler` and
+`a_merged_action_runs_the_first_handler_in_reading_order` in `crates/flui-widgets/tests/semantics.rs`;
 `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
 `packages/flui-material/tests/list_tile.rs`; `a_mounted_radio_announces_as_a_radio_button` in
 `packages/flui-material/tests/radio.rs`; `compatibility_rules_for_modeled_fields` for the

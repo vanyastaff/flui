@@ -1704,10 +1704,15 @@ impl SemanticsConfiguration {
     ///   the contributor does.
     /// - **Role** — by specificity, see `more_specific_role`; without a
     ///   role on either side, none.
-    /// - **Actions** — absorb every action whose handler the child
-    ///   defined. If `other.blocks_user_actions == true`, only actions in
-    ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
-    ///   filtered out.
+    /// - **Actions** — first wins per action: the receiver keeps its own
+    ///   handler, and an action it lacks takes the first contributor's that
+    ///   defines it. Assembly absorbs in reading order (sort key, then tree
+    ///   order), so a merged node's action goes to the first descendant in
+    ///   that order that handles it, and a later one cannot take it over.
+    ///   Eligibility is filtered before
+    ///   precedence: if `other.blocks_user_actions == true`, only actions in
+    ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary, and a
+    ///   blocked one claims nothing.
     /// - **Custom actions** — the contributor's follow the receiver's, each
     ///   with its own handler; a contributor that blocks user actions adds
     ///   none.
@@ -1729,7 +1734,9 @@ impl SemanticsConfiguration {
         let effective_other_actions = other.effective_actions_as_bits();
         for (action, handler) in &other.actions {
             if (action.value() & effective_other_actions) != 0 {
-                self.actions.insert(*action, Rc::clone(handler));
+                self.actions
+                    .entry(*action)
+                    .or_insert_with(|| Rc::clone(handler));
             }
         }
         // Custom actions append, each with its own handler, so the
