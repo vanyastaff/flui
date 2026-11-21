@@ -1107,7 +1107,7 @@ fn a_key_down_no_release_follows_is_held_by_nobody() {
     let (cancelled, _registration) = record_cancels(&nodes[0]);
     let stray = key(
         KeyState::Down(KeyPress::Unpaired),
-        Key::character("Ã©"),
+        Key::character("é"),
         Code::Unidentified,
     );
     assert!(manager.dispatch_key_event(&stray).is_handled());
@@ -1162,7 +1162,7 @@ fn an_orphan_release_is_reported_with_the_ledger_let_go() {
         }));
     });
     flui_testing::log_capture::disarm_interest_cache();
-    let release = key(KeyState::Up, Key::character("Ã©"), Code::Unidentified);
+    let release = key(KeyState::Up, Key::character("é"), Code::Unidentified);
     let result = tracing::subscriber::with_default(ReenteringWarning, || {
         catch_unwind(AssertUnwindSafe(|| manager.dispatch_key_event(&release)))
     });

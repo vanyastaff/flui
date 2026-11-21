@@ -1,4 +1,4 @@
-//! `RenderAnimatedTransform` â€” a transform that follows an animation without
+//! `RenderAnimatedTransform` — a transform that follows an animation without
 //! rebuilding the element tree.
 //!
 //! # One cached sample
@@ -14,7 +14,7 @@
 //!
 //! A tick classifies the matrix the new sample produces as *identity*,
 //! *layered* (finite, invertible and not the identity) or *degenerate*
-//! (singular â€” a scale of 0 â€” or non-finite). Crossing between classes
+//! (singular — a scale of 0 — or non-finite). Crossing between classes
 //! adds or removes the transform layer, so it marks paint; a tick that stays
 //! layered marks only a composited-layer update, which patches the existing
 //! `TransformLayer` in the enclosing repaint boundary's retained capture
@@ -75,8 +75,8 @@ use crate::subscription::RenderSubscription;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TransformMotion {
-    /// Translation by a fraction of the node's own size: `(dxÂ·width,
-    /// dyÂ·height)` logical pixels. Under [`TextDirection::Rtl`] `dx` is
+    /// Translation by a fraction of the node's own size: `(dx·width,
+    /// dy·height)` logical pixels. Under [`TextDirection::Rtl`] `dx` is
     /// mirrored, so a positive value moves toward the reading-direction start.
     Slide {
         /// The fractional offset.
@@ -247,7 +247,7 @@ fn classify_matrix(m: &Matrix4) -> Class {
     }
 }
 
-/// A finite reading of the animation, or `None` for NaN/Â±âˆž.
+/// A finite reading of the animation, or `None` for NaN/±∞.
 fn finite(sample: (f64, f64)) -> Option<(f64, f64)> {
     (sample.0.is_finite() && sample.1.is_finite()).then_some(sample)
 }
