@@ -5,8 +5,8 @@ use super::owner_dispatch::{PresentationDispatcher, close_this_window};
 use crate::app::hot_reload::WorkerWatcherGuard;
 use flui_native::HostWindow;
 use flui_native::WindowInstallation;
+use rustc_hash::FxHashMap;
 use std::{
-    collections::HashMap,
     hash::Hash,
     rc::{Rc, Weak},
 };
@@ -60,7 +60,7 @@ fn retire_session(state: SessionState) {
 
 pub(in crate::app) struct SessionController<K: Eq + Hash> {
     installer: Option<SessionInstaller>,
-    sessions: HashMap<K, SessionState>,
+    sessions: FxHashMap<K, SessionState>,
     watcher: Option<WorkerWatcherGuard>,
 }
 impl<K: Eq + Hash + Clone> SessionController<K> {
@@ -70,7 +70,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
     ) -> Self {
         Self {
             installer: Some(Box::new(installer)),
-            sessions: HashMap::new(),
+            sessions: FxHashMap::default(),
             watcher,
         }
     }

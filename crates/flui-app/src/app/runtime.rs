@@ -14,9 +14,9 @@ mod fallback_rescan;
 
 use std::sync::atomic::Ordering;
 
+use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -121,7 +121,7 @@ type FontDigest = (u64, usize);
 struct FontRegistrations {
     /// Every accepted font, by digest, so the same bytes are never added
     /// twice.
-    digests: HashSet<FontDigest>,
+    digests: FxHashSet<FontDigest>,
     /// Fonts accepted before this thread resolved its services, registered
     /// on the collection when it is built. On a thread that never builds a
     /// UI runtime they stay here, and no collection gains them.
