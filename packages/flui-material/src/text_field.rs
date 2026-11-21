@@ -5,7 +5,7 @@
 //!
 //! The field composes a raw [`EditableText`] and [`InputDecorator`] inline,
 //! with no
-//! [`flui_sdk::widgets::RawTextField`](flui_sdk::widgets::RawTextField)
+//! [`flui_sdk::widgets::RawTextField`]
 //! in the middle â€” that type is this crate's theme-free sibling for a tree
 //! with no `Theme` ancestor, named `RawTextField` (not `TextField`)
 //! specifically so this Material type gets to be the one thing named

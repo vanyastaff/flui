@@ -1,8 +1,7 @@
 //! [`EditableText`] against a mounted tree: focus and enablement, submit
 //! keys, the IME session and its cursor-area loop, pointer selection, the
 //! obscured-text mapping as the render object sees it, and composing-region
-//! paint. The key handler, the mask and the render-view assembly stay unit
-//! tests in `src/text/editable_text.rs`.
+//! paint.
 
 use std::rc::Rc;
 
