@@ -93,7 +93,6 @@ Web ignored page freeze and GPU context loss.
    `OwnerPlatform` to `flui-app`, which fans it out to every presentation's `LifecycleHandle`
    (`subscribe_notices`, same FIFO and containment rules as lifecycle subscriptions).
    `AppLifecycleState` is unchanged; page freeze maps onto the execution state, not a notice.
-   `WidgetsBindingObserver`'s memory-pressure and exit-request hooks are removed.
 8. **Session end can be held only where the OS allows it.** A subscriber may take a
    `SessionEndBlock` with a reason; while any block lives the OS is answered "wait"
    (`ShutdownBlockReasonCreate` on Windows, `NSTerminateLater` on macOS); dropping the last block

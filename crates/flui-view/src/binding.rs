@@ -12,7 +12,7 @@
 //!   ├── build_owner: BuildOwner     (manages dirty elements)
 //!   ├── element_tree: ElementTree   (stores elements)
 //!   ├── root_element: ElementId     (root of element tree)
-//!   └── observers: Vec<Observer>    (lifecycle notifications)
+//!   └── lifecycle: LifecycleSource (app lifecycle state and its subscribers)
 //! ```
 //!
 //! # Usage
@@ -34,13 +34,8 @@ mod tree_cell;
 
 use std::{
     cell::RefCell,
-    future::Future,
-    pin::Pin,
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use flui_foundation::ElementId;
@@ -57,223 +52,11 @@ use crate::{
     view::{RootRenderView, View},
 };
 
-// ============================================================================
-// Route Information
-// ============================================================================
-
-/// Information about a route for navigation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteInformation {
-    /// The URI of the route (path + query + fragment).
-    pub uri: String,
-    /// Optional state key associated with this route.
-    /// A string key that can reference stored state elsewhere, rather than
-    /// carrying arbitrary state.
-    pub state_key: Option<String>,
-}
-
-impl RouteInformation {
-    /// Create a new RouteInformation with just a URI.
-    pub fn new(uri: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            state_key: None,
-        }
-    }
-
-    /// Create a new RouteInformation with URI and state key.
-    pub fn with_state_key(uri: impl Into<String>, state_key: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            state_key: Some(state_key.into()),
-        }
-    }
-}
-
-// ============================================================================
-// View Focus Event
-// ============================================================================
-
-/// Event describing a change in view focus state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ViewFocusEvent {
-    /// The view ID that changed focus.
-    pub view_id: u64,
-    /// Whether the view gained or lost focus.
-    pub state: ViewFocusState,
-    /// The direction of focus change.
-    pub direction: ViewFocusDirection,
-}
-
-/// The state of view focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(clippy::exhaustive_enums, reason = "a view gains focus or loses it")]
-pub enum ViewFocusState {
-    /// View gained focus.
-    Focused,
-    /// View lost focus.
-    Unfocused,
-}
-
-/// The direction of focus change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ViewFocusDirection {
-    /// Focus moved forward (e.g., Tab).
-    Forward,
-    /// Focus moved backward (e.g., Shift+Tab).
-    Backward,
-    /// Focus changed without direction (e.g., mouse click).
-    Undefined,
-}
-
-// ============================================================================
-// Predictive Back Event (Android)
-// ============================================================================
-
-/// Event for predictive back gesture (Android 13+).
-#[derive(Debug, Clone, Copy)]
-pub struct PredictiveBackEvent {
-    /// Progress of the back gesture (0.0 to 1.0).
-    pub progress: f64,
-    /// X coordinate of the touch.
-    pub touch_x: f64,
-    /// Y coordinate of the touch.
-    pub touch_y: f64,
-    /// Whether the swipe is from the left edge.
-    pub swipe_edge_left: bool,
-}
-
-// ============================================================================
-// WidgetsBindingObserver
-// ============================================================================
-
-/// Observer for widgets binding lifecycle events.
-///
-/// Implement this trait to receive notifications about:
-/// - Locale changes
-/// - Metrics changes (window resize)
-/// - App lifecycle changes
-/// - Memory pressure
-/// - Navigation events
-/// - Back gestures (Android predictive back)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_view::{WidgetsBindingObserver, AppLifecycleState};
-/// use std::future::Future;
-/// use std::pin::Pin;
-///
-/// struct MyObserver;
-///
-/// impl WidgetsBindingObserver for MyObserver {
-///     fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
-///         println!("App lifecycle changed to: {:?}", state);
-///     }
-///
-///     fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-///         Box::pin(async {
-///             // Handle back navigation
-///             true // We handled it
-///         })
-///     }
-/// }
-/// ```
-pub trait WidgetsBindingObserver {
-    // ========================================================================
-    // Navigation
-    // ========================================================================
-
-    /// Called when the system tells the app to pop the current route.
-    ///
-    /// This is triggered by the system back button or back gesture.
-    /// Return `true` if handled (e.g., by closing a dialog), `false` otherwise.
-    /// If no observer returns `true`, the application may quit.
-    fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-        Box::pin(async { false })
-    }
-
-    /// Called when the host tells the app to push a new route.
-    ///
-    /// Return `true` if handled, `false` otherwise.
-    fn did_push_route_information(
-        &self,
-        _route: &RouteInformation,
-    ) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-        Box::pin(async { false })
-    }
-
-    // ========================================================================
-    // Predictive Back Gesture (Android 13+)
-    //
-    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. These four trait
-    // methods + the matching `WidgetsBinding::handle_*_back_gesture`
-    // impls + the `back_gesture_observers` storage are Android-13+
-    // infrastructure waiting on the `flui-native` Android wire-up. No
-    // in-workspace `impl WidgetsBindingObserver` overrides them today.
-    // Still deferred: the `flui-native` Android backend is compiled
-    // and linted in CI but dispatches no back-gesture events — nothing
-    // in the workspace constructs a `PredictiveBackEvent` outside this
-    // crate — so there is still nothing to wire this surface to. By
-    // this date either delete the whole surface (no consumer
-    // materialized) OR wire the platform side and drop this marker.
-    // ========================================================================
-
-    /// Called at the start of a predictive back gesture.
-    ///
-    /// Return `true` to handle the gesture (start animation), `false`
-    /// otherwise. If `true`, subsequent gesture events will be sent to this
-    /// observer.
-    fn handle_start_back_gesture(&self, _event: PredictiveBackEvent) -> bool {
-        false
-    }
-
-    /// Called when a predictive back gesture moves.
-    ///
-    /// Only called if `handle_start_back_gesture` returned `true`.
-    fn handle_update_back_gesture_progress(&self, _event: PredictiveBackEvent) {}
-
-    /// Called when a predictive back gesture is committed.
-    ///
-    /// The route should be popped.
-    fn handle_commit_back_gesture(&self) {}
-
-    /// Called when a predictive back gesture is canceled.
-    ///
-    /// The animation should be reversed.
-    fn handle_cancel_back_gesture(&self) {}
-
-    // ========================================================================
-    // Metrics and Display
-    // ========================================================================
-
-    /// Called when window metrics change (size, DPI, etc).
-    ///
-    /// System preferences (locales, text scale, contrast, motion) and the
-    /// presentation's brightness reach widgets through `MediaQuery` and its
-    /// field-specific dependencies (ADR-0172), not through this observer.
-    fn did_change_metrics(&self) {}
-
-    // ========================================================================
-    // App Lifecycle
-    // ========================================================================
-
-    /// Called when app lifecycle state changes.
-    fn did_change_app_lifecycle_state(&self, _state: AppLifecycleState) {}
-
-    /// Called when the view focus changes.
-    fn did_change_view_focus(&self, _event: ViewFocusEvent) {}
-}
-
 /// Application lifecycle states.
 ///
-/// Re-exported from [`flui_scheduler::AppLifecycleState`] — the canonical
-/// lifecycle enum (`UpdateScheduler::handle_app_lifecycle_state_change`).
-/// `flui-view` previously defined its own parallel
-/// `Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached` enum; the two were
-/// consolidated onto the scheduler's copy (ADR-0035) since it is the one
-/// tied to real frame-scheduling behavior (`frames_enabled`).
+/// Re-exported from [`flui_scheduler::AppLifecycleState`], the one lifecycle
+/// enum (`UpdateScheduler::handle_app_lifecycle_state_change`), which is tied
+/// to frame-scheduling behavior (`frames_enabled`) (ADR-0035).
 pub use flui_scheduler::AppLifecycleState;
 
 /// The owner-local binding for one widgets layer.
@@ -281,7 +64,7 @@ pub use flui_scheduler::AppLifecycleState;
 /// WidgetsBinding manages:
 /// - A single ElementTree rooted at `root_element`
 /// - A BuildOwner that tracks dirty elements
-/// - Lifecycle observers
+/// - The app lifecycle state and its subscribers
 /// - First frame tracking
 ///
 /// # Ownership
@@ -347,28 +130,6 @@ pub struct WidgetsBinding {
     debug_building_dirty_elements: AtomicBool,
 }
 
-// Each physical registry member and notification snapshot owns its own
-// reference; it is destroyed normally (ADR-0281).
-#[derive(Clone)]
-struct BindingObserverOwner(Arc<dyn WidgetsBindingObserver>);
-
-impl BindingObserverOwner {
-    fn new(observer: Arc<dyn WidgetsBindingObserver>) -> Self {
-        Self(observer)
-    }
-
-    fn as_arc(&self) -> &Arc<dyn WidgetsBindingObserver> {
-        &self.0
-    }
-}
-
-impl std::ops::Deref for BindingObserverOwner {
-    type Target = dyn WidgetsBindingObserver;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
 /// Which build pass of a frame [`WidgetsBinding::draw_frame_impl`] runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildPass {
@@ -393,22 +154,6 @@ struct WidgetsBindingInner {
     /// This is set by the application binding (`flui-app`'s `UiRuntime`)
     /// and propagated to elements during mounting.
     pipeline_owner: Option<PipelineCell>,
-
-    /// Lifecycle observers.
-    observers: Vec<BindingObserverOwner>,
-
-    /// Observers currently handling a predictive back gesture (Android).
-    ///
-    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. The predictive-
-    // back-gesture surface (`handle_*_back_gesture` trait methods +
-    // `back_gesture_observers` storage + `WidgetsBinding::handle_*_
-    // back_gesture` impls) is Android-13+ infrastructure waiting on the
-    // `flui-native` Android side, which still dispatches no such
-    // events — see the matching marker on the trait surface above for
-    // the verified detail. By this date either delete this surface (no
-    // consumer materialized) OR wire the platform side and drop this
-    // marker.
-    back_gesture_observers: Vec<BindingObserverOwner>,
 
     /// Whether a build has been scheduled.
     build_scheduled: bool,
@@ -467,8 +212,6 @@ impl WidgetsBinding {
             element_tree: ElementTree::new(),
             root_element: None,
             pipeline_owner: None,
-            observers: Vec::new(),
-            back_gesture_observers: Vec::new(),
             build_scheduled: false,
             need_to_report_first_frame: true,
         }));
@@ -1293,72 +1036,18 @@ impl WidgetsBinding {
         self.debug_building_dirty_elements.load(Ordering::Relaxed)
     }
 
-    // ========================================================================
-    // Observers
-    // ========================================================================
-
-    /// Add a lifecycle observer.
-    pub fn add_observer(&self, observer: Arc<dyn WidgetsBindingObserver>) {
-        self.inner
-            .write()
-            .observers
-            .push(BindingObserverOwner::new(observer));
-    }
-
-    /// Remove a lifecycle observer.
-    pub fn remove_observer(&self, observer: &Arc<dyn WidgetsBindingObserver>) {
-        self.inner
-            .write()
-            .observers
-            .retain(|o| !Arc::ptr_eq(o.as_arc(), observer));
-    }
-
-    /// Notify all observers of metrics change.
-    ///
-    /// Snapshots the observer list under the read lock and releases the
-    /// lock before invoking callbacks. An observer callback
-    /// that re-enters the binding (e.g., adds or removes an observer,
-    /// reads `observer_count`, or schedules a build) would deadlock if
-    /// the iteration held the lock across the dispatch.
-    pub fn handle_metrics_changed(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_metrics();
-        }
-    }
-
-    /// Commit a local lifecycle observation and notify legacy and scoped listeners.
-    /// Legacy observers retain their snapshot iteration behavior. Scoped
-    /// subscriptions still drain when a legacy observer panics.
+    /// Commit a local lifecycle observation and deliver it to the
+    /// presentation's [`LifecycleHandle::subscribe`](crate::LifecycleHandle::subscribe)
+    /// subscribers.
     pub fn handle_app_lifecycle_state_changed(&self, state: AppLifecycleState) {
         if self.lifecycle.commit(state).is_ok() {
-            self.notify_lifecycle(state);
+            self.lifecycle.drain();
         }
-    }
-
-    pub(crate) fn notify_lifecycle(&self, state: AppLifecycleState) {
-        // An observer that panics ends the observers' walk, as any binding
-        // notification does; the scoped subscribers still hear the state,
-        // and the observer's panic is the one resumed.
-        let mut first = FirstPanic::new();
-        first.contain(|| {
-            let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-            for observer in &observers {
-                observer.did_change_app_lifecycle_state(state);
-            }
-        });
-        first.contain(|| self.lifecycle.drain());
-        first.resume();
     }
 
     /// Get the number of elements in the tree.
     pub fn element_count(&self) -> usize {
         self.inner.read().element_tree.len()
-    }
-
-    /// Get the number of observers.
-    pub fn observer_count(&self) -> usize {
-        self.inner.read().observers.len()
     }
 
     /// Give the elements of this binding the window they are presented in, so
@@ -1408,118 +1097,6 @@ impl WidgetsBinding {
     pub fn mark_ready_to_produce_frames(&self) {
         self.ready_to_produce_frames.store(true, Ordering::Release);
     }
-
-    // ========================================================================
-    // Navigation Handling
-    // ========================================================================
-
-    /// Handle a pop route request from the system.
-    ///
-    /// Notifies observers until one returns `true`, meaning it handled the
-    /// request. If none return `true`, the application may quit.
-    pub async fn handle_pop_route(&self) -> bool {
-        let observers: Vec<_> = self.inner.read().observers.clone();
-        for observer in observers {
-            if observer.did_pop_route().await {
-                return true;
-            }
-        }
-        // No observer handled - application may quit
-        false
-    }
-
-    /// Handle a push route request from the host.
-    pub async fn handle_push_route(&self, route: &RouteInformation) -> bool {
-        let observers: Vec<_> = self.inner.read().observers.clone();
-        for observer in observers {
-            if observer.did_push_route_information(route).await {
-                return true;
-            }
-        }
-        false
-    }
-
-    // ========================================================================
-    // Predictive Back Gesture (Android)
-    //
-    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. See the matching
-    // marker on the `WidgetsBindingObserver::handle_*_back_gesture` trait
-    // surface for the rationale and dispose-or-wire decision rule.
-    // ========================================================================
-
-    /// Handle the start of a predictive back gesture.
-    ///
-    /// Returns `true` if any observer is handling the gesture.
-    pub fn handle_start_back_gesture(&self, event: PredictiveBackEvent) -> bool {
-        let mut inner = self.inner.write();
-        inner.back_gesture_observers.clear();
-
-        // Clone observers to avoid holding lock during callback
-        let observers: Vec<_> = inner.observers.clone();
-        drop(inner);
-
-        let mut handling_observers = Vec::new();
-        for observer in observers {
-            if observer.handle_start_back_gesture(event) {
-                handling_observers.push(observer);
-            }
-        }
-
-        if handling_observers.is_empty() {
-            false
-        } else {
-            self.inner.write().back_gesture_observers = handling_observers;
-            true
-        }
-    }
-
-    /// Handle progress update for a predictive back gesture.
-    pub fn handle_update_back_gesture_progress(&self, event: PredictiveBackEvent) {
-        let observers: Vec<_> = self.inner.read().back_gesture_observers.clone();
-        for observer in &observers {
-            observer.handle_update_back_gesture_progress(event);
-        }
-    }
-
-    /// Handle commit of a predictive back gesture.
-    ///
-    /// If no observer was handling the gesture, falls back to
-    /// `handle_pop_route`.
-    pub async fn handle_commit_back_gesture(&self) {
-        let observers: Vec<_> = self.inner.read().back_gesture_observers.clone();
-        if observers.is_empty() {
-            // No predictive handler - fall back to normal pop
-            self.handle_pop_route().await;
-            return;
-        }
-        for observer in &observers {
-            observer.handle_commit_back_gesture();
-        }
-    }
-
-    /// Handle cancellation of a predictive back gesture.
-    pub fn handle_cancel_back_gesture(&self) {
-        let observers: Vec<_> = self.inner.read().back_gesture_observers.clone();
-        for observer in &observers {
-            observer.handle_cancel_back_gesture();
-        }
-    }
-
-    // ========================================================================
-    // View Focus
-    // ========================================================================
-
-    /// Handle view focus change.
-    ///
-    /// Snapshots the observer list under the read lock and releases the
-    /// lock before invoking callbacks. See
-    /// [`Self::handle_metrics_changed`] for the deadlock-safety rationale.
-    pub fn handle_view_focus_changed(&self, event: ViewFocusEvent) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_view_focus(event);
-        }
-    }
 }
 
 impl std::fmt::Debug for WidgetsBinding {
@@ -1538,7 +1115,6 @@ impl std::fmt::Debug for WidgetsBinding {
             )
             .field("dirty_count", &inner.build_owner.dirty_count())
             .field("element_count", &inner.element_tree.len())
-            .field("observer_count", &inner.observers.len())
             .finish_non_exhaustive()
     }
 }
@@ -1546,6 +1122,7 @@ impl std::fmt::Debug for WidgetsBinding {
 #[cfg(test)]
 mod tests {
     use crate::view::IntoView;
+    use std::sync::Arc;
 
     use std::rc::Rc;
 

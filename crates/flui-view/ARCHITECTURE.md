@@ -196,30 +196,6 @@ retired tag. The final nonzero tag is admitted once; after that, owner
 construction panics permanently. Existing scoped claims stay usable, and a
 stale release cannot withdraw a later owner's claim.
 
-### Binding observers and returned futures retire independently
-
-**Rule:** observer registries and each notification snapshot own separately
-guarded observer envelopes. Healthy destruction keeps container order; after
-the first propagating destructor failure, or during an incoming unwind, the
-remaining envelopes are still destroyed (ADR-0281). Snapshot callbacks run after the
-binding guard is released. A registry change affects the next notification;
-a running dispatch keeps its snapshot, and a callback panic stops that
-notification. A legacy lifecycle failure precedes the scoped lifecycle drain,
-and its payload stays the first failure.
-
-**Rule:** suspended pop, push and application-exit notifications await each
-observer's response future in turn; cancelling the notification destroys the
-current future, its observer and the remaining snapshot normally (ADR-0281).
-Pop and push stop at the first handled response; exit consults every observer.
-
-**Limits:** a destructor that panics while a cancellation is already unwinding
-aborts, as in std, and whole-binding destruction is not covered.
-Predictive-back list clearing and replacement still retire entries under the
-write guard.
-
-**Pinned by:** the `binding_observer_ownership_and_notifications` rows of
-`lifecycle_panic_containment_matrix`.
-
 ### Same-drain absorption of a mid-drain external schedule (issue #1180)
 
 **Rule:** `BuildOwner::drain_build_scope`'s heap loop absorbs the

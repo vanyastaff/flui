@@ -84,7 +84,7 @@ fn terminal_lifecycle_ladder_runs_through_the_seam() {
         .commit_terminal(Detached)
         .expect("terminal commit after begin_close");
     assert_eq!(binding.lifecycle_source().current(), Some(Detached));
-    binding.notify_committed_lifecycle(Detached);
+    binding.notify_committed_lifecycle();
     assert_eq!(seen.get(), Some(Detached));
 
     binding.lifecycle_source().finish_close();
