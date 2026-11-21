@@ -538,7 +538,7 @@ pub mod view {
 }
 
 /// Application configuration. Re-exported from [`app`] (`flui-app`).
-pub use flui_app::app::AppConfig;
+pub use flui_app::AppConfig;
 /// The errors a window request can fail with — what [`AppHandle`] reports and
 /// what an [`Application`] window-error observer receives (and, under
 /// `unstable-windows`, what `open_window` answers). Re-exported from [`app`]
@@ -548,13 +548,16 @@ pub use flui_app::app::AppConfig;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use flui_app::app::AppWindowError;
+pub use flui_app::AppWindowError;
 /// Whether an additional window joins the caller's UI runtime or gets its own.
 /// Re-exported from [`app`] (`flui-app`); unstable, under `unstable-windows`
 /// (see `open_window`), and absent on iOS, where no secondary-window entry
 /// point exists.
 #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
-pub use flui_app::app::WindowPolicy;
+pub use flui_app::WindowPolicy;
+/// The function an application starts from on every platform; on Android it
+/// writes the `android_main` the system calls. Re-exported from `flui-app`.
+pub use flui_app::main;
 /// Open an additional top-level window without widget content.
 ///
 /// Unstable, under `unstable-windows` (see [`open_window`]). Desktop only.
@@ -569,7 +572,7 @@ pub use flui_app::app::WindowPolicy;
     not(target_arch = "wasm32"),
     feature = "unstable-windows"
 ))]
-pub use flui_app::app::open_secondary_window;
+pub use flui_app::open_secondary_window;
 /// Open an additional top-level window with mounted widget content.
 ///
 /// Unstable: an application has one window unless it turns on the additive
@@ -589,7 +592,14 @@ pub use flui_app::app::open_secondary_window;
     not(target_arch = "wasm32"),
     feature = "unstable-windows"
 ))]
-pub use flui_app::app::open_window;
+pub use flui_app::open_window;
+/// Run `root` in a main window: `Application::new().run(root)`, as Flutter's
+/// `runApp` takes the root widget. Re-exported from [`app`] (`flui-app`).
+///
+/// The root is any [`view::View`], stateless or stateful. It returns a
+/// [`LaunchError`] when the platform cannot start, the system is below FLUI's
+/// floor or the run fails; on the desktop it returns after shutdown.
+pub use flui_app::run_app;
 /// The handle a desktop [`Application`] gives its `on_ready` observer, which
 /// shows the main window or quits from any thread, and why a request through
 /// it fails. Re-exported from [`app`] (`flui-app`); desktop only.
@@ -598,17 +608,7 @@ pub use flui_app::app::open_window;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub use flui_app::app::{AppControlError, AppHandle};
-/// The function an application starts from on every platform; on Android it
-/// writes the `android_main` the system calls. Re-exported from `flui-app`.
-pub use flui_app::main;
-/// Run `root` in a main window: `Application::new().run(root)`, as Flutter's
-/// `runApp` takes the root widget. Re-exported from [`app`] (`flui-app`).
-///
-/// The root is any [`view::View`], stateless or stateful. It returns a
-/// [`LaunchError`] when the platform cannot start, the system is below FLUI's
-/// floor or the run fails; on the desktop it returns after shutdown.
-pub use flui_app::run_app;
+pub use flui_app::{AppControlError, AppHandle};
 /// The builder of a configured run, and why a run fails. Re-exported from
 /// [`app`] (`flui-app`).
 pub use flui_app::{Application, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem};
@@ -670,23 +670,23 @@ pub use flui_app::{FontRegistrationError, register_font};
 /// (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so it stays at
 /// `flui::cupertino` rather than joining this glob.
 pub mod prelude {
-    pub use flui_app::app::AppConfig;
+    pub use flui_app::AppConfig;
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub use flui_app::app::AppWindowError;
+    pub use flui_app::AppWindowError;
     #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
-    pub use flui_app::app::WindowPolicy;
+    pub use flui_app::WindowPolicy;
+    pub use flui_app::{Application, LaunchError, register_font, run_app};
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
         not(target_arch = "wasm32"),
         feature = "unstable-windows"
     ))]
-    pub use flui_app::app::{open_secondary_window, open_window};
-    pub use flui_app::{Application, LaunchError, register_font, run_app};
+    pub use flui_app::{open_secondary_window, open_window};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

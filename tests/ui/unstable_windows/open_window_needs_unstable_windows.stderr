@@ -12,5 +12,5 @@ note: found an item that was configured out
   |     feature = "unstable-windows"
   |     ---------------------------- the item is gated behind the `unstable-windows` feature
   | ))]
-  | pub use flui_app::app::open_window;
-  |                        ^^^^^^^^^^^
+  | pub use flui_app::open_window;
+  |                   ^^^^^^^^^^^
