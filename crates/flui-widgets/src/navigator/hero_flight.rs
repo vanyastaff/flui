@@ -564,7 +564,8 @@ impl HeroFlight {
     /// This exists because a controller can be replaced while the navigator lives;
     /// were the controller owned by the navigator for its whole life, leaving the
     /// placeholders frozen would be harmless, since the tree would be torn down
-    /// anyway. Recorded in `ARCHITECTURE.md`.
+    /// anyway. Recorded in `ARCHITECTURE.md`, "Replacing a `HeroController` retires its
+    /// in-flight flights, restoring both heroes".
     fn abort(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
         let Some((from_hero, to_hero)) = self.teardown(recovery) else {
             return;

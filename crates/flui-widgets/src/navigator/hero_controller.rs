@@ -825,7 +825,7 @@ impl NavigatorObserver for HeroController {
         // their shuttle's painting forever. FLUI replaces the controller through
         // `add_observer`/`remove_observer` while the navigator stays alive, so a
         // controller does not live as long as its navigator. Recorded in
-        // `ARCHITECTURE.md` §18.
+        // `ARCHITECTURE.md`, "Replacing a `HeroController` retires its in-flight flights".
         let previous = Terminal::new(self.navigator.borrow_mut().take());
         self.flights.finish_all();
         drop(previous);

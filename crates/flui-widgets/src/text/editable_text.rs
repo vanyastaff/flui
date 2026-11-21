@@ -137,8 +137,8 @@ pub type SubmitCallback = Rc<dyn Fn(&mut EventContext<'_>, &str)>;
 /// of it once and [`EditableText::on_changed`] runs at most once, only when
 /// the committed text (the text without the composition) changed. A
 /// platform selection is kept exactly, even inside a grapheme cluster; a tap
-/// or an arrow key still snaps to one (Mapping decisions #33 and #34 in
-/// `flui-widgets/ARCHITECTURE.md`). An obscured field reports itself
+/// or an arrow key still snaps to one (`flui-widgets/ARCHITECTURE.md`, "Platform
+/// selection is exact; user selection snaps"). An obscured field reports itself
 /// protected: the input method may edit it and ask for geometry, but not
 /// read its text.
 ///

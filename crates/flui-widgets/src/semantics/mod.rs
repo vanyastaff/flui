@@ -25,7 +25,8 @@
 //! context) advertises none of these actions, so no platform sees a control
 //! that nothing can run. [`Semantics::from_configuration`] still takes raw
 //! handlers; that is the `flui-semantics` surface, below this widget.
-//! `ARCHITECTURE.md` §17 records the design.
+//! `ARCHITECTURE.md`, "`Semantics` action handlers are owner-local `EventContext`
+//! callbacks", records the design.
 
 mod actions;
 mod annotation;

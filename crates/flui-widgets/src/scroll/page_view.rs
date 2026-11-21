@@ -42,8 +42,8 @@
 //!   bubbling yet. The controller's listener records a change when
 //!   `round(page)` moves; the callback runs on the local post-frame lane with
 //!   the `EventContext` its writes need, one frame after the change, every recorded
-//!   page in order (ADR-0086; mapping decision 37 in
-//!   `crates/flui-widgets/ARCHITECTURE.md`).
+//!   page in order (ADR-0086; `ARCHITECTURE.md`, "`PageView` reports page changes
+//!   after the frame, in order").
 //! - **Non-snapping mode, `reverse`, end padding, implicit scrolling, page
 //!   storage restoration, and `viewport_fraction > 1.0` centering** are not
 //!   modeled — [`PageSnap`] is always applied (page snapping is the

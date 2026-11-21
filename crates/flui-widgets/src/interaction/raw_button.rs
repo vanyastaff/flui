@@ -44,7 +44,7 @@ type PressCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 /// activation key reaching it keeps bubbling.
 ///
 /// It is a design-agnostic press primitive with no Material styling and no
-/// pressed or hovered look; see `ARCHITECTURE.md` "Mapping decisions".
+/// pressed or hovered look; see `ARCHITECTURE.md`, "`RawButton` is a widgets-layer button".
 #[derive(Clone, StatelessView)]
 pub struct RawButton {
     on_pressed: Option<PressCallback>,

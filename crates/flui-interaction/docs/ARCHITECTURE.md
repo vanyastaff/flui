@@ -936,7 +936,7 @@ The mark is cleared by any non-programmatic focus move inside the scope (the
 user chose), by a later `set_first_focus` (a restore is final), and by
 `take_provisional_first_focus`, which an `autofocus` widget calls to replace
 the guess once. The navigator uses it for a pushed route's first entry
-(`flui-widgets` ARCHITECTURE §40, `push_moves_focus_into_the_new_route`).
+([`flui-widgets` `ARCHITECTURE.md`](../../flui-widgets/ARCHITECTURE.md#route-keyboard-focus-belongs-to-modalroute-simpleroute-has-none), `push_moves_focus_into_the_new_route`).
 
 Removing the subtree that holds primary focus runs no user code: removal comes
 from a widget's dispose, inside reconciliation. It records an orphan marker —
