@@ -74,19 +74,6 @@ impl OverlayEntryId {
         &COUNTER
     }
 
-    /// Leave exactly `remaining` process entry identities. Only for a test
-    /// that runs alone in its own child process.
-    #[cfg(test)]
-    pub(crate) fn leave_process_identities(remaining: u64) {
-        // The last identity is MAX; the counter then parks at the zero sentinel.
-        let next = if remaining == 0 {
-            0
-        } else {
-            u64::MAX - (remaining - 1)
-        };
-        Self::counter().store(next, Ordering::Relaxed);
-    }
-
     pub(crate) fn from_counter(counter: &AtomicU64) -> Self {
         // Zero is a permanent exhausted sentinel, never an admitted identity.
         // The final nonzero identity remains usable without wrapping to one.
@@ -208,12 +195,14 @@ impl OverlayEntry {
 
     /// Builder form of [`set_opaque`](Self::set_opaque), for an entry that is not
     /// yet attached (so no rebuild is needed).
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_opaque(self, opaque: bool) -> Self {
         self.inner.opaque.store(opaque, Ordering::Relaxed);
         self
     }
 
     /// Builder form of [`set_maintain_state`](Self::set_maintain_state).
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_maintain_state(self, maintain_state: bool) -> Self {
         self.inner
             .maintain_state
@@ -310,6 +299,7 @@ impl OverlayEntry {
     ///
     /// The identity that proves a `rearrange` *moved* a layer rather than
     /// rebuilding it in place.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn element_id(&self) -> Option<flui_foundation::ElementId> {
         self.inner
             .rebuild

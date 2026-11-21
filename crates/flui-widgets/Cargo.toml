@@ -175,8 +175,10 @@ harness = true
 
 [features]
 default = []
-# `ScrollStep::for_test` and `FlingStep::for_test`: a nested scroll connection
-# exercised alone, outside the channel that otherwise builds every step.
+# `ScrollStep::for_test` and `FlingStep::for_test`, for a nested scroll connection
+# exercised alone, and the doc-hidden `__test_access` this crate's integration
+# tests name private items through (ADR-0083 §4). Only the dev-dependency on
+# this crate turns it on.
 testing = []
 # Decodes PNG, JPEG and GIF bytes or files through
 # `flui_painting::paint::Image::decode`, under its decoded-size limit.

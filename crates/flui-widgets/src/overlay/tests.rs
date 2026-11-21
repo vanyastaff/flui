@@ -6,32 +6,10 @@
 //! the headless harness is not compiled into this crate's unit-test build
 //! (ADR-0083 §4).
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use flui_view::prelude::*;
 
 use super::{OnstagePlan, OverlayEntry, onstage_plan};
 use crate::SizedBox;
-
-/// Counts how many times an entry's builder closure ran.
-#[derive(Clone, Default)]
-struct Calls(Arc<AtomicUsize>);
-
-impl Calls {
-    fn bump(&self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-/// An entry whose builder counts invocations and builds a leaf.
-fn counting_entry(calls: &Calls) -> OverlayEntry {
-    let calls = calls.clone();
-    OverlayEntry::new(move |_ctx| {
-        calls.bump();
-        SizedBox::new(10.0, 10.0).into_view().boxed()
-    })
-}
 
 /// The `skipCount` handed to the theater is the number of *covered but
 /// maintained* entries, and they are always the leading children — the property

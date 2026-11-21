@@ -348,6 +348,7 @@ impl<T: 'static> PageRoute<T> {
     /// to measure a route's final hero geometry. Test-facing
     /// until `HeroController` gives it a production caller; read through
     /// `crate::__test_access::RouteProbe`.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn modal_handle(&self) -> super::modal_route::ModalHandle {
         self.modal.handle()
     }
@@ -356,6 +357,7 @@ impl<T: 'static> PageRoute<T> {
     /// test drives the transition with `set_value` through this handle
     /// rather than awaiting the `AnimationRunFuture` `did_push` returns, which needs a
     /// real `Vsync`. Read through `crate::__test_access::RouteProbe`.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()
     }
@@ -491,6 +493,7 @@ impl<T: 'static> PopupRoute<T> {
 
 impl<T: 'static> PopupRoute<T> {
     /// See [`PageRoute::transition_handle`].
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()
     }

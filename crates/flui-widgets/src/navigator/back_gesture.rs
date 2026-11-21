@@ -286,6 +286,7 @@ impl BackGestureRuntime {
     }
 
     /// Whether a drag has started and not yet been released or disposed.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn has_gesture(&self) -> bool {
         self.gesture.borrow().is_some()
@@ -293,6 +294,7 @@ impl BackGestureRuntime {
 
     /// Whether a released drag's settle animation is still owed a
     /// `did_stop_user_gesture` report.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn awaiting_settle(&self) -> bool {
         self.awaiting_settle.get()

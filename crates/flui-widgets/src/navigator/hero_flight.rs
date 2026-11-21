@@ -433,36 +433,42 @@ impl HeroFlight {
     }
 
     /// The overlay entry this flight presents its shuttle in, while it has one.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn entry_id(&self) -> Option<crate::OverlayEntryId> {
         self.inner.entry.borrow().as_ref().map(OverlayEntry::id)
     }
 
     /// The tween's current evaluation — where the shuttle is.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn shuttle_rect(&self) -> Rect {
         self.inner.current_rect()
     }
 
     /// The tween's destination, re-aimed by every tick.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn target_rect(&self) -> Rect {
         self.inner.rect.get().end
     }
 
     /// The tween's origin. Re-aiming the destination must never move it.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn begin_rect(&self) -> Rect {
         self.inner.rect.get().begin
     }
 
     /// The shuttle's current opacity.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn opacity(&self) -> f64 {
         self.inner.opacity.get()
     }
 
     /// Which way the flight currently runs — a divert can flip it.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn direction(&self) -> FlightDirection {
         self.inner.state.borrow().direction
@@ -937,6 +943,7 @@ impl FlightManager {
     }
 
     /// How many flights are parked awaiting a safe drop.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn retired_count(&self) -> usize {
         self.retired.borrow().len()
@@ -944,6 +951,7 @@ impl FlightManager {
 
     /// How many end-of-frame drains have been scheduled — coalescing must keep this at
     /// one per frame no matter how many flights land.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn drains_scheduled(&self) -> usize {
         self.drains_scheduled.get()
@@ -987,11 +995,13 @@ impl FlightManager {
         clippy::len_without_is_empty,
         reason = "a test-facing count; nothing asks whether the manager is empty"
     )]
+    #[cfg(any(test, feature = "testing"))]
     pub fn len(&self) -> usize {
         self.flights.len()
     }
 
     /// The flight for `tag`, if any.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroFlight> {
         self.flights.get(tag)

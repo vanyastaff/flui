@@ -258,6 +258,7 @@ impl HeroRecordings {
         self.manifests.borrow_mut().extend(manifests);
     }
 
+    #[cfg(any(test, feature = "testing"))]
     fn manifests(&self) -> Vec<HeroFlightManifest> {
         // HeroTag clones its Arc identity; this copies no authored key code.
         self.manifests.borrow().clone()
@@ -329,21 +330,25 @@ impl HeroController {
     }
 
     /// How many post-frame measurements have been scheduled.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn scheduled_count(&self) -> usize {
         self.scheduled.get()
     }
 
     /// Everything the post-frame callbacks resolved, in order.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn measurements(&self) -> Vec<Measurement> {
         self.recordings.measurements.borrow().clone()
     }
 
     /// The flights that started, one per shared tag. Recorded even after they land.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn manifests(&self) -> Vec<HeroFlightManifest> {
         self.recordings.manifests()
     }
 
     /// The flights currently in the air.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn flights(&self) -> &Rc<FlightManager> {
         &self.flights
     }

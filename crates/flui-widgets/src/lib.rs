@@ -87,8 +87,10 @@ mod support;
 // guarantee, workspace-only.
 #[doc(hidden)]
 pub mod __private;
-// Temporary access to private items for this crate's own integration tests
-// (ADR-0083 §4): no semver guarantee, `crates/flui-widgets/tests` only.
+// Private items this crate's own integration tests name (ADR-0083 §4). Built
+// only with `testing`, which the crate's dev-dependency on itself turns on, so
+// no application build carries it.
+#[cfg(feature = "testing")]
 #[doc(hidden)]
 pub mod __test_access;
 mod anchored_box;

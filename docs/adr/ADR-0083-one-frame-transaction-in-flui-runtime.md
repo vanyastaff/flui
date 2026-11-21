@@ -246,8 +246,10 @@ library. That still compiles, since the harness takes a `flui_view::View` and th
 `crate::MediaQuery::maybe_of` and every other lookup of a `flui-widgets` type reads `None`. The
 planned "harness stays above the runtime" gate ([`design/architecture.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/architecture.md)) turns this into a check.
 `reach-forbid = ["flui-testing"]` keeps the test driver out of the widgets' normal closure. A moved test that still reads a private item reaches it
-through `flui_widgets::__test_access`: doc-hidden, always compiled (no visibility feature, one type
-layout), for `crates/flui-widgets/tests` only, and **temporary**. It holds probe traits for
+through `flui_widgets::__test_access`: doc-hidden, built only with the crate's `testing` feature (which
+only the crate's dev-dependency on itself turns on, so no application build carries it, and an item
+only it reaches is built under the same `cfg`), for `crates/flui-widgets/tests` only, and
+**temporary**. It holds probe traits for
 methods on public types, re-exports of private types raised to `pub` inside private modules, and
 test types that stand in for a capability that must stay unreachable (a route that finalizes only
 itself, rather than a probe that finalizes through any `RouteBindingSlot`). Not every entry is a

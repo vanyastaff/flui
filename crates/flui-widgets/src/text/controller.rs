@@ -322,6 +322,7 @@ impl TextEditingController {
     /// A shipped build has no caller: the integration tests read it through
     /// `crate::__test_access::TextEditingControllerProbe` (ADR-0083 §4), and it
     /// leaves with that module.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub(crate) fn listener_count(&self) -> usize {
         self.notifier.len()
