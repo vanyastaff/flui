@@ -7,7 +7,7 @@
 //! gets the id of its key; an output it cannot key gets one fresh id that stays
 //! its own while the native object it stands for exists.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_foundation::geometry::DevicePixelRatio;
 #[cfg(any(feature = "x11", test))]
@@ -73,7 +73,7 @@ pub(crate) struct Resolved {
 /// object.
 #[derive(Debug, Default)]
 pub(crate) struct FreshIds {
-    issued: HashMap<u32, DisplayId>,
+    issued: FxHashMap<u32, DisplayId>,
 }
 
 impl FreshIds {

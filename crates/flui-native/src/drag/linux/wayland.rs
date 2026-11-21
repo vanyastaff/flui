@@ -42,7 +42,9 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::FxHashMap;
 use std::os::fd::AsFd as _;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -218,7 +220,7 @@ struct State {
     table: OfferTable,
     windows: Vec<DragWindow>,
     hover: Option<Hover>,
-    offers: HashMap<DataTransferId, Offer>,
+    offers: FxHashMap<DataTransferId, Offer>,
     /// The fetches reading, at most [`MAX_FETCHES`].
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.

@@ -447,10 +447,11 @@ pub(crate) mod events {
 
     use std::{
         cell::{Cell, RefCell},
-        collections::HashMap,
         rc::Rc,
         sync::Arc,
     };
+
+    use rustc_hash::FxHashMap;
 
     use flui_foundation::geometry::{DevicePixelRatio, Point};
     use flui_platform::{
@@ -561,12 +562,12 @@ pub(crate) mod events {
 
     /// The pointers a canvas holds captured, by DOM pointer id with the
     /// buttons they hold.
-    type Captured = Rc<RefCell<HashMap<i32, u16>>>;
+    type Captured = Rc<RefCell<FxHashMap<i32, u16>>>;
 
     /// End the captures the canvas still holds as its registration retires:
     /// custody first, since a release can synchronously dispatch the capture
     /// loss, then each release in a boundary of its own.
-    fn release_captures(captured: &RefCell<HashMap<i32, u16>>, custody: &dyn PointerCustody) {
+    fn release_captures(captured: &RefCell<FxHashMap<i32, u16>>, custody: &dyn PointerCustody) {
         let ids: Vec<i32> = captured.borrow_mut().drain().map(|(id, _)| id).collect();
         for &id in &ids {
             custody.forget(id);

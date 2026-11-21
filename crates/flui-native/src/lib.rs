@@ -199,6 +199,8 @@
 // first on every target.
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// Ids the process or the OS mints hash with `rustc_hash`; std tables keyed by application values say so.
+#![warn(clippy::disallowed_types)]
 
 pub(crate) mod accessibility;
 pub mod assets;

@@ -195,7 +195,6 @@ mod off {
 
 #[cfg(all(any(x11_host, wayland_host), feature = "single-instance"))]
 mod bus {
-    use std::collections::HashMap;
     use std::sync::{Arc, Weak};
     use std::time::{Duration, Instant};
 
@@ -208,6 +207,13 @@ mod bus {
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::OwnerSignal;
     use crate::owner::single_instance::{Delivery, HOLD, OwnerWake, Posted, Refused};
+
+    /// A D-Bus `a{sv}` dictionary: the map type zbus (de)serializes.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the dictionary type zbus (de)serializes, keyed by the peer's strings"
+    )]
+    type DBusDict<K, V> = std::collections::HashMap<K, V>;
 
     /// The launches waiting for the owner.
     type Inbox = crate::owner::single_instance::Inbox<Forwarded>;
@@ -360,7 +366,7 @@ mod bus {
         let forwarded = match member {
             "Activate" => {
                 let (platform_data,) = body
-                    .deserialize::<(HashMap<String, OwnedValue>,)>()
+                    .deserialize::<(DBusDict<String, OwnedValue>,)>()
                     .map_err(invalid)?;
                 Forwarded {
                     uris: Vec::new(),
@@ -369,7 +375,7 @@ mod bus {
             }
             "Open" => {
                 let (uris, platform_data) = body
-                    .deserialize::<(Vec<String>, HashMap<String, OwnedValue>)>()
+                    .deserialize::<(Vec<String>, DBusDict<String, OwnedValue>)>()
                     .map_err(invalid)?;
                 Forwarded {
                     uris: uris
@@ -384,7 +390,7 @@ mod bus {
             // call only brings its window forward.
             "ActivateAction" => {
                 let (_action, _parameter, platform_data) = body
-                    .deserialize::<(String, Vec<OwnedValue>, HashMap<String, OwnedValue>)>()
+                    .deserialize::<(String, Vec<OwnedValue>, DBusDict<String, OwnedValue>)>()
                     .map_err(invalid)?;
                 Forwarded {
                     uris: Vec::new(),
@@ -497,7 +503,7 @@ mod bus {
     }
 
     /// The token in `platform_data`, whose values are strings.
-    fn token(platform_data: &HashMap<String, OwnedValue>) -> Option<String> {
+    fn token(platform_data: &DBusDict<String, OwnedValue>) -> Option<String> {
         let strings: Vec<(&str, &str)> = platform_data
             .iter()
             .filter_map(|(key, value)| match &**value {
@@ -700,7 +706,7 @@ mod bus {
         path: &str,
         launch: Forwarded,
     ) -> zbus::Result<()> {
-        let data: HashMap<&str, Value<'_>> = platform_data(launch.token.as_deref())
+        let data: DBusDict<&str, Value<'_>> = platform_data(launch.token.as_deref())
             .into_iter()
             .map(|(key, value)| (key, Value::from(value)))
             .collect();

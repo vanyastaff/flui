@@ -15,7 +15,9 @@
 mod link;
 mod wire;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -302,8 +304,8 @@ struct Session {
     style: u32,
     root: xproto::Window,
     inbox: Arc<Inbox>,
-    contexts: HashMap<ContextId, Context>,
-    ics: HashMap<u16, ContextId>,
+    contexts: FxHashMap<ContextId, Context>,
+    ics: FxHashMap<u16, ContextId>,
     /// The contexts asked for, in the order the server answers them, each
     /// with its deadline; one closed meanwhile is destroyed once made.
     creating: VecDeque<(Instant, ContextId)>,
@@ -332,8 +334,8 @@ pub(super) async fn serve(
         style,
         root: link.root(),
         inbox: Arc::clone(inbox),
-        contexts: HashMap::new(),
-        ics: HashMap::new(),
+        contexts: FxHashMap::default(),
+        ics: FxHashMap::default(),
         creating: VecDeque::new(),
         forward: KEY_PRESS_MASK | KEY_RELEASE_MASK,
         serial: 0,
