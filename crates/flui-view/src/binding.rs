@@ -33,9 +33,8 @@
 mod tree_cell;
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use flui_foundation::ElementId;
@@ -104,30 +103,15 @@ pub struct WidgetsBinding {
     /// it with the cell's borrow released.
     on_need_frame: RefCell<Option<Rc<dyn Fn()>>>,
 
-    /// Whether the first frame has been rasterized.
-    first_frame_rasterized: AtomicBool,
-
-    /// Whether binding is ready to produce frames.
-    ready_to_produce_frames: AtomicBool,
-
-    /// Whether we are currently building dirty elements (debug-only flag).
+    /// Whether a frame is building dirty elements (debug builds only).
     ///
-    /// Hoisted out of `WidgetsBindingInner` so that `handle_build_scheduled`
-    /// can check it WITHOUT taking the `inner` RwLock. This eliminates the
-    /// deadlock that would occur when `schedule_build_for` is called from
-    /// inside `build_scope` (which holds `inner.write()`) and the
-    /// `on_build_scheduled` callback calls `handle_build_scheduled`:
-    ///
-    /// * Before (broken): callback → `handle_build_scheduled` → `inner.read()`
-    ///   → parking_lot non-reentrant read-under-write → deadlock.
-    /// * After (E0a): callback → `handle_build_scheduled` → atomic load →
-    ///   no lock acquired.
-    ///
-    /// The flag is set/cleared in `draw_frame` at the same program points
-    /// the previous `inner.debug_building_dirty_elements` field was, so the
-    /// semantics are unchanged.
+    /// Outside `inner`: `handle_build_scheduled` runs from inside
+    /// `build_scope` (the `on_build_scheduled` callback) while the frame
+    /// holds `inner`, so it reads this flag without borrowing the tree.
+    /// `draw_frame_impl` sets it for the frame and a guard clears it on
+    /// every exit, unwinding included.
     #[cfg(debug_assertions)]
-    debug_building_dirty_elements: AtomicBool,
+    debug_building_dirty_elements: Cell<bool>,
 }
 
 /// Which build pass of a frame [`WidgetsBinding::draw_frame_impl`] runs.
@@ -221,10 +205,8 @@ impl WidgetsBinding {
             inner,
             global_key_registry,
             on_need_frame: RefCell::new(None),
-            first_frame_rasterized: AtomicBool::new(false),
-            ready_to_produce_frames: AtomicBool::new(false),
             #[cfg(debug_assertions)]
-            debug_building_dirty_elements: AtomicBool::new(false),
+            debug_building_dirty_elements: Cell::new(false),
         }
     }
 
@@ -723,7 +705,7 @@ impl WidgetsBinding {
     /// It is called from inside `build_scope` (via the `on_build_scheduled`
     /// callback on `BuildOwner`) while `draw_frame` holds `inner.write()`,
     /// so borrowing `inner` here would be refused as re-entry. Instead the
-    /// building flag is an `AtomicBool` on `WidgetsBinding` itself (outside
+    /// building flag is a `Cell<bool>` on `WidgetsBinding` itself (outside
     /// `inner`). The `on_need_frame` callback is cloned out of its cell and
     /// called with no borrow held, so it may call
     /// [`set_on_need_frame`](Self::set_on_need_frame) or schedule another
@@ -737,7 +719,7 @@ impl WidgetsBinding {
         #[cfg(debug_assertions)]
         {
             assert!(
-                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                !self.debug_building_dirty_elements.get(),
                 "setState() or markNeedsBuild() called during build.\n\
                  While the widget tree was being built, laid out, and painted, \
                  a new frame was scheduled to rebuild the widget tree.\n\
@@ -854,7 +836,7 @@ impl WidgetsBinding {
         #[cfg(debug_assertions)]
         let _building_guard = {
             assert!(
-                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                !self.debug_building_dirty_elements.get(),
                 "draw_frame called while already building dirty elements; \
                  ensure draw_frame is not called recursively or from a build callback"
             );
@@ -870,14 +852,13 @@ impl WidgetsBinding {
             // `true` across that unwind would turn every retry into this
             // assert's false positive ("recursive draw_frame") instead of
             // re-running the frame.
-            struct BuildingFlagReset<'a>(&'a AtomicBool);
+            struct BuildingFlagReset<'a>(&'a Cell<bool>);
             impl Drop for BuildingFlagReset<'_> {
                 fn drop(&mut self) {
-                    self.0.store(false, Ordering::Relaxed);
+                    self.0.set(false);
                 }
             }
-            self.debug_building_dirty_elements
-                .store(true, Ordering::Relaxed);
+            self.debug_building_dirty_elements.set(true);
             BuildingFlagReset(&self.debug_building_dirty_elements)
         };
 
@@ -944,29 +925,17 @@ impl WidgetsBinding {
     ///
     /// This is the **production entry point** for lazy `SliverList` /
     /// `ListView::builder` child building, on a platform runner and a headless
-    /// host alike, and must be called immediately after
-    /// `PipelineOwner::run_frame` releases its write-lock so no node of the
-    /// render tree is entered.
+    /// host alike, and runs after `PipelineOwner::run_frame` has returned, so
+    /// no node of the render tree is entered.
     ///
-    /// `UiRuntime::draw_frame` (`flui-app`) calls this method after the
-    /// `run_frame` write-guard drops, passing the same shared `PipelineOwner`
-    /// that `run_frame` used. The lock order is `widgets → pipeline`: the
-    /// `widgets` write-lock (`WidgetsBinding::inner`) is held here; the brief
-    /// `pipeline.write()` taken inside the delegate is a narrower, nested
-    /// acquisition. This matches the order established in Phase 1 (`build_scope`
-    /// → `pipeline`) and does not introduce a new ordering edge.
+    /// `UiRuntime::draw_frame` (`flui-app`) calls it with the same
+    /// `PipelineCell` that `run_frame` used. The tree is borrowed for the call
+    /// and the pipeline owner is entered inside it, in the order `build_scope`
+    /// already uses (tree, then pipeline).
     ///
-    /// # True cost on a no-lazy-list app
-    ///
-    /// This method is **not** a free no-op on applications without lazy lists.
-    /// It always takes a brief `pipeline.write()` to drain the two pending
-    /// `Vec`s (`pending_child_requests` and `pending_retain_bands`) before
-    /// the early-return triggered by their being empty. On a no-lazy-list app
-    /// that is two short lock acquisitions on empty vecs per frame (~microseconds
-    /// on an uncontested `parking_lot::RwLock`). Callers that need to avoid even
-    /// this overhead can gate on `pipeline.read().has_pending_child_requests()`
-    /// before calling, but the unconditional call is simpler and the cost is
-    /// negligible in practice.
+    /// On an application without lazy lists the call only finds the two
+    /// pending lists (`pending_child_requests`, `pending_retain_bands`) empty
+    /// and returns.
     ///
     /// # One path for every frame
     ///
@@ -1028,12 +997,11 @@ impl WidgetsBinding {
         build_owner.settle_layout_with_builders(element_tree, pipeline)
     }
 
-    /// Check if we are currently building dirty elements.
-    ///
-    /// Reads the atomic flag directly — no lock acquired.
+    /// Whether a frame of this binding is building dirty elements; read
+    /// without borrowing the tree.
     #[cfg(debug_assertions)]
     pub fn is_building(&self) -> bool {
-        self.debug_building_dirty_elements.load(Ordering::Relaxed)
+        self.debug_building_dirty_elements.get()
     }
 
     /// Commit a local lifecycle observation and deliver it to the
@@ -1056,47 +1024,6 @@ impl WidgetsBinding {
     pub fn set_window_handle(&self, handle: crate::WindowHandle) {
         self.inner.write().build_owner.set_window_handle(handle);
     }
-
-    // ========================================================================
-    // First Frame Tracking
-    // ========================================================================
-
-    /// Whether the first frame has been rasterized.
-    ///
-    /// Usually, the time that a frame is rasterized is very close to the time
-    /// it gets presented on the display.
-    pub fn first_frame_rasterized(&self) -> bool {
-        self.first_frame_rasterized.load(Ordering::Acquire)
-    }
-
-    /// Mark the first frame as rasterized.
-    ///
-    /// Called by the engine after the first frame is painted.
-    pub fn mark_first_frame_rasterized(&self) {
-        self.first_frame_rasterized.store(true, Ordering::Release);
-        tracing::debug!("First frame rasterized");
-    }
-
-    // Note: the first-frame *deferral counter* (`defer_first_frame` /
-    // `allow_first_frame` / `send_frames_to_engine`) used to be duplicated
-    // here as its own independent `AtomicU32` + `AtomicBool` pair. There
-    // must be exactly one such counter; a second, unrelated counter on this
-    // binding could drift from the real one and never actually gated
-    // anything reachable from the production frame path. It has been
-    // removed — the single canonical counter lives on the renderer binding
-    // (`crates/flui-app/src/bindings/renderer_binding.rs`), forwarded through `UiRuntime::defer_first_frame`
-    // / `allow_first_frame` / `send_frames_to_engine`, and consulted by
-    // `UiRuntime::render_frame_entered`.
-
-    /// Whether the binding is ready to produce frames.
-    pub fn is_ready_to_produce_frames(&self) -> bool {
-        self.ready_to_produce_frames.load(Ordering::Acquire)
-    }
-
-    /// Mark the binding as ready to produce frames.
-    pub fn mark_ready_to_produce_frames(&self) {
-        self.ready_to_produce_frames.store(true, Ordering::Release);
-    }
 }
 
 impl std::fmt::Debug for WidgetsBinding {
@@ -1105,14 +1032,6 @@ impl std::fmt::Debug for WidgetsBinding {
         f.debug_struct("WidgetsBinding")
             .field("root_element", &inner.root_element)
             .field("build_scheduled", &inner.build_scheduled)
-            .field(
-                "first_frame_rasterized",
-                &self.first_frame_rasterized.load(Ordering::Relaxed),
-            )
-            .field(
-                "ready_to_produce_frames",
-                &self.ready_to_produce_frames.load(Ordering::Relaxed),
-            )
             .field("dirty_count", &inner.build_owner.dirty_count())
             .field("element_count", &inner.element_tree.len())
             .finish_non_exhaustive()
@@ -1122,7 +1041,6 @@ impl std::fmt::Debug for WidgetsBinding {
 #[cfg(test)]
 mod tests {
     use crate::view::IntoView;
-    use std::sync::Arc;
 
     use std::rc::Rc;
 
@@ -1336,11 +1254,11 @@ mod tests {
 
     #[derive(Clone)]
     struct DisposeMarkerView {
-        disposed: Arc<parking_lot::Mutex<bool>>,
+        disposed: Rc<Cell<bool>>,
     }
 
     struct DisposeMarkerState {
-        disposed: Arc<parking_lot::Mutex<bool>>,
+        disposed: Rc<Cell<bool>>,
     }
 
     impl crate::StatefulView for DisposeMarkerView {
@@ -1348,7 +1266,7 @@ mod tests {
 
         fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             DisposeMarkerState {
-                disposed: Arc::clone(&self.disposed),
+                disposed: Rc::clone(&self.disposed),
             }
         }
     }
@@ -1363,7 +1281,7 @@ mod tests {
         }
 
         fn dispose(&mut self) {
-            *self.disposed.lock() = true;
+            self.disposed.set(true);
         }
     }
 
@@ -1402,21 +1320,21 @@ mod tests {
         }
 
         let binding = WidgetsBinding::new();
-        let disposed = Arc::new(parking_lot::Mutex::new(false));
+        let disposed = Rc::new(Cell::new(false));
         let view = ParentOfDisposeMarker {
             child: DisposeMarkerView {
-                disposed: Arc::clone(&disposed),
+                disposed: Rc::clone(&disposed),
             },
         };
 
         binding.attach_root_widget(&view).expect("attach succeeds");
         binding.draw_frame();
-        assert!(!*disposed.lock(), "precondition: nothing has torn down yet");
+        assert!(!disposed.get(), "precondition: nothing has torn down yet");
 
         binding.detach_root_widget();
 
         assert!(
-            *disposed.lock(),
+            disposed.get(),
             "detach_root_widget must run State::dispose for every descendant, \
              not just unmount the (internal RootRenderView-wrapped) root node"
         );

@@ -40,12 +40,11 @@
 //! A `Stream<Item = Result<T, E>>` keeps yielding after an error, so an error
 //! leaves the state `Active` and polling continues.
 
-use std::{pin::Pin, rc::Rc, sync::Arc};
+use std::{cell::RefCell, pin::Pin, rc::Rc};
 
 use super::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
 use futures_core::Stream;
-use parking_lot::Mutex;
 
 use super::async_slot::{
     InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, SnapshotUpdate, apply_update,
@@ -165,7 +164,7 @@ where
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view, so
         // the configuration the first subscription needs is copied here.
         StreamBuilderState {
-            slot: Arc::new(Mutex::new(Slot::new(AsyncSnapshot::nothing()))),
+            slot: Rc::new(RefCell::new(Slot::new(AsyncSnapshot::nothing()))),
             handle: ctx.rebuild_handle(),
             driver: ctx.async_driver(),
             token: None,
@@ -222,7 +221,7 @@ where
     K: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let slot = self.slot.lock();
+        let slot = self.slot.borrow();
         f.debug_struct("StreamBuilderState")
             .field("key", &self.key)
             .field("connection_state", &slot.snapshot.connection_state())
@@ -246,7 +245,7 @@ where
     fn unsubscribe(&mut self) {
         self.token = None; // Drop cancels.
         self.key = None;
-        self.slot.lock().generation += 1;
+        self.slot.borrow_mut().generation += 1;
     }
 
     /// Start a subscription for `key`.
@@ -265,13 +264,13 @@ where
         let handle = self.handle.clone();
 
         let generation = {
-            let mut slot = self.slot.lock();
+            let mut slot = self.slot.borrow_mut();
             slot.generation += 1;
             slot.generation
         };
 
         let mut stream = make();
-        let slot_for_task = Arc::clone(&self.slot);
+        let slot_for_task = Rc::clone(&self.slot);
 
         // No eager poll: a stream must show `Waiting` before its first event.
         let token = driver.spawn_local(Box::pin(async move {
@@ -296,7 +295,7 @@ where
         }));
 
         self.slot
-            .lock()
+            .borrow_mut()
             .set_connection_state(ConnectionState::Waiting);
 
         self.token = Some(token);
@@ -316,7 +315,7 @@ where
             Some(initial_data) => AsyncSnapshot::with_data(ConnectionState::None, initial_data()),
             None => AsyncSnapshot::nothing(),
         };
-        let previous = core::mem::replace(&mut self.slot.lock().snapshot, initial);
+        let previous = core::mem::replace(&mut self.slot.borrow_mut().snapshot, initial);
         drop(previous);
 
         // An absent key means no stream: no subscription, snapshot stays
@@ -328,7 +327,7 @@ where
     }
 
     fn build(&self, view: &StreamBuilder<K, T, E>, ctx: &dyn BuildContext) -> impl IntoView {
-        let slot = self.slot.lock();
+        let slot = self.slot.borrow();
         (view.builder)(ctx, &slot.snapshot)
     }
 
@@ -347,7 +346,9 @@ where
 
         if self.token.is_some() || self.key.is_some() {
             self.unsubscribe();
-            self.slot.lock().set_connection_state(ConnectionState::None);
+            self.slot
+                .borrow_mut()
+                .set_connection_state(ConnectionState::None);
         }
 
         if let Some(key) = new_view.key.clone() {

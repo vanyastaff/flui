@@ -41,7 +41,7 @@ pub struct RenderObjectContext<'a> {
     depth: usize,
     /// The deferred dependent-record sink [`depend_on`](Self::depend_on)
     /// records into; drained by `build_scope`.
-    dep_sink: Option<&'a parking_lot::Mutex<Vec<DependentRecord>>>,
+    dep_sink: Option<&'a std::cell::RefCell<Vec<DependentRecord>>>,
     /// Whether the presentation collects its semantics tree.
     collects_semantics: bool,
 }
@@ -88,7 +88,7 @@ impl<'a> RenderObjectContext<'a> {
         tree: &'a ElementTree,
         element_id: ElementId,
         depth: usize,
-        dep_sink: &'a parking_lot::Mutex<Vec<DependentRecord>>,
+        dep_sink: &'a std::cell::RefCell<Vec<DependentRecord>>,
         collects_semantics: bool,
     ) -> Self {
         Self {
@@ -142,7 +142,7 @@ impl<'a> RenderObjectContext<'a> {
         // write is deferred to the `build_scope` drain. A missed provider records
         // the miss, so a later mount reschedules this element.
         if let Some(sink) = self.dep_sink {
-            sink.lock().push(DependentRecord {
+            sink.borrow_mut().push(DependentRecord {
                 provider: provider_id,
                 dependent: element_id,
                 depth: self.depth,
