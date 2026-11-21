@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use downcast_rs::{Downcast, impl_downcast};
+use std::any::Any;
 
 // ============================================================================
 // PARENT DATA TRAIT
@@ -21,7 +21,7 @@ use downcast_rs::{Downcast, impl_downcast};
 ///
 /// # Cloning
 ///
-/// `ParentData` requires `DynClone` from the `dyn_clone` crate. All types
+/// `ParentData` requires `DynClone` from the `dyn_clone` crate, because std has no way to clone a `&dyn Trait` into a `Box`. All types
 /// that implement `Clone` automatically satisfy this bound. This enables
 /// `dyn_clone::clone_box(&*data)` to clone `&dyn ParentData` into
 /// `Box<dyn ParentData>`, which the intrinsic and dry query walks use to read
@@ -56,7 +56,7 @@ use downcast_rs::{Downcast, impl_downcast};
     label = "missing `impl ParentData for {Self}`",
     note = "`impl ParentData for {Self} {{}}` is enough (every method has a default) provided `{Self}` is `Debug + Clone + 'static`"
 )]
-pub trait ParentData: Debug + Downcast + dyn_clone::DynClone {
+pub trait ParentData: Debug + Any + dyn_clone::DynClone {
     /// Called when render object is removed from tree.
     ///
     /// Override to clean up resources (listeners, subscriptions, etc).
@@ -64,8 +64,25 @@ pub trait ParentData: Debug + Downcast + dyn_clone::DynClone {
     fn detach(&mut self) {}
 }
 
-// Enable downcasting for ParentData trait objects
-impl_downcast!(ParentData);
+impl dyn ParentData {
+    /// Returns `true` if the concrete type behind this trait object is `T`.
+    #[must_use]
+    pub fn is<T: ParentData>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Returns the concrete `T` behind this trait object, or `None` for another type.
+    #[must_use]
+    pub fn downcast_ref<T: ParentData>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref::<T>()
+    }
+
+    /// Mutable counterpart to `downcast_ref`.
+    #[must_use]
+    pub fn downcast_mut<T: ParentData>(&mut self) -> Option<&mut T> {
+        (self as &mut dyn Any).downcast_mut::<T>()
+    }
+}
 
 // Enable `Box<dyn ParentData>::clone()` — all concrete types that
 // derive `Clone` automatically satisfy the `DynClone` bound.

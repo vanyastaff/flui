@@ -909,7 +909,7 @@ pub trait ElementBase: Any + 'static {
     ///
     /// 1. Check `type_id` against the static `TypeId::of::<N>()` of the
     ///    notification type they care about — skip if mismatch.
-    /// 2. Downcast `notification` via `<dyn Any>::downcast_ref::<N>()`.
+    /// 2. Cast `notification` via `<dyn Any>::downcast_ref::<N>()`.
     /// 3. Invoke their typed handler (e.g. the typed
     ///    [`NotifiableElement<N>`](crate::element::NotifiableElement)
     ///    wrapper) and return its `bool`.

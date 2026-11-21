@@ -537,7 +537,6 @@ parley = { version = "0.11.1", default-features = false, features = ["std"] }
 # marks its clusters with, so no second one, and no dictionary or LSTM data.
 icu_segmenter = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
 dyn-clone = "1.0"
-downcast-rs = "2.0.2"
 static_assertions = "1.1"
 # Compile-fail suites (flui-painting, flui-view, flui-engine, flui-rendering):
 # each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
