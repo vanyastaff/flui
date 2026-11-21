@@ -13,7 +13,7 @@ use crate::input_tap::HeldInputRow;
 
 /// Most pointer events one presentation retains while it has no committed
 /// tree, counting events handed out for an in-flight replay.
-pub const HELD_POINTER_CAPACITY: usize = 256;
+pub(crate) const HELD_POINTER_CAPACITY: usize = 256;
 
 /// One held pointer event and the surface of the window it addressed: the
 /// window itself or a surface embedded in it, where it is dispatched once
@@ -23,7 +23,7 @@ pub const HELD_POINTER_CAPACITY: usize = 256;
 /// dispatching it admits with the sequence the dispatch placed it in and
 /// dropping it admits as never delivered (ADR-0215 §1).
 #[derive(Debug)]
-pub struct HeldEvent {
+pub(crate) struct HeldEvent {
     /// The surface of the window the event addressed.
     pub surface: InputSurface,
     /// The event.
@@ -80,7 +80,7 @@ struct QueueCounters {
 /// are O(n) average and O(n²) worst-case; `n` is always bounded by
 /// [`HELD_POINTER_CAPACITY`], so neither work nor storage can grow with an
 /// uncommitted-frame storm.
-pub struct HeldPointerQueue {
+pub(crate) struct HeldPointerQueue {
     presentation_id: PresentationId,
     events: VecDeque<HeldEvent>,
     replay_in_flight: bool,
@@ -129,14 +129,14 @@ impl HeldPointerQueue {
     }
 
     /// Admit one event without ever exposing more than the fixed capacity.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn append(&mut self, event: PointerEvent) {
         self.append_with_active_contact(event, false);
     }
 
     /// Admit one event for the window's own surface whose pointer may
     /// already have a live gesture route.
+    #[cfg(test)]
     pub fn append_with_active_contact(
         &mut self,
         event: PointerEvent,
@@ -148,6 +148,7 @@ impl HeldPointerQueue {
     /// Admit one event for `surface` of the window whose pointer may already
     /// have a live gesture route. A move coalesces only with a move of the
     /// same pointer on the same surface.
+    #[cfg(test)]
     pub fn append_on(
         &mut self,
         surface: InputSurface,
@@ -157,9 +158,11 @@ impl HeldPointerQueue {
         self.append_recorded(surface, event, has_active_contact_sequence, None);
     }
 
-    /// [`append_on`](Self::append_on) with the event's input row while a
+    /// Admit one event for `surface` of the window whose pointer may already
+    /// have a live gesture route, with the event's input row while a
     /// recording runs: the row is admitted when the event is dispatched, or
-    /// as undelivered when the queue refuses or discards it.
+    /// as undelivered when the queue refuses or discards it. A move coalesces
+    /// only with a move of the same pointer on the same surface.
     pub(crate) fn append_recorded(
         &mut self,
         surface: InputSurface,
@@ -379,8 +382,7 @@ impl HeldPointerQueue {
     }
 
     /// Events held, counting those handed out for an in-flight replay.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
+    #[cfg(test)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.total_len()
@@ -898,7 +900,7 @@ impl HeldPointerQueue {
 /// reentrantly. Dropping an unfinished batch places its suffix ahead of that
 /// newly queued input and clears the in-flight state.
 #[must_use = "dropping an unconsumed replay batch restores its remaining input"]
-pub struct HeldPointerReplay<'a> {
+pub(crate) struct HeldPointerReplay<'a> {
     queue: &'a RefCell<HeldPointerQueue>,
     remaining: VecDeque<HeldEvent>,
     snapshot_events: usize,

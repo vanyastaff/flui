@@ -425,9 +425,9 @@ host.
   `every_presentation_pipeline_holds_the_ui_runtimes_text_context`.
 - **Test hooks stay behind `testing`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
-  `SemanticsHost::ensure_semantics`, `outstanding_handles`,
-  `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started` and
-  `platform_semantics_enabled`, the announce/event delivery, the UI runtime's
+  `SemanticsHost::ensure_semantics`,
+  `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started`,
+  the announce/event delivery, the UI runtime's
   `for_test` constructors and `*_for_test` probes such as
   `text_context_for_test`, the `testing` doubles),
   compile only under `cfg(test)` or the `testing` feature, which only
