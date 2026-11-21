@@ -244,7 +244,7 @@ impl BuildOwner {
     /// children (pre-order DFS, children in
     /// [`ElementNode::child_ids`](crate::tree::ElementNode) slot order).
     ///
-    /// E3: children come from the slab-resident `child_ids` list — the
+    /// Children come from the slab-resident `child_ids` list — the
     /// single element graph. `finalize_tree` reverses the collected order
     /// so `remove_finalized` runs deepest-first; pre-order guarantees a
     /// parent always precedes every one of its descendants, so the
@@ -253,8 +253,8 @@ impl BuildOwner {
     /// The walk is driven by an explicit `Vec` work-stack instead of
     /// recursion: the element tree nests several times deeper than the
     /// render tree, and a recursive shape overflowed the 1 MiB Windows
-    /// main-thread stack on deep chains (the failure class PR #177
-    /// closed for the render-tree walks). To preserve the recursive
+    /// main-thread stack on deep chains (a failure class the render-tree walks
+    /// also had). To preserve the recursive
     /// shape's visit order on a LIFO stack, children are pushed in
     /// reverse slot order so the leftmost child is popped next — same
     /// discipline as `WidgetsBinding::collect_all_elements`.

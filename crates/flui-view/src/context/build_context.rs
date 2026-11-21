@@ -148,7 +148,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// The closure receives a reference to the matched InheritedView as
     /// `&dyn Any` and runs synchronously while the implementation holds
     /// the necessary tree-lock — this preserves the declarative-build
-    /// invariant (Constitution Principle 5) AND avoids extending a
+    /// invariant AND avoids extending a
     /// `&self` borrow into the rest of `build()`. The typed wrapper
     /// [`BuildContextExt::depend_on`] handles `TypeId` resolution and
     /// downcast.
@@ -162,7 +162,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     ) -> bool;
 
     /// [`depend_on_inherited`](Self::depend_on_inherited) at **field**
-    /// granularity (issue #1090): the dependency is recorded with `mask`, and
+    /// granularity: the dependency is recorded with `mask`, and
     /// a later provider update schedules this element only if a field in the
     /// mask changed ([`InheritedView::changed_fields`]). `FieldSet::ALL`
     /// is exactly `depend_on_inherited`. The set is untyped here (this
@@ -217,7 +217,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// The closure receives a reference to the matched ancestor View as
     /// `&dyn Any` and runs synchronously while the implementation holds
     /// the necessary tree-read-lock — this preserves the
-    /// declarative-build invariant (Constitution Principle 5) AND avoids
+    /// declarative-build invariant AND avoids
     /// extending a `&self` borrow into the rest of `build()`. The typed
     /// wrapper [`BuildContextExt::find_ancestor`] handles `TypeId`
     /// resolution and downcast.
@@ -440,7 +440,7 @@ pub trait LifecycleContext: BuildContext {
     /// with [`SignalError::WrittenDuringBuild`](crate::SignalError::WrittenDuringBuild).
     fn writer_source(&self) -> crate::WriterSource;
 
-    /// The UI runtime's build phase (ADR-0086 §7): building while any
+    /// The UI runtime's build phase (ADR-0074 §5.2): building while any
     /// element of the runtime builds.
     ///
     /// A widget that subscribes to a controller binds the controller to this
@@ -814,7 +814,7 @@ pub trait BuildContextExt: BuildContext {
             .signal_owned_by(self.element_id(), value)
     }
 
-    /// [`depend_on`](Self::depend_on) at **field** granularity (issue #1090):
+    /// [`depend_on`](Self::depend_on) at **field** granularity:
     /// read through `f` as usual, but depend only on the fields in `mask` —
     /// the `FIELD_*` constants a `#[derive(InheritedData)]` data type emits.
     /// Changing `Theme.text_scale` then no longer rebuilds a
@@ -909,7 +909,7 @@ pub trait BuildContextExt: BuildContext {
     /// reparenting refreshes lifecycle dependencies before the next build.
     ///
     /// Callback form chosen over `Option<&T>` to preserve the
-    /// declarative-build invariant (Constitution Principle 5) and avoid
+    /// declarative-build invariant and avoid
     /// extending the inherited-data borrow across the rest of
     /// `build()`.
     ///
@@ -957,7 +957,7 @@ pub trait BuildContextExt: BuildContext {
     /// dependents).
     ///
     /// Callback form chosen over `Option<&V>` to preserve the
-    /// declarative-build invariant (Constitution Principle 5) and avoid
+    /// declarative-build invariant and avoid
     /// extending the ancestor-view borrow across the rest of `build()`.
     ///
     /// # Example

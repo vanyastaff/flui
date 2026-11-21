@@ -2187,7 +2187,7 @@ places a private inherited `RouterScope<R>` above that navigator, and
 it with a dependency, Flutter's `GoRouter.of(context)`; a lifecycle context
 upcasts to a build context, so a state resolves it the same way. A handle
 mutation made while the UI runtime builds answers `RouterError::DuringBuild`
-and changes nothing (ADR-0086 §7). The page builder and transitions are shared
+and changes nothing (ADR-0074 §5.2). The page builder and transitions are shared
 with every page, so a parent rebuild reaches the pages already on the stack; a
 transition duration is fixed when a page is placed, because the page's
 animation controller is made with it.

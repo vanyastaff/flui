@@ -13,7 +13,7 @@ an arity marker `A: ElementArity`, and an `ElementBehavior` `B` that supplies th
 view-specific build/lifecycle half. `ElementCore<V, A>` carries the common logic
 (mount/unmount/activate/deactivate, view storage and update, `PipelineOwner`
 propagation, dirty tracking). `ElementArity` is a marker subtrait of
-`flui_foundation::Arity`; it no longer carries an associated child storage (the
+`flui_foundation::Arity`; it carries no associated child storage (the
 slab-resident `ElementTree` is the single element graph).
 
 The behavior families, each at one arity:
@@ -201,7 +201,7 @@ retired tag. The final nonzero tag is admitted once; after that, owner
 construction panics permanently. Existing scoped claims stay usable, and a
 stale release cannot withdraw a later owner's claim.
 
-### Same-drain absorption of a mid-drain external schedule (issue #1180)
+### Same-drain absorption of a mid-drain external schedule
 
 **Rule:** `BuildOwner::drain_build_scope`'s heap loop absorbs the
 out-of-frame external inbox (`ExternalBuildScheduler` /
@@ -217,19 +217,16 @@ during a `LayoutBuilder(scope)` drain defers to the root bucket for the next
 Global pass, and the mirror lands a scope-local id in `isolated[scope]`
 during a Global drain.
 
-**Conflict:** issue #1180 — a build that calls another element's
-`RebuildHandle` synchronously (a `Listenable` notifying a subscriber it
-owns, the common `AnimatedBuilder`/`AnimatedView` shape) lands in the
-inbox, but the OLD `drain_build_scope` only ever emptied that inbox once,
-before its loop started. A schedule arriving mid-loop therefore sat until
-the *next* `build_scope` call — a whole extra frame — even though the
-notifying build and the notified rebuild belong to the same
-user-observable action. Concretely: a `Duration::ZERO` implicit-animation
-retarget snaps the controller's value synchronously in `did_update_view`,
-and the dependent `AnimatedBuilder`'s listener fires in that same instant —
-but used to need a second pump to actually rebuild, because its schedule
-missed the retargeting build's own drain by one absorb call. The inbox-based
-external scheduling had no per-iteration re-entry point.
+**Reason:** a build that calls another element's `RebuildHandle`
+synchronously (a `Listenable` notifying a subscriber it owns, the common
+`AnimatedBuilder`/`AnimatedView` shape) lands in the inbox. Emptying the inbox
+only once, before the loop starts, would leave a schedule that arrives
+mid-loop until the *next* `build_scope` call, a whole extra frame, although
+the notifying build and the notified rebuild belong to the same
+user-observable action. A `Duration::ZERO` implicit-animation retarget, for
+example, snaps the controller's value synchronously in `did_update_view` and
+the dependent `AnimatedBuilder`'s listener fires in that same instant, so its
+rebuild has to join the same drain.
 
 **Choice:** absorb per pop, bounded by a per-*frame* budget
 (`BuildOwner::mid_drain_absorbs_left`, reset to `MAX_MID_DRAIN_ABSORBS = 16`
@@ -334,7 +331,7 @@ still reaches its caller, the binding. Pinned by
 time. There is no element-side child-mutation seam (insert / move / remove /
 attach / detach of a child render object on the parent element): a seam
 of that shape had zero production callers across the workspace and was
-deleted. The audit table behind this decision is recorded in issue #1203; it
+deleted. The audit behind this decision
 mapped every consumer family of such a seam, including the hard cases
 (multi-child reorder, GlobalKey reparent, parent-data attach).
 
@@ -368,9 +365,6 @@ path — `render_custody::mount`'s diagnostic when an element-tree parent
 with an active `PipelineOwner` leaves the chain with no render ancestor,
 plus its debug-build refusal test
 (`crates/flui-view/tests/orphaned_render_mount.rs`).
-That gate and its tests arrived with the #1198 fix and are untouched here;
-the else-arm diagnostics the same fix added to the six (now deleted) seam
-methods vanish with them, as intended.
 
 
 ### Lifecycle capability types are nameable through the facade
@@ -1051,7 +1045,7 @@ graph rejects is dropped normally, during an unwind too
 `BuildOwner::drop` reclaims its global keys and tells the tree observer `detached()`, contained,
 and never resumes a failure; the element tree drops a `ReconcileGuard` that only resets a cell.
 A `dispose` that panics while a presentation tears down is contained and recorded per element, so
-the tree's teardown is no source of the raised failure that #1165 is about.
+the tree's teardown is no source of the failure a presentation raises.
 
 ### Independent child and contained payload retirement
 

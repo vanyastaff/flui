@@ -36,7 +36,7 @@ pub struct ElementNode {
     /// Cloned `View::key()` for the view this element currently holds,
     /// or `None` when the view is keyless.
     ///
-    /// FR-022. Populated at every `insert`/`mount_root_*`
+    /// Populated at every `insert`/`mount_root_*`
     /// call site (cloned via `ViewKey::clone_key`) and re-cloned at
     /// every `update` boundary so the field stays in lock-step with
     /// the view value the element actually holds. The keyed
@@ -64,7 +64,7 @@ pub struct ElementNode {
     /// finalization.
     pub(crate) registered_global_key: Option<Box<dyn ViewKey>>,
     /// This node's slab-id-based child list — the single, authoritative
-    /// element child graph (E3 — atomic box→arena swap).
+    /// element child graph.
     ///
     /// Written by the production id-based reconciler
     /// [`reconcile_children_by_id`](super::super::id_reconcile::reconcile_children_by_id),
@@ -223,7 +223,7 @@ impl ElementNode {
     ///
     /// The keyed reconciler reads this directly to build its
     /// `old_keyed: FxHashMap<u64, ElementId>` index — no view-typed
-    /// `downcast::<V>()` needed. FR-022.
+    /// `downcast::<V>()` needed.
     pub fn key(&self) -> Option<&dyn ViewKey> {
         self.key.as_deref()
     }
@@ -267,7 +267,7 @@ impl ElementNode {
     /// The slice is ordered by child slot (entry `i` is slot `i`). It is
     /// the read side of the id-based child model maintained by the id-based
     /// reconciler (`super::id_reconcile::reconcile_children_by_id`); the
-    /// single element graph (E3 — atomic box→arena swap).
+    /// single element graph.
     ///
     /// Public because it is the only way to observe a parent's own view of
     /// its children — [`Self::parent`] answers the child's side, and the two

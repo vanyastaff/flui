@@ -211,7 +211,7 @@ struct NavigatorShared {
     /// pump of the route-command queue, run in the animation tick that resolved
     /// the future, so the next route's `did_add` and entrance start in that same
     /// frame and never inside `build`, where a controller refuses mutation
-    /// (ADR-0086 §7). The continuation holds only this `Rc` (and a clone of the
+    /// (ADR-0074 §5.2). The continuation holds only this `Rc` (and a clone of the
     /// route-command queue); the pump reaches the navigator through a `Weak`.
     ///
     /// Installed by [`NavigatorState::init_state`](struct@NavigatorState),
@@ -2069,7 +2069,7 @@ impl ViewState<Navigator> for NavigatorState {
     /// `FocusTraversalGroup` all belong to features deferred for now.
     ///
     /// Drains no `RouteCommand`: a flush mutates route controllers, which
-    /// refuse mutation during `build` (ADR-0086 §7). A push-completion
+    /// refuse mutation during `build` (ADR-0074 §5.2). A push-completion
     /// continuation pumps the queue itself, in the tick that settled it.
     fn build(&self, _view: &Navigator, ctx: &dyn BuildContext) -> impl IntoView {
         // Re-resolved every build, not just once at mount — see

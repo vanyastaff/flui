@@ -63,7 +63,7 @@ impl BuildOwner {
     /// two-call sequence (`element_for_global_key` followed by
     /// `unregister_global_key`) would leave open if any other code
     /// path mutates the registry between the two calls — a real
-    /// risk in Phase 2 testing infrastructure where multiple
+    /// risk in testing infrastructure where multiple
     /// parents may rebuild concurrently in test fixtures.
     ///
     /// The caller (the keyed reconciler's middle-walk) consults

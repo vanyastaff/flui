@@ -156,7 +156,7 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// `ViewState::build` returns `impl IntoView` (return-position
     /// `impl Trait` in trait, stabilized in Rust 1.75). This makes
     /// `ViewState` **non-object-safe** — no `dyn ViewState` use exists
-    /// or is needed (FR-008).
+    /// or is needed.
     ///
     /// The framework normalizes the opaque return via
     /// [`IntoView::into_view`] inside the build call site (see

@@ -29,7 +29,7 @@ use crate::{
 /// During a [`BuildOwner::build_scope`](crate::owner::BuildOwner) drain the owner
 /// carries a [`BuildHandle`](crate::ElementOwner) — a borrowed live view of
 /// the real tree — so the variant resolves to [`LiveBuildContext`] and ancestor
-/// walks / `depend_on` hit real nodes (PR-K). A component build outside a
+/// walks / `depend_on` hit real nodes. A component build outside a
 /// `build_scope` drain is a framework bug: it would otherwise resurrect the
 /// inert `new_minimal` context and make `InheritedView` reads silently fail.
 ///
@@ -308,11 +308,9 @@ where
 {
     /// Run this view type's build half and return its OWNED child view(s).
     ///
-    /// E3 (atomic box→arena swap): this replaces the old
-    /// `perform_build(&mut core, owner)` that reconciled the box-owned
-    /// children in place. Now it runs only the build half (today's
-    /// `build_or_recover` / `build_proxy_style` producer) and returns the
-    /// owned child views; the reconcile half is hoisted to
+    /// It runs only the build half (`build_or_recover` / `build_proxy_style`
+    /// producer) and returns the
+    /// owned child views; the reconcile half is run by
     /// [`BuildOwner::build_scope`](crate::owner::BuildOwner), which feeds the
     /// returned views to the slab id-reconciler with a fresh `&mut tree`.
     /// The element holds no child storage, so this method never touches a
@@ -642,7 +640,7 @@ where
     /// The split-borrow `owner` handle is threaded through so the override
     /// can resolve the same live build-time context (`BuildHandle`) the
     /// rebuild uses, letting a user `did_change_dependencies` re-read the
-    /// changed inherited value against the real tree (PR-K).
+    /// changed inherited value against the real tree.
     #[expect(
         unused_variables,
         reason = "the default body ignores its arguments; their names document the signature an override receives"
@@ -718,7 +716,7 @@ where
         if !super::behavior_commons::should_build_with_trace(core, "StatelessBehavior") {
             return crate::view::ChildViews::none();
         }
-        // Live tree-backed context inside a `build_scope` drain (PR-K). Held
+        // Live tree-backed context inside a `build_scope` drain. Held
         // in a local so the `&dyn BuildContext` outlives the `catch_unwind`
         // closure below; it borrows the tree/sink, not `owner`, so the
         // mutable `owner` reborrow for `build_or_recover` is still free.
@@ -965,7 +963,7 @@ where
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> crate::view::ChildViews {
-        // Live tree-backed context inside a `build_scope` drain (PR-K). One
+        // Live tree-backed context inside a `build_scope` drain. One
         // context serves both the first-build `init_state` and the `build`
         // below; it borrows the tree/sink, not `owner`/`self`, so the later
         // mutable reborrows stay free.
@@ -1389,7 +1387,7 @@ use super::provided::Dependents;
 /// # Dependents
 ///
 /// Each dependent is recorded with its depth in the element tree and the
-/// provider fields it read ([`FieldSet`](crate::view::FieldSet), #1090). The
+/// provider fields it read ([`FieldSet`](crate::view::FieldSet)). The
 /// depth is captured at `depend_on_inherited` time and used during
 /// `on_view_updated` to call `ElementOwner::schedule_build_for` with a typed
 /// rebuild reason, without an extra tree traversal (the tree is not in scope
@@ -1535,7 +1533,7 @@ where
         self.data = core.view().data().clone();
         self.view_cache = std::rc::Rc::clone(core.shared_view());
 
-        // Field-granular (#1090): the provider reports WHICH fields changed
+        // Field-granular: the provider reports WHICH fields changed
         // (`ALL` for a provider that never opted in — the
         // `update_should_notify` default), and only dependents whose recorded
         // mask intersects are scheduled. One path for both granularities.

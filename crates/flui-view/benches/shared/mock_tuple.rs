@@ -14,8 +14,7 @@
 //! per-node storage shape over a large heterogeneous distribution, and the S2
 //! question is about per-frame algorithm shape over a fixed 16-position tuple.
 //! Sharing a node primitive between them would couple two unrelated bench
-//! decisions; the plan's "if needed, add it to a NEW shared/mock_tuple.rs"
-//! footnote prescribes this split.
+//! decisions.
 //!
 //! # The static-path observation
 //!
@@ -30,7 +29,7 @@
 //!
 //! # Workload
 //!
-//! Fixed-arity 16 (per spec FR-013: `ViewSeq` tuple impls cap at `0..=16`).
+//! Fixed arity 16 (`ViewSeq` tuple impls cap at `0..=16`).
 //! Each position carries a synthetic [`TypeIdSlot`] — a `(TypeId, key_hash)`
 //! pair modelling what a real `(A, B, ..., P)` tuple's per-position view would
 //! expose to a per-position-comparing reconciler. The mock distribution mints
@@ -40,7 +39,7 @@
 //!
 //! # Why two specialised variants
 //!
-//! The doc verdict's "is the specialised path materially faster" question has
+//! The "is the specialised path materially faster" question has
 //! two honest framings:
 //!   1. **Positional-only specialised** — walk 16 positions, compare TypeIds
 //!      per slot, emit Reuse/Replace. **O(N)**, no allocation, **no reorder
@@ -52,7 +51,7 @@
 //!      lookup, no heap allocation. This is the apples-to-apples comparison
 //!      against the linear keyed algorithm — same big-O, lower constant.
 //!
-//! Both variants are run; the doc's verdict tabulates both against the linear
+//! Both variants are run and compared against the linear
 //! baseline.
 
 use std::any::TypeId;
@@ -60,10 +59,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 // ----------------------------------------------------------------------------
-// Fixed-arity 16 — per spec FR-013 cap
+// Fixed arity 16 — the tuple impls' cap
 // ----------------------------------------------------------------------------
 
-/// Fixed tuple arity. Spec FR-013 caps `ViewSeq` tuple impls at `0..=16`; we
+/// Fixed tuple arity. `ViewSeq` tuple impls cap at `0..=16`; we
 /// measure at the cap because that is the worst case the static-path
 /// specialised algorithm pays for.
 pub const TUPLE_ARITY: usize = 16;
@@ -223,15 +222,15 @@ pub enum ReconcileAction {
 }
 
 /// Fixed-arity 16 result array. `[ReconcileAction; TUPLE_ARITY]` is stack-only,
-/// no heap allocation — exactly the "zero-cost specialised path" the doc's
-/// verdict asks about.
+/// no heap allocation — exactly the "zero-cost specialised path" the
+/// S2 question asks about.
 pub type ReconcileResult = [ReconcileAction; TUPLE_ARITY];
 
 // ----------------------------------------------------------------------------
-// Algorithm A — linear keyed (the FR-016 baseline, simulated)
+// Algorithm A — linear keyed (the shared algorithm, simulated)
 // ----------------------------------------------------------------------------
 
-/// Linear keyed algorithm — the FR-016 baseline shape applied to the
+/// Linear keyed algorithm — the shared shape applied to the
 /// 16-tuple case. Builds a `HashMap<u64, u8>` over old `key_hash` -> old
 /// index, then walks new positions looking up by `key_hash`. This is the
 /// **same shape** as the production keyed reconciler's keyed-map-build + walk
@@ -313,7 +312,7 @@ pub fn reconcile_positional_specialised(
 ///
 /// **Complexity:** O(N) average (size-1 buckets, immediate match), O(N²)
 /// worst case under adversarial bucket collisions across all N positions.
-/// Bounded to N = `TUPLE_ARITY` = 16 by FR-013, so the worst-case absolute
+/// Bounded to N = `TUPLE_ARITY` = 16, so the worst-case absolute
 /// cost is capped at 256 probes per reconcile call.
 ///
 /// The stack-allocated index is the structural win over the linear keyed
@@ -323,8 +322,8 @@ pub fn reconcile_positional_specialised(
 ///
 /// **Semantic difference from Algorithm A**: same O(N) shape, same outputs
 /// for any 16 distinct TypeIds; differs only on synthetic hash collisions
-/// (which the spec's TypeId-derived hashes do not encounter at the 16-element
-/// scale). This is the algorithm the doc's verdict measures against the
+/// (which TypeId-derived hashes do not encounter at the 16-element
+/// scale). It is the baseline the specialised variants are measured against, the
 /// linear keyed baseline.
 #[must_use]
 #[inline(never)]
@@ -362,7 +361,7 @@ pub fn reconcile_reorder_specialised(
     let mut out = [ReconcileAction::Replace; TUPLE_ARITY];
     for (i, slot) in new.iter().enumerate() {
         let mut bucket = (slot.key_hash as usize) % TUPLE_ARITY;
-        // Bound the probe loop to TUPLE_ARITY iterations per Codex review #6.
+        // Bound the probe loop to TUPLE_ARITY iterations.
         // If `index` is fully populated (16 `Some` entries with no matching
         // key — possible when new keys are absent from old, e.g., any replace
         // scenario), the original loop's `Some(_) => keep probing` arm had no

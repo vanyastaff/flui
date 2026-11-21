@@ -59,7 +59,7 @@ use flui_foundation::RebuildReasons;
 use rustc_hash::FxHashMap;
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
-/// `build_scope` drain runs an element's `build()` (PR-K).
+/// `build_scope` drain runs an element's `build()`.
 ///
 /// Lets a behavior construct a live
 /// [`LiveBuildContext`](crate::context::LiveBuildContext) — reading the real tree and
@@ -229,7 +229,7 @@ pub struct ElementOwner<'a> {
     /// listener tick can request a frame from outside the build.
     pub(crate) external_request_frame: Option<&'a Arc<dyn Fn() + Send + Sync>>,
 
-    /// Live-tree access during a `build_scope` drain (PR-K). `Some` only
+    /// Live-tree access during a `build_scope` drain. `Some` only
     /// while an element's `build()` runs; `None` on every other lifecycle
     /// path (mount / unmount / update / reconcile). The behavior reads it
     /// to build a live [`LiveBuildContext`](crate::context::LiveBuildContext).

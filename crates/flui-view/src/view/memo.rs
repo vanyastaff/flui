@@ -7,7 +7,7 @@
 //! # The `PartialEq` bound is intentionally narrow
 //!
 //! The bound lives **only** on `Memo<V>`, not on the base `View` trait.
-//! That placement is a Constitution C1 hard requirement — "the Druid
+//! That placement avoids "the Druid
 //! trap": a blanket `View: PartialEq` bound means every view type must
 //! implement `PartialEq`, which is impossible for views that carry
 //! callbacks or `Arc<dyn Fn>` fields (closures are not `PartialEq`).
@@ -62,13 +62,13 @@ use super::{into_view::BoxedView, view::View};
 /// [`crate::element::ProxyElement`]/[`crate::element::ProxyBehavior`] and does
 /// not introduce a new `ElementKind` variant.
 ///
-/// # Constitution compliance
+/// # Design notes
 ///
-/// - **C1** — `PartialEq` bound lives only here, not on `View`; the
+/// - The `PartialEq` bound lives only here, not on `View`; the
 ///   default `should_skip_rebuild` is `false`.
-/// - **C4** — `should_skip_rebuild` carries `where Self: Sized`, keeping
+/// - `should_skip_rebuild` carries `where Self: Sized`, keeping
 ///   `View` object-safe.
-/// - **C9** — the equality check runs with both concrete `V` values
+/// - The equality check runs with both concrete `V` values
 ///   coexisting; zero `dyn` at the comparison site.
 #[derive(Clone, Debug)]
 pub struct Memo<V> {

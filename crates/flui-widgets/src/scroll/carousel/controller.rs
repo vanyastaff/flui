@@ -113,7 +113,7 @@ impl CarouselController {
     /// # Errors
     ///
     /// [`MutatedDuringBuild`] when called from a `build` while the carousel is laid out: the
-    /// position does not move (ADR-0086 §7).
+    /// position does not move (ADR-0074 §5.2).
     pub fn animate_to_item(&self, index: usize) -> Result<(), MutatedDuringBuild> {
         self.move_to(index, true)
     }

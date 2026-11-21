@@ -86,7 +86,7 @@ pub struct CupertinoTabController {
     index: Rc<Cell<usize>>,
     notifier: ChangeNotifier,
     /// The build phase of the scaffold that uses this controller, bound in
-    /// its `init_state` (ADR-0086 §7).
+    /// its `init_state` (ADR-0074 §5.2).
     build_phase: Rc<RefCell<Option<BuildPhase>>>,
 }
 

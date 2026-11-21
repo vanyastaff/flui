@@ -139,7 +139,7 @@ impl<T: 'static> GlobalKey<T> {
     /// # Registry access
     ///
     /// Reads the registry handle activated by the current owner-thread UI runtime
-    /// scope (or by the legacy test harness adapter). When no UI runtime is active
+    /// scope. When no UI runtime is active
     /// the method returns [`KeyLookup::NoActiveRuntime`]: the call ran outside
     /// `UiRuntime::enter`, as in a unit test that bypasses the framework binding,
     /// and says nothing about whether the key is mounted.

@@ -19,7 +19,7 @@ use std::sync::Arc;
 /// its dirty heap at the top of every heap pop — not just once at frame
 /// start — so a schedule landing mid-drain (a build calling another
 /// element's [`RebuildHandle`](super::super::RebuildHandle) synchronously) joins
-/// the SAME drain instead of waiting for the next frame (issue #1180). The
+/// the SAME drain instead of waiting for the next frame. The
 /// listener still never needs to touch the owner.
 ///
 /// The inbox carries the element id and every cause accumulated since it was
