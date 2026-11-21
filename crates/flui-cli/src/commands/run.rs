@@ -1784,6 +1784,19 @@ fn find_adb() -> CliResult<PathBuf> {
     })
 }
 
+/// How long a stop of the app may take: `adb shell am force-stop` answers in
+/// well under a second on a reachable device.
+const FORCE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Stop `package` through `adb` (a command already aimed at the device), and
+/// give up at `timeout`. The stop runs before every start and when the session
+/// ends (`q`, Ctrl-C), so an `adb` that never answers (a hung server, a device
+/// gone mid-call) costs the bound, never the CLI.
+fn force_stop(mut adb: Command, package: &str, timeout: Duration) {
+    let _ =
+        crate::proc::output_with_timeout(adb.args(["shell", "am", "force-stop", package]), timeout);
+}
+
 impl AndroidSession {
     fn new(
         device: AndroidDevice,
@@ -1922,10 +1935,7 @@ impl AndroidSession {
             &serde_json::json!({ "serial": self.device.serial, "apk": apk }),
         );
         // A previous instance would keep the old library mapped.
-        let _ = self
-            .adb()
-            .args(["shell", "am", "force-stop", &self.package])
-            .output();
+        force_stop(self.adb(), &self.package, FORCE_STOP_TIMEOUT);
         let component = format!("{}/{ANDROID_ACTIVITY}", self.package);
         let mut start = vec!["shell", "am", "start", "-W", "-n", &component];
         if let Some(session) = &self.agent {
@@ -1975,10 +1985,7 @@ impl AndroidSession {
 impl Drop for AndroidSession {
     /// `q` and Ctrl-C stop the app, like the desktop session stops its child.
     fn drop(&mut self) {
-        let _ = self
-            .adb()
-            .args(["shell", "am", "force-stop", &self.package])
-            .output();
+        force_stop(self.adb(), &self.package, FORCE_STOP_TIMEOUT);
     }
 }
 
@@ -2953,6 +2960,28 @@ pub(crate) fn execute_scene(
 #[cfg(test)]
 mod tests {
     use super::env;
+
+    /// A stop of the app gives up at its bound when `adb` never answers, so a
+    /// session's start and its end (`q`, Ctrl-C) cannot hang on a stuck server.
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_that_adb_never_answers_ends_at_its_bound() {
+        // `sh -c 'sleep 30'` stands in for an `adb` that hangs: the arguments
+        // the stop appends become the script's positional parameters.
+        let mut adb = std::process::Command::new("sh");
+        adb.args(["-c", "sleep 30"]);
+        let started = std::time::Instant::now();
+        super::force_stop(
+            adb,
+            "org.example.app",
+            std::time::Duration::from_millis(200),
+        );
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(5),
+            "the stop waited {took:?} for an adb that never answers"
+        );
+    }
 
     /// A browser too old for the agent's link exits as an unsupported target, as Safari does,
     /// with the version it needs and nothing of a failed start; a browser that failed starting
