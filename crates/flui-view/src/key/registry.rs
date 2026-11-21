@@ -238,7 +238,8 @@ thread_local! {
     /// replaceable singleton, makes nested UI runtime entry restore correctly.
     ///
     /// `ManuallyDrop` is required because this module can be instantiated in a
-    /// hot-reload cdylib. `RegistryActivation` empties the stack explicitly.
+    /// hot-reload cdylib: every `RegistryActivation` pops what it pushed, and a
+    /// test activation frees the buffer it leaves empty.
     #[cfg_attr(
         target_os = "android",
         allow(
@@ -251,10 +252,15 @@ thread_local! {
     };
 }
 
-/// RAII activation token. Private so only the binding's scoped entry method
-/// can manipulate the ambient registry.
+/// RAII activation token. Crate-private so only the binding's scoped entry
+/// and the `testing` kit can manipulate the ambient registry.
 pub(crate) struct RegistryActivation {
     expected: GlobalKeyRegistryHandle,
+    /// Free the stack's buffer when this activation leaves it empty. The stack
+    /// is `ManuallyDrop`, so a buffer still held when its thread ends is never
+    /// freed: a test thread releases it, while the binding's entry keeps it so
+    /// that entering a runtime allocates nothing once warm.
+    release_empty_buffer: bool,
 }
 
 impl Drop for RegistryActivation {
@@ -270,14 +276,31 @@ impl Drop for RegistryActivation {
                 // aborts the process. Preserve the unexpected top for diagnosis.
                 stack.push(popped);
                 tracing::error!("GlobalKey registry scopes dropped out of order");
+                return;
+            }
+            if self.release_empty_buffer && stack.is_empty() {
+                *stack = Vec::new();
             }
         });
     }
 }
 
-pub(crate) fn activate_registry(handle: GlobalKeyRegistryHandle) -> RegistryActivation {
+fn push_registry(
+    handle: GlobalKeyRegistryHandle,
+    release_empty_buffer: bool,
+) -> RegistryActivation {
     REGISTRY_STACK.with(|stack| stack.borrow_mut().push(handle.clone()));
-    RegistryActivation { expected: handle }
+    RegistryActivation {
+        expected: handle,
+        release_empty_buffer,
+    }
+}
+
+/// Activate `handle` until the returned token drops, for a test thread: the
+/// stack's buffer is freed once the token leaves it empty.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) fn activate_registry(handle: GlobalKeyRegistryHandle) -> RegistryActivation {
+    push_registry(handle, true)
 }
 
 /// Activate `handle` for the dynamic extent of `f`.
@@ -285,7 +308,7 @@ pub(crate) fn with_active_registry<R>(
     handle: &GlobalKeyRegistryHandle,
     f: impl FnOnce() -> R,
 ) -> R {
-    let _activation = activate_registry(handle.clone());
+    let _activation = push_registry(handle.clone(), false);
     f()
 }
 

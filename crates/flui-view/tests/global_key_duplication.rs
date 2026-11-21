@@ -3,7 +3,7 @@
 //! ## The optimistic graft, and what happens when it is wrong
 //!
 //! A `GlobalKey` is resolved optimistically. `reuse_or_mount` →
-//! `retake_active_global_key` (`crates/flui-view/src/tree/element_tree.rs`)
+//! `retake_active_global_key` (`crates/flui-view/src/tree/element_tree/global_key_retake.rs`)
 //! takes the keyed element even when it is still attached to a live parent:
 //! the old parent is assumed to be about to give the child up, and the only
 //! way that assumption is false is if the key is duplicated. The cases below
