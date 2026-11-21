@@ -138,7 +138,7 @@ fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
 // straight through the ui_runtime's per-presentation loop and killed the
 // process via the runner's `resume_unwind`.
 //
-// User lifecycle hooks now have narrower per-child boundaries,
+// User lifecycle hooks have narrower per-child boundaries,
 // including dense reconcile insertion and GlobalKey retake. They do
 // not exercise this outer presentation boundary. The headline test
 // therefore uses the dedicated segment probe to inject an unwind at
@@ -151,7 +151,7 @@ fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
 /// same pump, the typed report names A with causal detail, a retry is
 /// armed, and the next pump recovers A cleanly. The probe runs before
 /// `WidgetsBinding::draw_frame`, so this test intentionally makes no
-/// building-flag claim; lifecycle insertion panics are now bounded by
+/// building-flag claim; lifecycle insertion panics are bounded by
 /// the dense reconciler itself.
 pub(crate) fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames()
  {
@@ -397,7 +397,7 @@ impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
 /// `draw_frame_for_presentation`'s `Err` arm), so before the fix
 /// the boundary caught the HANDLER's panic as a segment panic and
 /// re-reported it — invoking the same panicking handler a second
-/// time, now outside any catch. Containment at the delivery site
+/// time, outside any catch. Containment at the delivery site
 /// means exactly one delivery, of the Pipeline kind, per failure.
 pub(crate) fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported() {
     let ui_runtime = UiRuntime::for_test();

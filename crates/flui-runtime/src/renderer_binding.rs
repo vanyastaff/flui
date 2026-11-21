@@ -211,8 +211,7 @@ impl RenderingBinding {
     ///
     /// Panics if called without a matching prior
     /// [`defer_first_frame`](Self::defer_first_frame) call (i.e. the deferred
-    /// count is already zero) — a caller-contract violation, mirroring the
-    /// oracle's `assert(_firstFrameDeferredCount > 0)`.
+    /// count is already zero) — a caller-contract violation.
     pub fn allow_first_frame(&self) {
         let count = self
             .first_frame_deferred_count
@@ -230,13 +229,11 @@ impl RenderingBinding {
         // The withheld frame(s) already ran build/layout/paint while
         // deferred (the pipeline work happens unconditionally — see the
         // module note above `defer_first_frame`); their dirty flags are
-        // already clear by the time the deferral lifts. The oracle's
-        // `compositeFrame()` re-submits the RETAINED layer tree regardless
-        // of dirty state, so its `scheduleWarmUpFrame` always has something
-        // to present. FLUI has no such retained-scene re-present — without
-        // re-marking the root dirty, the warm-up frame would find nothing
-        // to do and the withheld content would sit blank until some
-        // UNRELATED input dirtied the tree. See
+        // already clear by the time the deferral lifts. There is no
+        // retained-scene re-present, so without re-marking the root dirty
+        // the warm-up frame would find nothing to do and the withheld
+        // content would sit blank until some UNRELATED input dirtied the
+        // tree. See
         // [`redirty_root_for_represent`](Self::redirty_root_for_represent).
         if !self.first_frame_sent.get() {
             self.redirty_root_for_represent();
@@ -277,7 +274,7 @@ impl RenderingBinding {
 
     /// Latch that the first frame has been sent to the engine.
     ///
-    /// Mirrors the oracle's `_firstFrameSent = true`, set unconditionally
+    /// Set unconditionally
     /// once `send_frames_to_engine()` is found `true` during a frame —
     /// regardless of whether that particular frame painted anything.
     /// Idempotent: once latched, [`Self::send_frames_to_engine`] stays

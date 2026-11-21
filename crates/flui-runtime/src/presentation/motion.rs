@@ -111,7 +111,7 @@ impl PresentationState {
     }
 
     /// This presentation's own physical-time produce-gate state machine
-    /// (issue #556). See [`FrameClock`]'s own doc for the produce decision
+    /// See [`FrameClock`]'s own doc for the produce decision
     /// it makes.
     #[must_use]
     pub(crate) fn clock(&self) -> &FrameClock {

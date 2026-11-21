@@ -1841,7 +1841,7 @@ fn a_runtime_dropped_inside_an_unwind_destroys_its_values() {
 /// queued cross-thread signal write still holds a capture that fails too:
 /// the write's capture is destroyed by the drop itself, under containment,
 /// never left to the drop glue that runs inside the raised failure's unwind,
-/// so the first failure is the one raised (#1165, ADR-0281 §3).
+/// so the first failure is the one raised (ADR-0281 §3).
 fn a_queued_command_outliving_a_teardown_failure_does_not_abort() {
     let ui_runtime = UiRuntime::for_test();
     let id = ui_runtime.presentation_id();

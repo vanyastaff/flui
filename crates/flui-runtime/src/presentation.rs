@@ -134,7 +134,7 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's platform wake capability. It is wired as the UI runtime
     /// scheduler's `on_frame_scheduled` hook (in `UiRuntime::construct`) and
     /// handed to the platform accessibility bridge; the presentation's own
-    /// pipeline wake now routes through the scheduler rather than cloning
+    /// pipeline wake routes through the scheduler rather than cloning
     /// this directly.
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
     /// A cross-thread sender into the UI runtime's command inbox, already
@@ -566,8 +566,7 @@ pub struct PresentationState {
     /// Owner thread only.
     pub(crate) window_placement: Cell<Option<ContentPlacement>>,
     /// Owner-local widget framework state. One instance per presentation
-    /// (ADR-0043) — the UI runtime-level singular binding this used to be
-    /// dissolves here; every widget-tree operation for this surface enters
+    /// (ADR-0043), not one per UI runtime; every widget-tree operation for this surface enters
     /// through this presentation and activates this binding's own GlobalKey
     /// registry (composed into the UI runtime's whole-frame composite by
     /// `UiRuntime::enter`, never activated standalone in production).
@@ -581,9 +580,9 @@ pub struct PresentationState {
     /// first-frame gate: per-presentation facts, not shareable once a UI
     /// runtime hosts more than one presentation.
     renderer: RenderingBinding,
-    /// Total frames rendered successfully for this presentation. Moved here
-    /// from the retired `AppBinding`: per-window frame accounting, beside
-    /// its consumer [`Self::performance_overlay`].
+    /// Total frames rendered successfully for this presentation:
+    /// per-window frame accounting, beside its consumer
+    /// [`Self::performance_overlay`].
     /// `Cell`, not `AtomicU64`: `PresentationState` is owner-thread-confined
     /// (`!Send` transitively, via `Rc`-backed fields), so an atomic buys
     /// nothing here that `Cell`'s cheaper interior mutability does not
@@ -658,10 +657,10 @@ pub struct PresentationState {
     /// Borrowed only inside [`Self::motion_tick`], never across user code.
     motion_clock: RefCell<MotionClock>,
     /// This presentation's own physical-time produce-gate state machine
-    /// (issue #556) — the per-presentation half of the `UpdateScheduler`/
+    /// — the per-presentation half of the `UpdateScheduler`/
     /// `FrameClock`/raster three-owner split. `UiRuntime::draw_frame_entered`'s
-    /// per-presentation segment loop polls this instead of the old
-    /// `take_redraw_pending() || has_pending_work()` predicate directly;
+    /// per-presentation segment loop polls this rather than
+    /// `take_redraw_pending() || has_pending_work()` directly;
     /// first-frame deferral (`RenderingBinding::send_frames_to_engine`'s
     /// old counter) folds into this same clock, withholding only the
     /// submit — see `FrameClock`'s own module doc for the reasoning that
@@ -676,7 +675,7 @@ pub struct PresentationState {
     /// submit and is where `FrameClock::record_frame` actually runs, for
     /// whichever presentation's segment produced the outcome being
     /// submitted — see that call site's own doc). Lives here, not on the
-    /// shared `FrameClock` (issue #556 review): a `pub` field on a type
+    /// shared `FrameClock`: a `pub` field on a type
     /// every presentation shares would let one presentation's caller read
     /// or clobber a SIBLING's in-flight span; keeping it private to this
     /// presentation makes that structurally impossible. [`Self::
@@ -849,7 +848,7 @@ impl PresentationState {
     }
 
     // ========================================================================
-    // Window access, haptics (moved from the retired `AppBinding`)
+    // Window access, haptics
     // ========================================================================
 
     /// The identity of the window this presentation was built for.

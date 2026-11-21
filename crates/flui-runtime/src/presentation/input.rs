@@ -88,7 +88,6 @@ impl PresentationState {
     }
 
     // ========================================================================
-    // Frame accounting and the performance overlay (moved from the retired
-    // `AppBinding`)
+    // Frame accounting and the performance overlay
     // ========================================================================
 }

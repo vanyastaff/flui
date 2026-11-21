@@ -227,10 +227,10 @@ host.
   `APP_RUNTIME` trampoline contains it beside those host-only owners.
 - **Owner work is non-reentrant across UI runtimes.** A reentrant operation for any
   UI runtime appends to the same FIFO; only the outermost owner turn executes it.
-  Before ADR-0083 move 5a, `flui-app` rejected UI runtime B while UI runtime A was
-  checked out, which could lose B's UI close after its native window had
-  already closed. The app now provides the host-wide FIFO behavior that the
-  extraction must preserve. `flui-app` now executes at most 32 logical
+  `flui-app` never rejects UI runtime B while UI runtime A is checked out: a
+  rejection could lose B's UI close after its native window had already
+  closed. The app keeps one host-wide FIFO:
+  `flui-app` executes at most 32 logical
   operations per continuation callback, sharing the budget between fresh
   native roots and carried FIFO entries, counts stale entries against it, and
   requests one sequence-stamped continuation opportunity when work remains.
@@ -354,7 +354,7 @@ host.
   `allowed-dependents = ["flui-app", "flui-testing"]` makes the application
   host and the headless test driver the only crates allowed a normal edge.
   That rule is what keeps ADR-0047's
-  invariant true now that `ExecutionServices` is `pub`: only a host crate, one
+  invariant true while `ExecutionServices` is `pub`: only a host crate, one
   of the runtime's `allowed-dependents`, constructs the services, and no other
   workspace crate reaches the pools. `flui-testing` is the host of its own
   headless loop (ADR-0083 §4) and constructs no execution services. Dev edges
@@ -1505,8 +1505,7 @@ owner at delivery.
 
 **Rule:** `UiRuntime::drop` raises its first failure only once no field it still owns holds an
 application value. A failure raised from `Drop::drop` unwinds through the field drop glue that
-follows; a capture whose destructor panics there is a second panic in one unwind, and aborts
-(#1165).
+follows; a capture whose destructor panics there is a second panic in one unwind, and aborts.
 
 **Choice:** after the presentations and the owner-local frame work retire, the drop takes the
 queued commands (a cross-thread signal write carries the application's closure) and the

@@ -110,11 +110,10 @@ pub(crate) fn full_inbox_retries_outstanding_wake_debt_before_rejecting() {
 }
 
 // ========================================================================
-// Runtime coexistence — the criterion-1/2 evidence for singleton retirement.
-// Every process-global graph `UiRuntime` used to front (the transitional
-// at-most-one-instance construction guard, `AppBinding`, the `UpdateScheduler`
-// singleton) is gone: these tests prove what that actually buys, rather
-// than asserting the absence of code that no longer exists.
+// Runtime coexistence — UI runtimes in one process share no global state.
+// No process-global graph sits behind `UiRuntime`: these tests prove what
+// that buys (several runtimes coexist and drop independently) rather than
+// asserting the absence of code.
 // ========================================================================
 
 fn coexistence_constraints() -> BoxConstraints {
@@ -300,9 +299,8 @@ mod frame_pipeline_and_vsync;
 mod pump_transaction;
 
 // ========================================================================
-// Presentation-owned text input — migrated from the retired
-// `AppBinding`'s own test module (`binding.rs`, deleted alongside it).
-// End-to-end against a headless `FakeTextInput`, including ui_runtime-routed
+// Presentation-owned text input: end-to-end against a headless
+// `FakeTextInput`, including ui_runtime-routed
 // IME dispatch through `handle_input_entered`.
 // ========================================================================
 mod external_textures;
@@ -313,15 +311,15 @@ mod presentation_text_input;
 // Presentation forest — isolation suite (ADR-0043 §1)
 //
 // Production can install multiple presentations, while attaching widget
-// content to a secondary remains a test-only seam until issue #559 adds
-// per-presentation frame submission. These tests exercise the composite
+// content to a secondary remains a test-only seam: a shared UI runtime has
+// one sink and one constraints set per frame transaction. These tests exercise the composite
 // `GlobalKey` registry and hot-reload fan-out against a genuine N=2
 // forest.
 // ========================================================================
 mod presentation_forest_isolation;
 
 // ========================================================================
-// Addressed input/keyboard routing (issue #555's addressed-routing slice hop-2) — every
+// Addressed input/keyboard routing — every
 // input/IME delivery lands on exactly the stamped presentation, except
 // keyboard, which routes through FocusCoordinator's active presentation
 // instead (ADR-0043 §4).
@@ -329,7 +327,7 @@ mod presentation_forest_isolation;
 mod addressed_input_routing;
 
 // ========================================================================
-// Per-presentation redraw wake (issue #555's addressed-routing slice) — a redraw request that
+// Per-presentation redraw wake — a redraw request that
 // dirties one presentation's own pipeline must poke ITS OWN native
 // window only, never a sibling's.
 // ========================================================================
@@ -355,9 +353,9 @@ mod stale_handles;
 /// This module's own red-exploits: the segment gate's poll-decision
 /// equivalence table, the close-mid-animation probe, and the
 /// zero-produce (demand-driven idle) invariant. Distinct from
-/// `frame_pipeline_and_vsync` (which pins the PRE-EXISTING deferral/vsync
-/// behavior unedited) — these are the NEW clock-level guarantees this
-/// slice adds.
+/// `frame_pipeline_and_vsync` (which pins the deferral/vsync
+/// behavior) — these are the clock-level guarantees of the
+/// segment gate.
 // ========================================================================
 // Presentation-frame transaction boundary (ADR-0048):
 // a frame failure — a structured pipeline error or a panic that escaped
