@@ -21,8 +21,6 @@ mod agent_wake;
 mod ancestor_finders;
 #[path = "support/async_snapshot_recovery.rs"]
 mod async_snapshot_recovery;
-#[path = "public_support/binding_observer_retirement.rs"]
-mod binding_observer_retirement;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
 #[path = "support/child_payload_recovery.rs"]
@@ -158,10 +156,6 @@ fn lifecycle_panic_containment_matrix() {
         owner_key_retirement::dispatch_child(&kind);
         return;
     }
-    if let Ok(kind) = std::env::var("FLUI_BINDING_OBSERVER_RETIREMENT_CHILD") {
-        binding_observer_retirement::dispatch_child(&kind);
-        return;
-    }
     if let Ok(kind) = std::env::var("FLUI_STATIC_CHILDREN_RETIREMENT_CHILD") {
         static_children_retirement::dispatch_child(&kind);
         return;
@@ -194,7 +188,6 @@ fn lifecycle_panic_containment_matrix() {
         "lifecycle_panic_containment_matrix",
         &[
             ("static_children_retirement::healthy_static_children_release_in_order", static_children_retirement::healthy_static_children_release_in_order as fn()),
-            ("binding_observer_retirement::binding_observer_ownership_and_notifications", binding_observer_retirement::binding_observer_ownership_and_notifications as fn()),
             ("owner_key_lookup_reentry::key_hash_can_read_its_released_scope", owner_key_lookup_reentry::key_hash_can_read_its_released_scope as fn()),
             ("owner_key_lookup_reentry::scoped_key_equality_can_read_claim_count", owner_key_lookup_reentry::scoped_key_equality_can_read_claim_count as fn()),
             ("owner_key_lookup_reentry::key_equality_owner_release_revalidates_once", owner_key_lookup_reentry::key_equality_owner_release_revalidates_once as fn()),
@@ -472,6 +465,6 @@ fn signal_read_and_write_matrix() {
     );
 }
 
-// Keys, stream builders and binding observers carry no thread bound (ADR-0323 §4).
+// Keys and stream builders carry no thread bound (ADR-0323 §4).
 #[path = "owner_local.rs"]
 mod owner_local;

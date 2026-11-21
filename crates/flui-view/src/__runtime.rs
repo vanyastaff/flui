@@ -37,7 +37,6 @@ use flui_protocol::record::RecordRow;
 use flui_protocol::{
     error::ErrorObject, events::Event, events::EventFilter, record::RecordParams, tree::WindowId,
 };
-use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
 pub use crate::close_guard::{CloseGuardSource, SettledClose};
@@ -543,11 +542,11 @@ pub trait BindingRuntime: sealed::Sealed {
     /// This binding's exact local lifecycle source.
     fn lifecycle_source(&self) -> &LifecycleSource;
 
-    /// Notify legacy observers and scoped subscriptions of a state already
+    /// Deliver to the lifecycle subscribers a state already
     /// committed through [`Self::lifecycle_source`] (the terminal ladder
     /// commits with `commit_terminal`, which
     /// [`WidgetsBinding::handle_app_lifecycle_state_changed`] refuses).
-    fn notify_committed_lifecycle(&self, state: AppLifecycleState);
+    fn notify_committed_lifecycle(&self);
 }
 
 impl BindingRuntime for WidgetsBinding {
@@ -578,7 +577,7 @@ impl BindingRuntime for WidgetsBinding {
         &self.lifecycle
     }
 
-    fn notify_committed_lifecycle(&self, state: AppLifecycleState) {
-        self.notify_lifecycle(state);
+    fn notify_committed_lifecycle(&self) {
+        self.lifecycle.drain();
     }
 }

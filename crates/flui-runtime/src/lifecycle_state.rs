@@ -103,9 +103,11 @@ pub(crate) fn lifecycle_ladder(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod lifecycle_derivation_tests {
     use std::{
+        cell::RefCell,
         panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
         sync::{
-            Arc, Mutex,
+            Arc,
             atomic::{AtomicBool, Ordering},
         },
     };
@@ -115,34 +117,14 @@ mod lifecycle_derivation_tests {
         events::{PointerKind, make_down_event},
         pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
     };
-    use flui_view::WidgetsBindingObserver;
 
     use super::{AppLifecycleState, derive_lifecycle_state, lifecycle_ladder};
-
-    struct LifecycleSeen(Mutex<Vec<AppLifecycleState>>);
-
-    impl WidgetsBindingObserver for LifecycleSeen {
-        fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
-            self.0.lock().expect("lifecycle log lock").push(state);
-        }
-    }
 
     struct PanicOnLifecycleRouteDrop;
 
     impl Drop for PanicOnLifecycleRouteDrop {
         fn drop(&mut self) {
             panic!("lifecycle route cleanup panic");
-        }
-    }
-
-    struct PanickingLifecycleObserver(Arc<AtomicBool>);
-
-    impl WidgetsBindingObserver for PanickingLifecycleObserver {
-        fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
-            if state == AppLifecycleState::Hidden {
-                self.0.store(true, Ordering::Release);
-                panic!("widgets lifecycle listener panic");
-            }
         }
     }
 
@@ -264,9 +246,15 @@ mod lifecycle_derivation_tests {
         ui_runtime.synchronize_window_lifecycle();
         let lane = InteractionLane::try_new().expect("test interaction lane");
         let handle = lane.dispatch_handle();
-        let observer = Arc::new(LifecycleSeen(Mutex::new(Vec::new())));
-        let observer_handle: Arc<dyn WidgetsBindingObserver> = observer.clone();
-        ui_runtime.widgets().add_observer(observer_handle.clone());
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let lifecycle = ui_runtime
+            .widgets()
+            .with_build_owner(flui_view::BuildOwner::lifecycle_handle)
+            .expect("presentation lifecycle handle");
+        let heard_by_recorder = Rc::clone(&heard);
+        let (_, recorder) = lifecycle
+            .subscribe(move |state| heard_by_recorder.borrow_mut().push(state))
+            .expect("lifecycle subscription while open");
         let scheduler_listener_panicked = Arc::new(AtomicBool::new(false));
         let scheduler_probe = Arc::clone(&scheduler_listener_panicked);
         let scheduler_listener = ui_runtime.scheduler().listen_lifecycle_state(move |state| {
@@ -276,12 +264,15 @@ mod lifecycle_derivation_tests {
             }
         });
         let widget_listener_panicked = Arc::new(AtomicBool::new(false));
-        let panicking_observer: Arc<dyn WidgetsBindingObserver> = Arc::new(
-            PanickingLifecycleObserver(Arc::clone(&widget_listener_panicked)),
-        );
-        ui_runtime
-            .widgets()
-            .add_observer(panicking_observer.clone());
+        let widget_probe = Arc::clone(&widget_listener_panicked);
+        let (_, panicking_subscriber) = lifecycle
+            .subscribe(move |state| {
+                if state == AppLifecycleState::Hidden {
+                    widget_probe.store(true, Ordering::Release);
+                    panic!("widgets lifecycle listener panic");
+                }
+            })
+            .expect("lifecycle subscription while open");
 
         ui_runtime.enter(|ui_runtime| {
             lane.enter(|| {
@@ -312,13 +303,13 @@ mod lifecycle_derivation_tests {
                     Some(&"lifecycle route cleanup panic")
                 );
                 assert_eq!(
-                    *observer.0.lock().expect("lifecycle log lock"),
+                    *heard.borrow(),
                     vec![
                         AppLifecycleState::Inactive,
                         AppLifecycleState::Hidden,
                         AppLifecycleState::Paused,
                     ],
-                    "the complete synthesized ladder must reach widget observers"
+                    "the complete synthesized ladder must reach widget subscribers"
                 );
                 assert_eq!(ui_runtime.gestures().active_pointer_count(), 0);
                 assert_eq!(
@@ -336,8 +327,8 @@ mod lifecycle_derivation_tests {
                 );
 
                 scheduler_listener.detach();
-                ui_runtime.widgets().remove_observer(&panicking_observer);
-                ui_runtime.widgets().remove_observer(&observer_handle);
+                drop(panicking_subscriber);
+                drop(recorder);
                 ui_runtime.update_host_lifecycle(AppLifecycleState::Resumed);
             });
         });
