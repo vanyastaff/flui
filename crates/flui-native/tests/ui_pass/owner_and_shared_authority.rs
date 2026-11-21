@@ -1,7 +1,5 @@
-use flui_native::{
-    HeadlessDisplayControls, HeadlessHostEvents, HeadlessPreferences, HostWindow, OwnerPlatform,
-    PlatformProxy,
-};
+use flui_native::{HostWindow, OwnerPlatform, PlatformProxy};
+use flui_native::testing::{HeadlessDisplayControls, HeadlessHostEvents, HeadlessPreferences};
 use std::rc::Rc;
 
 fn assert_shared<T: Send + Sync + Clone>() {}

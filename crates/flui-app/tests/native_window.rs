@@ -12,7 +12,7 @@ use std::rc::Rc;
 use flui_app::Application;
 use flui_app::native::{HostWindow, NativeWindow, NativeWindowCapability};
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle};
-use flui_native::HeadlessPlatform;
+use flui_native::testing::HeadlessPlatform;
 use flui_platform::Unsupported;
 use flui_view::prelude::*;
 

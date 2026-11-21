@@ -9,8 +9,10 @@ use std::sync::Arc;
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
-use flui_native::{
+use flui_native::testing::{
     HeadlessExitReevaluation, HeadlessOpenWindows, HeadlessOwnerTurns, HeadlessPlatform,
+};
+use flui_native::{
     OpenWindowError, OwnerPlatform, PendingWindow, Platform as _, ProxySendError, WindowRequest,
 };
 use flui_platform::{WindowHandler, WindowOptions};

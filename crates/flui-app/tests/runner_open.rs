@@ -30,7 +30,7 @@ use flui_app::app::{
     WindowPolicy,
 };
 use flui_app::testing::{HeadlessRun, HeadlessRunHandle};
-use flui_native::HeadlessPlatform;
+use flui_native::testing::HeadlessPlatform;
 use flui_platform::{Launch, OpenTarget, Opened, OpenedFile, PlatformWindow, WindowId};
 use flui_view::navigation::OpenDeclarations;
 use flui_view::{CloseGuard, PendingClose};

@@ -5,7 +5,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
-use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, OwnerPlatform, Platform as _};
+use flui_native::testing::{HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::WindowOptions;
 use flui_platform::input::capabilities::InputCapabilities;

@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_native::{
+use flui_native::Platform as _;
+use flui_native::testing::{
     DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessHostWindow, HeadlessOwnerTurns,
-    HeadlessPlatform, Platform as _,
+    HeadlessPlatform,
 };
 use flui_platform::PlatformWindow;
 use flui_platform::{DisplayId, DisplaySnapshot, WindowDisplay};

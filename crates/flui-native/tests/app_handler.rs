@@ -8,7 +8,8 @@ use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
-use flui_native::{AppHandler, HeadlessPlatform, Platform, PlatformError};
+use flui_native::testing::HeadlessPlatform;
+use flui_native::{AppHandler, Platform, PlatformError};
 use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice, WindowOptions};
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::RecordingWindowHandler;

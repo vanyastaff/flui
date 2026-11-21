@@ -531,7 +531,7 @@ struct ComposingField {
     /// The loop of the run, when the test asks whether it still ran at
     /// Detached; what it answered then.
     loop_at_detached: Option<(
-        flui_native::HeadlessOwnerTurns,
+        flui_native::testing::HeadlessOwnerTurns,
         Rc<std::cell::Cell<Option<bool>>>,
     )>,
     /// How long the field's session-end notice subscriber blocks.
@@ -632,7 +632,7 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
     };
     let application =
         Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
-    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+    let platform = flui_native::testing::HeadlessPlatform::new().with_text_store_host(|| {
         flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
@@ -747,7 +747,7 @@ fn guarded_run(
     hold_on: HoldOn,
 ) -> (
     flui_app::testing::HeadlessRunHandle,
-    flui_native::HeadlessHostEvents,
+    flui_native::testing::HeadlessHostEvents,
     Rc<RefCell<Guarded>>,
 ) {
     guarded_run_with(hold_on, AppConfig::new())
@@ -759,7 +759,7 @@ fn guarded_run_with(
     config: AppConfig,
 ) -> (
     flui_app::testing::HeadlessRunHandle,
-    flui_native::HeadlessHostEvents,
+    flui_native::testing::HeadlessHostEvents,
     Rc<RefCell<Guarded>>,
 ) {
     let shared = Rc::new(RefCell::new(Guarded::default()));
@@ -768,7 +768,7 @@ fn guarded_run_with(
         shared: Rc::clone(&shared),
     };
     let application = Application::new().config(config.exit_policy(ExitPolicy::OnLastWindowClosed));
-    let platform = flui_native::HeadlessPlatform::new();
+    let platform = flui_native::testing::HeadlessPlatform::new();
     let events = platform.host_events();
     let run = HeadlessRun::start_on(application, view, platform);
     run.run_owner_turn();
@@ -1004,7 +1004,7 @@ pub(crate) fn session_end_commits_composition_before_the_flush() {
 
     let store = flui_interaction::testing::InMemoryTextStore::new("ab");
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
-    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+    let platform = flui_native::testing::HeadlessPlatform::new().with_text_store_host(|| {
         flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
@@ -1065,7 +1065,7 @@ pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
     };
     let application =
         Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
-    let platform = flui_native::HeadlessPlatform::new()
+    let platform = flui_native::testing::HeadlessPlatform::new()
         .with_session_end_support(flui_platform::SessionEndSupport::NotifyOnly)
         .with_text_store_host(|| {
             flui_testing::text_store_host::RecordingTextStoreHost::new()
@@ -1106,7 +1106,7 @@ const SPENT_MARGIN: Duration = Duration::from_millis(2_500);
 /// observer runs while the loop still runs.
 pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
-    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
+    let platform = flui_native::testing::HeadlessPlatform::new().with_text_store_host(|| {
         flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
@@ -1172,7 +1172,7 @@ enum SlowOn {
 /// ran and then blocks for `delay`, as a slow save does.
 #[derive(Clone)]
 struct SlowDetached {
-    turns: flui_native::HeadlessOwnerTurns,
+    turns: flui_native::testing::HeadlessOwnerTurns,
     running: Rc<std::cell::Cell<Option<bool>>>,
     delay: Duration,
     slow_on: SlowOn,
@@ -1254,7 +1254,7 @@ impl flui_view::View for SlowDetached {
 /// windows' observers run while the loop still runs.
 pub(crate) fn a_slow_observer_stops_the_session_end_delivery() {
     for slow_on in [SlowOn::SessionEnded, SlowOn::Detached] {
-        let platform = flui_native::HeadlessPlatform::new();
+        let platform = flui_native::testing::HeadlessPlatform::new();
         let windows: [Rc<std::cell::Cell<Option<bool>>>; 2] = Default::default();
         let root = |running: &Rc<std::cell::Cell<Option<bool>>>| SlowDetached {
             turns: platform.owner_turns(),
@@ -1408,7 +1408,7 @@ pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
 /// still ran, and whose session-ended subscriber blocks for `notice_delay`.
 #[derive(Clone)]
 struct TornDown {
-    turns: flui_native::HeadlessOwnerTurns,
+    turns: flui_native::testing::HeadlessOwnerTurns,
     dropped: Rc<std::cell::Cell<Option<bool>>>,
     notice_delay: Duration,
 }
@@ -1473,7 +1473,7 @@ impl flui_view::View for TornDown {
 /// drops only after the loop stopped.
 pub(crate) fn session_end_tears_down_only_with_time_left() {
     for (notice_delay, inline) in [(Duration::ZERO, true), (SPENT_MARGIN, false)] {
-        let platform = flui_native::HeadlessPlatform::new();
+        let platform = flui_native::testing::HeadlessPlatform::new();
         let dropped = Rc::new(std::cell::Cell::new(None));
         let root = TornDown {
             turns: platform.owner_turns(),
@@ -1589,7 +1589,7 @@ pub(crate) fn a_notice_subscriber_panic_never_leaves_the_handler() {
         let root = PanickingSubscriber { panics_on };
         let application =
             Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
-        let platform = flui_native::HeadlessPlatform::new();
+        let platform = flui_native::testing::HeadlessPlatform::new();
         let events = platform.host_events();
         let run = HeadlessRun::start_on(application, root, platform);
         run.run_owner_turn();
@@ -1791,7 +1791,7 @@ fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
 /// running after each.
 fn tap(
     run: &flui_app::testing::HeadlessRunHandle,
-    window: &flui_native::HeadlessHostWindow,
+    window: &flui_native::testing::HeadlessHostWindow,
     at: flui_foundation::geometry::Offset<f64>,
 ) {
     use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
@@ -1940,7 +1940,7 @@ pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_bu
 /// last window as the user does and joins the run.
 fn close_after(
     run: flui_app::testing::HeadlessRunHandle,
-    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::HeadlessHostWindow),
+    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::testing::HeadlessHostWindow),
 ) -> flui_app::testing::ExitReport {
     run.run_owner_turn();
     let window = run
@@ -2271,7 +2271,7 @@ impl flui_view::View for NoteView {
 /// `pools`, storing under `root`, with [`Note`] loaded.
 struct NoteRun {
     run: flui_app::testing::HeadlessRunHandle,
-    events: flui_native::HeadlessHostEvents,
+    events: flui_native::testing::HeadlessHostEvents,
     shared: Rc<RefCell<NoteShared>>,
     pools: flui_runtime::execution::DeterministicExecutors,
     root: tempfile::TempDir,
@@ -2284,7 +2284,9 @@ impl NoteRun {
 
     /// [`Self::start`] on the headless platform `configure` makes.
     fn start_on(
-        configure: impl FnOnce(flui_native::HeadlessPlatform) -> flui_native::HeadlessPlatform,
+        configure: impl FnOnce(
+            flui_native::testing::HeadlessPlatform,
+        ) -> flui_native::testing::HeadlessPlatform,
     ) -> Self {
         let root = tempfile::tempdir().expect("a temporary data root");
         let pools = flui_runtime::execution::DeterministicExecutors::new();
@@ -2299,7 +2301,8 @@ impl NoteRun {
                 )
                 .exit_policy(ExitPolicy::OnLastWindowClosed),
         );
-        let platform = configure(flui_native::HeadlessPlatform::new().with_data_root(root.path()));
+        let platform =
+            configure(flui_native::testing::HeadlessPlatform::new().with_data_root(root.path()));
         let events = platform.host_events();
         let run = HeadlessRun::start_on(application, view, platform);
         run.run_owner_turn();
@@ -2432,7 +2435,7 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
 /// A phone's background, as the headless platform stands in for one.
 fn phone(
     window: Duration,
-) -> impl FnOnce(flui_native::HeadlessPlatform) -> flui_native::HeadlessPlatform {
+) -> impl FnOnce(flui_native::testing::HeadlessPlatform) -> flui_native::testing::HeadlessPlatform {
     move |platform| {
         platform.with_session_end_support(flui_platform::SessionEndSupport::Background { window })
     }

@@ -132,7 +132,7 @@ flui-testing = { path = ".", features = ["http"] }
 # `CountingWaker` and `panicking_waker` for tests that count or fail a waker.
 flui-foundation = { workspace = true, features = ["testing"] }
 # The headless host whose windows the conformance checks run against, named
-# through its doubles (`scripted`).
+# through its doubles (`flui_native::testing`, with `scripted`).
 flui-native = { workspace = true, features = ["scripted"] }
 # A hot reload renews a scene's lineage within a pump, which the headless
 # sink's texture tracking is tested against.

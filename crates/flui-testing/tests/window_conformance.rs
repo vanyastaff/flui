@@ -6,7 +6,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform};
+use flui_native::testing::{HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, Platform};
 use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CommandRefusal, Cursor, CursorError, PlatformSystemChrome,

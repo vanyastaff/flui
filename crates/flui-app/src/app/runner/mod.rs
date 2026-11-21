@@ -838,7 +838,7 @@ mod tests {
 
         let heard = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let log = Arc::clone(&heard);
-        let platform = flui_native::HeadlessPlatform::new()
+        let platform = flui_native::testing::HeadlessPlatform::new()
             .with_text_store_host(move || std::rc::Rc::new(FocusLog(Arc::clone(&log))));
         let _clear_guard = OwnerHostClearGuard::arm();
         Box::new(platform)

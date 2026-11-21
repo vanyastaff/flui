@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Point;
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, UiRuntimeId};
-use flui_native::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform as _};
+use flui_native::testing::{HeadlessDragAndDrop, HeadlessPlatform};
+use flui_native::{HostWindow, Platform as _};
 use flui_platform::DragDropEvent;
 use flui_platform::WindowOptions;
 use flui_platform::input::pointer::PressId;
@@ -170,7 +171,7 @@ impl Desktop {
             )
         };
         (&*self.window as &dyn std::any::Any)
-            .downcast_ref::<flui_native::HeadlessHostWindow>()
+            .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
             .expect("a headless window")
             .inject_event(PlatformInput::Pointer(event));
     }

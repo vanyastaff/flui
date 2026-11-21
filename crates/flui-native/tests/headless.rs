@@ -15,7 +15,8 @@
 use flui_native::testing::app;
 
 use app::{AppCall, AppLog, run_keeping_owner};
-use flui_native::{CurrentHost, HeadlessPlatform, current_host, current_platform};
+use flui_native::testing::HeadlessPlatform;
+use flui_native::{CurrentHost, current_host, current_platform};
 use flui_platform::WindowOptions;
 use flui_testing::window_commands::AdmitAndApply as _;
 

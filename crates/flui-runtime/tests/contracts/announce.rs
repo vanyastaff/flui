@@ -220,7 +220,7 @@ fn an_idle_presentation_speaks_an_announcement() {
 /// sent after the attach would reach an adapter holding no tree.
 #[test]
 fn semantics_stop_with_the_last_listener_and_restart_whole() {
-    let bridge = Arc::new(flui_native::FakeAccessibility::new());
+    let bridge = Arc::new(flui_native::testing::FakeAccessibility::new());
     let window = flui_native::headless_platform()
         .open_window(
             flui_platform::WindowOptions::default(),

@@ -15,10 +15,10 @@ use crate::Opened;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
-use flui_native::{
-    DisplaySpec, HeadlessHostWindow, HeadlessPlatform, HeadlessWindowPolicy, HostWindow,
-    Platform as _,
+use flui_native::testing::{
+    DisplaySpec, HeadlessHostWindow, HeadlessPlatform, HeadlessWindowPolicy,
 };
+use flui_native::{HostWindow, Platform as _};
 use flui_platform::{
     AdmissionError, ApplyError, DisplayId, InvalidGeometry, WindowCapabilities, WindowCommand,
     WindowExtent, WindowMode, WindowOptions, WindowPosition, WindowState,
@@ -690,7 +690,7 @@ fn the_user_resizing_and_moving_publish_too() {
 /// scale; a position on a display the platform does not hold is refused with
 /// it, and the window stays where it was.
 fn a_position_lands_on_the_display_it_names() {
-    use flui_native::DisplaySpec;
+    use flui_native::testing::DisplaySpec;
 
     let platform = HeadlessPlatform::new().with_displays(vec![
         DisplaySpec::new("left", 1920, 1080),

@@ -4,7 +4,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_native::{AppHandler, ExitAnswer, HeadlessPlatform, OwnerPlatform, Platform};
+use flui_native::testing::HeadlessPlatform;
+use flui_native::{AppHandler, ExitAnswer, OwnerPlatform, Platform};
 
 use super::{
     OwnerHostClearGuard, app_handler, install_owner_platform, route_exit_policy, route_quit,
@@ -214,7 +215,7 @@ mod handler_containment {
 
     /// A routed headless window of an installed owner, torn down on drop.
     struct Routed {
-        native: flui_native::HeadlessHostWindow,
+        native: flui_native::testing::HeadlessHostWindow,
         window: Rc<dyn flui_platform::PlatformWindow>,
         routes: Rc<crate::app::runner::window_routes::WindowRoutes>,
         _clear: OwnerHostClearGuard,
@@ -237,7 +238,7 @@ mod handler_containment {
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
             let native = (&*host_window as &dyn std::any::Any)
-                .downcast_ref::<flui_native::HeadlessHostWindow>()
+                .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
                 .expect("headless window")
                 .clone();
             let window: Rc<dyn flui_platform::PlatformWindow> = host_window;

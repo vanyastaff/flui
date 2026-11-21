@@ -55,12 +55,13 @@ use flui_native::input::linux::x11::decode as x11;
 use flui_native::input::linux::xkb as x11_keys;
 use flui_native::input::linux::xkb::{key_of, keysym as xkb_keysym};
 use flui_native::input::web::keys::key_composition;
+use flui_native::testing::{HeadlessHostWindow, HeadlessPlatform};
 #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
 use flui_native::text::conformance::TextInputV3;
 use flui_native::text::conformance::{
     AndroidMirror, AppKitClient, TsfDocument, WebEditContext, WebTextarea,
 };
-use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, OwnerPlatform, Platform as _};
+use flui_native::{HostWindow, OwnerPlatform, Platform as _};
 use flui_platform::Availability;
 use flui_platform::EventTime;
 use flui_platform::WindowOptions;

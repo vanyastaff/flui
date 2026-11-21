@@ -295,10 +295,10 @@ fn observed_app(
 struct Started {
     run: HeadlessRunHandle,
     handle: AppHandle,
-    window: flui_native::HeadlessHostWindow,
+    window: flui_native::testing::HeadlessHostWindow,
     renderer: StandInRenderer,
     /// What the platform reports, as the operating system does.
-    events: flui_native::HeadlessHostEvents,
+    events: flui_native::testing::HeadlessHostEvents,
 }
 
 fn start(observed: &Observed) -> Started {
@@ -320,7 +320,7 @@ fn start_configured(
 ) -> Started {
     let ready = Rc::new(RefCell::new(None));
     let (application, root) = observed_app(observed.clone(), Rc::clone(&ready), configure);
-    let platform = flui_native::HeadlessPlatform::new();
+    let platform = flui_native::testing::HeadlessPlatform::new();
     let events = platform.host_events();
     let run = HeadlessRun::start_on(application, root, platform);
     run.run_owner_turn();

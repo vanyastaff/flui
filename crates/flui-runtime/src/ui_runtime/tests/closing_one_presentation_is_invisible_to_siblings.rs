@@ -115,7 +115,7 @@ impl ViewState<CloseObserver> for CloseObserver {
 /// Exercise the platform capability the presentation actually calls; the
 /// headless recorder remains the oracle even when disable itself panics.
 struct CloseTextInput {
-    recorder: flui_native::FakeTextInput,
+    recorder: flui_native::testing::FakeTextInput,
     fail_disable: bool,
     reenter_disable: bool,
 }
@@ -484,7 +484,7 @@ fn run_ui_runtime_sibling_child() {
 }
 
 struct OwnershipBridge {
-    delegate: flui_native::FakeAccessibility,
+    delegate: flui_native::testing::FakeAccessibility,
     external: std::sync::Weak<
         parking_lot::Mutex<Option<Arc<dyn flui_semantics::platform::PlatformAccessibility>>>,
     >,
@@ -566,7 +566,7 @@ fn run_platform_ownership_child(kind: &str) {
             .keeping(bundle(&window_drops)),
     );
     let bridge = Arc::new(OwnershipBridge {
-        delegate: flui_native::FakeAccessibility::new(),
+        delegate: flui_native::testing::FakeAccessibility::new(),
         external: Arc::downgrade(&external_bridge),
         armed: AtomicBool::new(false),
         fail_callback: fail_bridge || cursor_first,
@@ -976,7 +976,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     ));
 
     let platform = Arc::new(CloseTextInput {
-        recorder: flui_native::FakeTextInput::new(),
+        recorder: flui_native::testing::FakeTextInput::new(),
         fail_disable: ime_failure,
         reenter_disable: reentry,
     });
