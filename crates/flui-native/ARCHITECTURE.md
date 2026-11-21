@@ -13,7 +13,7 @@ has one path (ADR-0151 §9), so a host and `flui-app` import them from
 `flui_platform`. What stays here is what names an OS stack, AccessKit or tokio:
 `Platform`, the owner-thread capability, `HostWindow` and every host.
 `PlatformAccessibility`, the trait the hosts' AccessKit adapters implement, is
-`flui-semantics`' (ADR-0082 §2, amended) and is imported from
+`flui-semantics`' (ADR-0082 §2) and is imported from
 `flui_semantics::platform`. Only `flui-app` may
 depend on this crate (`allowed-dependents`); a crate that needs a capability
 trait depends on `flui-platform` instead.
@@ -624,7 +624,7 @@ trait depends on `flui-platform` instead.
   Android's clipboard is `ClipboardManager`, reached
   through JNI from the owner thread.
 
-  Accessibility has no Cargo feature (ADR-0151 §15, as amended).
+  Accessibility has no Cargo feature (ADR-0151 §15).
   `accesskit_windows` and `accesskit_macos` are unconditional dependencies of
   their OS, and every Win32 and AppKit window builds its adapter. On Linux
   `accesskit_unix` and `zbus` are unconditional dependencies, as the native
@@ -3129,9 +3129,7 @@ just inside it still waits its own call to Win32, so the worst case is
 - **The owner window shuts other openers out.** Win32 refuses a concurrent
   `OpenClipboard` from any other owner, `NULL` included; with a `NULL` owner
   every `NULL` opener of the process counts as the same owner, so another
-  thread's `EmptyClipboard` could free a handle a read is scanning (see "Win32
-  clipboard: cross-thread sessions" in
-  [`docs/safety-review.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
+  thread's `EmptyClipboard` could free a handle a read is scanning.
   Since one thread opens every session, FLUI's own sessions never overlap and
   need no process-wide lock.
 - **No COM.** The thread reads with `GetClipboardData`, which needs no
@@ -3487,8 +3485,8 @@ one difference, and the operating system forces it. A panic reaching the
 platform at all is a defect of `flui-app`'s handlers, which contain every
 application panic (ADR-0258 §4), so the rule decides how such a defect ends,
 not whether an application survives one. The keyboard layout callback's panic
-on X11 and Wayland, and a Wayland field's text store's, used to be contained
-and logged; they follow the rule now, like every other handler's.
+on X11 and Wayland and a Wayland field's text store's follow
+the rule, like every other handler's.
 
 - X11: `dispatch_events` hears every event of the turn in its own containment
   and raises the first panic after the last (`hear_all`); a feature's
@@ -3559,33 +3557,9 @@ signal; the GPU context marks it lost and wakes its owner (`GpuContext::on_devic
   requires giving up the adapter, the swapchain, and any ability to composite
   native-rendered content into the framework's own UI. It would not escape the
   problem either, since a wgpu surface inside a WebView is canvas-backed and
-  wgpu's wasm backend does not recover from `webglcontextlost` (gfx-rs/wgpu#3679).
+  wgpu's wasm backend does not recover from `webglcontextlost`.
 
-**Market lineage:** [bevy#6830](https://github.com/bevyengine/bevy/pull/6830), where
-an `android-activity` maintainer states that only the top-level render target needs
-recreating, not the wgpu stack; [bevy#9937](https://github.com/bevyengine/bevy/pull/9937),
-which first despawned the window on suspend and was revised to "keep Bevy window,
-only recreate Winit window and wgpu surface"; and
-[winit#3786](https://github.com/rust-windowing/winit/pull/3786), which forwards
-Android's `suspended()`/`resumed()` and is a named second emitter for this same
-`false`/`true` pair. Flutter asks for the same contract under another name:
-[flutter#160933](https://github.com/flutter/flutter/issues/160933) requested an
-`onSurfaceDestroying` that precedes the engine's `cleanup()`, having found the
-after-the-fact callback fires once the native surface is gone. The spelling that
-landed upstream is not that one: the API that exists is
-`SurfaceProducer.onSurfaceCleanup`, the before-signal that replaced
-`onSurfaceDestroyed` because another thread could still touch the surface after
-the fact, so a grep for the requested name finds the request rather than the
-implementation (ADR-0063 names both spellings). One divergence from
-winit and bevy is deliberate: winit 0.30.13 keys on the window events alone —
-`src/platform_impl/android/mod.rs` maps `MainEvent::InitWindow` to `Resumed`
-and `MainEvent::TerminateWindow` to `Suspended`, while its `Start` and `Stop`
-arms are `warn!("TODO: forward …")` stubs that forward nothing — and bevy
-consumes those same two events. This backend keys on `Stop`/`Start` *as
-well as* `TerminateWindow`/`InitWindow`: the window pair is where the handle
-actually dies and returns, and the lifecycle pair is where the framework is
-told the app is going away, so emitting on both is the more conservative
-choice, at the cost the trade-off below books.
+**Elsewhere:** unlike winit and bevy, which key only on `InitWindow`/`TerminateWindow` (winit's Android backend forwards nothing for `Start`/`Stop`), this backend keys on `Stop`/`Start` as well: the window pair is where the handle actually dies and returns, and the lifecycle pair is where the framework is told the app is going away, so emitting on both is the more conservative choice, at the cost the trade-off below books. Flutter's `SurfaceProducer.onSurfaceCleanup` is the same contract under another name: a signal before the surface's destruction, because another thread can still touch the surface after an after-the-fact callback (ADR-0063 names both spellings).
 
 **Trade-off:** releasing on `Stop` unconditionally makes the cost per-edge rather
 than per-defect. Android maps `false` to both `Stop` and `TerminateWindow` and
@@ -3703,8 +3677,8 @@ resize was looked at by eye, and no frame on a Retina display, where a wrong
 contents scale would show at twice the size. AppKit's own backing layers
 hand their `display` to the view; `CAMetalLayer`'s does nothing, and the view
 answers no `displayLayer:`, so `FluiMetalLayer::display` calls the view's
-`updateLayer` itself. The in-pass `setNeedsDisplay:` measurement below was
-taken on `drawRect:`; the same re-arm runs from `updateLayer`, and
+`updateLayer` itself. The in-pass `setNeedsDisplay:` behaviour described below was
+observed on `drawRect:`; the same re-arm runs from `updateLayer`, and
 `appkit_window::a_redraw_from_another_thread_is_queued_without_waiting` and the
 frame pump of a running app pass on it. What changed is the re-arm.
 `owner::apple::macos::display_pass` marks the thread for the duration of the frame
@@ -3719,16 +3693,7 @@ bounded at `MAX_DEFER_HOPS`, because a display pass that opens a nested run loop
 services the same lane from inside itself — which the deferral would otherwise
 reproduce silently.
 
-Measured on macOS 15.7 (Darwin 24.6), a 100 Hz panel, isolated probe arms of 4 s
-each, every arm with the window fully visible (`occlusionState` carries the
-visible bit):
-
-| re-arm issued from inside `drawRect:` | draws over 4 s |
-|---|---|
-| `[view setNeedsDisplay:YES]` | 1 |
-| nothing at all (control) | 1 |
-| `[view.layer setNeedsDisplay]` | 1 |
-| `setNeedsDisplay:` deferred to the next main-queue turn | 396 |
+On macOS a `setNeedsDisplay:` sent from inside `drawRect:` is discarded: the view draws once and never again, whether the request goes to the view or to its backing layer, while the same call deferred to the next main-queue turn draws every frame.
 
 **Alternatives considered:**
 
@@ -3745,45 +3710,12 @@ visible bit):
   from the calling thread. Until that lands, the frame has to be able to re-arm
   from where it runs.
 - A diagnostic redraw tick in the backend (an `NSTimer`/thread poke behind a
-  `FLUI_MACOS_REDRAW_POKE_MS`-style knob, which was implemented while diagnosing
-  this). Deleted, not deferred: it contradicts ADR-0353 — the platform paces
+  `FLUI_MACOS_REDRAW_POKE_MS`-style knob). Rejected, not deferred: it contradicts ADR-0353 — the platform paces
   production, a sleep never does — and it pre-empts the `PlatformProxy` redraw
   verb ADR-0045 decision 5 scopes to #559 by shipping a second, private frame
   source. The primer that starts a measurement belongs to the measuring harness.
 
-**Market lineage:** nobody shipping a Rust macOS UI builds its frame loop this
-way. gpui-ce (`crates/gpui_macos/src/display_link.rs`, `main` @ `8e36ac0`,
-2026-09-15) and upstream Zed (the same crate, `main` @ `c24e309`, 2026-09-17)
-both pace on `CVDisplayLink` — one immortal link per `CGDirectDisplayID` in a
-`static Mutex<Registry>`, windows subscribing rather than owning, driven by
-`NSWindowOcclusionState::Visible` as the master start/stop switch and re-armed on
-screen change — and render **directly** from the link's callback on the main
-queue, with `displayLayer:` as the second, AppKit-initiated entry; both paths
-stop the link, render, and restart it. `CADisplayLink` /
-`NSView.displayLink(target:selector:)` appears nowhere in either repository, and
-**neither calls `setNeedsDisplay:` at all** (the sole hit is
-`setNeedsDisplayOnBoundsChange(true)` on the `CAMetalLayer`), nor has any
-`drawRect` path (`0` hits). That last point is the one worth keeping straight:
-it is evidence that the path this backend was on is a path the market left, not
-evidence about AppKit's behaviour — the discarded in-pass `setNeedsDisplay:` is
-this entry's own four-arm measurement, and the market never reaches the
-question. Their link is also leaked by design, because `CVDisplayLinkStop` is
-asynchronous and releasing raced its io thread (upstream segfaults #32116 /
-ZED-7XR) — the wart `CADisplayLink` does not have, which reads as support for
-ADR-0044's choice with the caveat that the market sits on the API macOS 15
-deprecates. Their deferral is a different one and not to be confused with the
-one above: upstream Zed PR #3592 (`f12510b8`, 2023-12-11) defers *drawing* until
-CoreAnimation calls `displayLayer:`, i.e. defers to a platform signal rather than
-around a discarded request; core gpui's `deferring re-entrant window draw
-request` is its own comment's description of a Windows-only re-entrancy case.
-One behaviour of theirs this backend still lacks is the fix for the stall that
-keeps a cold start from beginning: a single synchronous frame on re-activation,
-gated on `activated_least_once`.
-
-Basis for the above: source reading at the two commits named (clone grep plus
-`gh search code`, which agree), not by running either project — the clones are
-shallow, so an older revision containing a `setNeedsDisplay:` call is not ruled
-out, and no Apple documentation was consulted for the API-deprecation claim.
+**Elsewhere:** the Rust macOS UIs that pace on `CVDisplayLink` render directly from the link's callback and never call `setNeedsDisplay:`, so they do not meet the discarded in-pass request that this backend defers. One behaviour of theirs this backend still lacks is the fix for the stall that keeps a cold start from beginning: a single synchronous frame on re-activation.
 
 **Trade-off:** this deferral is AppKit-local, and the same defect had a second
 instance on another backend with the opposite sign. Web's `request_redraw`
@@ -3812,11 +3744,8 @@ that test fails and the other five in scope still pass), because a bare test
 process cannot construct an NSWindow at all. The behavioural end-to-end pin was a manual macOS run: a real visible window
 on the real AppKit run loop, whose frame callback re-arms the way the engine's
 frame does, behind a primer that stops at the first frame so the measurement
-cannot be explained by it. Measured 2026-09-17: 301 frames in 3.010 s (100.0 fps
-on the 100 Hz panel) with the deferral, against 1 frame total and 0 in the
-measurement window with the deferral branch removed. Both runs' marker lines
-(§4 of its `plan.md`) and the raw run logs are kept with the
-[pacing evidence](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/macos-native-vsync-pacing-evidence).
+cannot be explained by it. With the deferral the window drew every display
+frame; with the deferral branch removed it drew once and never again.
 
 ### macOS reports the period its display paces at, in the display snapshot
 
@@ -3880,17 +3809,7 @@ is keyed by the UUID of its display (`CGDisplayCreateUUIDFromDisplayID`).
   not taken: Rune reads a ProMotion panel's link at 120 Hz under Low Power Mode,
   so a measurement would not find the 60 Hz either.
 
-**Market lineage:** winit 0.30.13's macOS `MonitorHandle::refresh_rate_millihertz`
-(`src/platform_impl/macos/monitor.rs:260`) reads `CGDisplayCopyDisplayMode` →
-`CGDisplayModeGetRefreshRate`, returns it when it is `> 0.0`, and only then falls
-back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the order
-taken here. Read at the version pinned in this workspace's `Cargo.lock`, not
-recalled. The Low Power Mode rule is Rune's
-([`display_link.rs`](https://github.com/anomalyco/rune/blob/dev/crates/rune/src/platform/display_link.rs),
-branch `dev`, read 2026-11-18):
-`CGDisplayIsBuiltin` and `isLowPowerModeEnabled`, and the link's period held at
-1/60 s. Rune reads the flag at each change of display; this host also reads it
-again when Foundation posts the power-state notification.
+**Elsewhere:** the order, the mode's rate first and the display link only for a mode that names no cadence, is winit's. The Low Power Mode hold of the built-in panel at 60 Hz follows Rune, which reads `CGDisplayIsBuiltin` and `isLowPowerModeEnabled` at each change of display; this host also reads the flag again when Foundation posts the power-state notification.
 
 **Trade-off:** the cached display follows the window across screens and backing
 changes. A mode change that leaves the window where it is (a user switching
@@ -3919,13 +3838,11 @@ mode that names no cadence. The macOS column of
 period every other source reads (non-cadence inputs — zero, negative, NaN,
 ±infinity — are unknown rather than an infinite or panicking period), and
 `macos_shim_keeps_the_period_it_reports_today` holds the common panel rates to
-the value this backend reported before the snapshot. The reads themselves are
-FFI. The live path is
-pinned behaviourally by the same manual run that pins the frame pump,
-which reported the refresh period from
-the real backend on the real display: measured 2026-09-17 as `period_us=10000
-hz=100.0`, matching the independent AppKit probe's `CGDisplayModeGetRefreshRate`
-of 100.000 Hz on the same panel. Like every macOS-gated test here, these run
+the value the display shim reports. The reads themselves are
+FFI. The live path is pinned behaviourally by the same manual macOS run that
+pins the frame pump: the period the real backend reported matched the
+`CGDisplayModeGetRefreshRate` of an independent AppKit probe on the same
+panel. Like every macOS-gated test here, these run
 locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
 
 ### A macOS window's safe area is what its screen's camera housing covers of it
@@ -4005,21 +3922,7 @@ ADR-0069 states the contract it violates. The gate makes the focused field the *
 variable: the pre-existing path is byte-identical at the default, so the
 conformance adds no regression surface to a window with no focused field.
 
-**Market lineage.** winit 0.30.13 documents the same rule in the same terms
-(`Window::set_ime_allowed`): with IME allowed the window receives `Ime` events
-and, during the preedit phase, no `KeyboardInput`; with it disallowed the window
-receives no `Ime` events and a `KeyboardInput` for every keypress; and IME is
-**not** allowed by default. The native backend owns the pipeline
-instead of delegating to a library, so it implements the protocol rather than wrapping one. The documentation covers
-the *press*; reading winit's macOS implementation shows the release is gated too
-and on a different variable — `key_up` queues a `KeyboardInput` only from its
-`Ground` and `Disabled` states, so an open preedit suppresses the release while a
-committed character's release still arrives (`ImeState::Committed` is reset to
-`Ground` inside `keyDown:`). `key_up` here gates on the same condition expressed
-in this backend's own state (`TextClient::reports_key_release`, false exactly
-while AppKit's context holds marked text), so a release
-inside an open composition is suppressed for the same reason the press was: the
-application never saw that key go down.
+**Elsewhere:** winit documents the same rule: with IME allowed the window receives `Ime` events and, during the preedit phase, no `KeyboardInput`; with it disallowed it receives a `KeyboardInput` for every keypress. Its release is gated too, on a different variable: `key_up` queues a `KeyboardInput` only outside a preedit, so a committed character's release still arrives. `key_up` here gates on the same condition expressed in this backend's own state (`TextClient::reports_key_release`, false exactly while AppKit's context holds marked text), so a release inside an open composition is suppressed for the same reason the press was: the application never saw that key go down.
 
 **A composition that ends keeps its text, and AppKit is told.** `unmarkText`
 ends the field's composition and keeps what was composed; an empty
@@ -4047,15 +3950,13 @@ store cannot grant a read now. `NSRange` is UTF-16 and so is the store's
 
 **Trade-off, named rather than assumed.** The class-registration block cannot run
 under a bare `cargo test` (an unbundled `NSWindow` throws
-`_CFBundleGetValueForInfoKey`), so every encoding and selector here was
-hand-checked against `objc-0.2.7`'s `add_method` preconditions until the bundled
-a bundled run executed them — which it now has, on a real Mac, with all five assertions
-passing. What that run measured about the rect is that it is non-zero and
-screen-relative; the **direction** of the `firstRectForCharacterRange:` Y-flip is
-still designed rather than measured, because a flip of the wrong sign produces a
-non-zero screen rect too. Measuring which side of the caret the candidate window
-would land on needs a real input method to ask, which is the same gap as for real composition below.
-
+`_CFBundleGetValueForInfoKey`), so a bundled manual run on a real Mac executes
+it, and all five of its assertions pass. What that run showed about the rect is
+that it is non-zero and screen-relative; the **direction** of the
+`firstRectForCharacterRange:` Y-flip is designed rather than observed, because a
+flip of the wrong sign produces a non-zero screen rect too. Observing which
+side of the caret the candidate window would land on needs a real input method
+to ask, which is the same gap as for real composition below.
 **Replacement coverage.** The client's rules are pure Rust over the
 `InputContext` seam and run on every host (`text::apple::client::tests`):
 `kana_composed_then_converted_is_committed_in_the_field` (which also pins the
@@ -4076,13 +3977,8 @@ features) binds UIKit through `objc2`
 `dispatch2`, and takes its framework loop-exit signal from
 `applicationWillTerminate:`. ADR-0071 carries the full record.
 
-**Why `objc2` and not the macOS backend's `cocoa`/`objc`.** The choice is not
-consistency-versus-modernity: `objc` has not released since 2019 and `cocoa`
-has **no UIKit surface at all**, so the macOS stack cannot express this platform
-even in principle. `icrate`, which this module's stub doc once named, is a
-deprecated alias split into the `objc2-*` crates. Every shipping Rust Apple
-stack is on `objc2` (winit's iOS backend since 0.30, wgpu-hal, egui, slint,
-gpui), and the macOS module's own header already commits to migrating there.
+**Why `objc2`.** `cocoa` has no UIKit surface at all, so UIKit is bound through
+the same `objc2-*` family the macOS host uses (next section).
 
 **Why `applicationWillTerminate:`.** `UIApplicationMain` never returns, so
 there is no "after `Platform::run`" for the runner to use — the desktop and
@@ -4122,21 +4018,19 @@ arithmetic. The engine-side portability fix this uncovered —
 adapter caps `max_inter_stage_shader_variables` at 15 where
 `wgpu::Limits::default()` asks for 16 — carries a comment at the clamp.
 
-### macOS and iOS share the `objc2` binding stack; the `cocoa`/`objc` pair is gone
+### macOS and iOS share the `objc2` binding stack
 
 **Decision.** Both Apple backends bind their platform frameworks through the
 `objc2` family (`objc2`, `objc2-app-kit` for macOS/AppKit, `objc2-ui-kit` for
 iOS/UIKit, `objc2-foundation`, `objc2-quartz-core`) at the
-versions `wgpu-hal` already pins. The `cocoa` 0.27 / `objc` 0.2 dependency pair
-and the `build.rs` that existed only for its `cfg` macros are removed from the
-crate; neither appears in `Cargo.lock` any more. ADR-0071 carries the full
-record (ADR-0071 chose the stack for iOS first).
+versions `wgpu-hal` already pins. The crate depends on neither `cocoa` nor
+`objc`. ADR-0071 carries the full record.
 
 **Why.** `objc` has not released since 2019 and points at `objc2` as its
 successor; `cocoa` deprecated its whole surface in the same direction and has no
 UIKit bindings at all. Every shipping Rust Apple stack is on `objc2` (winit since
-0.30, `wgpu-hal`, egui, slint, gpui). Carrying both stacks was a two-generation
-wart with a `build.rs` to feed.
+0.30, `wgpu-hal`, egui, slint, gpui), so one binding generation serves both
+hosts.
 
 **One binding generation: typed classes and messages (ADR-0369).** Every class
 an Apple host registers is a `define_class!` class whose Rust state is its
@@ -4177,21 +4071,18 @@ read only for a press it delivers marked, and only the press with that stamp
 is marked when it arrives (`FirstClickTicket`): any press spends the ticket,
 so an answer whose press never came marks none.
 
-**Two defects the stricter macro caught.** objc2's `msg_send!` verifies return
-types against the selector encoding at run time and found `makeFirstResponder:`
-declared `void` where AppKit returns `BOOL` — silently accepted by objc 0.2. It
-also made the cursor-icon match's explicit `arrowCursor` arm list
-`clippy::match_same_arms`-visible (kept as documentation under a scoped allow).
-The newer macro is a stricter oracle; that is part of the migration's value.
+**Typed messages.** objc2's `msg_send!` verifies return types against the
+selector encoding at run time, so a selector declared with the wrong return type
+(`makeFirstResponder:` returns `BOOL`, not `void`) fails at its first call
+instead of being accepted silently.
 
 **Trade-off.** A second `objc2` generation is still in the lock via
 `accesskit_macos` 0.27 and `accesskit_ios` 0.2 (both on 0.5); resolved when
 those move, not by anything here.
 
-**Replacement coverage.** The four bundled macOS probes are unchanged in what
-they assert and all PASS on `objc2`, driving the migrated `msg_send!` sites
-through the production launch path; the five real-`NSPasteboard` tests and the
-`display.rs` arithmetic run in the normal suite.
+**Replacement coverage.** The four bundled macOS probes drive the `msg_send!`
+sites through the production launch path; the five real-`NSPasteboard` tests and
+the `display.rs` arithmetic run in the normal suite.
 
 ### Window-independent owner turns
 
@@ -4284,9 +4175,8 @@ claim native Windows runtime verification.
 
 AppKit shows a window the moment it is ordered front, and the first frame
 reaches the compositor only once the GPU stack behind it exists and the first
-present lands — 2.81 s on a measured cold launch — so ordering an opaque window
-at open shows its bare background for that whole gap (the launch blank-window
-observation in [`docs/BETA.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/BETA.md)). The deferral is the caller's to ask for,
+present lands, which on a cold launch takes seconds, so ordering an opaque window
+at open shows its bare background for that whole gap. The deferral is the caller's to ask for,
 through `WindowOptions::reveal`: with `WindowReveal::AfterFirstFrame`, macOS
 orders a `visible: true` window front at `alphaValue` 0 and gives it its alpha
 (opaque, or what `AppKitWindow::set_alpha` gave it meanwhile) when the embedder reports the first presented frame through
@@ -4310,15 +4200,12 @@ default `WindowReveal::AtOpen` therefore leaves alpha untouched and those
 windows appear at open, as they always did. A backend that cannot defer treats
 `AfterFirstFrame` as `AtOpen`.
 
-Transparent rather than hidden, because a hidden alternative was tried and
-measured on 2026-09-21: an un-ordered window gets no Metal drawable — wgpu
-reports the surface occluded on every acquire (30+ withheld frames in the log)
-— so a reveal that waited for a present into a hidden window waited for
-something that cannot happen and fell through to the embedder's 1 s fallback.
-Ordered at alpha 0, the first acquire still comes back occluded once (a
-post-configure quirk of the Metal surface) and the second presents; the reveal
-followed the first frame by 85 ms, and the window's first on-screen sighting
-through the CoreGraphics window list was already painted.
+Transparent rather than hidden, because an un-ordered window gets no Metal
+drawable: wgpu reports the surface occluded on every acquire, so a reveal that
+waited for a present into a hidden window would wait for something that cannot
+happen and fall through to the embedder's 1 s fallback. Ordered at alpha 0, the
+first acquire still comes back occluded once (a post-configure quirk of the
+Metal surface) and the second presents; a manual macOS run pinned both.
 
 The embedder's half is `flui-app`'s `FirstReveal` policy: the first presented
 frame earns the reveal, and a frame that ran and presented nothing arms a

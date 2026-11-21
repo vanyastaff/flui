@@ -166,10 +166,8 @@ tokio = { workspace = true, features = ["net", "io-util"] }
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
-# `objc2` is the backend's binding stack. The `cocoa`/`objc` pair it replaced
-# is gone entirely: `objc` had not released since 2019, and `cocoa` deprecated
-# its whole surface in favor of this family. Versions are the ones `wgpu-hal`
-# already pins, so no new crate generation was introduced.
+# `objc2` is the backend's binding stack, at the versions `wgpu-hal` already
+# pins, so the macOS host and the GPU stack share one crate generation.
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = [
     "std",
@@ -475,8 +473,7 @@ futures-util = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "net"] }
 
 # iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
-# binding stack — the `objc` crate the macOS backend still uses has not
-# released since 2019, and `cocoa` has no UIKit surface at all. Only the
+# binding stack, as on macOS: `cocoa` has no UIKit surface at all. Only the
 # classes this backend messages are enabled: objc2-ui-kit exposes one feature
 # per header and turns all ~456 on by default, which would compile the whole
 # framework's bindings for a handful of classes. Versions are the ones already
