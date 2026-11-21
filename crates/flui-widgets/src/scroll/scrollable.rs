@@ -490,8 +490,8 @@ impl StatefulView for Scrollable {
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // Unbounded: pixel values from the ballistic simulation are never
         // clamped — the simulation's own `is_done` terminates the run.
-        // Unboundedness is a constructor fact (#1183), not a bound value —
-        // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
+        // Unboundedness is a constructor fact, not a bound value:
+        // `without_ticker_bounds` rejects a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
         let owner = Rc::new(RefCell::new(None));
         let fling_controller = AnimationController::builder(Duration::from_millis(1))

@@ -1493,7 +1493,7 @@ feedback's corner). The entry learns the overlay's node the way the paste
 probe does, and the origin is mapped through `PipelineOwner::local_to_global`.
 
 **Why:** the session's positions are window positions (the recognizer reports
-the platform's root-space position, issue #908), and the feedback must sit
+the platform's root-space position), and the feedback must sit
 under the pointer wherever the overlay is. Every session has its own entry,
 removed when the session ends or when the operating system takes the drag and
 draws its own image. The feedback takes no pointer input, so the targets
@@ -1618,9 +1618,9 @@ would have inherited has to be re-proved here, and that is where this object's
 defects have actually come from: an absent level and a zero-inset level are
 not the same thing for hit-testing (which is why `padding` is `Option` and the
 child-recursion gate is conditional — see **Hit-testing** below), and the
-layered-range predicate now exists in two places (issue #1143). A composed
+layered-range predicate now exists in two places. A composed
 shape would make those classes unrepresentable rather than tested-for. It is a
-legitimate future reshape, not a defect in this one; tracked in issue #1144.
+legitimate future reshape, not a defect in this one.
 Render-level composition fixes `Container` and not the general class, so any
 other conditional-layer widget in this catalog keeps the same hazard.
 
@@ -1693,7 +1693,7 @@ scaled child, three of four probe points outside the box hit in the stack's tree
 and miss here. Unlike the margin-band gate below, this one is **not** closed:
 the gated-level reasoning that fixes that case does not extend to the outer
 gate, because at identity there is no level to reason about — the node itself
-is the difference. Tracked in issue #1143.
+is the difference.
 
 **Collapsed branch:** the stack's three childless shapes — the placeholder
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no

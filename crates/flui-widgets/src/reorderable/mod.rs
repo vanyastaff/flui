@@ -31,6 +31,10 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hashes of the application's item keys"
+)]
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
@@ -875,6 +879,10 @@ struct ItemRecord {
 }
 
 /// The items' records by the hash of their keys.
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hashes of the application's item keys"
+)]
 type Records = HashMap<u64, Vec<ItemRecord>>;
 
 /// The record of `key` among `records`.
@@ -1256,7 +1264,7 @@ impl Shared {
             drags: RefCell::new(Vec::new()),
             clock: RefCell::new(clock),
             generation: Cell::new(0),
-            records: RefCell::new(HashMap::new()),
+            records: RefCell::new(Records::default()),
             vsync: RefCell::new(None),
             rebuild: ctx.rebuild_handle(),
             writer: ctx.writer_source(),

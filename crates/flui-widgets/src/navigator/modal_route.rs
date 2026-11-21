@@ -61,6 +61,10 @@
 // particular has no public caller until `Hero` drives it.
 
 use std::cell::Cell;
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hero tags, supplied by the application"
+)]
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -1048,6 +1052,10 @@ impl ModalHandle {
     /// plus — recursively — whatever each nested `Navigator` mounted inside it
     /// publishes for its own current top `PageRoute`.
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keys are hero tags, supplied by the application"
+    )]
     pub fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
         self.inner.heroes.all_heroes()
     }

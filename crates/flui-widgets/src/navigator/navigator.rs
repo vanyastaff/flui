@@ -35,10 +35,11 @@
 //! and its location is its name (ADR-0330).
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
+
+use rustc_hash::FxHashMap;
 
 use flui_animation::AnimationRunFuture;
 use flui_foundation::ChangeNotifier;
@@ -408,7 +409,7 @@ impl NavigatorShared {
             // Cloned lazily, on the first `PopInvoked`/`LocalHistoryPopped`:
             // an animated push's own `AwaitPush` effect (the common case,
             // since every push produces one) never needs this map at all.
-            let mut modals: Option<HashMap<RouteId, ModalHandle>> = None;
+            let mut modals: Option<FxHashMap<RouteId, ModalHandle>> = None;
             // Read once, as the flush left it: where its owed `on_remove`s go.
             let post_frame = self.post_frame.borrow().clone();
             for effect in std::mem::take(&mut outcome.deferred) {
@@ -542,8 +543,8 @@ impl NavigatorShared {
             // navigator mounted registers this closure while the slot is
             // still `None`, and only a later mount fills it. Cloned out and
             // dropped before the pump runs: the pump re-enters the navigator,
-            // and an if-let-scrutinee guard held across it is the shape #1177
-            // eliminated elsewhere in the workspace.
+            // and a guard held across it (an if-let scrutinee keeps its
+            // temporary alive for the whole body) would still be held then.
             let pump = settle_wake.borrow().clone();
             if let Some(pump) = pump {
                 pump();

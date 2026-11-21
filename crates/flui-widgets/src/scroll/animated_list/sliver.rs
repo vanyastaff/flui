@@ -2,6 +2,10 @@
 //! on.
 
 use std::cell::{Cell, RefCell};
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are the application's item keys"
+)]
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
@@ -341,6 +345,10 @@ where
                 .zip(&old_keys)
                 .any(|((key, _), old)| key != old);
 
+        #[expect(
+            clippy::disallowed_types,
+            reason = "keys are the application's item keys"
+        )]
         let mut by_key: HashMap<K, Entry<T, K>> = old
             .into_iter()
             .map(|entry| (entry.key.clone(), entry))
@@ -462,6 +470,10 @@ where
         let count = shown.len();
         let slots: Rc<[Rc<PlacementSlot>]> =
             shown.iter().map(|shown| Rc::clone(&shown.slot)).collect();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "keys are the application's item keys"
+        )]
         let index: HashMap<K, usize> = keys
             .iter()
             .enumerate()

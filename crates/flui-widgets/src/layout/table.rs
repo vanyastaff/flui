@@ -1,5 +1,9 @@
 //! [`Table`], [`TableRow`], and [`TableCell`] — grid layout over `RenderTable`.
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "`RenderTable` takes its column widths as a std map, keyed by the column indexes the application chose"
+)]
 use std::collections::HashMap;
 
 use flui_foundation::ViewKey;
@@ -219,6 +223,10 @@ impl StatelessView for KeyedCell {
 /// Column 0 sits against the start edge of the ambient [`Directionality`]:
 /// the left edge in LTR, the right edge in RTL.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "the column widths are a std map because `RenderTable` takes one"
+)]
 pub struct Table {
     rows: Vec<TableRow>,
     /// `rows`' cells in row-major order, each a `KeyedCell` carrying its row's
@@ -234,6 +242,10 @@ pub struct Table {
     site: CreationSite,
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "the column widths are a std map because `RenderTable` takes one"
+)]
 impl Table {
     /// A table of `rows`, with the default column width, alignment, no
     /// border, and no explicit text baseline.
@@ -252,10 +264,16 @@ impl Table {
         }
     }
 
-    /// Builder: set per-column width overrides.
+    /// Builder: set per-column width overrides from `(column, width)` pairs; a
+    /// column named twice keeps its last width.
     #[must_use]
-    pub fn column_widths(mut self, column_widths: HashMap<usize, TableColumnWidth>) -> Self {
-        self.column_widths = column_widths;
+    pub fn column_widths(
+        mut self,
+        widths: impl IntoIterator<Item = (usize, TableColumnWidth)>,
+    ) -> Self {
+        self.column_widths = widths
+            .into_iter()
+            .collect::<HashMap<usize, TableColumnWidth>>();
         self
     }
 
