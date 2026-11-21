@@ -161,7 +161,8 @@ trybuild = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 flui-testing = { path = "../flui-testing" }
 
-# Executing wasm32 tests for the frame-timing helper. Pinned
+# Executes the device-rebuild backoff test in the wasm VM, where its clock is
+# `performance.now()` (`raster_executor::device_health`). Pinned
 # exactly like flui-foundation / flui-app: 0.3.77 pairs with the locked
 # wasm-bindgen 0.2.127; an unpinned `"0.3"` would bump the workspace lock.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

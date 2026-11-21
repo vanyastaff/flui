@@ -218,7 +218,12 @@ mod tests {
         REBUILD_CAP,
     };
 
-    #[test]
+    // The one engine test that executes on wasm32 as well: the backoff reads
+    // `web_time::Instant`, which is `performance.now()` there, and a clock
+    // that traps or a deadline that overflows on wasm32 shows up only when a
+    // test runs in the wasm VM, not in `cargo check`.
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn the_rebuild_backoff_climbs_to_its_ceiling_and_gives_up_after_ten_at_it() {
         let mut rebuilds = DeviceRebuilds::default();
         let now = Instant::now();
