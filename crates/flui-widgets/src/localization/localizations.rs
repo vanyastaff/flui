@@ -23,9 +23,10 @@
 //!   diff; it would change observable rebuild behavior.
 
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use flui_platform::Locale;
 use flui_view::prelude::*;
@@ -184,7 +185,7 @@ impl LocalizationsDelegate for DefaultWidgetsLocalizationsDelegate {
 #[derive(Clone)]
 struct LocalizationsSnapshot {
     locale: Locale,
-    resources: Rc<HashMap<TypeId, Rc<dyn Any>>>,
+    resources: Rc<FxHashMap<TypeId, Rc<dyn Any>>>,
 }
 
 /// Private inherited scope publishing the resolved [`LocalizationsSnapshot`]
@@ -346,8 +347,8 @@ impl Localizations {
 impl StatelessView for Localizations {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         // Sync-only v1: no deferred-first-frame gap — see module docs.
-        let mut resources: HashMap<TypeId, Rc<dyn Any>> =
-            HashMap::with_capacity(self.delegates.len());
+        let mut resources: FxHashMap<TypeId, Rc<dyn Any>> =
+            FxHashMap::with_capacity_and_hasher(self.delegates.len(), rustc_hash::FxBuildHasher);
         for delegate in self.delegates.iter() {
             // Only the first delegate of a given resource type loads.
             let type_id = delegate.0.resource_type_id();

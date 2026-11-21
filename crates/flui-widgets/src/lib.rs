@@ -8,10 +8,8 @@
 //! - composes other widgets (a [`StatelessView`]), or
 //! - configures parent-layout data on its single child (a [`ParentDataView`]).
 //!
-//! A widget is a thin configuration
-//! object over a render object. The render *machine* (layout/paint/compositing)
-//! lives in [`flui_rendering`] and [`flui_objects`]; this crate is the
-//! declarative surface over it.
+//! The render *machine* (layout/paint/compositing) lives in [`flui_rendering`] and
+//! [`flui_objects`]; this crate is the declarative surface over it.
 //!
 //! ## Architecture
 //!
@@ -28,8 +26,7 @@
 //!
 //! ## Authoring style
 //!
-//! Widgets favour a constructor + chainable-config surface (with
-//! `bon` builders reserved for the widest future configuration objects). Single
+//! Widgets favour a constructor + chainable-config surface. Single
 //! children are taken as `impl IntoView`; a list of children is a
 //! [`ViewSeq`](flui_view::ViewSeq): a tuple (the static path), an array
 //! of one type, or `Vec<BoxedView>` (the dynamic path).
@@ -60,6 +57,8 @@
 // Lint levels come from `[workspace.lints]`. Every public
 // item is documented; keep it that way.
 #![deny(missing_docs)]
+// Ids the process mints hash with `rustc_hash`; std maps need an `#[expect]` (AGENTS.md "Current forms").
+#![warn(clippy::disallowed_types)]
 #![expect(
     clippy::module_inception,
     reason = "a one-type family module named after its type (`flex/flex.rs`, `text/text.rs`) is the catalog's house style"

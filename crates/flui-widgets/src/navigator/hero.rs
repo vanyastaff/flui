@@ -64,6 +64,10 @@ use super::flight_seat::{FlightSeat, PlaceholderBuilder, SeatClaim, SeatHold};
 use super::hero_tags::{HeroTags, TagSeat};
 use super::lifecycle::{RetiredMap, RetiredValues, Terminal};
 use std::cell::{Cell, RefCell};
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hero tags, supplied by the application"
+)]
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -230,6 +234,10 @@ impl HeroRegistry {
     ///
     /// Sources resolve outside borrows. Owning registry identities bound traversal
     /// when a source resolves to an already visited registry, including itself.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keys are hero tags, supplied by the application"
+    )]
     pub(crate) fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
         let mut all = RetiredMap(HashMap::new());
         let mut visited = RetiredValues(Vec::new());
@@ -1033,7 +1041,7 @@ impl fmt::Debug for HeroHandle {
 /// tag.
 ///
 /// A `HeroController` must observe the `Navigator` for flights to run; a bare
-/// `Navigator` now installs a default one, and `HeroControllerScope` customizes or
+/// `Navigator` installs a default one, and `HeroControllerScope` customizes or
 /// disables that. The public surface includes the baseline `tag`/`child` plus the
 /// customization hooks: [`create_rect_tween`](Self::create_rect_tween),
 /// [`flight_shuttle_builder`](Self::flight_shuttle_builder), FLUI's

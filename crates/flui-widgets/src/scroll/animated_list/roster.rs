@@ -23,6 +23,10 @@ use crate::support::retirement::Terminal;
 pub(super) type ItemBuilder<T> = Rc<dyn Fn(&T) -> BoxedView>;
 
 /// The items one configuration of a list shows, in order, each with its key.
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are the application's item keys"
+)]
 pub(super) struct Items<T, K> {
     entries: Vec<(K, Rc<T>)>,
     keys: HashSet<K>,
@@ -43,6 +47,10 @@ where
             .into_iter()
             .map(|item| (key(&item), Rc::new(item)))
             .collect();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "keys are the application's item keys"
+        )]
         let mut keys = HashSet::with_capacity(entries.len());
         for (key, _) in &entries {
             assert!(
@@ -87,6 +95,10 @@ where
 {
     // Each dropped key, filed under the key just before it in `old`.
     let mut leading: Vec<&K> = Vec::new();
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keys are the application's item keys"
+    )]
     let mut after: HashMap<&K, Vec<&K>> = HashMap::new();
     let mut previous: Option<&K> = None;
     for key in old {

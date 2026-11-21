@@ -72,6 +72,11 @@ impl<T> Drop for RetiredValues<T> {
     }
 }
 
+/// A map of `HeroTag`-keyed values retired entry by entry.
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hero tags, supplied by the application"
+)]
 pub(crate) struct RetiredMap<K, V>(pub(crate) std::collections::HashMap<K, V>);
 
 impl<K, V> Drop for RetiredMap<K, V> {
@@ -80,7 +85,7 @@ impl<K, V> Drop for RetiredMap<K, V> {
     }
 }
 
-pub(crate) fn retire_map<K, V>(values: std::collections::HashMap<K, V>) {
+pub(crate) fn retire_map<K, V>(values: impl IntoIterator<Item = (K, V)>) {
     let mut first = FirstPanic::new();
     for (key, value) in values {
         // HeroTag keys can own user values. Secure both before retiring either.
@@ -95,22 +100,22 @@ pub(crate) use flui_foundation::panic::drop_contained;
 /// A shared map empties itself only at its physical last release, preserving
 /// independently owned aliases until then.
 #[derive(Debug)]
-pub(crate) struct TerminalMap<K, V>(std::cell::RefCell<std::collections::HashMap<K, V>>);
+pub(crate) struct TerminalMap<K, V>(std::cell::RefCell<rustc_hash::FxHashMap<K, V>>);
 
 impl<K, V> Default for TerminalMap<K, V> {
     fn default() -> Self {
-        Self::new(std::collections::HashMap::new())
+        Self::new(rustc_hash::FxHashMap::default())
     }
 }
 
 impl<K, V> TerminalMap<K, V> {
-    pub(crate) fn new(values: std::collections::HashMap<K, V>) -> Self {
+    pub(crate) fn new(values: rustc_hash::FxHashMap<K, V>) -> Self {
         Self(std::cell::RefCell::new(values))
     }
 }
 
 impl<K, V> std::ops::Deref for TerminalMap<K, V> {
-    type Target = std::cell::RefCell<std::collections::HashMap<K, V>>;
+    type Target = std::cell::RefCell<rustc_hash::FxHashMap<K, V>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

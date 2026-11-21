@@ -2,6 +2,10 @@
 //! authorize release. Authored key operations and retirement run outside borrows.
 
 use std::cell::RefCell;
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hashes of hero tags, supplied by the application"
+)]
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
@@ -37,6 +41,10 @@ impl<T> Clone for TagSeat<T> {
     }
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hashes of hero tags, supplied by the application"
+)]
 pub(super) struct HeroTags<T> {
     buckets: RefCell<HashMap<u64, Vec<Rc<Entry<T>>>>>,
 }
@@ -53,7 +61,7 @@ impl<T> Drop for HeroTags<T> {
 impl<T> Default for HeroTags<T> {
     fn default() -> Self {
         Self {
-            buckets: RefCell::new(HashMap::new()),
+            buckets: RefCell::default(),
         }
     }
 }

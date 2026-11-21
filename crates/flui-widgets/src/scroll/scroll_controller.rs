@@ -794,8 +794,8 @@ mod tests {
             // Establish a genuine RUNNING state FIRST, before any listener/hook
             // is wired up — otherwise starting the run itself would trigger the
             // reentrant cascade below synchronously, on this (main) thread,
-            // before the sanity check even runs. `fling_stub` is unbounded
-            // (#1183): `forward()` targets an infinite bound and is refused, so
+            // before the sanity check even runs. `fling_stub` is unbounded, so
+            // `forward()` targets an infinite bound and is refused;
             // `animate_to` with a large finite target is the unbounded-safe
             // substitute.
             fling
