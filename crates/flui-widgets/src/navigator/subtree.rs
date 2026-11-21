@@ -71,6 +71,7 @@ pub struct RouteSubtree {
 }
 
 /// The element half and the render half of a [`RouteSubtreeCell`], unjoined.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) type SubtreeParts = (Option<ElementId>, Option<RenderId>);
 
 /// The two cells a mounted [`RouteSubtreeAnchor`] publishes into.
@@ -114,6 +115,7 @@ impl RouteSubtreeCell {
     /// `AND`, so it cannot tell which half a bug left behind — a test that only
     /// checks `resolve() == None` passes when *either* retraction works, and would
     /// stay green with one of them deleted.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn parts(&self) -> SubtreeParts {
         (*self.element.borrow_mut(), self.anchor.get())
     }

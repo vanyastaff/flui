@@ -57,12 +57,7 @@
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
 // The types (ADR-0076) and the mutation surface the navigator needs are public;
-// `navigator` needs no such exception, since every item there has a production
-// caller, a `#[cfg(test)]` or a `crate::__test_access` re-export (ADR-0083 §4).
-#![expect(
-    dead_code,
-    reason = "overlay items that only tests reach (`insert_all`, `entry_ids`, builder-form constructors, parts of `OverlayScope` and the `Theater` machinery) are dead in the lib target"
-)]
+// the rest is reached by tests only and is built for them alone.
 
 mod entry;
 mod theater;
@@ -142,14 +137,6 @@ impl OverlayShared {
         if let Some(handle) = self.rebuild.lock().as_ref() {
             handle.schedule(flui_view::RebuildReason::StateChange);
         }
-    }
-
-    /// Whether the overlay is mounted.
-    pub(crate) fn is_mounted(&self) -> bool {
-        self.rebuild
-            .lock()
-            .as_ref()
-            .is_some_and(RebuildHandle::is_active)
     }
 
     /// Retain the entries matching `keep`. Used by [`OverlayEntry::remove`].
@@ -295,6 +282,7 @@ impl OverlayHandle {
 
     /// The entries, bottom → top. Read by `crate::__test_access::OverlayProbe`,
     /// which is how this crate's integration tests inspect the list.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn ids_bottom_to_top(&self) -> Vec<OverlayEntryId> {
         self.shared
             .entries

@@ -53,7 +53,9 @@ use super::binding::{
 use super::hero::{HeroRegistry, HeroScope, NestedHeroSource};
 use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
-use super::history::{DeferredEffect, FlushOutcome, ReplaceTarget, RouteHistory};
+#[cfg(any(test, feature = "testing"))]
+use super::history::ReplaceTarget;
+use super::history::{DeferredEffect, FlushOutcome, RouteHistory};
 use super::modal_route::ModalHandle;
 use super::observer::{NavigatorObserver, Notification, deliver};
 use super::overlay_route::NavigatorRoute;
@@ -925,6 +927,7 @@ impl NavigatorHandle {
     /// hand-attached `HeroController`s. Test-facing: pins that automatic attach adds
     /// exactly one, and that a manual controller suppresses it. Read through
     /// `crate::__test_access::NavigatorProbe`.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn hero_observer_count(&self) -> usize {
         self.shared
             .observers
@@ -1217,6 +1220,7 @@ impl NavigatorHandle {
     ///
     /// Has the placement and permanent identity-capacity panic behavior of
     /// [`push`](Self::push); the rejected route is destroyed by the capacity unwind.
+    #[cfg(any(test, feature = "testing"))]
     pub fn push_replacement<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
         if let Some(refusal) = self.placement_refusal(&route) {
             return self.refuse("push_replacement", refusal, route);
@@ -1235,6 +1239,7 @@ impl NavigatorHandle {
     /// [`push`](Self::push). On capacity unwind, both the rejected route and
     /// `result` are destroyed by the unwind, before any binding or history
     /// admission.
+    #[cfg(any(test, feature = "testing"))]
     pub fn push_replacement_with<R: NavigatorRoute, T: 'static>(
         &self,
         route: R,
@@ -1248,6 +1253,7 @@ impl NavigatorHandle {
         self.push_replacement_erased(route, Some(AnyResult::new(result)))
     }
 
+    #[cfg(any(test, feature = "testing"))]
     fn push_replacement_erased<R: NavigatorRoute>(
         &self,
         route: R,
@@ -1292,6 +1298,7 @@ impl NavigatorHandle {
     /// Has the placement and permanent identity-capacity panic behavior of
     /// [`push`](Self::push), retaining the rejected route before any binding
     /// or history admission. User callbacks can also panic.
+    #[cfg(any(test, feature = "testing"))]
     pub fn push_and_remove_until<R: NavigatorRoute>(
         &self,
         route: R,
@@ -1465,6 +1472,7 @@ impl NavigatorHandle {
 
     /// Remove `id`, delivering `result`. Same type contract as
     /// [`pop_with`](NavigatorHandle::pop_with).
+    #[cfg(any(test, feature = "testing"))]
     pub fn remove_route_with<T: 'static>(&self, id: RouteId, result: T) -> bool {
         self.remove_route_erased(id, Some(AnyResult::new(result)))
     }
@@ -1578,6 +1586,7 @@ impl NavigatorHandle {
     }
 
     /// [`maybe_pop`](NavigatorHandle::maybe_pop), delivering `result` if it pops.
+    #[cfg(any(test, feature = "testing"))]
     pub fn maybe_pop_with<T: 'static>(&self, result: T) -> bool {
         self.maybe_pop_erased(Some(AnyResult::new(result)))
     }
@@ -1601,6 +1610,7 @@ impl NavigatorHandle {
     }
 
     /// The route stack, bottom → top.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn route_ids(&self) -> Vec<RouteId> {
         self.shared.history.borrow().ids()
@@ -1642,6 +1652,7 @@ impl NavigatorHandle {
     /// The lifecycle state of `id`'s entry. Test-facing, read through
     /// `crate::__test_access::NavigatorProbe`; the same applies to the four
     /// accessors below.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn route_state(&self, id: RouteId) -> Option<super::lifecycle::RouteLifecycle> {
         self.shared.history.borrow().state_of(id)
     }
@@ -1649,6 +1660,7 @@ impl NavigatorHandle {
     /// The overlay entry `id`'s route presents. Test-facing: `opaque` and
     /// `maintain_state` are written through a `RouteBinding`, and this is the only
     /// way to read back what a route actually wrote.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn entry_of(&self, id: RouteId) -> Option<OverlayEntry> {
         self.shared.registries.entries.borrow().get(&id).cloned()
     }
@@ -1658,6 +1670,7 @@ impl NavigatorHandle {
     /// Test-facing. Must track the route count exactly: an entry left behind for
     /// a disposed route is invisible in the overlay (it was removed from *its*
     /// list) but leaks here, forever.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn tracked_entry_count(&self) -> usize {
         self.shared.registries.entries.borrow().len()
     }
@@ -1667,12 +1680,14 @@ impl NavigatorHandle {
     /// Test-facing, and for the same reason as `tracked_entry_count`: a cell left
     /// behind for a disposed route resolves to `None` (its page is unmounted), so
     /// the leak is invisible through `route_subtree` and visible only here.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn tracked_subtree_count(&self) -> usize {
         self.shared.registries.subtrees.borrow().len()
     }
 
     /// `id`'s subtree cell, half by half. Test-facing; see
     /// [`RouteSubtreeCell::parts`](super::subtree::RouteSubtreeCell::parts).
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn route_subtree_parts(&self, id: RouteId) -> Option<super::subtree::SubtreeParts> {
         self.shared
             .registries
@@ -1698,6 +1713,7 @@ impl NavigatorHandle {
     ///
     /// The root walk cannot find fewer navigators than the nearest walk, so no
     /// fall back to the local navigator is needed.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn maybe_of_root(ctx: &dyn BuildContext) -> Option<Self> {
         ctx.find_root_state::<NavigatorState, _>(NavigatorState::handle)
@@ -1763,6 +1779,7 @@ impl NavigatorHandle {
     /// Test-facing: `did_change_top` no longer asserts on it (the over-strict
     /// `is_current` check was removed because FLUI's re-entrant notification model
     /// breaks it). Read through `crate::__test_access::NavigatorProbe`.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn is_current(&self, id: RouteId) -> bool {
         self.current() == Some(id)
     }

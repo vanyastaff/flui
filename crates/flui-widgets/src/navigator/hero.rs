@@ -287,6 +287,7 @@ impl HeroRegistry {
     /// The handle registered under `tag`, cloned out. Test-facing: production
     /// matching goes through `all_heroes`, which also reaches a
     /// nested `Navigator`'s heroes.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroHandle> {
         self.inner.heroes.get(tag)
@@ -305,6 +306,7 @@ impl HeroRegistry {
         clippy::len_without_is_empty,
         reason = "a test-facing count; nothing asks whether the registry is empty"
     )]
+    #[cfg(any(test, feature = "testing"))]
     pub fn len(&self) -> usize {
         self.inner.heroes.len()
     }
@@ -938,6 +940,7 @@ impl HeroHandle {
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn includes_child(&self) -> bool {
         self.inner.seat.includes_child()
@@ -962,6 +965,7 @@ impl HeroHandle {
     /// `include_child_in_placeholder` is `true` for the *from* hero of a push and
     /// `false` otherwise: the source subtree is preserved offstage so its
     /// state survives the flight, while the destination's is not yet needed.
+    #[cfg(any(test, feature = "testing"))]
     pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
         // The temporary test-access seam freezes a settled placeholder without
         // a running manager. Production flights always supply their identity.

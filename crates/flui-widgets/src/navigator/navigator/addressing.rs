@@ -117,6 +117,7 @@ impl NavigatorHandle {
     ///
     /// A widget that pushes its own transient page (a container transform)
     /// asks this to choose the route it builds instead of being refused.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn admits_pages(&self) -> bool {
         self.shared.addressing.is_none()
