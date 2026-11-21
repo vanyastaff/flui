@@ -13,7 +13,7 @@ app's trees, frames and input, and this crate composes that with what only the O
   app's page export is reached through the Chrome lane's BiDi session (`connect` with a channel as
   `onLine`, each line a `script.message`, each request a `send` through `script.callFunction`),
   and the headless target runs the agent's own `flui_runtime::agent::Session` through
-  `flui_testing::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
+  `flui_testing::agent_service::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
   The `Connection` trait is private.
 - **Virtual time on the headless target.** The headless app's host runs on a thread of its own and
   pumps no frame by itself: a call that waits asks for one frame at a time, each 16 ms of the

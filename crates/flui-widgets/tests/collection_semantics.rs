@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::common::{LaidOut, lay_out, tight};
 use flui_semantics::{CellPosition, SemanticsRole, SetSize, SortDirection, TableShape};
-use flui_testing::A11yTree;
+use flui_testing::a11y::A11yTree;
 use flui_testing::a11y::{A11ySortDirection, Role};
 use flui_view::ViewExt;
 use flui_view::element::{ItemCount, SemanticSetMapping};
@@ -965,7 +965,7 @@ pub(crate) fn a_lazy_sliver_names_its_collection() {
     let lists: Vec<Option<&str>> = lists_tree
         .find_all(Role::List)
         .iter()
-        .map(flui_testing::A11yNode::label)
+        .map(flui_testing::a11y::A11yNode::label)
         .collect();
     assert_eq!(
         lists,
@@ -991,7 +991,7 @@ pub(crate) fn a_lazy_sliver_names_its_collection() {
     let grids: Vec<Option<&str>> = grid_tree
         .find_all(Role::Grid)
         .iter()
-        .map(flui_testing::A11yNode::label)
+        .map(flui_testing::a11y::A11yNode::label)
         .collect();
     assert_eq!(grids, vec![Some("Photos")], "{}", grid_tree.describe());
 }

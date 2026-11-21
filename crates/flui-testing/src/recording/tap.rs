@@ -188,7 +188,7 @@ impl<W: Write> JoinWriter<W> for Sink<W> {
 /// each runtime records into the writer `make` returns, for the runtime's
 /// life. `make` gets the header that runtime's recording starts from, on
 /// the monotonic clock: its windows with their scales and gesture values and
-/// its preference revision, as [`HeadlessHost::recording_header`](crate::HeadlessHost::recording_header)
+/// its preference revision, as [`HeadlessHost::recording_header`](crate::host::HeadlessHost::recording_header)
 /// writes them. A worker thread writes each runtime's rows; it ends,
 /// flushing its writer, once the runtime and its tap are gone.
 #[cfg(not(target_arch = "wasm32"))]

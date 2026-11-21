@@ -21,7 +21,7 @@ use flui_system::jump_list::{
 use flui_system::os::{Architecture, OsCapability, OsInfo, OsVersion};
 use flui_system::share::{MalformedShare, ShareCapability, ShareError, ShareRequest, ShareResult};
 use flui_system::testing::{InWindow, ScriptedSystem};
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
 use crate::{CapabilitySlot, acquire_in, acquire_on, outcome_slot, turn, within};
 

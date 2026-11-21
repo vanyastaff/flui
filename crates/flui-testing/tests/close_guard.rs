@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::widgets::{lay_out, tight};
-use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{
     AppLifecycleState, BuildContext, CloseGuard, CloseHold, CloseReason, IntoView,
     LifecycleContext, StatefulView, View, ViewState,
@@ -310,8 +310,8 @@ impl ViewState<FailsAsItDetaches> for FailsAsItDetachesState {
 /// the first of them failing as it detaches.
 fn two_held_windows() -> (
     HeadlessHost,
-    flui_testing::HeadlessWindowId,
-    flui_testing::HeadlessWindowId,
+    flui_testing::host::HeadlessWindowId,
+    flui_testing::host::HeadlessWindowId,
     Seen,
     Seen,
 ) {
@@ -722,7 +722,7 @@ pub(crate) fn a_session_end_close_asks_the_handler_before_the_guard() {
 /// it, as a subscriber whose work takes that long does.
 #[derive(Clone)]
 struct SpendsAtSessionEnd {
-    clock: flui_testing::HostClock,
+    clock: flui_testing::host::HostClock,
     spent: Duration,
 }
 

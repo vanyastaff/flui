@@ -18,11 +18,11 @@ use flui_sdk::interaction::{
     CompositionBranch, CompositionKind, ContestCancel, EventTime, GestureArena, GestureArenaEntry,
     GestureArenaMember, GestureComposition, GestureDisposition, PointerId, RejectionReason,
 };
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::recording::{
     Privacy, RecordingReader, RecordingWriter, ReplayableRecording, record,
 };
 use flui_testing::replay::{PointerScript, TouchScript};
-use flui_testing::{HeadlessHost, HeadlessWindow};
 
 use flui_devtools::gesture_overlay::{GestureInspectorOverlay, GestureOverlayController};
 use flui_sdk::foundation::RebuildReason;

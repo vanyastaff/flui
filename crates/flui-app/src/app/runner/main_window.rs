@@ -1470,7 +1470,7 @@ mod tests {
         use flui_platform::{Launch, OpenTarget, Opened};
         use flui_runtime::ui_runtime::UiRuntime;
 
-        flui_testing::disarm_interest_cache();
+        flui_testing::log_capture::disarm_interest_cache();
         let installs = Rc::new(Cell::new(0_u32));
         let reopens = Rc::new(Cell::new(0_u32));
         let _owner = OwnerHostClearGuard::arm();
@@ -1494,7 +1494,7 @@ mod tests {
         let counted = Rc::clone(&installs);
         let installs_seen = Rc::clone(&installs);
         let reopened = Rc::clone(&reopens);
-        let (ran, log) = flui_testing::capture(|| {
+        let (ran, log) = flui_testing::log_capture::capture(|| {
             Box::new(platform).run(crate::app::runner::opening_app_handler(
                 settings,
                 move |owner| {

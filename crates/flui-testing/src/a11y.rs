@@ -10,7 +10,7 @@
 //!
 //! Reach it through [`LaidOut::a11y_tree`](crate::widgets::LaidOut::a11y_tree)
 //! after [`LaidOut::enable_semantics`](crate::widgets::LaidOut::enable_semantics),
-//! or [`HeadlessHost::published_a11y_tree`](crate::HeadlessHost::published_a11y_tree)
+//! or [`HeadlessHost::published_a11y_tree`](crate::host::HeadlessHost::published_a11y_tree)
 //! — the semantics phase is a no-op until something asks for it, exactly as in
 //! production.
 

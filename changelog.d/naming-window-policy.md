@@ -5,7 +5,7 @@
   `GlobalKey` scope and scheduler.
 - `flui_app::WindowPolicy::SharedRealm` is now `WindowPolicy::Shared`: a
   second window of the same session.
-- `flui_testing::HeadlessRealm` is now `flui_testing::HeadlessHost`.
+- `flui_testing::HeadlessRealm` is now `flui_testing::host::HeadlessHost`.
 - The module `flui_testing::realm` is now `flui_testing::host`; its
   `HeadlessWindow`, `HeadlessSink` and `HeadlessDevAgent` keep their names and
   their crate-root re-exports.

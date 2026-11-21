@@ -13,8 +13,8 @@ use flui_interaction::gesture::{
     GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues,
 };
 use flui_semantics::SemanticsRole;
-use flui_testing::MouseScript;
 use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
+use flui_testing::replay::MouseScript;
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{

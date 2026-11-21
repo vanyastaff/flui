@@ -10,7 +10,7 @@ use accesskit::{
 };
 use flui_foundation::TextDirection;
 use flui_semantics::ActionDecodeError;
-use flui_testing::InvokeActionError;
+use flui_testing::a11y::InvokeActionError;
 use flui_widgets::{
     Column, MergeSemantics, Row, SelectionArea, SelectionContainer, Semantics, SizedBox, Text,
 };

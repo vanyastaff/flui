@@ -7,7 +7,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::MonotonicClock as _;
-use flui_testing::{Locator, TestError, TestWindow, Tester, find};
+use flui_testing::find;
+use flui_testing::tester::{Locator, TestError, TestWindow, Tester};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView};
 use flui_widgets::{Center, Column, RawButton, SizedBox, Text};
@@ -324,7 +325,7 @@ fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
     use std::cell::RefCell;
 
     use flui_interaction::events::PointerEvent;
-    use flui_testing::LogicalPoint;
+    use flui_testing::tester::LogicalPoint;
     use flui_widgets::{ColoredBox, Listener};
 
     // An edge swipe starts where no element's centre is: the press lands at
@@ -481,13 +482,15 @@ fn title_field() -> Tester {
         flui_interaction::focus::FocusNode::with_debug_label("title"),
     );
     let mut t = Tester::mount(Center::new().child(SizedBox::new(300.0, 40.0).child(field)));
-    t.tap(&find::role(flui_testing::Role::TextInput));
+    t.tap(&find::role(flui_testing::tester::Role::TextInput));
     t
 }
 
 /// The field's editable render object's `name` field, as an agent inspects it.
-fn editable_field(t: &mut Tester, name: &str) -> Option<flui_testing::InspectValue> {
-    fn find_editable(nodes: &[flui_testing::InspectNode]) -> Option<&flui_testing::InspectNode> {
+fn editable_field(t: &mut Tester, name: &str) -> Option<flui_testing::tester::InspectValue> {
+    fn find_editable(
+        nodes: &[flui_testing::tester::InspectNode],
+    ) -> Option<&flui_testing::tester::InspectNode> {
         nodes.iter().find_map(|node| {
             if node.kind == "RenderEditable" {
                 Some(node)
@@ -506,11 +509,11 @@ fn editable_field(t: &mut Tester, name: &str) -> Option<flui_testing::InspectVal
 
 #[test]
 fn a_composition_shows_in_the_focused_field_until_it_is_committed() {
-    use flui_testing::InspectValue::{Bool, Uint};
+    use flui_testing::tester::InspectValue::{Bool, Uint};
 
     let mut t = title_field();
     t.compose("とう", Some(1));
-    t.expect(find::role(flui_testing::Role::TextInput))
+    t.expect(find::role(flui_testing::tester::Role::TextInput))
         .to_have_value("Trip とう");
     assert_eq!(editable_field(&mut t, "composing_start"), Some(Uint(5)));
     assert_eq!(editable_field(&mut t, "composing_end"), Some(Uint(11)));
@@ -529,7 +532,7 @@ fn a_composition_shows_in_the_focused_field_until_it_is_committed() {
     );
 
     t.commit_composition("東京");
-    t.expect(find::role(flui_testing::Role::TextInput))
+    t.expect(find::role(flui_testing::tester::Role::TextInput))
         .to_have_value("Trip 東京");
     assert_ne!(editable_field(&mut t, "composing_start"), Some(Uint(5)));
 }
@@ -539,7 +542,7 @@ fn a_cancelled_composition_leaves_the_text_as_it_was() {
     let mut t = title_field();
     t.compose("abc", Some(3));
     t.cancel_composition();
-    t.expect(find::role(flui_testing::Role::TextInput))
+    t.expect(find::role(flui_testing::tester::Role::TextInput))
         .to_have_value("Trip ");
 
     let error = t
@@ -960,7 +963,7 @@ fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
 /// host fact of an unseen window may arm a wake of its own.
 #[test]
 fn an_unseen_window_asks_for_no_wake_until_it_is_seen() {
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
     let mut host = HeadlessHost::new(HeadlessWindow::new(40, 40));
     host.attach(&flui_widgets::ActivityIndicator::new())
@@ -990,7 +993,7 @@ fn an_unseen_window_asks_for_no_wake_until_it_is_seen() {
 /// `Inactive`.
 #[test]
 fn opening_a_second_window_makes_the_first_inactive() {
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use flui_view::AppLifecycleState::Inactive;
 
     let (view, opened) = notebook(false);
@@ -1665,7 +1668,7 @@ fn a_session_end_writes_even_when_committing_the_composition_panics() {
     );
     let mut t = Tester::mount(Column::new((book, SizedBox::new(300.0, 40.0).child(field))));
     let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
-    t.tap(&find::role(flui_testing::Role::TextInput));
+    t.tap(&find::role(flui_testing::tester::Role::TextInput));
     t.compose("とう", Some(1));
     let _listening = controller.listen(Rc::new({
         let controller = controller.clone();

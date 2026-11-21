@@ -13,7 +13,7 @@ use flui_painting::paint::Clip;
 use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
 use flui_semantics::{AccessibilityNodeId, ActionCall, SemanticsActionRequest};
-use flui_testing::{Action, ActionRequest, NodeId, TreeId};
+use flui_testing::a11y::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::{BuildContext, IntoView, StatelessView, View};
 use flui_widgets::{
     ColoredBox, Directionality, Disclosure, ExpansionState, GestureDetector, OverflowBox,

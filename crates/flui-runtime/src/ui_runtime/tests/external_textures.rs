@@ -197,7 +197,7 @@ struct Fixture {
 
 fn mounted(placement: Placement) -> Fixture {
     let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(
-        flui_testing::MockWindow::new()
+        flui_platform::testing::MockWindow::new()
             .focused(true)
             .with_size(f64::from(SURFACE.0), f64::from(SURFACE.1)),
     );

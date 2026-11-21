@@ -11,7 +11,8 @@ use flui_objects::FocusRingStyle;
 use flui_painting::DrawOp;
 use flui_painting::styling::Color;
 use flui_platform::input::keyboard::{Key, KeyState, NamedKey};
-use flui_testing::{Action, ActionRequest, MouseScript, TreeId};
+use flui_testing::a11y::{Action, ActionRequest, TreeId};
+use flui_testing::replay::MouseScript;
 use flui_widgets::{DefaultFocusRingStyle, Focus, RawButton, Text};
 
 use super::{key, press, tab};

@@ -215,8 +215,9 @@ mod swipes {
     /// A swipe of three fingers from the middle, `step` a sample, six samples
     /// 16 ms apart, then the lift.
     pub(super) fn swipe(step: Offset<f64>) -> flui_testing::replay::PointerScript {
-        let mut script = flui_testing::TrackpadScript::new("swipe", Offset::new(150.0, 150.0))
-            .swipe_start(NonZeroU8::new(3).expect("three fingers"));
+        let mut script =
+            flui_testing::replay::TrackpadScript::new("swipe", Offset::new(150.0, 150.0))
+                .swipe_start(NonZeroU8::new(3).expect("three fingers"));
         let mut travel = Offset::new(0.0, 0.0);
         for _ in 0..6 {
             travel += step;

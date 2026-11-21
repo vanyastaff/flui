@@ -14,7 +14,7 @@ use flui_interaction::gesture::{
     GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues, RemainderHandoff,
 };
 use flui_platform::{EventTime, TargetPlatform};
-use flui_testing::{
+use flui_testing::replay::{
     MouseScript, PenScript, PointerScript, ScriptStep, TouchScript, TrackpadScript,
 };
 use flui_view::environment::VsyncScope;

@@ -98,8 +98,8 @@ impl HeadlessHost {
     pub fn set_pointer_resampling(
         &self,
         window: HeadlessWindowId,
-        policy: crate::PointerResampling,
-    ) -> Result<(), crate::PointerResamplingError> {
+        policy: flui_runtime::presentation::PointerResampling,
+    ) -> Result<(), flui_runtime::presentation::PointerResamplingError> {
         self.ui_runtime().set_pointer_resampling(window.0, policy)
     }
 
@@ -388,7 +388,7 @@ impl HeadlessHost {
     ///
     /// # Errors
     ///
-    /// [`A11yQueryError`](crate::A11yQueryError) when no node, or more than
+    /// [`A11yQueryError`](crate::a11y::A11yQueryError) when no node, or more than
     /// one, matches.
     ///
     /// # Panics
@@ -400,7 +400,7 @@ impl HeadlessHost {
         window: HeadlessWindowId,
         role: accesskit::Role,
         label: &str,
-    ) -> Result<flui_foundation::geometry::Offset<f64>, crate::A11yQueryError> {
+    ) -> Result<flui_foundation::geometry::Offset<f64>, crate::a11y::A11yQueryError> {
         let tree = self
             .published_a11y_tree(window)
             .expect("the window published no semantics tree; enable semantics and pump first");

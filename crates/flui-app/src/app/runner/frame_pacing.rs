@@ -753,7 +753,7 @@ mod desktop_pacing_tests {
 
         let (finished, outcome) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            flui_testing::disarm_interest_cache();
+            flui_testing::log_capture::disarm_interest_cache();
             let period = Duration::from_millis(16);
             let fallback = Rc::new(FallbackWake::new());
             let deadline = fallback.arm_after_no_present(Instant::now(), period, false);

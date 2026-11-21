@@ -138,11 +138,11 @@ fn launch_refused_by(
     bootstrap: impl FnOnce(OwnerPlatform) -> Result<(), flui_native::BootstrapError> + 'static,
 ) -> (
     Result<(), flui_native::PlatformError>,
-    flui_testing::CapturedLog,
+    flui_testing::log_capture::CapturedLog,
 ) {
     use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
 
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let heard = Rc::new(Cell::new(0_usize));
     let files = Rc::clone(&heard);
     let settings = crate::app::runner::OpenSettings {
@@ -162,7 +162,7 @@ fn launch_refused_by(
         )
         .0,
     );
-    let (ran, log) = flui_testing::capture(|| {
+    let (ran, log) = flui_testing::log_capture::capture(|| {
         Box::new(platform).run(crate::app::runner::opening_app_handler(settings, bootstrap))
     });
     assert_eq!(
@@ -174,7 +174,7 @@ fn launch_refused_by(
 }
 
 /// The files and the link of the launch, each refused by count and reason.
-fn assert_launch_refused(log: &flui_testing::CapturedLog) {
+fn assert_launch_refused(log: &flui_testing::log_capture::CapturedLog) {
     let refused: Vec<(Option<&str>, Option<&str>)> = log
         .records()
         .iter()

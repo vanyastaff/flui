@@ -21,9 +21,11 @@ use flui_platform::input::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKe
 use flui_rendering::delegates::SliverGridDelegateWithMaxCrossAxisExtent;
 use flui_semantics::Urgency;
 use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::__test_access::{Navigator, NavigatorHandle};

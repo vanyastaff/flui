@@ -12,8 +12,8 @@ use std::time::Duration;
 use flui_rendering::pipeline::PipelineCell;
 use flui_semantics::{SemanticsConfiguration, SemanticsRole};
 use flui_testing::a11y::Role;
+use flui_testing::a11y::{A11yQuery, A11yQueryError, A11yTree};
 use flui_testing::widgets::{LaidOut, lay_out, loose};
-use flui_testing::{A11yQuery, A11yQueryError, A11yTree};
 use flui_widgets::{Semantics, SizedBox};
 
 /// A 10×10 leaf labelled `label` with the button role, `selected` when given,

@@ -363,7 +363,7 @@ fn display_change_runs_the_dpi_geometry_barrier() {
     // A window that counts how often the gesture geometry was re-read.
     let reads = Rc::new(Cell::new(0_usize));
     let window: Rc<dyn PlatformWindow> = Rc::new(
-        flui_testing::MockWindow::over(
+        flui_platform::testing::MockWindow::over(
             flui_native::headless_platform()
                 .open_window(
                     flui_platform::WindowOptions::default(),
@@ -375,7 +375,7 @@ fn display_change_runs_the_dpi_geometry_barrier() {
         .with_observer({
             let reads = Rc::clone(&reads);
             move |call| {
-                if matches!(call, flui_testing::WindowCall::GestureGeometry) {
+                if matches!(call, flui_platform::testing::WindowCall::GestureGeometry) {
                     reads.set(reads.get() + 1);
                 }
             }

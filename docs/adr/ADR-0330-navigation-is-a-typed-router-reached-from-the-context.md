@@ -448,7 +448,7 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `Navigator`, `NavigatorHandle` or
   named-route item, and `cargo xtask send-positions` holds the navigator's rows at zero.
 - §5: in `crates/flui-widgets/tests/url_owner.rs`, rows of the `router_and_widgets_app` table
-  driven through `flui_testing::HeadlessHost::navigate`:
+  driven through `flui_testing::host::HeadlessHost::navigate`:
   `an_intent_reaches_only_the_router_of_its_window` (two presentations of one UI runtime, a push,
   a `go` and a `Pop` to `NothingToPop`), `a_window_without_a_router_has_no_url_owner`
   (`NoUrlOwner`, and `NoPresentation` after the window closes),

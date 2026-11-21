@@ -763,7 +763,7 @@ impl TabController {
     /// leaves them unfulfilled.
     ///
     /// The view builds these itself. They are public so that
-    /// `flui_testing::assert_gesture_alternatives` can check the pair against
+    /// `flui_testing::gesture_alternatives::assert_gesture_alternatives` can check the pair against
     /// a mounted view and bar.
     #[must_use]
     pub fn step_alternatives(&self) -> GestureAlternatives {

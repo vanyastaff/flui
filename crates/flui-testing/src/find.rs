@@ -1,4 +1,4 @@
-//! Where a [`Tester`](crate::Tester) looks: the [`Locator`]s a test finds
+//! Where a [`Tester`](crate::tester::Tester) looks: the [`Locator`]s a test finds
 //! elements with, as an assistive technology, the driver and an agent find
 //! them.
 //!

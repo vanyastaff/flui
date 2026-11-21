@@ -633,7 +633,7 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
     let application =
         Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
     let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
-        flui_testing::RecordingTextStoreHost::new()
+        flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let run = HeadlessRun::start_on(application, field, platform);
@@ -1005,7 +1005,7 @@ pub(crate) fn session_end_commits_composition_before_the_flush() {
     let store = flui_interaction::testing::InMemoryTextStore::new("ab");
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
     let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
-        flui_testing::RecordingTextStoreHost::new()
+        flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let running = Rc::new(std::cell::Cell::new(None));
@@ -1068,7 +1068,7 @@ pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
     let platform = flui_native::HeadlessPlatform::new()
         .with_session_end_support(flui_platform::SessionEndSupport::NotifyOnly)
         .with_text_store_host(|| {
-            flui_testing::RecordingTextStoreHost::new()
+            flui_testing::text_store_host::RecordingTextStoreHost::new()
                 as Rc<dyn flui_platform::text::store::TextStoreHost>
         });
     let run = HeadlessRun::start_on(application, field, platform);
@@ -1107,7 +1107,7 @@ const SPENT_MARGIN: Duration = Duration::from_millis(2_500);
 pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
     let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
-        flui_testing::RecordingTextStoreHost::new()
+        flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let running = Rc::new(std::cell::Cell::new(None));
@@ -2405,7 +2405,7 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
         "the Ending phase returned with the published bytes on disk"
     );
     assert!(
-        took < flui_testing::SESSION_END_BUDGET,
+        took < flui_testing::host::SESSION_END_BUDGET,
         "the flush took {took:?}"
     );
     note.run.run_owner_turn();
@@ -2424,7 +2424,7 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
     let took = started.elapsed();
     assert!(!note.stores("never written"));
     assert!(
-        took < flui_testing::SESSION_END_BUDGET + Duration::from_secs(1),
+        took < flui_testing::host::SESSION_END_BUDGET + Duration::from_secs(1),
         "a stuck write held the session end for {took:?}"
     );
 }
@@ -2485,7 +2485,8 @@ pub(crate) fn a_phone_holds_its_background_for_the_writes_in_flight() {
         .set(Note("stored in the background".to_owned()))
         .expect("the loaded document takes the value");
     note.run.run_owner_turn();
-    let driver = note.drive_io_after(flui_testing::SESSION_END_BUDGET + Duration::from_millis(300));
+    let driver =
+        note.drive_io_after(flui_testing::host::SESSION_END_BUDGET + Duration::from_millis(300));
     assert_eq!(
         note.run.end_session(SessionEndPhase::Ending),
         SessionEndAnswer::Block,

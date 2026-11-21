@@ -28,8 +28,8 @@ fn invoke(slot: &'static std::thread::LocalKey<Callback>) {
 /// A headless window that plays its haptics on `haptics`.
 fn haptic_window(
     haptics: &Arc<flui_platform::testing::FakeHaptics>,
-) -> flui_testing::MockWindow<flui_testing::mock_window::Over> {
-    flui_testing::MockWindow::over(
+) -> flui_platform::testing::MockWindow<flui_platform::testing::mock_window::Over> {
+    flui_platform::testing::MockWindow::over(
         flui_native::headless_platform()
             .open_window(
                 flui_platform::WindowOptions::default(),
@@ -89,7 +89,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         // when armed.
         let panic_query = Rc::new(Cell::new(false));
         let window = Rc::new(
-            flui_testing::MockWindow::over(
+            flui_platform::testing::MockWindow::over(
                 flui_native::headless_platform()
                     .open_window(
                         flui_platform::WindowOptions::default(),
@@ -101,7 +101,7 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
             .with_observer({
                 let panic_query = Rc::clone(&panic_query);
                 move |call| {
-                    if matches!(call, flui_testing::WindowCall::GestureGeometry) {
+                    if matches!(call, flui_platform::testing::WindowCall::GestureGeometry) {
                         let panic = panic_query.replace(false);
                         invoke(&QUERY);
                         assert!(!panic, "native query failure");

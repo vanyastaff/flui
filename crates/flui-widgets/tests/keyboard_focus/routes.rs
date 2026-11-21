@@ -13,7 +13,7 @@ use flui_painting::Alignment;
 use flui_platform::TargetPlatform;
 use flui_platform::input::keyboard::{Key, Modifiers, NamedKey};
 use flui_platform::input::pointer::PointerButton;
-use flui_testing::MouseScript;
+use flui_testing::replay::MouseScript;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, NavigatorRoute};

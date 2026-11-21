@@ -18,9 +18,11 @@ use flui_platform::TargetPlatform;
 use flui_platform::input::keyboard::NamedKey;
 use flui_semantics::SemanticsAnchor;
 use flui_testing::a11y::{Action, Role};
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 use flui_widgets::{
@@ -906,9 +908,9 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
                     .nodes()
                     .find(|node| node.supports_action(Action::ShowContextMenu))
                     .unwrap_or_else(|| panic!("{case}: the row\n{}", tree.describe()));
-                laid.invoke_semantics_action(flui_testing::ActionRequest {
+                laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
                     action: Action::Focus,
-                    target_tree: flui_testing::TreeId::ROOT,
+                    target_tree: flui_testing::a11y::TreeId::ROOT,
                     target_node: row.id(),
                     data: None,
                 })

@@ -111,7 +111,7 @@ blocks) and the runtime does not.
 3. **Every host delivers at the end of a work item.** `OwnerDelivery` takes the requests under the
    lease of each runtime work item that is not terminal, and after an installation that succeeded,
    and delivers them once the runtime is back, each contained in the work item's `FirstPanic`.
-   `flui_testing::HeadlessHost` delivers after each pump, window observation and system notice, and
+   `flui_testing::host::HeadlessHost` delivers after each pump, window observation and system notice, and
    before it decides how long its loop waits (`time_to_next_frame`) or whether it has settled
    (`pump_until_settled`), so a change written between two pumps is asked for as the work item
    that wrote it would ask on a runner.

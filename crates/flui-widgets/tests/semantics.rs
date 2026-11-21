@@ -1318,8 +1318,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_semantics::{AccessibilityNodeId, SemanticsActionRequest};
+use flui_testing::a11y::{Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_testing::widgets::LaidOut;
-use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_view::{SignalWriteExt as _, View};
 
 use crate::common::{ProbeSignals, SignalProbe};
@@ -1328,7 +1328,7 @@ use crate::common::{ProbeSignals, SignalProbe};
 /// from both assembled semantics and the actual delivered update stream.
 pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_update() {
     use flui_interaction::focus::FocusNode;
-    use flui_testing::A11yTree;
+    use flui_testing::a11y::A11yTree;
     use flui_testing::a11y::Role;
     use flui_view::ViewExt as _;
     use flui_widgets::{
@@ -1512,7 +1512,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
 ///
 /// The tree is returned alongside its own description so a failing assertion
 /// can show what was actually there, matching this file's other a11y tests.
-fn pump_labelled(root: impl View) -> (LaidOut, flui_testing::A11yTree, NodeId) {
+fn pump_labelled(root: impl View) -> (LaidOut, flui_testing::a11y::A11yTree, NodeId) {
     let mut laid = lay_out(root, loose(200.0));
     laid.enable_semantics();
     laid.pump();
@@ -1524,7 +1524,7 @@ fn pump_labelled(root: impl View) -> (LaidOut, flui_testing::A11yTree, NodeId) {
 }
 
 /// The node carrying [`LABEL`] in `tree`.
-fn labelled_node(tree: &flui_testing::A11yTree) -> NodeId {
+fn labelled_node(tree: &flui_testing::a11y::A11yTree) -> NodeId {
     tree.find_by_label(LABEL)
         .unwrap_or_else(|error| {
             panic!(
@@ -2408,7 +2408,10 @@ pub(crate) fn unrepresentable_projected_bounds_are_withdrawn_and_recover() {
 /// Where an AccessKit adapter places the labelled node: its bounds under
 /// its own transform and every ancestor's, which AccessKit defines as
 /// physical pixels relative to the window's client area.
-fn effective_bounds(tree: &flui_testing::A11yTree, label: &str) -> flui_testing::a11y::A11yRect {
+fn effective_bounds(
+    tree: &flui_testing::a11y::A11yTree,
+    label: &str,
+) -> flui_testing::a11y::A11yRect {
     let update = tree.raw();
     let parent_of = |id| {
         update
@@ -2484,7 +2487,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         crate::common::tight(200.0, 200.0),
     );
 
-    let delivered: Arc<Mutex<Option<flui_testing::A11yTree>>> = Arc::new(Mutex::new(None));
+    let delivered: Arc<Mutex<Option<flui_testing::a11y::A11yTree>>> = Arc::new(Mutex::new(None));
     let sink = Arc::clone(&delivered);
     laid.pipeline_owner().with_mut(|owner| {
         owner.set_device_pixel_ratio(
@@ -2493,7 +2496,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         owner.set_semantics_update_callback(Rc::new(move |update| {
             let mut mirror = sink.lock().expect("publication mirror lock");
             let Some(current) = mirror.as_ref() else {
-                *mirror = Some(flui_testing::A11yTree::new(update.clone()));
+                *mirror = Some(flui_testing::a11y::A11yTree::new(update.clone()));
                 return;
             };
             let mut merged = current.raw().clone();
@@ -2504,7 +2507,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
                     merged.nodes.push((*id, node.clone()));
                 }
             }
-            *mirror = Some(flui_testing::A11yTree::new(merged));
+            *mirror = Some(flui_testing::a11y::A11yTree::new(merged));
         }));
     });
     laid.enable_semantics();
@@ -2814,9 +2817,9 @@ pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
 
 /// The published node whose `author_id` is `identifier`, if exactly one is.
 fn identified_node<'a>(
-    tree: &'a flui_testing::A11yTree,
+    tree: &'a flui_testing::a11y::A11yTree,
     identifier: &str,
-) -> Option<flui_testing::A11yNode<'a>> {
+) -> Option<flui_testing::a11y::A11yNode<'a>> {
     let mut matches = tree
         .nodes()
         .filter(|node| node.raw().author_id() == Some(identifier));
@@ -2825,7 +2828,7 @@ fn identified_node<'a>(
 }
 
 /// `root` mounted alone, semantics on, one frame pumped.
-fn identifier_tree(root: impl View) -> flui_testing::A11yTree {
+fn identifier_tree(root: impl View) -> flui_testing::a11y::A11yTree {
     let mut laid = lay_out(root, loose(200.0));
     laid.enable_semantics();
     laid.pump();
@@ -3107,7 +3110,7 @@ pub(crate) fn authored_properties_and_relations_reach_the_published_node() {
 /// when the presentation starts collecting (the late tree loses its click
 /// action).
 pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start() {
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use flui_widgets::{Column, RawButton, Text};
     use std::time::Duration;
 

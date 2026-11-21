@@ -1420,8 +1420,8 @@ fn editable_blur_during_preedit_pull() {
         |harness| {
             harness.active_text_store().is_none()
                 && harness.store_host_calls().ends_with(&[
-                    flui_testing::StoreHostCall::CompleteComposition,
-                    flui_testing::StoreHostCall::Unfocus,
+                    flui_testing::text_store_host::StoreHostCall::CompleteComposition,
+                    flui_testing::text_store_host::StoreHostCall::Unfocus,
                 ])
         },
     );
@@ -2681,7 +2681,7 @@ fn editable_key_edit_whose_on_changed_panics() {
 
 fn editable_semantic_set_text_whose_on_changed_panics() {
     use flui_testing::a11y::Role;
-    use flui_testing::{Action, ActionData, ActionRequest, TreeId};
+    use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
 
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("semantic edit, failing owner");

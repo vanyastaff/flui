@@ -521,7 +521,7 @@ fn pending_metrics_do_not_cross_ordered_operations() {
 fn a_runtime_starts_in_its_window_lifecycle() {
     use flui_scheduler::AppLifecycleState::{Hidden, Inactive, Resumed};
 
-    let window = Rc::new(flui_testing::MockWindow::new().visible(false));
+    let window = Rc::new(flui_platform::testing::MockWindow::new().visible(false));
     let runtime = UiRuntime::for_test_with_window(window);
     assert_eq!(runtime.scheduler().lifecycle_state(), Hidden);
     let observed = Rc::new(RefCell::new(Vec::new()));
@@ -543,7 +543,7 @@ fn a_runtime_starts_in_its_window_lifecycle() {
     // focused takes the focus, and the first window steps down to Inactive.
     let mut runtime = runtime;
     let hidden: Rc<dyn flui_platform::PlatformWindow> =
-        Rc::new(flui_testing::MockWindow::new().visible(false));
+        Rc::new(flui_platform::testing::MockWindow::new().visible(false));
     let hidden = runtime.assemble_presentation(hidden);
     let hidden = runtime.install_presentation(hidden);
     runtime.synchronize_window_snapshot(hidden, WindowExecutionState::Running, false, false);
@@ -551,7 +551,7 @@ fn a_runtime_starts_in_its_window_lifecycle() {
     runtime.update_window_visibility(id, false);
     assert_eq!(*observed.borrow(), [Inactive, Resumed, Inactive, Hidden]);
     let focused: Rc<dyn flui_platform::PlatformWindow> =
-        Rc::new(flui_testing::MockWindow::new().focused(true));
+        Rc::new(flui_platform::testing::MockWindow::new().focused(true));
     let focused = runtime.assemble_presentation(focused);
     let focused = runtime.install_presentation(focused);
     runtime.synchronize_window_snapshot(focused, WindowExecutionState::Running, true, true);

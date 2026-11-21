@@ -17,8 +17,9 @@
 //! app, just a compile-and-mount smoke check for the facade surface itself.
 
 use flui::prelude::*;
+use flui_testing::find;
+use flui_testing::tester::Tester;
 use flui_testing::widgets::{lay_out, tight};
-use flui_testing::{Tester, find};
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.

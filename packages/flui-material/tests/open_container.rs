@@ -28,7 +28,7 @@ use flui_sdk::widgets::{
     ColoredBox, Column, Padding, PageHandle, Routable, RouteResultError, Router, ScrollController,
     ScrollView, Semantics, SingleChildScrollView, SizedBox, Transform,
 };
-use flui_testing::{Action, ActionRequest, TreeId};
+use flui_testing::a11y::{Action, ActionRequest, TreeId};
 
 const WIDTH: f64 = 400.0;
 const HEIGHT: f64 = 800.0;

@@ -59,10 +59,10 @@ fn reentrant_identity_window(
     on_scale: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Rc<dyn PlatformWindow> {
     Rc::new(
-        flui_testing::MockWindow::new()
+        flui_platform::testing::MockWindow::new()
             .with_id(flui_platform::WindowId::try_from_raw(100).expect("a nonzero window id"))
             .with_observer(move |call| {
-                if matches!(call, flui_testing::WindowCall::Id) {
+                if matches!(call, flui_platform::testing::WindowCall::Id) {
                     queried.store(true, std::sync::atomic::Ordering::SeqCst);
                     assert!(matches!(
                         crate::app::runner::request_presentation_close(probe),
@@ -70,7 +70,7 @@ fn reentrant_identity_window(
                             crate::app::CloseRequestError::UnknownPresentation { .. }
                         ) | crate::app::runner::PresentationCloseError::NoHostedRuntime)
                     ));
-                } else if matches!(call, flui_testing::WindowCall::State)
+                } else if matches!(call, flui_platform::testing::WindowCall::State)
                     && let Some(on_scale) = &on_scale
                 {
                     on_scale();
@@ -308,7 +308,7 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
         let primary = install_test_ui_runtime();
         let sibling = keep_sibling.then(|| {
             let window: Rc<dyn PlatformWindow> =
-                Rc::new(flui_testing::MockWindow::new().with_id(
+                Rc::new(flui_platform::testing::MockWindow::new().with_id(
                     flui_platform::WindowId::try_from_raw(99).expect("a nonzero window id"),
                 ));
             install_presentation_alongside(primary, window).expect("initial sibling installs")
@@ -1300,7 +1300,7 @@ fn preferences_wake_each_isolated_window() {
         .run(crate::app::runner::app_handler(move |owner| {
             install_owner_platform(owner)?;
             for id in [101, 102] {
-                let mock = Rc::new(flui_testing::MockWindow::new().with_id(
+                let mock = Rc::new(flui_platform::testing::MockWindow::new().with_id(
                     flui_platform::WindowId::try_from_raw(id).expect("a nonzero window id"),
                 ));
                 let window: Rc<dyn PlatformWindow> = mock.clone();

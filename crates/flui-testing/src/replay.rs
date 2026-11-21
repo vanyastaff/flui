@@ -18,7 +18,7 @@
 //! ([`PointerScript::inputs`]), the same input a recording holds; it prints as
 //! a readable timeline ([`Display`](std::fmt::Display)) and writes as a
 //! recording ([`PointerScript::write_recording`]).
-//! [`HeadlessHost::run_script`](crate::HeadlessHost::run_script) delivers it to a
+//! [`HeadlessHost::run_script`](crate::host::HeadlessHost::run_script) delivers it to a
 //! UI runtime, a frame step as a frame;
 //! [`LaidOut::replay`](crate::widgets::LaidOut::replay) pumps a frame of the
 //! UI runtime before each event.

@@ -119,7 +119,7 @@ entries and hero flights, and a test must say "created equals released". The tes
 plants a sentinel in each value it hands the framework, and the sentinel's `Drop` is what counts:
 
 ```rust
-// flui_testing::DropLedger
+// flui_testing::drop_ledger::DropLedger
 #[derive(Clone, Default)]
 pub struct DropLedger { /* Arc<{ planted: AtomicUsize, dropped: AtomicUsize }> */ }
 impl DropLedger {
@@ -231,7 +231,7 @@ Live-node counts per kind (elements, render objects, controllers, tickers), visi
 
 The test's application plants a guard in each value it hands the framework (a capture, a
 controller's listener, a route's page); a guard reports its own `Drop` to a ledger the test reads.
-The ledger is `flui_testing::DropLedger`, so the acceptance app and the runner's tests share it.
+The ledger is `flui_testing::drop_ledger::DropLedger`, so the acceptance app and the runner's tests share it.
 
 - Good, because it proves the destructor ran. A slab node outlives its runtime only through
   `forget` or a leaked runtime, and both leave the sentinel alive.

@@ -16,10 +16,10 @@ use flui_interaction::gesture::{GestureSettingsSource, RemainderHandoff};
 use flui_platform::EventTime;
 use flui_platform::input::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
-use flui_testing::{
-    AlternativesSubject, GestureAlternativesCheck, MouseScript, PointerScript, TouchScript,
-    TrackpadScript, assert_gesture_alternatives,
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
 };
+use flui_testing::replay::{MouseScript, PointerScript, TouchScript, TrackpadScript};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_widgets::{

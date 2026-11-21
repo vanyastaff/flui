@@ -945,7 +945,7 @@ fn developer_history_respects_capacity_and_clear() {
 #[test]
 fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
     use flui_platform::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
     const WORK: Duration = Duration::from_millis(5);
 

@@ -13,9 +13,11 @@ use flui_animation::{
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
 use flui_semantics::SemanticsAnchor;
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_testing::replay::PointerScript;
 use flui_testing::widgets::tight;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};

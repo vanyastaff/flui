@@ -3075,7 +3075,7 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         RasterFactory::Scripted(slots.clone()),
         RasterPlacement::Inline,
     );
-    let window = flui_testing::MockWindow::new();
+    let window = flui_platform::testing::MockWindow::new();
     host.attach(
         &window,
         address(),

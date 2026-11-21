@@ -1,6 +1,6 @@
 ### Added
 
-- **`flui_testing::MockWindow`** (also `flui_platform::testing::MockWindow` under
+- **`flui_platform::testing::MockWindow`** (under
   `flui-platform`'s `testing`): the one test double of `PlatformWindow`. Standalone, its
   refresh-rate request and image cursor answer as its capabilities say, and it takes input
   regions exactly when built `taking_input_regions`; `MockWindow::over(window)` is a
@@ -22,6 +22,6 @@
 
 ### Removed
 
-- **`flui_runtime::testing::TestWindow`**: use `flui_testing::MockWindow`
+- **`flui_runtime::testing::TestWindow`**: use `flui_platform::testing::MockWindow`
   (`with_sizes(physical, logical)` is `with_size(width, height)` at the scale factor, and
   `redraw_calls_handle()` is `redraw_requests()`).

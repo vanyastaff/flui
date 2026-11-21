@@ -10,7 +10,7 @@ use flui_foundation::TextDirection;
 use flui_layer::Layer;
 use flui_painting::styling::Color;
 use flui_painting::{DrawOp, paint::PaintStyle};
-use flui_testing::{Action, ActionRequest, NodeId, TreeId};
+use flui_testing::a11y::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};

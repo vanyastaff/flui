@@ -862,7 +862,7 @@ impl HeadlessHost {
 
     /// The clipboard the UI runtime hands its widgets.
     #[must_use]
-    pub fn clipboard(&self) -> crate::ScriptedClipboard {
+    pub fn clipboard(&self) -> crate::clipboard::ScriptedClipboard {
         self.scripted.clipboard.clone()
     }
 
@@ -872,7 +872,7 @@ impl HeadlessHost {
     /// runner registers HTTP only with its own.
     #[cfg(feature = "http")]
     #[must_use]
-    pub fn http(&self) -> crate::ScriptedHttp {
+    pub fn http(&self) -> flui_platform::testing::ScriptedHttp {
         self.scripted.http.clone()
     }
 
@@ -881,7 +881,7 @@ impl HeadlessHost {
     /// refused it, as on that platform, and what this double is told reaches
     /// nobody.
     #[must_use]
-    pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
+    pub fn primary_selection(&self) -> crate::primary_selection::ScriptedPrimarySelection {
         self.scripted.primary_selection.clone()
     }
 }

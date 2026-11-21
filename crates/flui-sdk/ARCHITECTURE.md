@@ -174,7 +174,7 @@ commands another widget already draws as controls declares `Alternative::Compani
 `CompanionLink`, which the owner of the shared state makes, as `flui-material`'s `TabBar` does for
 `TabBarView` (`tab_bar_view_with_its_tab_bar` in `packages/flui-material/tests/gesture_alternatives.rs`).
 `tests/surface/behavioural_widget.rs` is the proof: a fling-to-file widget written against
-`flui_sdk` alone passes `flui_testing::assert_gesture_alternatives`
+`flui_sdk` alone passes `flui_testing::gesture_alternatives::assert_gesture_alternatives`
 (`a_package_gesture_widget_reaches_its_intent_on_every_path`) and performs its second command from
 its gesture while leaving an edge-strip touch alone
 (`a_package_gesture_widget_performs_its_second_command_from_its_gesture`).

@@ -8,7 +8,8 @@ use flui_layer::Layer;
 use flui_painting::{DrawOp, paint::PaintStyle};
 use flui_rendering::constraints::BoxConstraints;
 use flui_semantics::{AccessibilityNodeId, ActionCall, NumericRange, SemanticsActionRequest};
-use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, widgets::LaidOut};
+use flui_testing::a11y::{Action, ActionData, ActionRequest, NodeId, TreeId};
+use flui_testing::widgets::LaidOut;
 use flui_widgets::{Directionality, SizedBox, Slider};
 use std::{
     cell::{Cell, RefCell},

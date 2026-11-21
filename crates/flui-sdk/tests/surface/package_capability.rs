@@ -11,7 +11,7 @@ use flui_sdk::platform::capability::{Capability, CapabilityRegistrar, Plugin, Pr
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{LifecycleContext, LifecycleContextExt};
 use flui_sdk::widgets::SizedBox;
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
 /// The package's capability: the battery level, as a percentage.
 enum Battery {}

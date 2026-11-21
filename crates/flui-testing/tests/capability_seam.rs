@@ -23,7 +23,8 @@ use flui_platform::{
     Unsupported, UnsupportedReason,
 };
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry, ProviderTier};
-use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedClipboard};
+use flui_testing::clipboard::ScriptedClipboard;
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_view::{
     BuildContext, IntoView, LifecycleContext, LifecycleContextExt, StatefulView, View, ViewState,
 };
@@ -96,7 +97,7 @@ pub(crate) fn acquire_capability<C: Capability>(
 /// and return what it was answered.
 fn acquire_in(
     host: &mut HeadlessHost,
-    window: flui_testing::HeadlessWindowId,
+    window: flui_testing::host::HeadlessWindowId,
 ) -> Result<ClipboardHandle, Unsupported> {
     acquire_capability_in::<ClipboardCapability>(host, window)
 }
@@ -105,7 +106,7 @@ fn acquire_in(
 /// what it was answered.
 pub(crate) fn acquire_capability_in<C: Capability>(
     host: &mut HeadlessHost,
-    window: flui_testing::HeadlessWindowId,
+    window: flui_testing::host::HeadlessWindowId,
 ) -> Result<C::Handle, Unsupported> {
     let acquired = Acquired::<C>::default();
     host.attach_to(

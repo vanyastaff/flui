@@ -23,9 +23,8 @@ pub(crate) mod native_actions {
     use flui_interaction::focus::FocusNode;
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::a11y::Role;
-    use flui_testing::{
-        A11yTree, Action, ActionData, ActionRequest, HeadlessHost, HeadlessWindow, NodeId, TreeId,
-    };
+    use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use flui_view::prelude::*;
     use flui_widgets::{EditableText, SizedBox, TextEditingController};
 
@@ -959,7 +958,7 @@ fn with_render_editable<T>(
 /// Red-check: drop the field's `on_tap_up` request, and the tap asks the
 /// host nothing.
 pub(crate) fn a_tap_on_the_focused_field_asks_for_the_keyboard() {
-    use flui_testing::StoreHostCall;
+    use flui_testing::text_store_host::StoreHostCall;
     use std::time::Duration;
 
     let asked = |harness: &crate::common::harness::Harness| {
@@ -1400,7 +1399,7 @@ pub(crate) fn a_field_measures_and_hit_tests_the_current_text_scale() {
 /// the caret inside a composition that is still open), or from the paste
 /// action (a paste is refused while composing).
 pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
-    use flui_testing::StoreHostCall;
+    use flui_testing::text_store_host::StoreHostCall;
 
     fn composing(text: &str) -> (crate::common::harness::Harness, TextEditingController) {
         let controller = TextEditingController::with_text(text);
@@ -2058,7 +2057,7 @@ pub(crate) mod text_store {
     /// Red-check: have the presentation's text-input owner skip its host —
     /// the host hears nothing and serves no store.
     pub(crate) fn focus_gain_and_loss_reach_the_store_host() {
-        use flui_testing::StoreHostCall;
+        use flui_testing::text_store_host::StoreHostCall;
 
         let controller = TextEditingController::with_text("ab");
         let (mut harness, focus_node) = focused(&controller);
@@ -3394,7 +3393,7 @@ pub(crate) fn enter_moves_the_focus_as_the_fields_enter_key_says() {
     use flui_platform::PlatformInput;
     use flui_platform::input::keyboard::NamedKey;
     use flui_platform::text::store::{EnterAction, TextInputOptions};
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use flui_view::ViewExt;
     use flui_widgets::{Column, SizedBox};
 
