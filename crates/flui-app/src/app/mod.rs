@@ -34,7 +34,7 @@ pub(crate) mod native_window;
     not(target_arch = "wasm32")
 ))]
 pub(crate) mod placement_recorder;
-pub mod runner;
+pub(crate) mod runner;
 pub(crate) mod runtime;
 pub(crate) mod storage_host;
 pub(crate) mod window_control;

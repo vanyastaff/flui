@@ -34,7 +34,7 @@ whether it stays. The measured state on `main` at `e13b7ce`:
 | Fact | Evidence |
 |---|---|
 | The public API of `flui` and `flui-sdk` has 240 listed `Send`/`Sync` positions on about 140 items; 15 name the kind of value that crosses | `tools/xtask/allowlists/send-positions.toml` |
-| The four kinds do not cover work handed to a worker, a committed scene, or an error's source, although such positions are listed and are right | `flui_view::background::Background::compute`, `flui_layer`'s `AnnotationValue`, `flui_app::app::launch::LaunchError` |
+| The four kinds do not cover work handed to a worker, a committed scene, or an error's source, although such positions are listed and are right | `flui_view::background::Background::compute`, `flui_layer`'s `AnnotationValue`, `flui_app::LaunchError` |
 | Widget signatures ask for `Send + Sync` on values no other thread reads | `Localizations::of<R: Send + Sync>() -> Arc<R>` (`crates/flui-widgets/src/localization/localizations.rs`), `RouteSettings::arguments<T: Any + Send + Sync>` (`navigator/route.rs`), `StreamBuilder<K, T, E>` (`crates/flui-view/src/element/stream_builder.rs`), `AnimatedList<K: Send + Sync>` |
 | Owner-thread state sits behind locks | `Mutex`/`RwLock` outside tests in `flui-widgets/src/navigator/navigator.rs`, `flui-view/src/element/future_builder.rs`, `flui-scheduler/src/scheduler.rs`, `flui-interaction/src/pointer/resampler.rs`, `flui-view/src/owner/build_owner.rs`, `flui-interaction/src/gesture/arena/mod.rs` |
 
@@ -154,10 +154,10 @@ positions keeps all of them unless a marker is named.
 |---|---|
 | `panic-payload` | `flui_foundation::panic::{FirstPanic::{held, fold, record, into_payload}, discard_payload, payload_text}`, `flui_view::view::error::FrameworkError::from_panic`, `flui_platform::capability::owner::PendingCompletions::retire`, `…::runtime_local::RuntimeLocals::retire`, `flui_platform::text::store::lock::CommitGate::{defer_failure, take_failure}`, `…::owner_calls::OwnerCalls::{into_failure, keep}` |
 | `waker` | `flui_foundation::claim_slot`, `flui_foundation::testing::CountingWaker::{calling, retiring_waker}`, `flui_platform::surface_target::RedrawRequester` and its blanket impl, `flui_platform::capability::owner::OwnerPoster::new`, `flui_scheduler::scheduler::UpdateScheduler::set_on_frame_scheduled`, `flui_view::dev_reload::ReloadWake::new`, `flui_view::owner::build_owner::BuildOwner::set_on_build_scheduled`, `flui_rendering::pipeline::owner::PipelineOwner::set_on_need_visual_update`, `flui_hot_reload::dispatch::register_request_rebuild` |
-| `job` and `worker-result` | `flui_view::background::Background::{compute, io}`, `flui_app::app::lifecycle::{TaskSpawner::{spawn_compute, spawn_io, spawn_worker}, WorkerHandle, ServiceFuture, ServiceDefinition::new, CancellationSignal::cancelled, ServicePublisher, service_events}`, `flui_platform::executor::{ComputeJob, IoFuture, RoomFuture::new}`, `flui_platform::http::{HttpFuture, BodySource}`, `flui_platform::storage::StorageFuture`, `flui_platform::capability::owner::OwnerPoster::post`, `flui_platform::capability::completion::{CompletionSource::pending, Resolver}`, `flui_widgets::image::provider::{DecodeJob::{decode, read_then_decode}, ImageProvider::resolve_async}` and its two implementations |
+| `job` and `worker-result` | `flui_view::background::Background::{compute, io}`, `flui_app::{TaskSpawner::{spawn_compute, spawn_io, spawn_worker}, WorkerHandle, ServiceFuture, ServiceDefinition::new, CancellationSignal::cancelled, ServicePublisher, service_events}`, `flui_platform::executor::{ComputeJob, IoFuture, RoomFuture::new}`, `flui_platform::http::{HttpFuture, BodySource}`, `flui_platform::storage::StorageFuture`, `flui_platform::capability::owner::OwnerPoster::post`, `flui_platform::capability::completion::{CompletionSource::pending, Resolver}`, `flui_widgets::image::provider::{DecodeJob::{decode, read_then_decode}, ImageProvider::resolve_async}` and its two implementations |
 | `handle` | `flui_platform::executor::Executor`, `flui_runtime::execution::{HostComputePool, HostIoPool}`, `flui_platform::http::{HttpClient, HttpAuthority::of}`, `flui_platform::storage::Storage`, `flui_platform::surface_target::{SurfaceTarget, DisplayConnection}`, `flui_runtime::frame_failure::FrameFailureHandlerFactory::new`, `flui_runtime::input_tap::InputTapFactory::new`, `flui_view::dev_reload::DevReloadHook` and `flui_view::dev_agent::DevAgentHook` (`Send` only, until ADR-0311's factories carry it), `flui_devtools::capture::Capture::{on_frame, on_frame_open}` (a tracing layer is shared by every thread that emits), `flui_hot_reload::dynlib::DynLib` |
 | `snapshot` | `flui_widgets::paint::annotated_region::AnnotatedRegion` and its `View` and `RenderView` impls |
-| `error` | `flui_app::app::launch::LaunchError::{Platform, Service}::source`, `flui_app::app::application_control::AppWindowError::{Mount, Native, Renderer, Show}::source` |
+| `error` | `flui_app::LaunchError::{Platform, Service}::source`, `flui_app::AppWindowError::{Mount, Native, Renderer, Show}::source` |
 
 **Go, with what replaces them.**
 
@@ -176,8 +176,8 @@ positions keeps all of them unless a marker is named.
 | `flui_foundation::wasm::WasmNotSendSync` and its blanket impl | deleted: no production caller |
 | `flui_platform::{transfer::data::DragTransport, transfer::drag::PlatformDragSource, haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput}` | no thread supertrait: each is reached through a `PlatformWindow` on the owner thread |
 | `flui_runtime::owner_turn::CloseRequestHandler::new` (re-exported as `flui_app::CloseRequestHandler`) | `impl Fn(&CloseRequest) -> CloseResponse + 'static`, held as `Rc`; the wrong-thread branch of its call goes with the bound |
-| `flui_app::app::direct::run_direct` | deleted: a hand-built scene is a version made by `Scene::new` (ADR-0304 §9), and the entry had no caller |
-| `flui_app::app::config::AppConfig::memory_reclaim` | `impl ReclaimMemory + 'static`, held as `Rc`: a receiver is reclaimed on the owner thread |
+| `flui_app::run_direct` | deleted: a hand-built scene is a version made by `Scene::new` (ADR-0304 §9), and the entry had no caller |
+| `flui_app::AppConfig::memory_reclaim` | `impl ReclaimMemory + 'static`, held as `Rc`: a receiver is reclaimed on the owner thread |
 | `flui_hot_reload::pipeline::PluginPipeline::mount` | `V: View + StatelessView + Clone + 'static` |
 | `flui_painting::typography::InlineSpan::as_trait` and `InlineSpanTrait` | deleted: `InlineSpan` is a closed enum, and its methods match its variants |
 

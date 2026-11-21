@@ -6,7 +6,7 @@
 //! embedder are the runtime's composition roots and are not part of this module: a widget
 //! reaches the presentation through [`crate::view::BuildContext`] and its lifecycle hooks.
 
-pub use flui_app::app::DevReload;
+pub use flui_app::DevReload;
 pub use flui_app::{
     AppConfig, AppId, AppIdError, AppIdentity, Application, BackendFailure, DiagnosticsProfile,
     EXIT_CODE_HUNG, FontRegistrationError, FrameLatency, GpuBackend, LaunchError, MotionOverride,

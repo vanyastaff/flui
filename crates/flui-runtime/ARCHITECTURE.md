@@ -397,8 +397,8 @@ host.
   `PresentationState` and their methods are `pub` only where `flui-app`
   calls them; what only `flui-app`'s tests call is `pub` under
   `testing`; the rest is `pub(crate)`. `flui-app` re-exports none of
-  them, only `frame_failure`'s report types and `RenderingBinding`,
-  at their old `flui_app` paths. `flui-testing` hosts a UI runtime in its
+  them, only `frame_failure`'s report types, at the crate root of
+  `flui_app`. `flui-testing` hosts a UI runtime in its
   `HeadlessHost` and keeps it crate-private, so `flui::testing` does not
   reach it either.
 - **The frame sink is the host's, the verdict is the UI runtime's.** A host

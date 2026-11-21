@@ -6,11 +6,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use flui_app::app::{
+use flui_app::testing::{HeadlessRun, RunExit, TeardownStep};
+use flui_app::{
     AppConfig, AppHandle, Application, ExitPolicy, ServiceDefinition, ServiceLifetime,
     WindowPolicy, open_secondary_window,
 };
-use flui_app::testing::{HeadlessRun, RunExit, TeardownStep};
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 /// The order every loop's teardown runs in.
@@ -158,7 +158,7 @@ pub(crate) fn a_hung_service_and_compute_job_end_within_the_exit_budget() {
 /// returned.
 fn watched_application() -> (
     Application,
-    std::sync::mpsc::Receiver<flui_app::app::LifecycleWatch>,
+    std::sync::mpsc::Receiver<flui_app::LifecycleWatch>,
     std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let (watches, watched) = std::sync::mpsc::channel();
@@ -898,10 +898,10 @@ pub(crate) fn a_session_end_with_a_checked_out_runtime_calls_no_user_code() {
 pub(crate) fn a_session_end_asks_the_handler_before_the_guard() {
     let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = std::sync::Arc::clone(&asked);
-    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+    let handler = flui_app::CloseRequestHandler::new(move |request| {
         assert_eq!(request.reason(), flui_view::CloseReason::SessionEnd);
         counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        flui_app::app::CloseResponse::Close
+        flui_app::CloseResponse::Close
     });
     let (run, _events, shared) = guarded_run_with(
         HoldOn::Decision,
@@ -1303,9 +1303,9 @@ pub(crate) fn a_slow_observer_stops_the_session_end_delivery() {
 pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
     let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
     let seen = std::sync::Arc::clone(&refused);
-    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+    let handler = flui_app::CloseRequestHandler::new(move |request| {
         *seen.lock().expect("unpoisoned") = Some(request.address());
-        flui_app::app::CloseResponse::KeepOpen
+        flui_app::CloseResponse::KeepOpen
     });
     let (run, events, _shared) = guarded_run_with(
         HoldOn::Nothing,
@@ -1334,7 +1334,7 @@ pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
 /// A close handler that panics on a session end refuses it, and the answer
 /// is still given (ADR-0260 §1).
 pub(crate) fn a_session_end_handler_panic_refuses() {
-    let handler = flui_app::app::CloseRequestHandler::new(|_| panic!("the handler failed"));
+    let handler = flui_app::CloseRequestHandler::new(|_| panic!("the handler failed"));
     let (run, _events, _shared) = guarded_run_with(
         HoldOn::Nothing,
         AppConfig::new().close_request_handler(handler),
@@ -1358,19 +1358,19 @@ pub(crate) fn a_session_end_handler_panic_refuses() {
 pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
     let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
     let seen = std::sync::Arc::clone(&refused);
-    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+    let handler = flui_app::CloseRequestHandler::new(move |request| {
         let mut first = seen.lock().expect("unpoisoned");
         match *first {
             // The first window asked waits for its save.
             None => {
                 *first = Some(request.address());
-                flui_app::app::CloseResponse::KeepOpen
+                flui_app::CloseResponse::KeepOpen
             }
             // The next one finishes that save and closes the first window.
             Some(address) => {
                 drop(first);
                 flui_app::request_presentation_close(address).expect("the first window closes");
-                flui_app::app::CloseResponse::Close
+                flui_app::CloseResponse::Close
             }
         }
     });
@@ -1773,11 +1773,10 @@ fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
     let panics = std::sync::Arc::clone(panics);
     AppConfig::new()
         .exit_policy(ExitPolicy::OnLastWindowClosed)
-        .frame_failure_handler(flui_app::app::FrameFailureHandlerFactory::new(move || {
+        .frame_failure_handler(flui_app::FrameFailureHandlerFactory::new(move || {
             let panics = std::sync::Arc::clone(&panics);
-            flui_app::app::FrameFailureHandler::new(move |report| {
-                if let flui_app::app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind
-                {
+            flui_app::FrameFailureHandler::new(move |report| {
+                if let flui_app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind {
                     panics
                         .lock()
                         .expect("BUG: the frame-failure handler does not panic")
@@ -2052,12 +2051,12 @@ fn exit_code_after_a_build_panic() {
 
 fn exit_code_after_a_close_handler_panic() {
     let panicked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let handler = flui_app::app::CloseRequestHandler::new(move |_| {
+    let handler = flui_app::CloseRequestHandler::new(move |_| {
         assert!(
             panicked.swap(true, std::sync::atomic::Ordering::SeqCst),
             "the close-request handler failed"
         );
-        flui_app::app::CloseResponse::Close
+        flui_app::CloseResponse::Close
     });
     let application = Application::new().config(
         AppConfig::new()

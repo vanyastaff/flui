@@ -9,12 +9,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use flui_app::app::{
+use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
+use flui_app::{
     AppConfig, AppHandle, AppWindowError, Application, CloseReason, CloseRequestHandler,
     CloseResponse, DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory,
     FrameFailureKind, WindowPolicy, open_window, request_presentation_close,
 };
-use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::Leaf;
 use flui_foundation::PresentationAddress;
 use flui_foundation::geometry::Size;
@@ -653,7 +653,7 @@ pub(crate) fn a_close_from_a_thread_without_a_loop_is_refused() {
         .expect("the request does not panic");
     assert_eq!(
         answered,
-        Err(flui_app::app::PresentationCloseError::NoHostedRuntime)
+        Err(flui_app::PresentationCloseError::NoHostedRuntime)
     );
     started.run.run_owner_turn();
     assert!(started.run.is_running(), "the window stayed open");

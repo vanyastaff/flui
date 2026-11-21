@@ -25,11 +25,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_app::app::{
+use flui_app::testing::{HeadlessRun, HeadlessRunHandle};
+use flui_app::{
     AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse, ExitPolicy,
     WindowPolicy,
 };
-use flui_app::testing::{HeadlessRun, HeadlessRunHandle};
 use flui_native::testing::HeadlessPlatform;
 use flui_platform::{Launch, OpenTarget, Opened, OpenedFile, PlatformWindow, WindowId};
 use flui_view::navigation::OpenDeclarations;
@@ -253,9 +253,7 @@ fn opens(application: Application, url: &str) -> bool {
 }
 
 pub(crate) fn the_entry_functions_manifest_declares_what_a_run_opens() {
-    use flui_app::app::__entry::{
-        FileTypeDeclaration, OpenDeclarations, declare, join, joined_len,
-    };
+    use flui_app::__entry::{FileTypeDeclaration, OpenDeclarations, declare, join, joined_len};
 
     // What `#[flui::main]` writes at the top of the function it marks for a
     // manifest declaring `url-schemes = ["myapp"]`, a `file-types` entry, and
@@ -775,7 +773,7 @@ pub(crate) fn a_link_goes_to_the_main_window_never_a_hidden_helper() {
         .expect("the helper's opening is answered")
         .expect("the helper opened");
     // The helper is the window opened first, and the application hides it.
-    let helper = flui_app::app::window_handle(address).expect("the helper's handle");
+    let helper = flui_app::window_handle(address).expect("the helper's handle");
     helper.hide().expect("the helper takes the hide");
     turns(&run, 3);
 
@@ -823,7 +821,7 @@ pub(crate) fn a_link_restores_the_minimized_window_it_opens_in() {
         .try_result()
         .expect("the show is answered")
         .expect("the main window opened");
-    let window = flui_app::app::window_handle(address).expect("the main window's handle");
+    let window = flui_app::window_handle(address).expect("the main window's handle");
     window
         .set_mode(flui_platform::WindowMode::Minimized)
         .expect("the window takes the minimize");
@@ -869,7 +867,7 @@ pub(crate) fn a_link_shows_the_hidden_window_it_opens_in() {
         .try_result()
         .expect("the show is answered")
         .expect("the main window opened");
-    let window = flui_app::app::window_handle(address).expect("the main window's handle");
+    let window = flui_app::window_handle(address).expect("the main window's handle");
     // A tray application hides its only window and keeps running.
     window.hide().expect("the window takes the hide");
     turns(&run, 3);
