@@ -458,8 +458,9 @@ pub struct HeadlessWindowSystem {
 ///   handler method a real platform would.
 ///
 /// There is no public constructor: obtain one by opening a window on a
-/// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned
-/// `Rc<dyn PlatformWindow>` via its `as_any()` to `&HeadlessHostWindow`.
+/// [`HeadlessPlatform`](crate::HeadlessPlatform), upcasting the window the
+/// returned `Rc<dyn HostWindow>` holds (not the `Rc`) to `&dyn Any`, and
+/// downcasting that to `&HeadlessHostWindow`.
 #[derive(Clone)]
 pub struct HeadlessHostWindow {
     id: WindowId,

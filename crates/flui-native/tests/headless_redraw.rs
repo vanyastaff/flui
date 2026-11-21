@@ -98,9 +98,7 @@ fn reporting_window(platform: &HeadlessPlatform) -> crate::Opened {
 
 /// The headless window behind `opened`.
 fn headless(opened: &crate::Opened) -> &HeadlessHostWindow {
-    opened
-        .window
-        .as_any()
+    (&*opened.window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("the headless platform opens headless windows")
 }

@@ -74,16 +74,14 @@ fn a_nested_close_request_keeps_the_window() {
     handler.react_to_close_request(move || {
         if heard.get().is_none() {
             let window = mock(&weak);
-            let window = window
-                .as_any()
+            let window = (&*window as &dyn std::any::Any)
                 .downcast_ref::<HeadlessHostWindow>()
                 .expect("a headless window");
             heard.set(Some(window.simulate_close()));
         }
         CloseDecision::Close
     });
-    let window = window
-        .as_any()
+    let window = (&*window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("a headless window");
     assert!(

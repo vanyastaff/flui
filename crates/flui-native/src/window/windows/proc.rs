@@ -382,9 +382,9 @@ pub(crate) struct WindowContext {
     /// on, as the shell answered, until the settings or the displays change
     /// ([`Self::auto_hide_edges_at`]).
     pub(crate) app_bars: std::cell::Cell<Option<super::app_bars::MonitorAppBars>>,
-    /// How many times the app asked for the window to be shown; see
-    /// [`Self::note_show_request`].
-    pub show_requests: std::cell::Cell<u32>,
+    /// The app's requests for the window to be shown, which a restore that
+    /// hides it again reads to tell it was overtaken.
+    pub(crate) show_requests: super::show_requests::ShowRequests,
     /// What is still owed of the window's first show. A window opens hidden and
     /// in its mode, so the first sight of it is already maximized or
     /// fullscreen, not a normal window that jumps.
@@ -2800,8 +2800,7 @@ impl WindowContext {
     /// Note that the app asked for the window to be shown, so a restore that
     /// hides it again afterwards can tell it was overtaken.
     pub(crate) fn note_show_request(&self) {
-        self.show_requests
-            .set(self.show_requests.get().wrapping_add(1));
+        self.show_requests.note();
     }
 }
 

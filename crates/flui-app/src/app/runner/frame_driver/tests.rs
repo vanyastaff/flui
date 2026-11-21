@@ -1946,8 +1946,7 @@ fn agent_notification_follows_live_native_initialization() {
     ] {
         let _clear = OwnerHostClearGuard::arm();
         let host = crate::app::window_test_support::headless_test_host_window();
-        let mock = host
-            .as_any()
+        let mock = (&*host as &dyn std::any::Any)
             .downcast_ref::<flui_native::HeadlessHostWindow>()
             .expect("a headless window")
             .clone();

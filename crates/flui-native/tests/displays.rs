@@ -127,8 +127,7 @@ fn window_move_names_the_new_display_and_hints_once() {
         .open_window(WindowOptions::default(), handler.clone())
         .expect("window");
     let window: Rc<dyn flui_native::HostWindow> = window;
-    let mock = window
-        .as_any()
+    let mock = (&*window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("headless window")
         .clone();
@@ -164,8 +163,7 @@ fn a_move_to_a_display_the_platform_does_not_hold_is_refused() {
         )
         .expect("window");
     let window: Rc<dyn flui_native::HostWindow> = window;
-    let mock = window
-        .as_any()
+    let mock = (&*window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("headless window")
         .clone();

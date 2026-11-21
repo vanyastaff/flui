@@ -1362,8 +1362,7 @@ impl Headless {
     }
 
     fn mock(&self) -> &HeadlessHostWindow {
-        self.window
-            .as_any()
+        (&*self.window as &dyn std::any::Any)
             .downcast_ref::<HeadlessHostWindow>()
             .expect("headless window")
     }

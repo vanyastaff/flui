@@ -2,6 +2,7 @@
 //! that made the platform where a test stands in for `Platform::run`, and what
 //! the compositor said of a window, read apart from the window's snapshot.
 
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -62,7 +63,7 @@ pub fn fullscreen_on<H: Host<Loop = WaylandLoop>>(
     window: &dyn HostWindow,
     output: OutputName,
 ) -> bool {
-    let Some(window) = window.as_any().downcast_ref::<WaylandWindow>() else {
+    let Some(window) = (window as &dyn Any).downcast_ref::<WaylandWindow>() else {
         return false;
     };
     platform
@@ -135,7 +136,7 @@ impl PortalParentRequest {
 /// compositor activated; `None` for a window of another host.
 #[must_use]
 pub fn bridge_focus(window: &dyn HostWindow) -> Option<bool> {
-    let window = window.as_any().downcast_ref::<WaylandWindow>()?;
+    let window = (window as &dyn Any).downcast_ref::<WaylandWindow>()?;
     Some(window.bridge_focus())
 }
 
@@ -146,8 +147,7 @@ pub fn bridge_focus(window: &dyn HostWindow) -> Option<bool> {
 /// configured yet.
 #[must_use]
 pub fn suspend(window: &dyn HostWindow, suspended: bool) -> bool {
-    window
-        .as_any()
+    (window as &dyn Any)
         .downcast_ref::<WaylandWindow>()
         .is_some_and(|window| window.suspend_as_told(suspended))
 }
@@ -159,7 +159,7 @@ pub fn suspend(window: &dyn HostWindow, suspended: bool) -> bool {
 pub fn text_store_host(
     window: &dyn HostWindow,
 ) -> Option<std::rc::Rc<dyn flui_platform::text::store::TextStoreHost>> {
-    let window = window.as_any().downcast_ref::<WaylandWindow>()?;
+    let window = (window as &dyn Any).downcast_ref::<WaylandWindow>()?;
     crate::host_window::HostWindow::text_store_host(
         window,
         crate::host_window::OwnerThreadToken::new(),
@@ -173,8 +173,7 @@ pub fn text_store_host(
 /// `false` for a window of another host, or one with nothing to draw on.
 #[must_use]
 pub fn present(window: &dyn HostWindow) -> bool {
-    window
-        .as_any()
+    (window as &dyn Any)
         .downcast_ref::<WaylandWindow>()
         .is_some_and(WaylandWindow::present_blank)
 }
@@ -258,7 +257,7 @@ impl ClientFrameReport {
 pub fn client_frame_report(window: &dyn HostWindow) -> Option<ClientFrameReport> {
     use crate::window::linux::wayland::client_frame::{Action, Piece, Rect};
 
-    let window = window.as_any().downcast_ref::<WaylandWindow>()?;
+    let window = (window as &dyn Any).downcast_ref::<WaylandWindow>()?;
     let said = window.client_frame_said();
     let rect = |rect: Rect| (rect.x, rect.y, rect.width, rect.height);
     Some(ClientFrameReport {
@@ -332,7 +331,7 @@ pub fn cursor_report<H: Host<Loop = WaylandLoop>>(
 /// What the compositor sent `window`; `None` for a window of another host.
 #[must_use]
 pub fn compositor_report(window: &dyn HostWindow) -> Option<CompositorReport> {
-    let window = window.as_any().downcast_ref::<WaylandWindow>()?;
+    let window = (window as &dyn Any).downcast_ref::<WaylandWindow>()?;
     let said = window.compositor_said();
     Some(CompositorReport {
         size: said.size,

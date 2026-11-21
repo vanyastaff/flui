@@ -86,8 +86,7 @@ impl Session {
 }
 
 fn mock(window: &Rc<dyn HostWindow>) -> &HeadlessHostWindow {
-    window
-        .as_any()
+    (&**window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("mock")
 }

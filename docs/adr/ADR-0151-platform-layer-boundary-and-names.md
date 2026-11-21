@@ -464,7 +464,8 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
 
 ### 8. The escape hatch is published, typed and cannot panic
 
-- `as_any` moves from `PlatformWindow` to the sealed `HostWindow`.
+- The downcast moves from `PlatformWindow` to the sealed `HostWindow`: `Any` is its supertrait,
+  and a `&dyn HostWindow` upcasts to `&dyn Any`.
 - The facade publishes the OS extension modules as `flui::native::<os>` behind `cfg(<os>)` and the
   feature `native`, kind Evolving, so the escape hatch is discoverable and its churn is not Stable.
   Their methods take and return FLUI types only (progress on the taskbar, background material,
@@ -545,7 +546,7 @@ crates/flui-native/
     error.rs                the core host's error types
     platform.rs             Platform (sealed), AppHandler; HostPlatform<H: Host>, the one
                             implementation of Platform, and the AppHandler wiring
-    host_window.rs          HostWindow (sealed), as_any
+    host_window.rs          HostWindow (sealed, Any supertrait)
     hosts/                  one table per host and its constructor, nothing else:
                             windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) headless.rs
     owner/                  the owner thread and each platform's loop (std's sys/pal): OwnerPlatform,

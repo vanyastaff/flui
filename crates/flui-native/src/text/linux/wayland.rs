@@ -182,6 +182,7 @@ impl TextInputWire for SeatWire {
 
     fn commit(&self) {
         self.object.commit();
+        // Wraps: the protocol counts its `uint` commit serial the same way.
         self.commits.set(self.commits.get().wrapping_add(1));
     }
 

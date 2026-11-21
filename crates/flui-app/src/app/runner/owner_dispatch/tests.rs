@@ -180,8 +180,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
                 .and_then(flui_native::WindowOpen::try_ready)
                 .expect("headless native window");
                 let window: Rc<dyn PlatformWindow> = host.clone();
-                let native = host
-                    .as_any()
+                let native = (&*host as &dyn std::any::Any)
                     .downcast_ref::<flui_native::HeadlessHostWindow>()
                     .expect("headless window");
                 if matches!(change, NativeChange::InitiallyUnfocused) {
@@ -676,8 +675,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
     let dispatcher =
         install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &window);
     install_input_wiring(dispatcher, window.as_ref());
-    let native = host
-        .as_any()
+    let native = (&*host as &dyn std::any::Any)
         .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("headless test window");
     let alt_f4 = || {
@@ -717,8 +715,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
                     flui_interaction::focus::KeyEventResult::Ignored
                 },
             ));
-            let native = turn_window
-                .as_any()
+            let native = (&*turn_window as &dyn std::any::Any)
                 .downcast_ref::<flui_native::HeadlessHostWindow>()
                 .expect("headless test window");
             in_turn_result.set(Some((
@@ -975,8 +972,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
         .expect("first callback");
         assert!(trace.borrow().is_empty());
         with_owner_callback(|_| {
-            let native = host
-                .as_any()
+            let native = (&*host as &dyn std::any::Any)
                 .downcast_ref::<flui_native::HeadlessHostWindow>()
                 .expect("the window is a headless one");
             let result = native.inject_event(PlatformInput::Keyboard(
@@ -1896,8 +1892,7 @@ fn platform_brightness_follows_the_window_appearance() {
     }
     let _clear = OwnerHostClearGuard::arm();
     let (host, window) = test_host_window();
-    let native = host
-        .as_any()
+    let native = (&*host as &dyn std::any::Any)
         .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("headless window")
         .clone();

@@ -39,10 +39,12 @@
 //! while the scene is suspended or detached. Process owner signals remain
 //! independent; no OS background execution entitlement is implied.
 
+mod lifecycle_generation;
 mod scene;
 mod scene_error;
 
 pub(crate) use super::NativeOwner;
+pub(crate) use lifecycle_generation::{LifecycleGeneration, LifecycleGenerations};
 pub use scene::{IOSSceneAttachmentId, IOSSceneSessionId};
 pub(crate) use scene::{SceneConsumer, SceneInstallation};
 
@@ -308,7 +310,7 @@ pub(crate) trait SceneWindow: HostWindow {
     /// The window's lifecycle generation, which moves on at every background,
     /// foreground and detach: a step that waited compares it to learn whether
     /// the window moved on meanwhile.
-    fn resource_generation(&self) -> u64;
+    fn resource_generation(&self) -> LifecycleGeneration;
 
     /// Whether the window's current attachment is `attachment`.
     fn attachment_matches(
@@ -412,7 +414,7 @@ struct SessionRecord {
 struct PendingSceneInstallation {
     origin: SceneOrigin,
     scene: Retained<UIWindowScene>,
-    resource_generation: u64,
+    resource_generation: LifecycleGeneration,
     completion: Box<dyn SceneInstallation>,
 }
 

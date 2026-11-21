@@ -358,9 +358,9 @@ impl PreferenceQueryError {
 /// which only the core host implements, carries it (ADR-0151 §8), so a window
 /// the framework programs against is never turned into a concrete type:
 ///
-/// ```compile_fail,E0599
+/// ```compile_fail,E0308
 /// fn downcast(window: &dyn flui_platform::PlatformWindow) {
-///     let _ = window.as_any();
+///     let _: &dyn std::any::Any = window;
 /// }
 /// ```
 pub trait PlatformWindow {

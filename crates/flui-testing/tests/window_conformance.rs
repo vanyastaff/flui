@@ -277,8 +277,7 @@ struct Fixture {
 
 impl Fixture {
     fn mock(&self) -> &HeadlessHostWindow {
-        self.model
-            .as_any()
+        (&*self.model as &dyn std::any::Any)
             .downcast_ref::<HeadlessHostWindow>()
             .expect("a headless platform opens headless windows")
     }
