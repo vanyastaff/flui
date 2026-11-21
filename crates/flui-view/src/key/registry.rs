@@ -298,6 +298,7 @@ fn push_registry(
 
 /// Activate `handle` until the returned token drops, for a test thread: the
 /// stack's buffer is freed once the token leaves it empty.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn activate_registry(handle: GlobalKeyRegistryHandle) -> RegistryActivation {
     push_registry(handle, true)
 }
