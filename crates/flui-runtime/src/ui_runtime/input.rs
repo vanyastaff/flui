@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 /// Runtime-level arbitration of which presentation currently owns OS keyboard
-/// focus (issue #555's addressed-routing slice). One [`FocusManager`](flui_interaction::focus::FocusManager) exists per presentation
+/// focus. One [`FocusManager`](flui_interaction::focus::FocusManager) exists per presentation
 /// (`PresentationState::focus_manager`), but only ONE presentation's tree
 /// should ever receive a keyboard event at a time — the one whose native
 /// window the platform most recently reported as focused.
@@ -96,9 +96,8 @@ pub(super) enum InputOrigin {
 
 /// Whether the UI runtime's input entry point must drop `input` outright,
 /// before ever reaching the per-kind dispatch above, given the
-/// presentation's current lifecycle. Moved here from the retired
-/// `AppBinding`, unchanged — the match arms below are the per-lifecycle
-/// rationale: a suspended presentation drops pointer/drag input (no gesture
+/// presentation's current lifecycle. The match arms below are the
+/// per-lifecycle rationale: a suspended presentation drops pointer/drag input (no gesture
 /// arena to resolve into) but still accepts keyboard/IME (a background
 /// window can keep text-input focus), while a not-yet-attached or closing
 /// presentation drops everything.
@@ -170,7 +169,7 @@ fn begins_contact(input: &PlatformInput) -> bool {
 /// A safe, content-free discriminator for a [`PlatformInput`] — never the
 /// payload itself. Logging text-input/IME payloads and drag-and-drop payloads
 /// is forbidden; this is the only thing about an input event that may reach a
-/// trace/log line. Moved here from the retired `AppBinding`, unchanged.
+/// trace/log line.
 pub(super) fn input_kind(input: &PlatformInput) -> &'static str {
     match input {
         PlatformInput::Pointer(_) => "pointer",
@@ -183,7 +182,7 @@ pub(super) fn input_kind(input: &PlatformInput) -> &'static str {
 }
 
 /// A safe, content-free discriminator for a [`DragDropEvent`] — never the
-/// carried offer/payload. Moved here from the retired `AppBinding`, unchanged.
+/// carried offer/payload.
 pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
     match event {
         DragDropEvent::Entered { .. } => "entered",
@@ -272,16 +271,15 @@ impl UiRuntime {
     }
 
     // ========================================================================
-    // Input dispatch (moved from the retired `AppBinding`)
+    // Input dispatch
     // ========================================================================
 
     /// Handle a platform input event while this UI runtime is already entered,
-    /// addressed to exactly one presentation this UI runtime hosts (issue #555
-    /// the addressed-routing slice).
+    /// addressed to exactly one presentation this UI runtime hosts.
     ///
     /// `presentation_id` is the exact presentation `dispatch_platform_ui_runtime`
     /// (`flui-app`'s `runner/owner_dispatch.rs`) stamped this event with at enqueue time — the window
-    /// that produced it, resolved through `WindowRegistry` at hop-1 — never
+    /// that produced it, resolved through `WindowRegistry` at enqueue — never
     /// assumed to be this UI runtime's primary. A `presentation_id` this UI runtime no
     /// longer hosts (closed between enqueue and drain) is a traced drop,
     /// never a panic or a silent fall-through to the forest's primary.

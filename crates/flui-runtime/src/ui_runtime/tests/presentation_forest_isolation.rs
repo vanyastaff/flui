@@ -59,10 +59,9 @@ pub(crate) fn sibling_presentations_flush_independently() {
     let mut ui_runtime = UiRuntime::for_test();
     let second_id = ui_runtime.install_second_presentation_for_test();
 
-    // Mark ONLY the second presentation dirty — reaching its own
-    // wake bit directly, the same seam a later addressed-routing
-    // slice would call through (no addressed entry point exists
-    // yet).
+    // Mark ONLY the second presentation dirty through its own wake bit, the
+    // bit `request_redraw_for` sets for an addressed request, without the
+    // runtime-wide `needs_redraw` flag or a platform wake.
     ui_runtime
         .presentations
         .get(second_id)

@@ -24,9 +24,8 @@ use std::sync::{
 /// RAII handle that keeps semantics enabled on its owning [`SemanticsHost`]
 /// while held.
 ///
-/// Mirrors the retired `SemanticsBinding::SemanticsHandle`'s ref-counting
-/// shape, now scoped to one presentation instead of a process-wide
-/// singleton.
+/// Reference-counted: semantics stays enabled until the last handle drops,
+/// scoped to one presentation rather than a process-wide singleton.
 ///
 /// Constructed only by [`SemanticsHost::ensure_semantics`]; the UI runtime's
 /// semantics agent holds one while any clone of it is alive.
