@@ -64,10 +64,6 @@
     clippy::module_inception,
     reason = "a one-type family module named after its type (`flex/flex.rs`, `text/text.rs`) is the catalog's house style"
 )]
-#![expect(
-    clippy::arc_with_non_send_sync,
-    reason = "ADR-0027: navigator, overlay, hero and focus state is owner-local, but the handle graph uses `Arc` at many internal seams, and `Send + Sync` must not be added to UI callbacks or route and page builders to satisfy the lint"
-)]
 
 // `#[derive(Routable)]` names this crate by its absolute path, which also
 // resolves inside the crate and its doctests through this alias.
@@ -346,9 +342,7 @@ pub use transitions::{
     ScaleTransition, ScaleTransitionState, SizeTransition, SizeTransitionState, SlideTransition,
     SlideTransitionState, SliverFadeTransition, SliverFadeTransitionState,
 };
-pub use value_listenable_builder::{
-    ValueListenableBuilder, ValueListenableBuilderState, ValueWidgetBuilder,
-};
+pub use value_listenable_builder::{ValueListenableBuilder, ValueListenableBuilderState};
 // The interactive-state vocabulary a widget's visual properties can vary
 // over (hover/focus/press/…) — see the module's own docs for named
 // deferrals.

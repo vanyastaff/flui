@@ -1748,7 +1748,7 @@ where
     ) {
         // Swap the subscription only when the listenable *instance* actually
         // changed — `Arc::ptr_eq`, a reference-identity comparison (the same
-        // guard `ValueListenableBuilderState::did_update_view` uses). A rebuild that passes the same `Arc<dyn Listenable>` through
+        // guard `ValueListenableBuilderState::did_update_view` uses on its `Rc`). A rebuild that passes the same `Arc<dyn Listenable>` through
         // unchanged (by far the common case — the parent rebuilt but the
         // animation itself didn't) must not unsubscribe/resubscribe.
         //

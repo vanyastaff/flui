@@ -1571,18 +1571,22 @@ mod terminal_tests {
             ),
         };
         let manager = Rc::new(FlightManager::default());
-        let exhausted = std::sync::atomic::AtomicU64::new(0);
+        let exhausted =
+            flui_foundation::AtomicIdMint::<std::num::NonZeroU64>::starting_after(u64::MAX);
         let failure = catch_unwind(AssertUnwindSafe(|| {
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
             recovery.run_with(|recovery| {
                 manager.start_reserving(&manifest, plan(), &manager.epoch(), recovery, || {
-                    crate::OverlayEntryId::from_counter(&exhausted)
+                    crate::OverlayEntryId::next_from(&exhausted)
                 });
             });
             recovery.finish();
         }))
         .expect_err("the shuttle's overlay identity is refused");
-        assert_failure(failure, "overlay entry identity space exhausted: 0");
+        assert_failure(
+            failure,
+            "overlay entry identities exhausted; OverlayEntry::try_new reports it as IdExhausted",
+        );
         assert_eq!(
             from.placeholder_size(),
             None,

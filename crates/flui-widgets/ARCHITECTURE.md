@@ -495,10 +495,12 @@ asserting the child's accessibility label and unchanged allocated size.
 
 ## Overlay entry identity admission
 
-Overlay entry allocation admits the final nonzero identity once and then refuses
-construction permanently, so an entry's removal authority and its consumer view
-key are never shared with a later entry. The rejected builder is destroyed by
-the refusal's unwind (ADR-0281).
+Overlay entry identities come from one process `AtomicIdMint` (ADR-0313): it
+admits the final nonzero identity once and then refuses construction
+permanently, so an entry's removal authority and its consumer view key are
+never shared with a later entry. `OverlayEntry::try_new` reports the refusal as
+`IdExhausted` and drops the rejected builder before it returns;
+`OverlayEntry::new` panics on it, naming `try_new`.
 
 ## Terminal navigation ownership
 
@@ -536,10 +538,11 @@ returns nothing and a mutation does nothing. Modal, transition and hero handles
 that outlive the navigator keep only their own state; a transition handle does
 not keep a modal page alive.
 
-Route identities never wrap: the integer maximum
-permanently refuses allocation, so a caught capacity failure cannot reissue an
-identity held by history. A rejected route and its
-replacement result are destroyed by the refusal's unwind (ADR-0281).
+Route identities come from one process `AtomicIdMint` (ADR-0313) and never
+wrap: once the integer maximum has been issued, allocation is refused
+permanently, so a caught capacity failure cannot reissue an identity held by
+history. A rejected route and its replacement result are destroyed by the
+refusal's unwind (ADR-0281).
 
 An admission reserves every identity it spends, route and overlay entry alike,
 before its first observable side effect: a recorded Router page, a filled
@@ -551,7 +554,8 @@ unseeded initial values) are destroyed on refusal. Spent reservations
 are not returned.
 
 Route, router, overlay, modal and hero owners withdraw each owned value from
-shared state before dropping it, so no destructor runs under an internal lock.
+shared state before dropping it, so no destructor runs under an internal borrow
+or lock.
 After the first destructor failure in a retirement the remaining values are
 still destroyed, each under containment, and the first failure propagates; a
 retirement during an incoming unwind destroys them too, and a destructor that

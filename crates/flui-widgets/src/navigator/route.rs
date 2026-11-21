@@ -36,9 +36,10 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::num::NonZeroU64;
 
 use flui_animation::AnimationRunFuture;
+use flui_foundation::{AtomicIdMint, IdExhausted};
 
 use super::result::{Completer, RouteResult, RouteResultError};
 
@@ -131,12 +132,18 @@ pub(crate) enum UndeliveredResult {
 
 /// Process-unique route identity.
 ///
+/// Issued by one process-wide [`AtomicIdMint`] (ADR-0313), never reissued:
+/// once every nonzero `u64` has been issued the mint refuses forever, and the
+/// navigator turns that refusal into its capacity panic. Atomic rather than an
+/// owner-local `IdMint` because the domain is the process's: every thread that
+/// hosts a UI runtime (each test of a parallel run is one) mints from it.
+///
 /// Not a slab index, so the 1-based `NonZeroUsize` ID convention does not apply.
 /// It stands in for route object identity: observers and
 /// `did_change_next`/`did_change_previous` receive ids rather than the routes
 /// themselves, which keeps this layer pure data — see `history.rs`' note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct RouteId(u64);
+pub struct RouteId(NonZeroU64);
 
 impl RouteId {
     /// Mint the next id.
@@ -144,37 +151,41 @@ impl RouteId {
     /// `pub(crate)` because `NavigatorHandle::push_bound` needs the
     /// id **before** the route is boxed, so it can hand the route a
     /// `RouteBinding` pre-bound to it.
+    ///
+    /// # Panics
+    ///
+    /// Once the process mint is exhausted: every admission from then on is
+    /// refused rather than given an identity a live route may hold.
     pub(crate) fn next() -> Self {
-        Self::next_from(Self::counter())
+        Self::next_from(Self::mint())
     }
 
-    fn counter() -> &'static AtomicU64 {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        &COUNTER
+    /// The process mint every production identity comes from.
+    fn mint() -> &'static AtomicIdMint<NonZeroU64> {
+        static MINT: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
+        &MINT
     }
 
     /// Leave exactly `remaining` process route identities. Only for a test
     /// that runs alone in its own child process.
     #[cfg(test)]
     pub(crate) fn leave_process_identities(remaining: u64) {
-        Self::counter().store(u64::MAX - remaining, Ordering::Relaxed);
+        Self::mint().reserve_through(u64::MAX - remaining);
     }
 
-    pub(super) fn next_from(counter: &AtomicU64) -> Self {
-        // MAX is a permanent exhausted sentinel. Admitted identities are
-        // 1..MAX; refusal never advances the counter back into that range.
-        let raw = counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                if next == 0 { None } else { next.checked_add(1) }
-            })
-            .unwrap_or_else(|_| panic!("BUG: route identity capacity exhausted"));
-        Self(raw)
+    /// [`next`](Self::next) from `mint`: a test passes a mint of its own near
+    /// exhaustion and leaves the process mint alone.
+    pub(super) fn next_from(mint: &AtomicIdMint<NonZeroU64>) -> Self {
+        match mint.next() {
+            Ok(raw) => Self(raw),
+            Err(IdExhausted) => panic!("BUG: route identity capacity exhausted"),
+        }
     }
 
     /// The raw identifier. Stable for the route's lifetime, never reused.
     #[must_use]
     pub fn get(self) -> u64 {
-        self.0
+        self.0.get()
     }
 }
 
@@ -595,11 +606,11 @@ pub(super) fn route_identity_exhaustion_preserves_history_authority() {
     use super::history::RouteHistory;
     use super::overlay_route::SimpleRoute;
     use flui_view::ViewExt;
-    let counter = AtomicU64::new(1);
+    let counter = AtomicIdMint::<NonZeroU64>::new();
     let older = RouteId::next_from(&counter);
-    counter.store(u64::MAX - 1, Ordering::Relaxed);
+    counter.reserve_through(u64::MAX - 1);
     let last = RouteId::next_from(&counter);
-    assert_eq!(last.get(), u64::MAX - 1);
+    assert_eq!(last.get(), u64::MAX, "the last identity is admitted");
     let mut history = RouteHistory::new();
     let older_result = history.seed_initial_with_id(
         older,
@@ -628,7 +639,7 @@ pub(super) fn route_identity_exhaustion_preserves_history_authority() {
     );
     assert!(!history.remove_route(older, None));
     assert_eq!(history.current(), Some(last));
-    let independent = AtomicU64::new(1);
+    let independent = AtomicIdMint::<NonZeroU64>::new();
     let mut recovered = RouteHistory::new();
     let id = RouteId::next_from(&independent);
     recovered.seed_initial_with_id(

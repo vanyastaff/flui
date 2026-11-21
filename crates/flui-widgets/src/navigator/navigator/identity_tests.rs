@@ -1,7 +1,9 @@
 //! Identity-exhaustion cases that need the navigator's private admission seams.
 
 use super::*;
-use std::sync::atomic::AtomicU64;
+use std::num::NonZeroU64;
+
+use flui_foundation::AtomicIdMint;
 
 use crate::navigator::route::{Route, RouteSettings};
 
@@ -70,7 +72,7 @@ fn assert_identity_admission_custody(case: &str) {
     let commit_capture = Capture {
         calls: Rc::clone(&commit_calls),
     };
-    let counter = AtomicU64::new(if case == "healthy" {
+    let counter = AtomicIdMint::<NonZeroU64>::starting_after(if case == "healthy" {
         u64::MAX - 1
     } else {
         u64::MAX
@@ -96,7 +98,7 @@ fn assert_identity_admission_custody(case: &str) {
     }));
     if case == "healthy" {
         let (admitted, _) = result.expect("last valid identity admits real route");
-        assert_eq!(admitted.get(), u64::MAX - 1);
+        assert_eq!(admitted.get(), u64::MAX, "the last identity is admitted");
         assert_eq!(navigator.current(), Some(admitted));
         assert_eq!(
             commit_calls.get(),
@@ -207,8 +209,10 @@ fn assert_identity_batch_admission_custody(case: &str) {
     // Two batch members fit; the third reservation is refused — by the route
     // counter, or, for `tail-entry`, by the overlay-entry counter.
     let entry_refused = case == "tail-entry";
-    let counter = AtomicU64::new(if entry_refused { 1 } else { u64::MAX - 2 });
-    let entries = AtomicU64::new(if entry_refused { u64::MAX - 1 } else { 1 });
+    let counter =
+        AtomicIdMint::<NonZeroU64>::starting_after(if entry_refused { 0 } else { u64::MAX - 2 });
+    let entries =
+        AtomicIdMint::<NonZeroU64>::starting_after(if entry_refused { u64::MAX - 2 } else { 0 });
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         navigator.replace_tail_using(
             Some(base),
@@ -221,7 +225,7 @@ fn assert_identity_batch_admission_custody(case: &str) {
             || {
                 RouteReservation::reserve_using(
                     || RouteId::next_from(&counter),
-                    || OverlayEntryId::from_counter(&entries),
+                    || OverlayEntryId::next_from(&entries),
                 )
             },
         )
@@ -230,7 +234,7 @@ fn assert_identity_batch_admission_custody(case: &str) {
     assert_eq!(
         flui_foundation::panic::payload_text(failure.as_ref()),
         Some(if entry_refused {
-            "overlay entry identity space exhausted: 0"
+            "overlay entry identities exhausted; OverlayEntry::try_new reports it as IdExhausted"
         } else {
             "BUG: route identity capacity exhausted"
         })
