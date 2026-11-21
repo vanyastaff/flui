@@ -79,6 +79,9 @@ flui-animation = { workspace = true }
 # The UI runtime's bounded owner inbox.
 crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
+# The hash tables keyed by ids the process mints (`TypeId`, presentation
+# addresses, element references).
+rustc-hash = { workspace = true }
 # `SpawnError`'s messages.
 thiserror = { workspace = true }
 tracing = { workspace = true }

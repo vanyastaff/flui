@@ -51,6 +51,7 @@
 //! - `testing` (with the `testing` feature): a window double and a
 //!   scripted sink for driving a UI runtime headlessly.
 
+#![warn(clippy::disallowed_types)]
 #![cfg_attr(
     test,
     allow(
