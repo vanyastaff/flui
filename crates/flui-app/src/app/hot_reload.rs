@@ -28,9 +28,10 @@
 //! panic too — and never called again; the frame that caught the panic
 //! continues, and the UI runtime is untouched.
 
+use rustc_hash::FxHashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use flui_view::dev_reload::DevReloadHook;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -84,7 +85,7 @@ struct Slot {
     patched_at: u64,
     patched_tier: Option<ReloadTier>,
     /// The epoch each UI runtime last caught up to. Cleared when the loop ends.
-    seen: HashMap<UiRuntimeId, u64>,
+    seen: FxHashMap<UiRuntimeId, u64>,
     /// Whether the log said once that a host whose executor turns on a raster
     /// thread asks the hook for no scene frame.
     unlent_noted: bool,
@@ -99,7 +100,7 @@ impl DevReload {
             epoch: 0,
             patched_at: 0,
             patched_tier: None,
-            seen: HashMap::new(),
+            seen: FxHashMap::default(),
             unlent_noted: false,
         })))
     }

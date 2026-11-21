@@ -216,10 +216,10 @@ where
     // session connects; the connection names the session and its window, so
     // the routes made for that session are adopted for that window, whatever
     // order sessions are made and connected in.
-    let made = Rc::new(std::cell::RefCell::new(std::collections::HashMap::<
+    let made = Rc::new(std::cell::RefCell::new(rustc_hash::FxHashMap::<
         flui_native::IOSSceneSessionId,
         Rc<super::window_routes::WindowRoutes>,
-    >::new()));
+    >::default()));
     let adopting = Rc::clone(&made);
     let handlers = Box::new(move |session: &flui_native::IOSSceneSessionId| {
         let routes = super::window_routes::WindowRoutes::new();

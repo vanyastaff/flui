@@ -54,6 +54,9 @@
 // A `_` arm must not absorb a variant added later; see the
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
 #![warn(clippy::wildcard_enum_match_arm)]
+// Ids and fingerprints the process mints hash with `rustc_hash`; a table keyed
+// by values an application supplies says so at its site.
+#![warn(clippy::disallowed_types)]
 
 // Modules
 pub mod app;

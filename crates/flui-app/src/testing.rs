@@ -129,7 +129,11 @@ impl HeadlessRun {
         let state = match started {
             Ok(Ok(started)) => Started::Running(started),
             Ok(Err(error)) => Started::Failed(error),
-            Err(payload) => Started::Panicked(panic_message(payload.as_ref())),
+            Err(payload) => {
+                let message = panic_message(payload.as_ref());
+                flui_foundation::panic::discard_payload(payload);
+                Started::Panicked(message)
+            }
         };
         HeadlessRunHandle {
             state,
@@ -269,9 +273,11 @@ impl HeadlessRunHandle {
                 match catch_unwind(AssertUnwindSafe(|| started.finish())) {
                     Ok(Ok(())) => RunExit::Returned,
                     Ok(Err(error)) => return Err(error),
-                    Err(payload) => RunExit::Panicked {
-                        message: panic_message(payload.as_ref()),
-                    },
+                    Err(payload) => {
+                        let message = panic_message(payload.as_ref());
+                        flui_foundation::panic::discard_payload(payload);
+                        RunExit::Panicked { message }
+                    }
                 }
             }
             Started::Failed(error) => return Err(error),

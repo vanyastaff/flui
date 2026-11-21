@@ -141,7 +141,9 @@ impl PendingRegistration {
 
 /// Start the registration the run holds, once: the main window revealed its
 /// first frame. A later reveal (a reopened main window, a secondary one)
-/// finds none.
+/// finds none. A reveal that finds the loop's state borrowed leaves the
+/// registration held for the next one, and a run no reveal starts it in
+/// registers nothing, which the next run makes up (`PendingRegistration::start`).
 #[cfg(windows)]
 pub(in crate::app) fn start_pending() {
     let taken = super::host::APP_RUNTIME.with(|slot| {
