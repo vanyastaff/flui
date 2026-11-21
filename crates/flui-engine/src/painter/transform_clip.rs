@@ -8,6 +8,13 @@ use flui_painting::paint::Path;
 
 use super::WgpuPainter;
 
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports `WgpuPainter` only under `testing`, for the benches"
+    )
+)]
 impl WgpuPainter {
     fn validate_current_transform(&mut self) {
         if let Err(error) = crate::clip_geometry::ValidatedAffine::try_new(
@@ -78,7 +85,7 @@ impl WgpuPainter {
     ///
     /// `offset` is in device pixels.  Equivalent to premultiplying the CTM by
     /// `T(offset.dx, offset.dy)`.
-    pub fn translate(&mut self, offset: Offset<f64>) {
+    pub(crate) fn translate(&mut self, offset: Offset<f64>) {
         self.state.translate(offset);
         self.validate_current_transform();
     }
@@ -86,7 +93,7 @@ impl WgpuPainter {
     /// Concatenate an arbitrary matrix onto the current transform — the whole
     /// matrix, so skew is retained. Perspective and non-finite results are rejected
     /// through the frame recording error. Equivalent to `Canvas::transform`.
-    pub fn transform(&mut self, matrix: &flui_foundation::geometry::Matrix4) {
+    pub(crate) fn transform(&mut self, matrix: &flui_foundation::geometry::Matrix4) {
         self.state.concat(matrix);
         self.validate_current_transform();
     }
@@ -95,7 +102,8 @@ impl WgpuPainter {
     ///
     /// `angle` is in radians.  Equivalent to premultiplying the CTM by
     /// `R(angle)` (rotation about the origin in the current coordinate space).
-    pub fn rotate(&mut self, angle: f32) {
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn rotate(&mut self, angle: f32) {
         self.state.rotate(angle);
         self.validate_current_transform();
     }
@@ -106,7 +114,8 @@ impl WgpuPainter {
     /// Equivalent to premultiplying the CTM by `S(sx, sy)`.  Negative values
     /// produce a reflection; zero produces a degenerate transform that collapses
     /// all geometry to a line or point.
-    pub fn scale(&mut self, sx: f32, sy: f32) {
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn scale(&mut self, sx: f32, sy: f32) {
         self.state.scale(sx, sy);
         self.validate_current_transform();
     }
@@ -219,7 +228,7 @@ impl WgpuPainter {
     }
 
     /// Intersect with a captured rounded superellipse.
-    pub fn clip_rsuperellipse(
+    pub(crate) fn clip_rsuperellipse(
         &mut self,
         rse: flui_foundation::geometry::RSuperellipse,
         clip: flui_painting::paint::Clip,
@@ -253,6 +262,7 @@ impl WgpuPainter {
     }
 
     /// Intersect with a captured path using its fill rule and hard-edge coverage.
+    #[cfg(feature = "testing")]
     pub fn clip_path(&mut self, path: &Path) {
         self.clip_path_operation(
             path,

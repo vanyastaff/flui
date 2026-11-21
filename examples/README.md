@@ -51,12 +51,15 @@ cargo run -p flui-hot-reload --features host-hook --example scene_render
 | Example | Run |
 |---|---|
 | **web_demo** — Web/WASM platform demo | `cd examples/web_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/web_demo/` over HTTP |
-| **painting_demo** — Web/WASM painting + engine demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/painting_demo/` over HTTP |
+| **painting_demo** — Web/WASM `Canvas` painting demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/painting_demo/` over HTTP |
 
 The `painting_demo` crate contains browser code only and targets
-`wasm32-unknown-unknown`. Its surface takes ownership of the `HtmlCanvasElement`
-through wgpu's safe `SurfaceTarget::Canvas` API. Native workspace checks compile
-an empty cdylib; they do not exercise the browser demo.
+`wasm32-unknown-unknown`. It is an ordinary FLUI application on the `flui` facade: `run_app`
+starts the web runner, which takes the page's `<canvas id="flui-canvas">`. The root is a
+scrolling column of sections, each a `Text` title above a `CustomPaint` whose `CustomPainter`
+draws that section's geometry at the size it is given, with its captions as `Text` widgets under
+or beside it. Native workspace checks compile an empty cdylib; they do not exercise the browser
+demo.
 
 ## Android
 

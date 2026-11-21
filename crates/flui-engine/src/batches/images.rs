@@ -173,6 +173,7 @@ fn valid_rect(rect: Rect<f64>) -> bool {
         && rect.width() > 0.0
         && rect.height() > 0.0
 }
+#[cfg(all(test, feature = "testing"))]
 fn full_source(image: &Image) -> Rect<f64> {
     Rect::from_xywh(
         0.0,
@@ -426,6 +427,7 @@ impl DrawBatcher {
         }
         publish(segment, order, content, bounds, mode);
     }
+    #[cfg(all(test, feature = "testing"))]
     pub(in super::super) fn draw_image(
         segment: &mut DrawSegment,
         order: &mut Vec<DrawItem>,
@@ -454,6 +456,7 @@ impl DrawBatcher {
         clippy::too_many_arguments,
         reason = "Legacy repeat convenience delegates to the complete region operation"
     )]
+    #[cfg(all(test, feature = "testing"))]
     pub(in super::super) fn draw_image_repeat(
         segment: &mut DrawSegment,
         order: &mut Vec<DrawItem>,
@@ -483,6 +486,7 @@ impl DrawBatcher {
         clippy::too_many_arguments,
         reason = "Legacy filtered convenience delegates to the complete region operation"
     )]
+    #[cfg(all(test, feature = "testing"))]
     pub(in super::super) fn draw_image_filtered(
         segment: &mut DrawSegment,
         order: &mut Vec<DrawItem>,
@@ -506,31 +510,6 @@ impl DrawBatcher {
             ImageRepeat::NoRepeat,
             Some(filter),
             Some(&paint),
-        );
-    }
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Slices share one source cache and unpublished operation"
-    )]
-    pub(in super::super) fn draw_image_nine_slice(
-        segment: &mut DrawSegment,
-        order: &mut Vec<DrawItem>,
-        state: &GpuStateStack,
-        cache: &mut TextureCache,
-        image: &Image,
-        centre: Rect<f64>,
-        dst: Rect<f64>,
-        mode: BlendMode,
-    ) {
-        Self::draw_image_nine_slice_painted(
-            segment,
-            order,
-            state,
-            cache,
-            image,
-            centre,
-            dst,
-            Some(&Paint::fill(Color::WHITE).with_blend_mode(mode)),
         );
     }
     #[expect(
@@ -614,25 +593,6 @@ impl DrawBatcher {
             }
         }
         publish(segment, order, content, bounds, mode);
-    }
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Sprites share one source cache and complete per-sprite affine transforms"
-    )]
-    pub(in super::super) fn draw_atlas(
-        segment: &mut DrawSegment,
-        order: &mut Vec<DrawItem>,
-        state: &GpuStateStack,
-        cache: &mut TextureCache,
-        image: &Image,
-        sprites: &[Rect<f64>],
-        transforms: &[Matrix4],
-        colors: Option<&[Color]>,
-        mode: BlendMode,
-    ) {
-        Self::draw_atlas_painted(
-            segment, order, state, cache, image, sprites, transforms, colors, mode, None,
-        );
     }
     #[expect(
         clippy::too_many_arguments,

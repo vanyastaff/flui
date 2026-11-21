@@ -15,9 +15,8 @@ use std::fmt;
 /// A GPU backend the renderer can draw with.
 ///
 /// FLUI's own name for it, so the renderer's public surface does not carry
-/// wgpu's (ADR-0089). [`GpuCapabilities::backend`](crate::GpuCapabilities::backend)
-/// says which one a renderer chose; [`EngineError::NoSupportedGpu`](crate::EngineError::NoSupportedGpu)
-/// says why each one it tried failed.
+/// wgpu's (ADR-0089). [`EngineError::NoSupportedGpu`](crate::EngineError::NoSupportedGpu)
+/// says why each one the renderer tried failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GpuBackend {
@@ -36,22 +35,6 @@ pub enum GpuBackend {
     WebGpu,
     /// WebGL2: the fallback on the web.
     WebGl2,
-}
-
-impl GpuBackend {
-    /// The backend an adapter wgpu returned runs on.
-    pub(crate) fn of_adapter(info: &wgpu::AdapterInfo) -> Self {
-        match info.backend {
-            wgpu::Backend::Vulkan => Self::Vulkan,
-            wgpu::Backend::Metal => Self::Metal,
-            wgpu::Backend::Dx12 if info.device_type == wgpu::DeviceType::Cpu => Self::Dx12Warp,
-            wgpu::Backend::Dx12 => Self::Dx12,
-            wgpu::Backend::Gl if cfg!(target_arch = "wasm32") => Self::WebGl2,
-            // No adapter has the no-op backend: it is never enabled.
-            wgpu::Backend::Gl | wgpu::Backend::Noop => Self::Gl,
-            wgpu::Backend::BrowserWebGpu => Self::WebGpu,
-        }
-    }
 }
 
 impl fmt::Display for GpuBackend {

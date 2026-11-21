@@ -1,8 +1,8 @@
-// ===== Public Drawing API =====
+// ===== Drawing API =====
 //
 // Inherent methods, not a trait: `LayerDispatcher` (the `CommandRenderer`
-// impl) and embedders driving the painter directly (`examples/painting_demo`)
-// are the callers, and there is no second painter for a trait to abstract.
+// impl), the engine's tests and its benches are the callers, and there is no
+// second painter for a trait to abstract.
 //
 // GPU rendering routinely converts between f32/u8/u32/i32 for pixel
 // coordinates, color channels, and buffer indices. These truncations are
@@ -10,6 +10,13 @@
 
 use std::sync::Arc;
 
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports `WgpuPainter` only under `testing`, for the benches"
+    )
+)]
 impl super::WgpuPainter {
     /// Draw a filled or stroked rectangle.
     ///
@@ -46,7 +53,7 @@ impl super::WgpuPainter {
     /// the SDF evaluator in `rect_instanced.wgsl` clips to the rounded
     /// boundary in the fragment shader, so no tessellation is needed for
     /// simple rounded rects.
-    pub fn draw_rrect(
+    pub(crate) fn draw_rrect(
         &mut self,
         rrect: flui_foundation::geometry::RRect,
         paint: &flui_painting::paint::Paint,
@@ -69,7 +76,7 @@ impl super::WgpuPainter {
     /// device pixels; the current transform's scale is baked into the instance
     /// by `DrawBatcher::circle` so the analytical SDF always operates in
     /// the correct device-pixel space.
-    pub fn draw_circle(
+    pub(crate) fn draw_circle(
         &mut self,
         center: flui_foundation::geometry::Point<f64>,
         radius: f32,
@@ -101,7 +108,7 @@ impl super::WgpuPainter {
     /// rendered via the circle-SDF pipeline with a non-uniform transform that
     /// stretches the unit circle to the ellipse aspect ratio — no tessellation
     /// required.
-    pub fn draw_oval(
+    pub(crate) fn draw_oval(
         &mut self,
         rect: flui_foundation::geometry::Rect<f64>,
         paint: &flui_painting::paint::Paint,
@@ -128,7 +135,7 @@ impl super::WgpuPainter {
     /// with two radii back to the center (pie-slice); otherwise only the arc
     /// itself is drawn.  The shape is batched as an `ArcInstance` via the
     /// analytical arc-SDF pipeline.
-    pub fn draw_arc(
+    pub(crate) fn draw_arc(
         &mut self,
         rect: flui_foundation::geometry::Rect<f64>,
         start_angle: f32,
@@ -166,7 +173,7 @@ impl super::WgpuPainter {
     /// Typical use: a border or ring where `inner` carves out the fill.
     /// Both shapes must be coaxial (same center); the behaviour is undefined
     /// if `inner` extends beyond `outer`.
-    pub fn draw_drrect(
+    pub(crate) fn draw_drrect(
         &mut self,
         outer: flui_foundation::geometry::RRect,
         inner: flui_foundation::geometry::RRect,
@@ -196,7 +203,7 @@ impl super::WgpuPainter {
     /// (minimum 0.5 px) and submitted via the tessellated-path pipeline.
     /// `paint.color` sets the stroke color; `paint.style` is ignored (lines are
     /// always stroked).
-    pub fn draw_line(
+    pub(crate) fn draw_line(
         &mut self,
         p1: flui_foundation::geometry::Point<f64>,
         p2: flui_foundation::geometry::Point<f64>,
@@ -374,7 +381,8 @@ impl super::WgpuPainter {
     /// to the path before advanced-blend support).  When `blend_mode.is_advanced()`
     /// the draw is isolated into a
     /// `DrawItem::AdvancedShape` so `flush_advanced_layer` can dst-read the backdrop.
-    pub fn draw_image(
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn draw_image(
         &mut self,
         image: &flui_painting::paint::Image,
         dst_rect: flui_foundation::geometry::Rect<f64>,
@@ -400,7 +408,7 @@ impl super::WgpuPainter {
         clippy::too_many_arguments,
         reason = "The source rectangle and optional fitted tile preserve the recorded image operation"
     )]
-    pub fn draw_image_region(
+    pub(crate) fn draw_image_region(
         &mut self,
         image: &flui_painting::paint::Image,
         src: flui_foundation::geometry::Rect<f64>,
@@ -471,7 +479,8 @@ impl super::WgpuPainter {
     /// Pass `BlendMode::SrcOver` for the default tiling behaviour.  When
     /// `blend_mode.is_advanced()` ALL tiles are collected into ONE
     /// `DrawItem::AdvancedShape` so every tile reads the original backdrop.
-    pub fn draw_image_repeat(
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn draw_image_repeat(
         &mut self,
         image: &flui_painting::paint::Image,
         dst: flui_foundation::geometry::Rect<f64>,
@@ -490,37 +499,14 @@ impl super::WgpuPainter {
         );
     }
 
-    /// Draw a nine-slice image with an explicit blend mode.
-    ///
-    /// Pass `BlendMode::SrcOver` for the default nine-slice behaviour.  When
-    /// `blend_mode.is_advanced()` ALL nine regions are collected into ONE
-    /// `DrawItem::AdvancedShape`.
-    pub fn draw_image_nine_slice(
-        &mut self,
-        image: &flui_painting::paint::Image,
-        center_slice: flui_foundation::geometry::Rect<f64>,
-        dst: flui_foundation::geometry::Rect<f64>,
-        blend_mode: flui_painting::paint::BlendMode,
-    ) {
-        crate::batches::DrawBatcher::draw_image_nine_slice(
-            &mut self.current_segment,
-            &mut self.draw_order,
-            &self.state,
-            self.resources.texture_cache_mut(),
-            image,
-            center_slice,
-            dst,
-            blend_mode,
-        );
-    }
-
     /// Draw a color-filtered image with an explicit GPU-level blend mode.
     ///
     /// `filter` bakes a per-pixel CPU operation first; `blend_mode` composites the
     /// result against the framebuffer (GPU).  Pass `BlendMode::SrcOver` for the
     /// default behaviour — the two blend modes are independent (see
     /// `DrawBatcher::draw_image_filtered` for the boundary contract).
-    pub fn draw_image_filtered(
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn draw_image_filtered(
         &mut self,
         image: &flui_painting::paint::Image,
         dst: flui_foundation::geometry::Rect<f64>,
@@ -547,7 +533,7 @@ impl super::WgpuPainter {
     /// sets the shadow tint (typically `Color::rgba(0,0,0,N)` for a Material
     /// elevation shadow).  Only convex path outlines are supported; complex
     /// paths fall back gracefully without crashing.
-    pub fn draw_shadow(
+    pub(crate) fn draw_shadow(
         &mut self,
         path: &flui_painting::paint::Path,
         color: flui_painting::styling::Color,
@@ -584,7 +570,7 @@ impl super::WgpuPainter {
     /// follow-up work; until then `tex_coords` callers pre-populate the vertex
     /// stream for forward-compat (the data path is correct, only the pipeline
     /// binding is missing).
-    pub fn draw_vertices(
+    pub(crate) fn draw_vertices(
         &mut self,
         vertices: &[flui_foundation::geometry::Point<f64>],
         colors: Option<&[flui_painting::styling::Color]>,
@@ -601,32 +587,6 @@ impl super::WgpuPainter {
             tex_coords,
             indices,
             paint,
-        );
-    }
-
-    /// Draw a sprite atlas with an explicit blend mode.
-    ///
-    /// Pass `BlendMode::SrcOver` for the default per-sprite compositing behaviour.
-    /// When `blend_mode.is_advanced()` ALL sprites are collected into ONE
-    /// `DrawItem::AdvancedShape` so every sprite reads the original backdrop.
-    pub fn draw_atlas(
-        &mut self,
-        image: &flui_painting::paint::Image,
-        sprites: &[flui_foundation::geometry::Rect<f64>],
-        transforms: &[flui_foundation::geometry::Matrix4],
-        colors: Option<&[flui_painting::styling::Color]>,
-        blend_mode: flui_painting::paint::BlendMode,
-    ) {
-        crate::batches::DrawBatcher::draw_atlas(
-            &mut self.current_segment,
-            &mut self.draw_order,
-            &self.state,
-            self.resources.texture_cache_mut(),
-            image,
-            sprites,
-            transforms,
-            colors,
-            blend_mode,
         );
     }
 
@@ -672,7 +632,8 @@ impl super::WgpuPainter {
     /// Draw using the resource's registered sampling policy.
     ///
     /// Alpha, crop, opacity and allocation lifetime follow [`Self::draw_texture`].
-    pub fn draw_texture_with_resource_sampling(
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn draw_texture_with_resource_sampling(
         &mut self,
         texture_id: flui_painting::paint::TextureId,
         dst: flui_foundation::geometry::Rect<f64>,

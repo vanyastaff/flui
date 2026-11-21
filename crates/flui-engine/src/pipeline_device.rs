@@ -28,6 +28,7 @@ impl<'a> PipelineDevice<'a> {
     }
 
     /// `device` without a pipeline cache.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn uncached(device: &'a wgpu::Device) -> Self {
         Self::new(device, None)
     }

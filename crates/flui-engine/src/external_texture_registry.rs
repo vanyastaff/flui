@@ -6,6 +6,16 @@
 //! The owner stamp checks engine lease routing; it does not prove raw provenance.
 //! A lease freezes allocation and interpretation, not texels. Ordered writes to
 //! the same allocation remain visible at submission; no pixel snapshot is made.
+//!
+//! The registry is reached through the painter, so its public types reach the
+//! crate root with the painter: only under `testing`, for the benches.
+#![cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports this module's types only under `testing`, for the benches"
+    )
+)]
 
 use crate::{
     device_domain::DeviceDomain,
@@ -28,9 +38,19 @@ pub enum ExternalSampling {
 
 /// How the encoded source components represent coverage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "encoded coverage is opaque, straight or premultiplied"
+#[cfg_attr(
+    feature = "testing",
+    expect(
+        clippy::exhaustive_enums,
+        reason = "encoded coverage is opaque, straight or premultiplied"
+    )
+)]
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        dead_code,
+        reason = "only the painter's tests and benches import a texture with opaque or premultiplied coverage"
+    )
 )]
 pub enum ExternalAlpha {
     /// Coverage is one; the stored alpha channel is ignored.
@@ -176,6 +196,7 @@ impl ExternalTextureRegistry {
     /// The first frame refused; every other frame and every retirement is
     /// still applied. [`EngineError::DeviceLost`](crate::error::EngineError::DeviceLost)
     /// for every frame once the registry's device is gone.
+    #[cfg(test)]
     pub(crate) fn apply(&mut self, updates: flui_layer::TextureUpdates) -> EngineResult<()> {
         let flui_layer::TextureUpdates {
             frames, retired, ..
@@ -420,26 +441,26 @@ impl ExternalTextureRegistry {
     }
     /// Whether the logical ID is currently registered.
     #[must_use]
+    #[cfg(all(test, feature = "testing"))]
     pub fn contains(&self, id: TextureId) -> bool {
         self.textures.contains_key(&id.get())
     }
     /// Number of currently registered IDs.
     #[must_use]
+    #[cfg(all(test, feature = "testing"))]
     pub fn len(&self) -> usize {
         self.textures.len()
     }
     /// Whether no IDs are registered.
     #[must_use]
+    #[cfg(all(test, feature = "testing"))]
     pub fn is_empty(&self) -> bool {
         self.textures.is_empty()
     }
     /// Close all future lookups without revoking recorded leases.
+    #[cfg(all(test, feature = "testing"))]
     pub fn clear(&mut self) {
         self.textures.clear();
-    }
-    /// Iterate currently registered logical IDs.
-    pub fn texture_ids(&self) -> impl Iterator<Item = TextureId> + '_ {
-        self.textures.keys().map(|&id| TextureId::new(id))
     }
 }
 

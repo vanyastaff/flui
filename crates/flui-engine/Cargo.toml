@@ -188,10 +188,12 @@ harness = false
 required-features = ["testing"]
 
 # Text-heavy frames end to end (record → encode → submit); the gate for the
-# engine-owned glyph rasteriser (ADR-0067).
+# engine-owned glyph rasteriser (ADR-0067). Drives `WgpuPainter`, which the
+# crate root re-exports only under the test feature.
 [[bench]]
 name = "text_throughput"
 harness = false
+required-features = ["testing"]
 
 [[bench]]
 name = "offscreen_resource_cache"

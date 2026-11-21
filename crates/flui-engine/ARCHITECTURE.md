@@ -101,13 +101,14 @@ recorder. The `offscreen_resource_cache` benchmark exercises public layer captur
 
 ---
 
-## Embedder-owned frames
+## Caller-owned frames
 
-Public `WgpuPainter` embedders check `begin_frame`'s result before recording, may flush
-with `render_to_view` several times, then call `finish_frame` once after the
-final encoder submission (or after discarding an encoder on error). This makes
-state reset and resource maintenance reachable without exposing the internal
-renderer. The window renderer retains its existing private multi-pass calls.
+`WgpuPainter` is crate-private; the crate root re-exports it only under
+`testing`, for the benches and the warm-path allocation test. Those callers
+check `begin_frame`'s result before recording, may flush with `render_to_view`
+several times, then call `finish_frame` once after the final encoder submission
+(or after discarding an encoder on error). The window renderer retains its
+existing private multi-pass calls.
 The public frame owns the device-domain submission scope until `finish_frame`;
 retiring intermediate submissions does not renew its cumulative work allowance.
 Nested begin is rejected. Internal child painters reset recording inside their
@@ -377,7 +378,7 @@ first (ADR-0244 §1): Vulkan then GLES 3.0, WebGPU then WebGL2, Direct3D 12
 then WARP, Metal alone. Each attempt gets an instance of its own for that one
 backend, because a combined mask does not retry (on the web wgpu commits to
 WebGPU as soon as `navigator.gpu` exists). The chosen backend is logged once
-and reported as `GpuCapabilities::backend`; when none answers,
+(`GPU backend selected`); when none answers,
 `EngineError::NoSupportedGpu` names each one tried with its reason.
 `WGPU_BACKEND` narrows the order, which is how the suites run on the
 fallback. Gradient stops live in a texture, not a storage buffer, because

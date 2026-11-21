@@ -14,7 +14,7 @@
 //!   the raster + upload cost the first frame of a new screen pays.
 //!
 //! GPU-guarded: skipped when no adapter is present. Run with
-//! `cargo bench -p flui-engine --bench text_throughput`.
+//! `cargo bench -p flui-engine --features testing --bench text_throughput`.
 
 use std::hint::black_box;
 use std::sync::Arc;

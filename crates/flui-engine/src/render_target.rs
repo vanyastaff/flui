@@ -52,6 +52,7 @@ impl<'a> RenderTarget<'a> {
     /// Use this only when the backing texture is unavailable. Internal pooled
     /// targets retain their backing texture to support destination reads.
     #[inline]
+    #[cfg(feature = "testing")]
     pub(crate) fn view_only(view: &'a wgpu::TextureView) -> Self {
         Self {
             view,

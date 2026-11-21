@@ -2120,11 +2120,11 @@ fn external_draw_sampling_overrides_registration() {
                     TextureId::new(10),
                     texture,
                     external_descriptor(
-                        crate::ExternalAlpha::Straight,
+                        crate::external_texture_registry::ExternalAlpha::Straight,
                         if default_linear {
-                            crate::ExternalSampling::Linear
+                            crate::external_texture_registry::ExternalSampling::Linear
                         } else {
-                            crate::ExternalSampling::Nearest
+                            crate::external_texture_registry::ExternalSampling::Nearest
                         },
                     ),
                 )
@@ -2160,8 +2160,8 @@ fn external_recorded_draw_survives_update_and_rebind() {
                     TextureId::new(11),
                     red,
                     external_descriptor(
-                        crate::ExternalAlpha::Straight,
-                        crate::ExternalSampling::Linear,
+                        crate::external_texture_registry::ExternalAlpha::Straight,
+                        crate::external_texture_registry::ExternalSampling::Linear,
                     ),
                 )
                 .expect("valid external texture");
@@ -2180,8 +2180,8 @@ fn external_recorded_draw_survives_update_and_rebind() {
                         TextureId::new(11),
                         blue,
                         external_descriptor(
-                            crate::ExternalAlpha::Straight,
-                            crate::ExternalSampling::Linear,
+                            crate::external_texture_registry::ExternalAlpha::Straight,
+                            crate::external_texture_registry::ExternalSampling::Linear,
                         ),
                     )
                     .expect("explicit rebind");
@@ -2212,13 +2212,13 @@ fn external_recorded_draw_survives_update_and_rebind() {
 }
 
 fn external_descriptor(
-    alpha: crate::ExternalAlpha,
-    sampling: crate::ExternalSampling,
-) -> crate::ExternalTextureDescriptor {
-    crate::ExternalTextureDescriptor {
+    alpha: crate::external_texture_registry::ExternalAlpha,
+    sampling: crate::external_texture_registry::ExternalSampling,
+) -> crate::external_texture_registry::ExternalTextureDescriptor {
+    crate::external_texture_registry::ExternalTextureDescriptor {
         sampling,
         alpha,
-        color: crate::ExternalColorEncoding::EncodedSrgb,
+        color: crate::external_texture_registry::ExternalColorEncoding::EncodedSrgb,
     }
 }
 
@@ -2226,8 +2226,14 @@ fn external_resource_sampling_survives_update() {
     use flui_painting::paint::TextureId;
     let (device, queue) = test_device_and_queue();
     for (sampling, expected) in [
-        (crate::ExternalSampling::Nearest, [255, 0, 0, 255]),
-        (crate::ExternalSampling::Linear, [183, 0, 72, 255]),
+        (
+            crate::external_texture_registry::ExternalSampling::Nearest,
+            [255, 0, 0, 255],
+        ),
+        (
+            crate::external_texture_registry::ExternalSampling::Linear,
+            [183, 0, 72, 255],
+        ),
     ] {
         for update in [false, true] {
             let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
@@ -2236,7 +2242,10 @@ fn external_resource_sampling_survives_update() {
                     .register(
                         TextureId::new(12),
                         external_pixels(&device, &queue, 2, &[255, 0, 0, 255, 0, 0, 255, 255]),
-                        external_descriptor(crate::ExternalAlpha::Straight, sampling),
+                        external_descriptor(
+                            crate::external_texture_registry::ExternalAlpha::Straight,
+                            sampling,
+                        ),
                     )
                     .expect("resource sampler registration");
                 if update {
@@ -2273,22 +2282,42 @@ fn external_alpha_contract_scales_opacity() {
     let (device, queue) = test_device_and_queue();
     for (alpha, source_alpha, opacity, expected) in [
         (
-            crate::ExternalAlpha::Premultiplied,
+            crate::external_texture_registry::ExternalAlpha::Premultiplied,
             128,
             1.0,
             [128, 0, 127, 255],
         ),
         (
-            crate::ExternalAlpha::Premultiplied,
+            crate::external_texture_registry::ExternalAlpha::Premultiplied,
             128,
             0.5,
             [64, 0, 191, 255],
         ),
-        (crate::ExternalAlpha::Straight, 128, 1.0, [64, 0, 127, 255]),
-        (crate::ExternalAlpha::Straight, 128, 0.5, [32, 0, 191, 255]),
+        (
+            crate::external_texture_registry::ExternalAlpha::Straight,
+            128,
+            1.0,
+            [64, 0, 127, 255],
+        ),
+        (
+            crate::external_texture_registry::ExternalAlpha::Straight,
+            128,
+            0.5,
+            [32, 0, 191, 255],
+        ),
         // Opaque metadata means source alpha is ignored, even if its byte is zero.
-        (crate::ExternalAlpha::Opaque, 0, 1.0, [128, 0, 0, 255]),
-        (crate::ExternalAlpha::Opaque, 0, 0.5, [64, 0, 128, 255]),
+        (
+            crate::external_texture_registry::ExternalAlpha::Opaque,
+            0,
+            1.0,
+            [128, 0, 0, 255],
+        ),
+        (
+            crate::external_texture_registry::ExternalAlpha::Opaque,
+            0,
+            0.5,
+            [64, 0, 128, 255],
+        ),
     ] {
         let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLUE, |painter| {
             painter
@@ -2296,7 +2325,10 @@ fn external_alpha_contract_scales_opacity() {
                 .register(
                     TextureId::new(13),
                     external_pixels(&device, &queue, 1, &[128, 0, 0, source_alpha]),
-                    external_descriptor(alpha, crate::ExternalSampling::Nearest),
+                    external_descriptor(
+                        alpha,
+                        crate::external_texture_registry::ExternalSampling::Nearest,
+                    ),
                 )
                 .expect("alpha source registration");
             painter.draw_texture(
@@ -2316,8 +2348,8 @@ fn external_invalid_registration_and_update_preserve_old_resource() {
     use flui_painting::paint::{FilterQuality, TextureId};
     let (device, queue) = test_device_and_queue();
     let descriptor = external_descriptor(
-        crate::ExternalAlpha::Straight,
-        crate::ExternalSampling::Nearest,
+        crate::external_texture_registry::ExternalAlpha::Straight,
+        crate::external_texture_registry::ExternalSampling::Nearest,
     );
     let pixels = render_to_rgba(&device, &queue, 32, wgpu::Color::BLACK, |painter| {
         let registry = painter.external_texture_registry_mut();
@@ -2455,8 +2487,8 @@ fn external_missing_id_and_unregister_recover() {
             TextureId::new(16),
             external_pixels(&device, &queue, 1, &[255, 0, 0, 255]),
             external_descriptor(
-                crate::ExternalAlpha::Straight,
-                crate::ExternalSampling::Nearest,
+                crate::external_texture_registry::ExternalAlpha::Straight,
+                crate::external_texture_registry::ExternalSampling::Nearest,
             ),
         )
         .expect("initial source");
@@ -2516,8 +2548,8 @@ fn external_missing_id_and_unregister_recover() {
             TextureId::new(16),
             external_pixels(&device, &queue, 1, &[0, 0, 255, 255]),
             external_descriptor(
-                crate::ExternalAlpha::Straight,
-                crate::ExternalSampling::Nearest,
+                crate::external_texture_registry::ExternalAlpha::Straight,
+                crate::external_texture_registry::ExternalSampling::Nearest,
             ),
         )
         .expect("fresh valid registration");
@@ -2559,8 +2591,8 @@ fn external_contents_are_live_within_the_same_allocation() {
                 TextureId::new(17),
                 texture,
                 external_descriptor(
-                    crate::ExternalAlpha::Straight,
-                    crate::ExternalSampling::Nearest,
+                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    crate::external_texture_registry::ExternalSampling::Nearest,
                 ),
             )
             .expect("live source registration");
@@ -2614,8 +2646,8 @@ fn external_nested_opacity_preserves_recorded_allocation() {
                 TextureId::new(18),
                 red,
                 external_descriptor(
-                    crate::ExternalAlpha::Straight,
-                    crate::ExternalSampling::Nearest,
+                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    crate::external_texture_registry::ExternalSampling::Nearest,
                 ),
             )
             .expect("nested source registration");
@@ -2725,8 +2757,8 @@ fn external_repeated_submission_keeps_allocation() {
             id,
             external_pixels(&device, &queue, 1, &[255, 0, 0, 255]),
             external_descriptor(
-                crate::ExternalAlpha::Straight,
-                crate::ExternalSampling::Nearest,
+                crate::external_texture_registry::ExternalAlpha::Straight,
+                crate::external_texture_registry::ExternalSampling::Nearest,
             ),
         )
         .expect("external allocation");
@@ -2783,11 +2815,26 @@ fn external_straight_linear_filtering_has_no_halo() {
     ] {
         for (opacity, expected_red) in [(1.0, 183), (0.5, 92)] {
             for (alpha, transparent_rgb) in [
-                (crate::ExternalAlpha::Premultiplied, [0, 0, 0]),
-                (crate::ExternalAlpha::Straight, [0, 0, 0]),
-                (crate::ExternalAlpha::Straight, [0, 0, 255]),
-                (crate::ExternalAlpha::Straight, [0, 255, 0]),
-                (crate::ExternalAlpha::Straight, [255, 255, 255]),
+                (
+                    crate::external_texture_registry::ExternalAlpha::Premultiplied,
+                    [0, 0, 0],
+                ),
+                (
+                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    [0, 0, 0],
+                ),
+                (
+                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    [0, 0, 255],
+                ),
+                (
+                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    [0, 255, 0],
+                ),
+                (
+                    crate::external_texture_registry::ExternalAlpha::Straight,
+                    [255, 255, 255],
+                ),
             ] {
                 let source = external_pixels_in_format(
                     &device,
@@ -2811,7 +2858,10 @@ fn external_straight_linear_filtering_has_no_halo() {
                         .register(
                             TextureId::new(19),
                             source,
-                            external_descriptor(alpha, crate::ExternalSampling::Linear),
+                            external_descriptor(
+                                alpha,
+                                crate::external_texture_registry::ExternalSampling::Linear,
+                            ),
                         )
                         .expect("filtered alpha source registration");
                     painter.draw_texture(
