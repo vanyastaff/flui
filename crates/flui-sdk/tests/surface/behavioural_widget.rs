@@ -18,9 +18,11 @@ use flui_sdk::widgets::{
     Actions, Alternative, CallbackAction, ColoredBox, ContactAdmission, ControlSpec, DragSlot,
     GestureAlternatives, GestureCommand, GestureDetector, Intent, SingleActivator, SizedBox,
 };
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_testing::replay::PointerScript;
 use flui_testing::widgets::lay_out;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 
 /// Archive the row.
 struct Archive;

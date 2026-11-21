@@ -478,7 +478,7 @@ impl fmt::Debug for MenuSpec {
 /// registered companion publishes for it. With no companion registered the
 /// alternatives are unfulfilled, which is a `flui.a11y` warning once the frame
 /// that mounted them has run and a failure of
-/// `flui_testing::assert_gesture_alternatives`.
+/// `flui_testing::gesture_alternatives::assert_gesture_alternatives`.
 ///
 /// Every command performs an intent the link carries; the first is the
 /// widget's gesture command.

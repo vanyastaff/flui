@@ -307,7 +307,7 @@ impl UiRuntime {
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
         let window: Rc<dyn flui_platform::PlatformWindow> =
-            Rc::new(flui_testing::MockWindow::new().focused(false));
+            Rc::new(flui_platform::testing::MockWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
     }

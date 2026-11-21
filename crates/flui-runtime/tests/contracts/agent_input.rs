@@ -24,7 +24,7 @@ use flui_protocol::{
     input::PointerButton, input::PointerDevice, input::Released, input::TrackpadAction,
     session::WindowParams,
 };
-use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_widgets::{Listener, SizedBox};
 use parking_lot::Mutex;

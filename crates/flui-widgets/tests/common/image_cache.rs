@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use flui_assets::{ImageCache, ImageCacheCapability};
 use flui_platform::assets::{AssetBundle, AssetBundleCapability};
-use flui_testing::HeadlessHost;
+use flui_testing::host::HeadlessHost;
 use flui_view::{
     BuildContext, IntoView, LifecycleContext, LifecycleContextExt as _, StatefulView, View,
     ViewState,
@@ -20,7 +20,7 @@ type Acquired = Rc<RefCell<Option<Arc<ImageCache>>>>;
 /// runtime loads through.
 pub fn runtime_image_cache(host: &mut HeadlessHost) -> Arc<ImageCache> {
     let acquired = Acquired::default();
-    let window = host.open_window(flui_testing::HeadlessWindow::new(10, 10));
+    let window = host.open_window(flui_testing::host::HeadlessWindow::new(10, 10));
     host.attach_to(
         window,
         &CacheAcquirer {

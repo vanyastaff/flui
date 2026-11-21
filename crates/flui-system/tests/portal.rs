@@ -22,7 +22,7 @@ use flui_system::dialog::{
     Picks, SaveLocation, SaveRequest,
 };
 use flui_system::testing::PortalOnBus;
-use flui_testing::HeadlessHost;
+use flui_testing::host::HeadlessHost;
 use zbus::message::Header;
 use zbus::{OwnedFd, OwnedObjectPath, OwnedVariant, Variant};
 

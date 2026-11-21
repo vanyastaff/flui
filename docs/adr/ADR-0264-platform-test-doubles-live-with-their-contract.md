@@ -56,7 +56,8 @@ Chosen option: 1.
    it: `HeadlessHaptics` plays every request on the window's actuator and keeps nothing. A test
    that asserts what played installs the kit's double.
 4. `flui-testing` enables the kits it builds on and re-exports their doubles where its own API
-   hands them out (`TestHost::haptic_actuator` returns `flui_platform::testing::FakeHaptics`).
+   hands them out, beside that API: `flui_testing::host` re-exports `FakeHaptics`, which
+   `HeadlessWindow::haptic_actuator` returns, and `ScriptedHttp`, which `HeadlessHost::http` returns.
 
 ### Consequences
 

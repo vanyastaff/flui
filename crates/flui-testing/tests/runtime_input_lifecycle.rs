@@ -49,7 +49,8 @@ fn dispatch(realm: &UiRuntime, id: PresentationId, event: PointerEvent) {
 }
 
 fn install_secondary(realm: &mut UiRuntime) -> PresentationId {
-    let window: Rc<dyn PlatformWindow> = Rc::new(flui_testing::MockWindow::new().focused(false));
+    let window: Rc<dyn PlatformWindow> =
+        Rc::new(flui_platform::testing::MockWindow::new().focused(false));
     let presentation = realm.assemble_presentation(window);
     realm.install_presentation(presentation)
 }
@@ -271,7 +272,7 @@ fn assert_ime_motion_order(fail: bool) {
     use flui_runtime::presentation::PointerResampling;
     use flui_widgets::{EditableText, TextEditingController};
 
-    let window = flui_testing::HeadlessWindow::new(100, 40).with_text_input();
+    let window = flui_testing::host::HeadlessWindow::new(100, 40).with_text_input();
     let mut realm = UiRuntime::for_test_with_text_input(window.text_input());
     let primary = realm.presentation_id();
     realm

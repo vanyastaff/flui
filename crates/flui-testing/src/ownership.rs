@@ -50,7 +50,7 @@ use flui_widgets::{
 };
 
 use crate::{
-    HeadlessHost, HeadlessWindow,
+    host::{HeadlessHost, HeadlessWindow},
     replay::{MouseScript, PenScript, PointerScript, TouchScript},
     widgets::{LaidOut, lay_out, tight},
 };

@@ -1,5 +1,5 @@
 //! A headless window's simulated `xdg-foreign` exports
-//! ([`HeadlessWindow::with_portal_export`](crate::HeadlessWindow::with_portal_export)).
+//! ([`HeadlessWindow::with_portal_export`](crate::host::HeadlessWindow::with_portal_export)).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};

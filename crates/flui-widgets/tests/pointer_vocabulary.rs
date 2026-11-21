@@ -711,7 +711,7 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         controller.value().transform_point(0.0, 0.0).0 > before,
         "the second fling coasts"
     );
-    let rest = flui_testing::TrackpadScript::new(
+    let rest = flui_testing::replay::TrackpadScript::new(
         "fingers rest",
         flui_foundation::geometry::Offset::new(100.0, 100.0),
     )

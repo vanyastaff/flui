@@ -31,7 +31,9 @@ fn installed_capture(
                     Rc::clone(&window) as Rc<dyn flui_platform::PlatformWindow>,
                     None,
                 )
-                .with_text_store_host(Some(flui_testing::RecordingTextStoreHost::new())),
+                .with_text_store_host(Some(
+                    flui_testing::text_store_host::RecordingTextStoreHost::new(),
+                )),
                 1.0,
                 flui_runtime::ui_runtime::RuntimeHostServices::new(
                     Arc::new(|| {}),

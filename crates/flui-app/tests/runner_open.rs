@@ -457,7 +457,7 @@ pub(crate) fn a_burst_of_links_with_no_window_opens_one_window_on_the_last() {
 }
 
 pub(crate) fn a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link() {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let handle = Rc::new(RefCell::new(None));
     let ready = Rc::clone(&handle);
@@ -470,7 +470,7 @@ pub(crate) fn a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applica
     turns(&run, 2);
     // A window the platform names that no installation in this run opens.
     let elsewhere = WindowId::try_from_raw(999).expect("a nonzero id");
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         run.open(link("myapp:///note/3", Launch::Running));
         run.open(kept(
             ["myapp:///note/4".to_owned()],
@@ -507,7 +507,7 @@ pub(crate) fn a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applica
 }
 
 pub(crate) fn a_link_for_a_closed_window_is_refused_as_it_arrives() {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let secondary = router("secondary", &built);
     let application = Application::new()
@@ -528,7 +528,7 @@ pub(crate) fn a_link_for_a_closed_window_is_refused_as_it_arrives() {
     turns(&run, 3);
     assert_eq!(run.open_windows().len(), 1, "one window is left");
 
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         run.open(kept(
             ["myapp:///note/5".to_owned()],
             [],
@@ -556,7 +556,7 @@ pub(crate) fn a_link_for_a_closed_window_is_refused_as_it_arrives() {
 }
 
 pub(crate) fn a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end() {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let handle = Rc::new(RefCell::new(None));
     let ready = Rc::clone(&handle);
@@ -568,7 +568,7 @@ pub(crate) fn a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end() 
     );
     turns(&run, 2);
     let app = handle.borrow_mut().take().expect("on_ready ran");
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         app.request_quit().expect("the run accepts its quit");
         run.open(link("myapp:///note/3", Launch::Running));
         turns(&run, 4);
@@ -587,14 +587,14 @@ pub(crate) fn a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end() 
 }
 
 pub(crate) fn a_panic_in_on_open_files_ends_the_run_and_refuses_the_link() {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let run = resident(
         &built,
         Application::new().on_open_files(|_: &[OpenedFile]| panic!("the files callback panics")),
     );
     turns(&run, 2);
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         run.open(kept(
             ["myapp:///note/3".to_owned()],
             [OpenedFile::new("/a.note")],
@@ -641,7 +641,7 @@ fn closed_main_window(built: &Built) -> (HeadlessRunHandle, flui_app::testing::S
 }
 
 pub(crate) fn a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt() {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let fail = Rc::new(std::cell::Cell::new(false));
     let attempts = Rc::new(std::cell::Cell::new(0_u32));
@@ -661,7 +661,7 @@ pub(crate) fn a_link_whose_window_fails_before_its_runtime_is_refused_after_one_
     );
     turns(&run, 2);
     fail.set(true);
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         run.open(link("myapp:///note/3", Launch::Running));
         turns(&run, 30);
     });
@@ -720,12 +720,12 @@ pub(crate) fn a_link_goes_to_the_main_window_not_a_window_its_files_open() {
 }
 
 pub(crate) fn a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused() {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let (run, renderer) = closed_main_window(&built);
     // Every window is refused its GPU slot, as on a host whose device cannot
     // draw the window: the link causes one opening, and then it is refused.
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         renderer.refuse_next_window();
         run.open(link("myapp:///note/3", Launch::Running));
         for _ in 0..30 {
@@ -1019,7 +1019,7 @@ pub(crate) fn a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahea
 }
 
 pub(crate) fn a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails() {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let fail = Rc::new(std::cell::Cell::new(false));
     let attempts = Rc::new(std::cell::Cell::new(0_u32));
@@ -1046,7 +1046,7 @@ pub(crate) fn a_link_that_finds_the_main_window_opening_is_refused_when_that_ope
     turns(&run, 2);
     fail.set(true);
     let app = handle.borrow_mut().take().expect("on_ready ran");
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         // The application asks for its main window, and the link arrives
         // while that opening is under way: the link is bound to it.
         drop(
@@ -1072,7 +1072,7 @@ pub(crate) fn a_link_that_finds_the_main_window_opening_is_refused_when_that_ope
 
 pub(crate) fn a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime()
  {
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let built = Built::default();
     let factory_built = Rc::clone(&built);
     let run = HeadlessRun::start_resident(
@@ -1087,7 +1087,7 @@ pub(crate) fn a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_i
     // The link reopens the main window, whose Router finds no route for it
     // and whose hook panics: user code in the window's navigation, held by
     // that window's UI runtime as in a window already open.
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         run.open(link("myapp:///nowhere", Launch::Running));
         turns(&run, 6);
     });

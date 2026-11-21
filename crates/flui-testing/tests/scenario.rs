@@ -16,7 +16,7 @@ use flui_platform::capability::{
     ProviderContext,
 };
 use flui_platform::{Unsupported, UnsupportedReason};
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
 use crate::capability_seam::{acquire_capability, acquire_capability_in};
 

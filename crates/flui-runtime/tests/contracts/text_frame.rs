@@ -665,7 +665,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         utf16::{Utf16Offset, Utf16Range},
     };
 
-    let native_store_host = flui_testing::RecordingTextStoreHost::new();
+    let native_store_host = flui_testing::text_store_host::RecordingTextStoreHost::new();
     let mut runtime = flui_runtime::ui_runtime::UiRuntime::try_new(
         crate::owner_publication::window().with_text_store_host(Some(native_store_host.clone())),
         1.0,
@@ -988,9 +988,9 @@ fn prepared_runtime(
     clock: &flui_foundation::ManualClock,
 ) -> (
     flui_runtime::ui_runtime::UiRuntime,
-    std::rc::Rc<flui_testing::RecordingTextStoreHost>,
+    std::rc::Rc<flui_testing::text_store_host::RecordingTextStoreHost>,
 ) {
-    let host = flui_testing::RecordingTextStoreHost::new();
+    let host = flui_testing::text_store_host::RecordingTextStoreHost::new();
     let runtime = flui_runtime::ui_runtime::UiRuntime::try_new(
         crate::owner_publication::window().with_text_store_host(Some(host.clone())),
         1.0,
@@ -2911,7 +2911,7 @@ fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime()
         ..
     } = pending_editable();
     assert!(runtime.settle_text_sizing(work, TextSizingSettlement::Waiting));
-    let sibling_host = flui_testing::RecordingTextStoreHost::new();
+    let sibling_host = flui_testing::text_store_host::RecordingTextStoreHost::new();
     let sibling = runtime.assemble_presentation(
         crate::owner_publication::window().with_text_store_host(Some(sibling_host.clone())),
     );

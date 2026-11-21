@@ -1252,7 +1252,7 @@ in `agent_port_admission_matrix` exercise both public reads and actions, then
 verify that later calls answer `gone`. The windows hold the presentation's semantics handle strongly instead of the presentation, so the
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s runners
-and `flui_testing::HeadlessDevAgent` drive the hooks through `dev_agent::DevAgentHost`, one per
+and `flui_testing::host::HeadlessDevAgent` drive the hooks through `dev_agent::DevAgentHost`, one per
 loop; the conversation over it is `agent::Service`'s (ADR-0288), which `flui-app`'s driver agent
 (ADR-0239) drives over its endpoint. Pinned by
 `an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and

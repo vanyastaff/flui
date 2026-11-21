@@ -442,12 +442,12 @@ fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
     );
     let wait = Duration::from_millis(16);
     let press = match pointer {
-        Pointer::Mouse => flui_testing::MouseScript::new("mouse press")
+        Pointer::Mouse => flui_testing::replay::MouseScript::new("mouse press")
             .press(at)
             .wait(wait)
             .release()
             .build(),
-        Pointer::Finger => flui_testing::TouchScript::new("touch press")
+        Pointer::Finger => flui_testing::replay::TouchScript::new("touch press")
             .down(1, at)
             .wait(wait)
             .up(1)

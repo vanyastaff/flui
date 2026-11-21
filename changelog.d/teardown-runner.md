@@ -5,7 +5,7 @@
   the application opens and runs their frames without a GPU. `HeadlessRunHandle::renderer`
   reads what a window presented and injects a lost device or failing rebuilds;
   `HeadlessRunHandle::wake_deadline` is the instant the loop is asked to wake at.
-- **`flui_testing::DropLedger` and `DropSentinel`** (also `flui::testing`): a test plants a
+- **`flui_testing::drop_ledger::DropLedger` and `DropSentinel`** (also `flui::testing`): a test plants a
   sentinel in each value it hands the framework and proves, with `live() == 0`, that every one
   was dropped (ADR-0261 §2).
 

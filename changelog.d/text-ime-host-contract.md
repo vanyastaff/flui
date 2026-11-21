@@ -12,7 +12,7 @@
   commit the active field's composition, keeping its text, through the host or in place.
 - **`flui_native::HeadlessPlatform::with_text_store_host`**: headless windows that offer a
   text-store host, for tests of the pull path.
-- **`flui_testing::RecordingTextStoreHost`**, `HeadlessWindow::with_text_store_host`,
+- **`flui_testing::text_store_host::RecordingTextStoreHost`**, `HeadlessWindow::with_text_store_host`,
   `HeadlessHost::text_store_host`, `widgets::harness::Harness::store_host_calls` and, under
   `test-support`, `flui_runtime::UiRealm::text_input_handle`.
 

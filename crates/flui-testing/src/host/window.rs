@@ -355,7 +355,7 @@ impl HeadlessWindow {
     /// The recording actuator this window plays haptics on: every request the
     /// UI runtime handed the platform, with the outcome it returned.
     #[must_use]
-    pub fn haptic_actuator(&self) -> &flui_platform::testing::FakeHaptics {
+    pub fn haptic_actuator(&self) -> &super::FakeHaptics {
         &self.haptics
     }
 

@@ -443,7 +443,7 @@ pub struct HeadlessWindowSystem {
 /// Every window [`HeadlessPlatform`](crate::HeadlessPlatform) opens is a `HeadlessHostWindow`:
 /// the [`HostWindow`] a runner drives, a fully functional [`PlatformWindow`] that needs no
 /// display server, owned by the headless owner loop as an OS window is owned by its backend's.
-/// It is not `flui_testing::HeadlessWindow`, the window a `HeadlessHost` presents a UI runtime
+/// It is not `flui_testing::host::HeadlessWindow`, the window a `HeadlessHost` presents a UI runtime
 /// into with no host at all. Beyond the trait surface it offers what a test harness needs to
 /// drive a window from the outside:
 ///

@@ -1237,7 +1237,7 @@ fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
     let (host, _) = open(&platform);
     // A headless window that starts OS drags through the panicking source.
     let window: Rc<dyn PlatformWindow> = Rc::new(
-        flui_testing::MockWindow::over(as_platform(&host))
+        flui_platform::testing::MockWindow::over(as_platform(&host))
             .with_drag_source(Arc::new(FirstStartPanics::default())),
     );
     let runtime = runtime_over(

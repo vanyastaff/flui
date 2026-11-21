@@ -965,7 +965,7 @@ pub(crate) mod event_context {
 /// An assistive focus request uses the actual mounted focus node, then publishes it.
 pub(crate) fn platform_focus_requests_the_mounted_node_and_rejects_disabled_focus() {
     use crate::common::{lay_out, loose};
-    use flui_testing::{Action, ActionRequest, TreeId};
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
     use flui_widgets::Semantics;
 
     let node = FocusNode::with_debug_label("assistive-target");
@@ -1142,7 +1142,7 @@ pub(crate) fn a_refused_node_replacement_is_made_by_the_next_rebuild() {
 /// longer owns the attachment.
 pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
     use crate::common::{lay_out, loose};
-    use flui_testing::{Action, ActionRequest, TreeId};
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
     use flui_widgets::Semantics;
 
     let node = FocusNode::with_debug_label("adopted-target");

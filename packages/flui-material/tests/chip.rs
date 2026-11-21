@@ -457,7 +457,7 @@ pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
                     );
                     (
                         node.id(),
-                        delete_buttons.first().map(flui_testing::A11yNode::id),
+                        delete_buttons.first().map(flui_testing::a11y::A11yNode::id),
                     )
                 };
                 if operable {

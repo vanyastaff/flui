@@ -25,7 +25,7 @@
 - **`CancelReason::Claimed`** (`flui-platform`): when a recognizer that claimed a continuing
   contact wins, every other target on the contact's route receives one `Cancel` with this reason
   and nothing more of the contact.
-- **`flui_testing::assert_ownership_table`**: every cell of the table, for touch and mouse.
+- **`flui_testing::ownership::assert_ownership_table`**: every cell of the table, for touch and mouse.
 
 ### Changed
 

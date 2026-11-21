@@ -24,11 +24,11 @@ use super::clock::HostClock;
 /// URL there.
 pub(super) struct ScriptedBuiltIns {
     pub(super) clock: HostClock,
-    pub(super) clipboard: crate::ScriptedClipboard,
-    pub(super) primary_selection: crate::ScriptedPrimarySelection,
+    pub(super) clipboard: crate::clipboard::ScriptedClipboard,
+    pub(super) primary_selection: crate::primary_selection::ScriptedPrimarySelection,
     pub(super) background: HeadlessBackground,
     #[cfg(feature = "http")]
-    pub(super) http: crate::ScriptedHttp,
+    pub(super) http: flui_platform::testing::ScriptedHttp,
 }
 
 impl ScriptedBuiltIns {
@@ -36,11 +36,11 @@ impl ScriptedBuiltIns {
     pub(super) fn on(driver: ScenarioDriver) -> Self {
         let scenario = driver.scenario();
         #[cfg(feature = "http")]
-        let http = crate::ScriptedHttp::default();
+        let http = flui_platform::testing::ScriptedHttp::default();
         #[cfg(feature = "http")]
         http.report_to(scenario.failure_report());
-        let clipboard = crate::ScriptedClipboard::on(scenario);
-        let primary_selection = crate::ScriptedPrimarySelection::on(scenario);
+        let clipboard = crate::clipboard::ScriptedClipboard::on(scenario);
+        let primary_selection = crate::primary_selection::ScriptedPrimarySelection::on(scenario);
         Self {
             clock: HostClock {
                 driver: Rc::new(driver),

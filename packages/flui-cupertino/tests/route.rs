@@ -17,7 +17,8 @@ use flui_sdk::painting::styling::Color;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ColoredBox, Routable, Router, RouterHandle, Text};
-use flui_testing::{LogicalPoint, TestWindow, Tester, find};
+use flui_testing::find;
+use flui_testing::tester::{LogicalPoint, TestWindow, Tester};
 
 /// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
 /// tag `3.44.0`).

@@ -546,14 +546,16 @@ fn run_platform_ownership_child(kind: &str) {
     // slot's owner is the last to release it, and fails when the case asks.
     let window_armed = Rc::new(Cell::new(false));
     let window = Rc::new(
-        flui_testing::MockWindow::new()
+        flui_platform::testing::MockWindow::new()
             .focused(true)
             .with_observer({
                 let armed = Rc::clone(&window_armed);
                 let external = Rc::downgrade(&external_window);
                 let fail_callback = fail_window || cursor_first;
                 move |call| {
-                    if matches!(call, flui_testing::WindowCall::SetCursor(_)) && armed.get() {
+                    if matches!(call, flui_platform::testing::WindowCall::SetCursor(_))
+                        && armed.get()
+                    {
                         if let Some(external) = external.upgrade() {
                             external.borrow_mut().take();
                         }

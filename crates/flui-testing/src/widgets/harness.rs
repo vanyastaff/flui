@@ -165,7 +165,7 @@ impl Harness {
 
     /// The clipboard this tree's widgets acquire through
     /// `ctx.capability::<ClipboardCapability>()`.
-    pub fn clipboard(&self) -> crate::ScriptedClipboard {
+    pub fn clipboard(&self) -> crate::clipboard::ScriptedClipboard {
         self.host.ui_runtime().clipboard()
     }
 
@@ -173,7 +173,7 @@ impl Harness {
     /// `ctx.capability::<PrimarySelectionCapability>()`, on a window whose
     /// platform has one (Linux, through [`mount_on`]); elsewhere they are
     /// refused it.
-    pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
+    pub fn primary_selection(&self) -> crate::primary_selection::ScriptedPrimarySelection {
         self.host.ui_runtime().primary_selection()
     }
 
@@ -205,7 +205,7 @@ impl Harness {
     /// `None` until [`enable_semantics`](Self::enable_semantics) has been
     /// called and a frame has run since.
     #[must_use]
-    pub fn a11y_tree(&self) -> Option<crate::A11yTree> {
+    pub fn a11y_tree(&self) -> Option<crate::a11y::A11yTree> {
         super::a11y_tree(&self.pipeline_owner)
     }
 
@@ -214,11 +214,11 @@ impl Harness {
     ///
     /// # Errors
     ///
-    /// See [`InvokeActionError`](crate::InvokeActionError).
+    /// See [`InvokeActionError`](crate::a11y::InvokeActionError).
     pub fn invoke_semantics_action(
         &self,
-        request: crate::ActionRequest,
-    ) -> Result<(), crate::InvokeActionError> {
+        request: crate::a11y::ActionRequest,
+    ) -> Result<(), crate::a11y::InvokeActionError> {
         self.host
             .ui_runtime()
             .enter(|_| crate::a11y::invoke_semantics_action(&self.pipeline_owner, request))
@@ -380,11 +380,11 @@ impl Harness {
     ///
     /// Panics unless the harness was mounted with [`mount_with_ime`]: no
     /// other window offers a host.
-    pub fn store_host_calls(&self) -> Vec<crate::StoreHostCall> {
+    pub fn store_host_calls(&self) -> Vec<crate::text_store_host::StoreHostCall> {
         self.store_host().calls()
     }
 
-    fn store_host(&self) -> &Rc<crate::RecordingTextStoreHost> {
+    fn store_host(&self) -> &Rc<crate::text_store_host::RecordingTextStoreHost> {
         self.host
             .ui_runtime()
             .text_store_host()
@@ -420,24 +420,24 @@ impl Harness {
     /// The headless window the tree is mounted in: its haptic actuator,
     /// cursor and input regions record what the UI runtime handed it.
     #[must_use]
-    pub fn window(&self) -> &crate::HeadlessWindow {
+    pub fn window(&self) -> &crate::host::HeadlessWindow {
         self.host.ui_runtime().window()
     }
 
     /// Apply `values` as the host's next system-preference revision; see
-    /// [`HeadlessHost::set_system_preferences`](crate::HeadlessHost::set_system_preferences).
+    /// [`HeadlessHost::set_system_preferences`](crate::host::HeadlessHost::set_system_preferences).
     pub fn set_system_preferences(&self, values: flui_platform::SystemPreferences) {
         self.host.ui_runtime().set_system_preferences(values);
     }
 
     /// Report the window shown or hidden; see
-    /// [`HeadlessHost::set_window_visible`](crate::HeadlessHost::set_window_visible).
+    /// [`HeadlessHost::set_window_visible`](crate::host::HeadlessHost::set_window_visible).
     pub fn set_window_visible(&self, visible: bool) {
         self.host.ui_runtime().set_window_visible(visible);
     }
 
     /// Report the window focused or not; see
-    /// [`HeadlessHost::set_window_focused`](crate::HeadlessHost::set_window_focused).
+    /// [`HeadlessHost::set_window_focused`](crate::host::HeadlessHost::set_window_focused).
     pub fn set_window_focused(&self, focused: bool) {
         self.host.ui_runtime().set_window_focused(focused);
     }

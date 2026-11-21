@@ -141,7 +141,7 @@ impl PlatformDragSource for FakeDragSource {
 /// A 100 × 100 window whose system starts OS drag sessions at `source`'s
 /// timing, or none.
 fn window(source: Option<OsDragStart>) -> Rc<dyn PlatformWindow> {
-    let window = flui_testing::MockWindow::new().with_size(100.0, 100.0);
+    let window = flui_platform::testing::MockWindow::new().with_size(100.0, 100.0);
     Rc::new(match source {
         Some(timing) => window.with_drag_source(Arc::new(FakeDragSource(timing))),
         None => window,

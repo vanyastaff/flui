@@ -19,7 +19,7 @@ use flui_system::dialog::{
     PickedFile, PickedForm, Picks, SaveLocation, SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
 use crate::{acquire, acquire_in, acquire_twice_on, outcome_slot, turn};
 
@@ -157,8 +157,10 @@ impl flui_sdk::view::ViewState<Picker> for PickerState {
 fn a_dialog_a_tap_through_the_agent_opens_is_answered_by_the_script() {
     let (dialogs, plugin) = scripted();
     dialogs.answer_next_open(Ok(Some(picks(&["a.png"]))));
-    let mut t =
-        flui_testing::Tester::mount_in(Picker, flui_testing::TestWindow::default().plugin(plugin));
+    let mut t = flui_testing::tester::Tester::mount_in(
+        Picker,
+        flui_testing::tester::TestWindow::default().plugin(plugin),
+    );
     t.expect(flui_testing::find::text("nothing picked"))
         .to_exist();
 

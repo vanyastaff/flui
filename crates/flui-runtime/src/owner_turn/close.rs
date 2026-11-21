@@ -604,7 +604,7 @@ mod tests {
     use flui_foundation::{PresentationId, UiRuntimeId};
 
     use super::*;
-    use flui_testing::MockWindow;
+    use flui_platform::testing::MockWindow;
 
     // What replaced the run-time thread checks: neither the router nor a
     // handler can reach another thread.

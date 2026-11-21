@@ -17,7 +17,7 @@ use flui_platform::input::pointer::{
 };
 use flui_platform::{EventTime, input::keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
-use flui_testing::{MouseScript, PenScript, PointerScript, TouchScript, TrackpadScript};
+use flui_testing::replay::{MouseScript, PenScript, PointerScript, TouchScript, TrackpadScript};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, Signal, SignalWriteExt, View, ViewExt};

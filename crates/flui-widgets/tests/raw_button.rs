@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use flui_interaction::pointer::HitTestBehavior;
 use flui_semantics::SemanticsRole;
-use flui_testing::{Action, ActionRequest, NodeId, TreeId};
+use flui_testing::a11y::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::prelude::*;
 use flui_view::{SignalError, WriterSource};
 use flui_widgets::{
@@ -109,7 +109,7 @@ fn value(seen: &Seen) -> Result<u32, SignalError> {
 }
 
 /// The node of the button: the one labelled with the button's text.
-fn button_node(app: &mut LaidOut) -> (flui_testing::A11yTree, NodeId) {
+fn button_node(app: &mut LaidOut) -> (flui_testing::a11y::A11yTree, NodeId) {
     app.enable_semantics();
     app.pump();
     let tree = app.a11y_tree().expect("semantics enabled before the frame");

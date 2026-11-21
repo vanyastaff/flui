@@ -15,7 +15,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_assets::ImageCache;
-use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedHttp, ScriptedResponse};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{ScriptedHttp, ScriptedResponse};
 use flui_widgets::{
     AssetImage, Image, ImageProvider, ImageProviderError, ImageServices, NetworkImage,
 };

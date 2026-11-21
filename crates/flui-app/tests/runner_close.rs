@@ -21,7 +21,7 @@ use flui_foundation::geometry::Size;
 use flui_rendering::{
     BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
 };
-use flui_testing::{DropLedger, DropSentinel};
+use flui_testing::drop_ledger::{DropLedger, DropSentinel};
 use flui_view::element::FutureBuilder;
 use flui_view::prelude::*;
 use flui_view::{CloseGuard, PendingClose};

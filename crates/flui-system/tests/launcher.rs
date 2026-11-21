@@ -14,7 +14,7 @@ use flui_platform::launch::{
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_system::SystemPlugin;
 use flui_system::testing::{LaunchRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
 use crate::{acquire, acquire_on, outcome_slot, turn};
 

@@ -2225,7 +2225,7 @@ pub(crate) mod event_context {
     use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
 
     use flui_painting::styling::Color;
-    use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
+    use flui_testing::a11y::{A11yTree, Action, ActionRequest, TreeId};
     use flui_view::prelude::*;
     use flui_widgets::{ColoredBox, GestureDetector, Semantics, Text};
 
@@ -2798,7 +2798,7 @@ pub(crate) fn a_smart_zoom_reaches_only_the_innermost_detector_under_it() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::gesture::{SmartZoomDetails, SmartZoomSource};
     use flui_interaction::pointer::HitTestBehavior;
-    use flui_testing::TrackpadScript;
+    use flui_testing::replay::TrackpadScript;
     use flui_widgets::{Padding, SizedBox};
     use std::{cell::RefCell, rc::Rc};
 

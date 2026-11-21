@@ -12,10 +12,10 @@ use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_native::HeadlessPlatform;
 use flui_platform::WindowId;
+use flui_platform::testing::{MockWindow, WindowCall};
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_platform::{WindowCapabilities, WindowFrame, WindowMode, WindowOptions};
 use flui_platform::{WindowExtent, WindowPosition};
-use flui_testing::{MockWindow, WindowCall};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;

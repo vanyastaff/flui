@@ -6,7 +6,7 @@ use flui_platform::{
         Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
     },
 };
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
 use flui_widgets::{
     Actions, CallbackAction, CallbackShortcuts, Focus, Intent, Shortcuts, SingleActivator,

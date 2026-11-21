@@ -372,7 +372,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::painting::styling::Color;
 
     use flui_sdk::widgets::ColoredBox;
-    use flui_testing::PointerScript;
+    use flui_testing::replay::PointerScript;
 
     for (end, settling_frames, panel_tap, both) in [
         (false, 0, false, false),

@@ -1,8 +1,8 @@
 //! # `flui_testing`
 //!
 //! The workspace's test support. Its frames are the product frame
-//! transaction: [`HeadlessHost`] hosts a UI runtime over a headless window and
-//! sink, and each [`pump`](HeadlessHost::pump) advances the host's virtual
+//! transaction: [`HeadlessHost`](host::HeadlessHost) hosts a UI runtime over a headless window and
+//! sink, and each [`pump`](host::HeadlessHost::pump) advances the host's virtual
 //! clock and runs `UiRuntime::pump` at the new instant (ADR-0083 §4). Every
 //! deadline-driven gesture (long-press, the press-delay of double-tap) and
 //! every animation therefore runs on one virtual timeline, so tests are
@@ -13,9 +13,9 @@
 //! state. Two presentations that need independent clocks are two hosts.
 //!
 //! - [`widgets::lay_out`] mounts a widget tree in a host and adds geometry,
-//!   layer and semantics probes; [`Tester`] is the application test API.
+//!   layer and semantics probes; [`Tester`](tester::Tester) is the application test API.
 //! - [`replay`] scripts pointer input as data on virtual time;
-//!   [`HeadlessHost::run_script`] and [`LaidOut::replay`](widgets::LaidOut::replay)
+//!   [`HeadlessHost::run_script`](host::HeadlessHost::run_script) and [`LaidOut::replay`](widgets::LaidOut::replay)
 //!   deliver it to the UI runtime's input path.
 //!
 //! ### What a frame cost
@@ -40,7 +40,7 @@
 //! use flui_foundation::geometry::Offset;
 //! use flui_painting::styling::Color;
 //! use flui_testing::replay::{PointerScript, ScriptError, TouchScript};
-//! use flui_testing::{HeadlessHost, HeadlessWindow};
+//! use flui_testing::host::{HeadlessHost, HeadlessWindow};
 //! use flui_widgets::{ColoredBox, GestureDetector};
 //!
 //! let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
@@ -111,42 +111,6 @@ pub mod widgets;
 pub mod window_commands;
 pub mod window_conformance;
 pub mod window_handler;
-
-pub use a11y::{
-    A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
-    InvokeActionError, NodeId, TreeId,
-};
-pub use agent_service::{ConversationRefused, HeadlessAgentService, HeadlessConversation};
-pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
-pub use clipboard::ScriptedClipboard;
-pub use drop_ledger::{DropLedger, DropSentinel};
-pub use flui_platform::testing::{
-    MockWindow, ScriptedHttp, ScriptedResponse, WindowCall, mock_window,
-};
-pub use flui_protocol::{
-    geometry::LogicalPoint, geometry::LogicalRect, inspect::InspectField, inspect::InspectNode,
-    inspect::InspectReading, inspect::InspectValue, locator::Locator, locator::Match,
-    locator::Pick, locator::StateFilter, locator::TextMatch, tree::Node, tree::Tree, wire::Role,
-};
-pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
-pub use gesture_alternatives::{
-    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
-};
-pub use host::{
-    HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
-    HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, ScriptedTextSizing, StartedOsDrag,
-    UnshownFrame, WindowSystemMismatch,
-};
-pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
-pub use ownership::assert_ownership_table;
-pub use portal_exports::HeadlessPortalExports;
-pub use primary_selection::ScriptedPrimarySelection;
-pub use replay::{
-    MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,
-    ScriptedPointer, TouchScript, TrackpadScript, VirtualScript,
-};
-pub use tester::{Expectation, TestError, TestWindow, Tester};
-pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 
 /// What one frame did, phase by phase: what [`LaidOut::pump_report`](crate::widgets::LaidOut::pump_report)
 /// returns for a frame of the UI runtime.

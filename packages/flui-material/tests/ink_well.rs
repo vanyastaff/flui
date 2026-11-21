@@ -344,7 +344,7 @@ fn logging(log: &TapLog, entry: &'static str) -> OnTap {
 /// `focusable`/`focused`) or its click (the enabled well offers none).
 pub fn ink_well_a11y_tree_matches_wrappers() {
     use flui_sdk::widgets::{Column, Text};
-    use flui_testing::Action;
+    use flui_testing::a11y::Action;
 
     for enabled in [true, false] {
         for focused in [false, true] {

@@ -14,7 +14,7 @@ use flui_protocol::{
     wire::ActionName,
 };
 
-use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::Signal;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook};
 use flui_view::prelude::*;

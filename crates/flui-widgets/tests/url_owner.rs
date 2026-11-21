@@ -15,7 +15,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_foundation::ChangeNotifier;
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_view::CloseReason;
 use flui_view::navigation::{NavigationIntent, NavigationOp, NavigationRefused, RouteParseError};
 use flui_view::navigation::{OpenDeclarations, OpenUrlRefused, OpenedUrl};
@@ -306,7 +306,7 @@ pub(crate) fn a_sibling_router_takes_the_url_over_when_the_owner_leaves() {
             },
         )
     };
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         host.attach(&root).expect("a fresh window");
         settle(&mut host);
     });
@@ -358,7 +358,7 @@ pub(crate) fn a_router_inside_a_page_does_not_own_the_url() {
             },
         )
     };
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         host.attach(&outer_router).expect("a fresh window");
         settle(&mut host);
     });
@@ -1008,7 +1008,7 @@ pub(crate) fn a_cold_url_no_router_took_is_dropped_after_the_first_frame() {
         )
     };
     assert_eq!(host.open_url(window, "myapp:///note/3"), Ok(()));
-    let ((), log) = flui_testing::capture(|| {
+    let ((), log) = flui_testing::log_capture::capture(|| {
         host.attach(&root).expect("a fresh window");
         settle(&mut host);
     });
@@ -1035,7 +1035,7 @@ pub(crate) fn a_cold_url_no_router_took_is_dropped_after_the_first_frame() {
     // says so.
     let closing = host.open_window(HeadlessWindow::new(400, 400));
     assert_eq!(host.open_url(closing, "myapp:///note/4"), Ok(()));
-    let (closed, log) = flui_testing::capture(|| {
+    let (closed, log) = flui_testing::log_capture::capture(|| {
         let closed = host.request_close(closing, CloseReason::Program);
         settle(&mut host);
         closed

@@ -2,7 +2,7 @@
 //! [`AnimationController`]s off a single virtual timeline.
 //!
 //! A frame driver (each presentation of a UI runtime, deterministic under
-//! `flui_testing::HeadlessHost`) owns one [`VsyncDriver`] and calls its
+//! `flui_testing::host::HeadlessHost`) owns one [`VsyncDriver`] and calls its
 //! [`tick_all`](VsyncDriver::tick_all) once per frame with the presentation's
 //! typed [`FrameTick`]. Controllers reach the registry through the driver's
 //! [`Vsync`] handle, ambiently: in the widget layer a `VsyncScope`

@@ -36,8 +36,8 @@ fn wake() {
 
 /// A focused 1 × 1 window whose redraw request runs the wake action this
 /// thread armed.
-fn wake_window() -> flui_testing::MockWindow {
-    flui_testing::MockWindow::new()
+fn wake_window() -> flui_platform::testing::MockWindow {
+    flui_platform::testing::MockWindow::new()
         .with_size(1.0, 1.0)
         .focused(true)
         .with_redraw_hook(wake)

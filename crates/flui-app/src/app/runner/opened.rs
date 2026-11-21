@@ -1272,13 +1272,13 @@ mod loan_tests {
     /// the unwinding destructor.
     #[test]
     fn a_loan_dropped_during_an_unwind_only_returns_its_urls() {
-        flui_testing::disarm_interest_cache();
+        flui_testing::log_capture::disarm_interest_cache();
         let routing = routing();
         hold(&routing, "myapp:///a");
         let loan = routing
             .lend(&[OpenTarget::Application])
             .expect("the held URL is lent");
-        let (unwound, log) = flui_testing::capture(|| {
+        let (unwound, log) = flui_testing::log_capture::capture(|| {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the test unwinds through the loan on purpose"
@@ -1301,7 +1301,7 @@ mod loan_tests {
     /// the next routing refuses it for the panic, not as a failed window.
     #[test]
     fn a_loan_whose_navigation_panics_is_refused_for_the_panic() {
-        flui_testing::disarm_interest_cache();
+        flui_testing::log_capture::disarm_interest_cache();
         let routing = routing();
         hold(&routing, "myapp:///a");
         let mut loan = routing
@@ -1319,7 +1319,7 @@ mod loan_tests {
             returned(&routing),
             [("myapp:///a".to_owned(), LoanEnd::NavigationPanicked)]
         );
-        let ((), log) = flui_testing::capture(|| routing.route_owed());
+        let ((), log) = flui_testing::log_capture::capture(|| routing.route_owed());
         assert_eq!(
             log.count_containing("its navigation panicked as its window opened"),
             1,
@@ -1341,7 +1341,7 @@ mod loan_tests {
     fn a_loan_dropped_while_the_loops_state_is_borrowed_asks_for_its_turn() {
         use super::{APP_RUNTIME, OpenedLoan};
 
-        flui_testing::disarm_interest_cache();
+        flui_testing::log_capture::disarm_interest_cache();
         let run = crate::testing::HeadlessRun::start_resident(
             crate::app::Application::new()
                 .declares(OpenDeclarations::new().url_schemes(&["myapp"]))
@@ -1361,7 +1361,7 @@ mod loan_tests {
             routing: Rc::clone(&routing),
             dropped_as: LoanEnd::Failed,
         };
-        let ((), log) = flui_testing::capture(|| {
+        let ((), log) = flui_testing::log_capture::capture(|| {
             APP_RUNTIME.with(|slot| {
                 let _busy = slot.borrow_mut();
                 drop(loan);
@@ -1391,7 +1391,7 @@ mod loan_tests {
     fn a_link_that_finds_the_loops_state_borrowed_is_routed_on_the_turn_it_asks_for() {
         use super::APP_RUNTIME;
 
-        flui_testing::disarm_interest_cache();
+        flui_testing::log_capture::disarm_interest_cache();
         let run = crate::testing::HeadlessRun::start_resident(
             crate::app::Application::new()
                 .declares(OpenDeclarations::new().url_schemes(&["myapp"]))

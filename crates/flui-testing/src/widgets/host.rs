@@ -204,7 +204,7 @@ impl WidgetHost {
         &self.pipeline
     }
 
-    pub(super) fn clock(&self) -> &crate::HostClock {
+    pub(super) fn clock(&self) -> &crate::host::HostClock {
         self.ui_runtime.clock()
     }
 
