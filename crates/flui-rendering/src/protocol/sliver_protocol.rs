@@ -1150,7 +1150,7 @@ impl ErasedSliverLayoutContext for DriverSliverLayoutContext<'_> {
         self.children
             .iter()
             .find_map(|slot| slot.parent_data.as_deref())
-            .map(|pd| pd.as_any().type_id())
+            .map(|pd| (pd as &dyn std::any::Any).type_id())
     }
 
     fn request_child_build(&mut self, logical_index: usize) -> ChildLayout {

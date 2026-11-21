@@ -47,8 +47,8 @@ pub enum SemanticsClip {
     ScrollCache(flui_foundation::geometry::Rect<f64>),
 }
 
-use downcast_rs::{Downcast, impl_downcast};
 use flui_foundation::inspect::Inspect;
+use std::any::Any;
 
 use crate::{protocol::Protocol, traits::PaintEffects};
 use flui_interaction::pointer::{CursorRequest, MouseTrackerAnnotation, PointerTarget};
@@ -183,7 +183,7 @@ impl HitTestOutcome {
     label = "no `RenderObject<{P}>` for `{Self}`",
     note = "render objects implement the protocol trait instead: `RenderBox` (box protocol) or `RenderSliver` (sliver protocol), plus `flui_foundation::inspect::Inspect`; `RenderObject<P>` then follows from a blanket impl"
 )]
-pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
+pub trait RenderObject<P: Protocol>: Inspect + Any {
     // ========================================================================
     // Core Operations
     // ========================================================================
@@ -977,4 +977,22 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
     // `storage/node.rs`.
 }
 
-impl_downcast!(RenderObject<P> where P: Protocol);
+impl<P: Protocol> dyn RenderObject<P> {
+    /// Returns `true` if the concrete type behind this trait object is `T`.
+    #[must_use]
+    pub fn is<T: RenderObject<P>>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Returns the concrete `T` behind this trait object, or `None` for another type.
+    #[must_use]
+    pub fn downcast_ref<T: RenderObject<P>>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref::<T>()
+    }
+
+    /// Mutable counterpart to `downcast_ref`.
+    #[must_use]
+    pub fn downcast_mut<T: RenderObject<P>>(&mut self) -> Option<&mut T> {
+        (self as &mut dyn Any).downcast_mut::<T>()
+    }
+}
