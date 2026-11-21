@@ -6,6 +6,7 @@ use flui_foundation::ViewKey;
 use flui_objects::RenderTable;
 
 use crate::{Directionality, SizedBox};
+use flui_foundation::CreationSite;
 use flui_objects::TableColumnWidth;
 use flui_painting::styling::{BoxDecoration, TableBorder};
 use flui_painting::typography::TextBaseline;
@@ -14,7 +15,7 @@ use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
 use flui_view::{
-    BoxedView, BuildContext, CreationSite, IntoView, ParentDataView, RenderView, View, ViewExt,
+    BoxedView, BuildContext, IntoView, ParentDataView, RenderView, View, ViewExt,
     impl_parent_data_view, impl_render_view,
 };
 

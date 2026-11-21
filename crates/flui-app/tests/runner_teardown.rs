@@ -1853,7 +1853,7 @@ pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
 /// post-frame handle for the test.
 #[derive(Clone)]
 struct PostFramePanics {
-    handle: Rc<RefCell<Option<flui_view::PostFrameHandle>>>,
+    handle: Rc<RefCell<Option<flui_scheduler::PostFrameHandle>>>,
 }
 
 struct PostFramePanicsState {

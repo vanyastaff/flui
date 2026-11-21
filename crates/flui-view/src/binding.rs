@@ -18,7 +18,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use flui_view::WidgetsBinding;
+//! use flui_view::__runtime::WidgetsBinding;
 //!
 //! // The UiRuntime owns the binding; construct it directly.
 //! let binding = WidgetsBinding::new();
@@ -351,7 +351,7 @@ impl WidgetsBinding {
     /// # Examples
     ///
     /// ```
-    /// use flui_view::WidgetsBinding;
+    /// use flui_view::__runtime::WidgetsBinding;
     ///
     /// let binding = WidgetsBinding::new();
     /// let recovered = binding.take_recovered_panics();
@@ -1133,7 +1133,7 @@ mod tests {
 
     use super::*;
     use crate::__runtime::BindingRuntime as _;
-    use crate::RootRenderElement;
+    use crate::view::RootRenderElement;
 
     // Carries a `PipelineCell` (via `CoreState::pipeline_owner`), so it must
     // stay pinned `!Send + !Sync` -- a stray `unsafe impl` here would let a

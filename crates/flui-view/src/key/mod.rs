@@ -18,8 +18,8 @@ pub(crate) mod registry;
 // `crate::key::registry::{install_registry, take_registry,
 // GlobalKeyRegistryHandle}` directly.
 
-// Re-export widget-layer keys (source of truth is here)
-// Re-export foundation keys for convenience
-pub use flui_foundation::{UniqueKey, ValueKey, ViewKey};
+// `ValueKey` is flui-foundation's; it is named here beside the widget-layer
+// keys so a view author finds every key it writes in one place.
+pub use flui_foundation::ValueKey;
 pub use global_key::{GlobalKey, KeyLookup};
 pub use object_key::ObjectKey;

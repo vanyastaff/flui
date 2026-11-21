@@ -144,7 +144,7 @@ struct ActiveBuild {
 /// Every presentation has its own [`Reactive`] graph, so a graph's own
 /// `building` cannot see another window's build. The UI runtime hands one
 /// `BuildInProgress` to every `BuildOwner` it assembles
-/// ([`BuildOwner::set_build_in_progress`](crate::BuildOwner::set_build_in_progress));
+/// ([`BuildOwner::set_build_in_progress`](crate::owner::BuildOwner::set_build_in_progress));
 /// each graph publishes its builds there and consults it before accepting a
 /// write or a slot creation, so a write that reaches window A's graph (through
 /// the runtime's `Writer` routing) while window B builds is refused with

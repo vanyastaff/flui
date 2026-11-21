@@ -31,6 +31,9 @@ use crate::{
     tree::ElementTree,
 };
 
+// The reconciler's trace collector and its direct driver.
+pub use crate::tree::test_utils::{CollectedEvent, ReconcileEventCollector, reconcile_children};
+
 /// An owned, detached [`BuildContext`] for one mounted element.
 ///
 /// It presents the element's owner-local [`BuildContext`] surface:

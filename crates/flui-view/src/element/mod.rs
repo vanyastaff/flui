@@ -14,11 +14,11 @@ pub(crate) mod future_builder;
 mod inherited_access;
 pub(crate) mod layout_builder;
 mod lifecycle;
-mod notification;
-mod provided;
+pub(crate) mod notification;
+pub(crate) mod provided;
 mod render_custody;
-mod render_object_element;
-mod root;
+pub(crate) mod render_object_element;
+pub(crate) mod root;
 pub(crate) mod sliver_adaptor;
 pub(crate) mod sliver_persistent_header;
 pub(crate) mod sparse_children;
@@ -26,17 +26,17 @@ mod stateful_render;
 pub(crate) mod stream_builder;
 
 // New generic infrastructure
-pub mod arity;
-pub mod behavior;
+mod arity;
+mod behavior;
 pub(crate) mod behavior_commons;
 // `dispatch` is the only View-update routing path:
 // `ElementCore::update_view` unconditionally routes through
 // `dispatch_view_update`, which downcasts only after a concrete
 // `TypeId` guard has matched.
 pub(crate) mod dispatch;
-pub mod generic;
-pub mod kind;
-pub mod unified;
+mod generic;
+mod kind;
+mod unified;
 
 use flui_foundation::ElementId;
 // `IndexedSlot` lives in flui-foundation. flui-view re-exports it and aliases
@@ -56,18 +56,17 @@ pub use generic::ElementCore;
 pub use inherited_access::{InheritedElementAccess, ProvidedRef};
 pub use kind::{
     ElementKind, InheritedElementBase, NotificationElementBase, ProxyElementBase,
-    RenderElementBase, StatefulElementBase, StatelessElementBase,
+    RenderElementBase, RootElementBase, StatefulElementBase, StatelessElementBase,
 };
 pub use layout_builder::LayoutBuilder;
 pub use lifecycle::Lifecycle;
-pub use notification::{
-    DragEndNotification, DragStartNotification, FocusNotification, KeepAliveNotification,
-    LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
-    SizeChangedNotification,
-};
-pub use provided::{Provided, ProvidedValue};
-pub use render_object_element::RenderTreeRootElement;
-pub use root::{RootElement, RootElementImpl};
+// The notifications are named at the crate root; the notifiable-element
+// trait is the element side of their dispatch.
+pub use notification::NotifiableElement;
+pub(crate) use notification::Notification;
+// The render-tree root marker and the root element are the composition
+// roots' (`crate::__runtime`).
+pub(crate) use render_object_element::RenderTreeRootElement;
 // The lazy multi-box adaptor and its extension point: a render object that
 // implements `LazyMultiBoxRender` gets the element-owned child lifecycle by
 // constructing `SliverMultiBoxAdaptor::with_config` (ADR-0053). `SliverList`,
@@ -100,7 +99,7 @@ pub use unified::Element;
 ///
 /// ```rust
 /// use flui_foundation::ElementId;
-/// use flui_view::ElementSlot;
+/// use flui_view::element::ElementSlot;
 ///
 /// let first = ElementSlot::first();
 /// assert_eq!(first.index(), 0);

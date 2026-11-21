@@ -24,7 +24,8 @@ use flui_layer::Scene;
 use flui_layer::{BoundaryContent, SceneOp, SceneOwner, SceneVersion, SurfaceKey};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
-use flui_view::{__runtime::BindingRuntime as _, StatelessView, View, WidgetsBinding};
+use flui_view::__runtime::WidgetsBinding;
+use flui_view::{__runtime::BindingRuntime as _, StatelessView, View};
 
 /// Why [`PluginPipeline::draw_frame`] produced no scene.
 ///

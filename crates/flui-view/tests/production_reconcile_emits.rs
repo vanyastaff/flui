@@ -28,9 +28,9 @@ use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::{
-    BoxedView, BuildOwner, ElementTree, ErrorView, GlobalKey, ObjectKey, RenderView, View, ViewExt,
-    tree::ReconcileEventKind,
+    BoxedView, ErrorView, GlobalKey, ObjectKey, ReconcileEventKind, RenderView, View, ViewExt,
 };
 use serial_test::serial;
 
@@ -423,7 +423,7 @@ fn expected_destination_mounts() -> Vec<(ReconcileEventKind, u64, String)> {
 }
 
 fn assert_destination_emits_only_final_mounts(
-    events: &[flui_view::tree::test_utils::CollectedEvent],
+    events: &[flui_view::testing::CollectedEvent],
     destination: ElementId,
     failed_view_type_id: TypeId,
 ) {

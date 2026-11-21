@@ -42,9 +42,9 @@ use flui_platform::transfer::data::TransferActions;
 use flui_platform::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
 use flui_view::environment::GesturePolicy;
-use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
 use flui_view::{EventContext, EventOutcome, RebuildHandle, WriterSource};
+use flui_view::{KeepAliveHandle, KeepAliveLease};
 
 use super::actions::{Action, ActionOutcome, Actions, CopySelectionTextIntent};
 use super::gesture_alternatives::{

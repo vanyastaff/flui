@@ -7,9 +7,10 @@ use std::rc::Rc;
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::widgets::{lay_out, tight};
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook};
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, IntoView, LifecycleContext, LifecycleHook, RenderView,
-    StatefulView, UnmountHook, View, ViewExt, ViewState,
+    BuildContext, IntoView, LifecycleContext, RenderView, StatefulView, UnmountHook, View, ViewExt,
+    ViewState,
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;

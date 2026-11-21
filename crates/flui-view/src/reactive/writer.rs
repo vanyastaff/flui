@@ -20,7 +20,7 @@
 //! The graph itself is not a write target. Host code that writes outside a
 //! widget (a cross-thread `UiCommand::SignalWrite`, a test harness) opens an
 //! [`EventContext`] through the owner's source,
-//! [`BuildOwner::writer_source`](crate::BuildOwner::writer_source), like any
+//! [`BuildOwner::writer_source`](crate::owner::BuildOwner::writer_source), like any
 //! callback.
 //!
 //! [`LifecycleContext::writer_source`]: crate::LifecycleContext::writer_source

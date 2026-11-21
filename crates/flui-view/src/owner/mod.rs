@@ -49,10 +49,10 @@ pub use keep_alive::{KeepAliveHandle, KeepAliveLease};
 pub use rebuild_handle::RebuildHandle;
 pub use unmount_hooks::UnmountHook;
 pub(crate) use unmount_hooks::UnmountHooks;
-// Moved to flui-foundation (ADR-0040: observation events carry typed
-// causes, and foundation is the only crate below every emitter); re-exported
-// here so no call site changes.
-pub use flui_foundation::{RebuildReason, RebuildReasons};
+// `RebuildReason` is flui-foundation's (ADR-0040: observation events carry
+// typed causes, and foundation is the only crate below every emitter); it is
+// named here beside the handle that takes it.
+pub use flui_foundation::RebuildReason;
 // Internal scheduling handle — `pub(crate)`: captured by `ElementCore` at mount,
 // no public consumer. See `ExternalBuildScheduler`.
 pub(crate) use build_owner::ExternalBuildScheduler;

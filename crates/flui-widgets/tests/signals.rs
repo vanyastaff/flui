@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::common::{lay_out, loose, size};
-use flui_view::view::InheritedView;
+use flui_view::InheritedView;
 use flui_view::{BuildContextExt, Signal, SignalError, StatelessView};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};

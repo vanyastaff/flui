@@ -558,7 +558,7 @@ impl LaidOut {
             .ui_runtime()
             .ui_runtime()
             .widgets()
-            .with_build_owner(flui_view::BuildOwner::focus_manager)
+            .with_build_owner(flui_view::__runtime::BuildOwner::focus_manager)
     }
 
     /// The clipboard this tree's widgets acquire through
@@ -1144,7 +1144,9 @@ impl LaidOut {
         // earlier frame built: empty when no build pass ran. When a focus move
         // rebuilds within the frame, a second pass that builds replaces the
         // first pass's report (`WidgetsBinding::rebuild_within_frame`).
-        self.with_build_owner_mut(flui_view::BuildOwner::clear_frame_build_report_for_test);
+        self.with_build_owner_mut(
+            flui_view::__runtime::BuildOwner::clear_frame_build_report_for_test,
+        );
         self.pump_for(dt);
         let pipeline_after = self
             .pipeline_owner
@@ -1191,7 +1193,7 @@ impl LaidOut {
     /// closure, not a borrow.
     pub fn with_build_owner_mut<R>(
         &mut self,
-        f: impl FnOnce(&mut flui_view::BuildOwner) -> R,
+        f: impl FnOnce(&mut flui_view::__runtime::BuildOwner) -> R,
     ) -> R {
         self.host
             .ui_runtime()

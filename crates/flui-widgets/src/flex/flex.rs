@@ -2,15 +2,15 @@
 
 use std::fmt;
 
-use flui_foundation::TextDirection;
+use flui_foundation::{CreationSite, TextDirection};
 use flui_objects::{
     CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, RenderFlex,
     VerticalDirection,
 };
 use flui_painting::typography::TextBaseline;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, CreationSite};
+use flui_view::BoxedView;
+use flui_view::ViewSeq;
 
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;

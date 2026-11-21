@@ -32,9 +32,11 @@ use std::{
     },
 };
 
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::Lifecycle;
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, ErrorView, FrameworkError, IntoView, Lifecycle,
-    LifecycleContext, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, ErrorView, FrameworkError, IntoView, LifecycleContext, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -92,11 +94,11 @@ impl<C: View + Clone + 'static> View for WrapperView<C> {
 
 #[derive(Clone)]
 struct InitPanicView {
-    failed_ids: std::sync::Arc<Mutex<Vec<flui_view::ElementId>>>,
+    failed_ids: std::sync::Arc<Mutex<Vec<flui_foundation::ElementId>>>,
 }
 
 struct InitPanicState {
-    failed_ids: std::sync::Arc<Mutex<Vec<flui_view::ElementId>>>,
+    failed_ids: std::sync::Arc<Mutex<Vec<flui_foundation::ElementId>>>,
 }
 
 impl StatefulView for InitPanicView {
@@ -130,14 +132,14 @@ impl View for InitPanicView {
 // Helpers
 // ----------------------------------------------------------------------------
 
-fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, flui_view::ElementId) {
+fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, flui_foundation::ElementId) {
     mount_and_build_with(view, None)
 }
 
 fn mount_and_build_with(
     view: &dyn View,
     error_view_builder: Option<flui_view::ErrorViewBuilder>,
-) -> (ElementTree, BuildOwner, flui_view::ElementId) {
+) -> (ElementTree, BuildOwner, flui_foundation::ElementId) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     owner.capabilities_mut().error_view_builder = error_view_builder;
@@ -147,7 +149,7 @@ fn mount_and_build_with(
     (tree, owner, root_id)
 }
 
-fn count_error_child_elements(tree: &ElementTree, parent: flui_view::ElementId) -> usize {
+fn count_error_child_elements(tree: &ElementTree, parent: flui_foundation::ElementId) -> usize {
     child_ids(tree, parent)
         .into_iter()
         .filter(|&child_id| {
@@ -156,7 +158,10 @@ fn count_error_child_elements(tree: &ElementTree, parent: flui_view::ElementId) 
         .count()
 }
 
-fn child_ids(tree: &ElementTree, parent: flui_view::ElementId) -> Vec<flui_view::ElementId> {
+fn child_ids(
+    tree: &ElementTree,
+    parent: flui_foundation::ElementId,
+) -> Vec<flui_foundation::ElementId> {
     tree.iter_nodes()
         .filter_map(|(id, node)| (node.parent() == Some(parent)).then_some(id))
         .collect()
@@ -291,7 +296,7 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
     assert_eq!(recovered.len(), 1, "the prior recovery record must survive");
     assert!(matches!(
         recovered[0].at,
-        flui_view::RecoveredAt::Element {
+        flui_view::__runtime::RecoveredAt::Element {
             element,
             parent: None,
             ..

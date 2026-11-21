@@ -1,4 +1,4 @@
-﻿//! Keyboard focus over a lazy list: one Tab stop, roving focus over its rows.
+//! Keyboard focus over a lazy list: one Tab stop, roving focus over its rows.
 //!
 //! [`FocusableList`] wraps whatever hosts the rows (a `ListView`'s or
 //! `GridView`'s viewport, or one sliver under `FocusableSliver`) in the **list
@@ -31,9 +31,9 @@ use flui_platform::input::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKe
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::view::{ScrollPosition, ViewportOffset as _};
 use flui_view::element::ElementKind;
-use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, impl_inherited_view};
+use flui_view::{KeepAliveHandle, KeepAliveLease};
 
 use super::{ScrollController, ScrollPositionScope};
 use crate::anchored_box::AnchoredSliver;
@@ -863,7 +863,7 @@ pub(crate) struct ListItemFocusState {
     /// The pin refresh the controller calls; the controller holds it weakly.
     refresh: Rc<dyn Fn()>,
     subscription: Option<Subscription>,
-    post_frame: Option<flui_view::PostFrameHandle>,
+    post_frame: Option<flui_scheduler::PostFrameHandle>,
 }
 
 impl StatefulView for ListItemFocus {

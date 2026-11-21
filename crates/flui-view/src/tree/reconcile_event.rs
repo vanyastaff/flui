@@ -8,8 +8,8 @@
 //! a fresh element or [`Reparent`](ReconcileEventKind::Reparent) when it
 //! retakes an inactive GlobalKey element — never both for one new-side
 //! view. The raw stream carries no reconcile-invocation or frame identifier
-//! and no batch delimiter. The `ReconcileEventCollector` test fixture (in the
-//! in-crate `tree::test_utils` module, gated behind `testing`) and other
+//! and no batch delimiter. The `ReconcileEventCollector` test fixture (named as
+//! `flui_view::testing::ReconcileEventCollector`, gated behind `testing`) and other
 //! callers that externally scope capture around one reconcile call can
 //! aggregate that call's disposition multiset without a tree diff. Other
 //! trace-tooling subscribers receive non-causal diagnostic records, not a

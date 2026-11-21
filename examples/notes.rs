@@ -12,7 +12,7 @@ use std::cell::RefCell;
 
 use flui::prelude::*;
 use flui::view::SignalError;
-use flui::view::key::ValueKey;
+use flui::view::ValueKey;
 
 #[derive(Clone, Default)]
 struct Notes {

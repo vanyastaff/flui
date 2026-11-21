@@ -249,7 +249,7 @@ mod lifecycle_derivation_tests {
         let heard = Rc::new(RefCell::new(Vec::new()));
         let lifecycle = ui_runtime
             .widgets()
-            .with_build_owner(flui_view::BuildOwner::lifecycle_handle)
+            .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
             .expect("presentation lifecycle handle");
         let heard_by_recorder = Rc::clone(&heard);
         let (_, recorder) = lifecycle

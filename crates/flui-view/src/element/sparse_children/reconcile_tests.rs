@@ -11,7 +11,7 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
 use super::{ReconcileSource, SparseChildren, item_exists};
 use crate::view::{RenderView, View};
-use crate::{BoxedView, BuildOwner, ElementTree};
+use crate::{BoxedView, owner::BuildOwner, tree::ElementTree};
 
 #[derive(Clone)]
 struct KeyedBox {
@@ -312,7 +312,7 @@ fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
         1,
         "exactly one panic must be recorded for the one failing mount"
     );
-    assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Mount);
+    assert_eq!(recovered_panics[0].hook, crate::owner::LifecycleHook::Mount);
     // A window-level record, not a behavior-level one:
     // `RenderBehavior::on_mount` does not catch/record its own panic
     // (unlike `StatefulBehavior::on_activate`), so the staged handoff

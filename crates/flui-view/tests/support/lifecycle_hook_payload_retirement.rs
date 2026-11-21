@@ -4,10 +4,11 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook};
 use flui_view::LifecycleContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, LifecycleHook, RebuildReason,
-    RenderView, StatefulView, View, ViewExt, ViewState,
+    BuildContext, GlobalKey, IntoView, RebuildReason, RenderView, StatefulView, View, ViewExt,
+    ViewState,
 };
 use std::{
     any::TypeId,
@@ -269,7 +270,7 @@ pub(crate) fn dispatch_child(kind: &str) {
     );
     assert_eq!(records[0].payload_text, None);
     assert!(
-        matches!(records[0].at, flui_view::RecoveredAt::Element { element, .. } if element == subject_id)
+        matches!(records[0].at, flui_view::__runtime::RecoveredAt::Element { element, .. } if element == subject_id)
     );
     owner.finalize_tree(&mut tree);
     assert!(!tree.contains(subject_id));

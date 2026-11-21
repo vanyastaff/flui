@@ -560,12 +560,12 @@ pub(crate) fn lazy_list_view_builder_callback_panics_are_contained_with_their_pa
 /// drop it.
 #[derive(Clone, StatefulView)]
 struct PinnedRow {
-    lease: Rc<RefCell<Option<flui_view::owner::KeepAliveLease>>>,
+    lease: Rc<RefCell<Option<flui_view::KeepAliveLease>>>,
     disposed: Rc<Cell<bool>>,
 }
 
 struct PinnedRowState {
-    lease: Rc<RefCell<Option<flui_view::owner::KeepAliveLease>>>,
+    lease: Rc<RefCell<Option<flui_view::KeepAliveLease>>>,
     disposed: Rc<Cell<bool>>,
 }
 

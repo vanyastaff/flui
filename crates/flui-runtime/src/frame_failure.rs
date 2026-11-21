@@ -31,7 +31,8 @@ use std::fmt;
 use flui_foundation::panic::{is_internal_invariant, payload_text};
 use flui_foundation::{PresentationAddress, TreeContext};
 use flui_rendering::RenderError;
-use flui_view::{LifecycleHook, RecoveredAt, RecoveredPanic as ViewRecoveredPanic};
+use flui_view::__runtime::RecoveredPanic as ViewRecoveredPanic;
+use flui_view::__runtime::{LifecycleHook, RecoveredAt};
 
 /// Panic text made safe for the application's selected diagnostics policy.
 ///

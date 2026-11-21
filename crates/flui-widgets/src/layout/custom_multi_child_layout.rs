@@ -8,7 +8,7 @@ use flui_objects::RenderCustomMultiChildLayoutBox;
 use flui_rendering::delegates::MultiChildLayoutDelegate;
 use flui_rendering::parent_data::MultiChildLayoutParentData;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::seq::ViewSeq;
+use flui_view::ViewSeq;
 use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_data_view};
 
 use crate::support::generic_render_view_element;

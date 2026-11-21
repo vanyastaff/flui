@@ -7,15 +7,15 @@ use std::fmt;
 use std::ops::Range;
 use std::rc::Rc;
 
-use flui_foundation::TextDirection;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
+use flui_foundation::{CreationSite, TextDirection};
 use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::{RenderToolbarItems, ToolbarItemsSplit};
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::ViewSeq;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, CreationSite, RebuildHandle, RebuildReason, View};
+use flui_view::{BoxedView, RebuildHandle, RebuildReason, View};
 
 use crate::interaction::{ExcludeFocus, GestureDetector};
 use crate::localization::{BoxedWidgetsLocalizations, Directionality};

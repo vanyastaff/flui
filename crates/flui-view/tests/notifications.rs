@@ -28,11 +28,12 @@ use std::{
 };
 
 use flui_foundation::{ElementId, RenderId};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::Lifecycle;
 use flui_view::testing::ElementBuildContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Notification, StatelessView,
-    View, ViewExt,
-    element::{Lifecycle, NotificationElementBase},
+    BuildContext, ElementBase, IntoView, Notification, StatelessView, View, ViewExt,
+    element::NotificationElementBase,
 };
 use std::cell::RefCell;
 use std::rc::Rc;

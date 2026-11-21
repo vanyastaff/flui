@@ -846,7 +846,7 @@ macro_rules! impl_render_view {
                 $crate::element::ElementKind::render_variable(self)
             }
 
-            fn creation_site(&self) -> $crate::CreationSite {
+            fn creation_site(&self) -> $crate::__private::CreationSite {
                 self.$field
             }
         }

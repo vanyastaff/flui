@@ -108,7 +108,10 @@ impl UiRuntime {
     /// If `id` names no presentation of this UI runtime.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn presentation_widgets_for_test(&self, id: PresentationId) -> &flui_view::WidgetsBinding {
+    pub fn presentation_widgets_for_test(
+        &self,
+        id: PresentationId,
+    ) -> &flui_view::__runtime::WidgetsBinding {
         self.presentations
             .get(id)
             .expect("BUG: presentation_widgets_for_test called with an unknown id")
@@ -440,7 +443,7 @@ impl UiRuntime {
     /// only: a caller that drives the tree through it outside
     /// [`Self::enter`] bypasses the UI runtime's entry scope.
     #[must_use]
-    pub fn widgets(&self) -> &flui_view::WidgetsBinding {
+    pub fn widgets(&self) -> &flui_view::__runtime::WidgetsBinding {
         self.presentations.primary().widgets()
     }
 

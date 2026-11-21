@@ -8,7 +8,7 @@ it is open, and a key so that state stays with its note when a note above it is 
 
 ```rust
 use flui::prelude::*;
-use flui::view::key::ValueKey;
+use flui::view::ValueKey;
 
 #[derive(Clone, Default)]
 struct Notes {

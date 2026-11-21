@@ -34,11 +34,8 @@ use flui_scheduler::{
 };
 use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
-use flui_view::__runtime::CloseGuardSource;
-use flui_view::{
-    __runtime::{BindingRuntime as _, FramePhaseMarker},
-    BuildInProgress, GlobalKeyScope, WidgetsBinding,
-};
+use flui_view::__runtime::{BindingRuntime as _, FramePhaseMarker};
+use flui_view::__runtime::{BuildInProgress, CloseGuardSource, GlobalKeyScope, WidgetsBinding};
 use web_time::{Duration, Instant};
 
 use crate::epoch::{FrameCommitState, TreeRevision};
@@ -1057,7 +1054,7 @@ impl PresentationState {
         let vsync_driver = VsyncDriver::new();
         // Controllers ticked here refuse mutation while this runtime builds.
         vsync_driver.set_build_phase(Some(
-            widgets.with_build_owner(flui_view::BuildOwner::build_phase),
+            widgets.with_build_owner(flui_view::__runtime::BuildOwner::build_phase),
         ));
         let request_animation_frame = Arc::clone(&request_frame);
         let animation_owner = Rc::downgrade(&alive);

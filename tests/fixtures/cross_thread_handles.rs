@@ -7,9 +7,10 @@
 use std::sync::Arc;
 
 use flui::app::{AppHandle, ComputeJob, HostComputePool, HostIoPool, IoFuture};
+use flui::scheduler::FrameWaker;
 use flui::view::dev_agent::DevAgentHook;
 use flui::view::dev_reload::DevReloadHook;
-use flui::view::{FrameWaker, RebuildHandle, SignalSender};
+use flui::view::{RebuildHandle, SignalSender};
 
 fn across<T: Send + 'static>(value: T) {
     std::thread::spawn(move || drop(value))

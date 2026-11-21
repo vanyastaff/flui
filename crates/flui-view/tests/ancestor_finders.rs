@@ -17,10 +17,9 @@
     reason = "these tests still read a detached `ElementBuildContext`; docs/gaps.md tracks moving them into a build"
 )]
 
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::testing::ElementBuildContext;
-use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementTree, IntoView, StatelessView, View, ViewExt,
-};
+use flui_view::{BuildContext, BuildContextExt, IntoView, StatelessView, View, ViewExt};
 use std::cell::RefCell;
 use std::rc::Rc;
 

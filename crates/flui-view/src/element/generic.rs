@@ -291,7 +291,7 @@ where
     ///
     /// The `(self_id, depth)` pair stamped here is what `setState` pushes
     /// onto the dirty heap that
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains.
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner) drains.
     //
     // E3 (atomic box→arena swap): the per-element `children: A::Storage`
     // box graph is gone. Children are slab-resident nodes addressed by
@@ -513,7 +513,7 @@ where
     // child views (`build_into_views`, on the behavior); the reconcile +
     // recursive build runs against the slab-resident
     // [`ElementTree`](crate::tree::ElementTree) in
-    // [`BuildOwner::build_scope`](crate::BuildOwner) via
+    // [`BuildOwner::build_scope`](crate::owner::BuildOwner) via
     // [`reconcile_children_by_id`](crate::tree::id_reconcile), which
     // schedules each child as its own drain entry. No element ever holds a
     // `&mut` into the slab across a second slab mutation.
@@ -639,7 +639,7 @@ where
     /// `Listenable`): the returned callback is registered with the listenable,
     /// so a `notify_listeners` fired between frames (an animation tick) queues
     /// the element on the external build inbox and requests a frame. The drain
-    /// in [`BuildOwner::build_scope`](crate::BuildOwner) marks the element
+    /// in [`BuildOwner::build_scope`](crate::owner::BuildOwner) marks the element
     /// dirty, so the callback holds no reference to the element's own state.
     ///
     /// The `ExternalBuildScheduler` + `self_id` are captured by value, so the

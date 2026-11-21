@@ -6,8 +6,8 @@
 
 use flui_objects::RenderTheater;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::ViewSeq;
 use flui_view::element::ElementKind;
-use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, View};
 
 /// A `StackFit::Expand` stack whose first `skip_count` children are offstage.

@@ -1,8 +1,9 @@
 //! [`Opacity`] — makes its child partially transparent.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderOpacity;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Makes its child partially transparent.
 ///

@@ -11,7 +11,8 @@ use flui_foundation::{ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{BoxedView, BuildOwner, ElementTree, GlobalKey, RenderView, View, ViewExt};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::{BoxedView, GlobalKey, RenderView, View, ViewExt};
 
 #[derive(Clone)]
 struct Leaf {

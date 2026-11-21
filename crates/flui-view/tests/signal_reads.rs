@@ -11,12 +11,14 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::ElementId;
 use flui_objects::RenderSizedBox;
+use flui_rendering::RenderUpdateImpact;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::prelude::*;
-use flui_view::tree::ElementTree;
 use flui_view::{Signal, SignalSender};
 
 static_assertions::assert_not_impl_any!(Signal<u32>: Send, Sync);
@@ -293,7 +295,7 @@ impl Drop for ReleaseProbe {
 }
 
 pub(crate) fn explicit_release_allows_destructor_reentry_and_slot_reuse() {
-    let owner = flui_view::BuildOwner::new();
+    let owner = flui_view::__runtime::BuildOwner::new();
     let graph = owner.signal_graph().clone();
     let writer = owner.writer_source();
     let drops = Rc::new(Cell::new(0));
@@ -664,7 +666,7 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
 
     laid.pump_widget(root);
     assert_eq!(
-        writer.write(|ctx| flui_view::ReadGraph::graph_id(ctx)),
+        writer.write(|ctx| flui_foundation::read_scope::ReadGraph::graph_id(ctx)),
         graph.id(),
         "the writer writes the owner's graph"
     );
@@ -801,7 +803,7 @@ pub(crate) fn run_released_loan_child() -> bool {
                 self.0.release(self.1);
             }
         }
-        let owner = flui_view::BuildOwner::new();
+        let owner = flui_view::__runtime::BuildOwner::new();
         let graph = owner.signal_graph().clone();
         let writer = owner.writer_source();
         let drops = Rc::new(Cell::new(0));
@@ -847,7 +849,7 @@ pub(crate) fn run_released_loan_child() -> bool {
         }
     }
     struct ReleaseOnDrop {
-        graph: flui_view::reactive::Reactive,
+        graph: flui_view::Reactive,
         slot: flui_view::SignalSlot,
         drops: Rc<Cell<usize>>,
     }
@@ -857,7 +859,7 @@ pub(crate) fn run_released_loan_child() -> bool {
             self.graph.release(self.slot);
         }
     }
-    let owner = flui_view::BuildOwner::new();
+    let owner = flui_view::__runtime::BuildOwner::new();
     let graph = owner.signal_graph().clone();
     let writer = owner.writer_source();
     let next = graph.signal(10u32);

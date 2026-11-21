@@ -1,10 +1,11 @@
 //! [`ClipRect`] — clips its child to its own rectangular bounds.
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::Rect;
 use flui_objects::RenderClipRect;
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to this widget's rectangular bounds.
 ///

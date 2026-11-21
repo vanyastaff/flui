@@ -67,11 +67,12 @@ use flui_foundation::geometry::Axis;
 use flui_foundation::{ChangeNotifier, Listenable};
 use flui_platform::input::capabilities::PointerKindSet;
 use flui_rendering::view::{CacheExtentStyle, DimensionChangePolicy, ScrollPosition};
+use flui_scheduler::PostFrameHandle;
+use flui_view::ViewSeq;
 use flui_view::prelude::StatefulView;
-use flui_view::seq::ViewSeq;
 use flui_view::{
-    BoxedView, BuildContext, EventContext, EventOutcome, IntoView, LifecycleContext,
-    PostFrameHandle, RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
+    BoxedView, BuildContext, EventContext, EventOutcome, IntoView, LifecycleContext, RebuildHandle,
+    RebuildReason, ViewExt, ViewState, WriterSource,
 };
 
 use crate::localization::{

@@ -511,7 +511,7 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     }
 }
 
-use flui::view::{
+use flui::scheduler::{
     AsyncDriver, BoxedTask, FrameId, FrameTiming, Instant, PostFrameHandle,
     PostFrameScheduleError, TaskToken,
 };

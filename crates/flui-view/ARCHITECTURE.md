@@ -775,20 +775,39 @@ without shadowing the element's fact or diffing against it. Pinned by `flui-test
 `an_id_from_before_a_removal_is_gone` and
 `a_views_field_named_as_an_element_fact_reads_and_diffs_as_its_own`.
 
+### One public path per item
+
+An item of a closed module is named at the crate root; an item of an open module is named only
+through its module. The closed modules (`binding`, `child`, `context`, `key`, `owner`,
+`reactive`, `seq`, `tree`, `view`) are private, and the root re-exports what a widget, package
+or render-view author writes with. The open modules (`background`, `dev_agent`, `dev_reload`,
+`element`, `environment`, `navigation`, `persist`, `testing`) are namespaces whose items are not
+also at the root: `element` holds what an element author names (`ElementKind`, the element and
+behaviour types, `Lifecycle`, the slots, the builder elements). The root re-exports no other
+crate's items beyond the derives of `flui-macros`, beside the traits they implement, and the
+vocabulary of this crate's own traits (`ValueKey`, `RebuildReason`, `AppLifecycleState`, the
+signal types of `flui_foundation::read_scope`): ids and creation sites are `flui_foundation`'s,
+the frame scheduler's handles `flui_scheduler`'s, and the facade and `flui-sdk` name them in
+their `foundation` and `scheduler` modules. `prelude` holds the authoring forms only, and no
+`tracing` macro.
+
 ### The composition-root seam is a hidden module, not a feature
 
 What the UI runtime-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`)
-need from a binding lives in `#[doc(hidden)] pub mod __runtime` (ADR-0081 §4): the
+need from a binding lives in `#[doc(hidden)] pub mod __runtime` (ADR-0081 §4): the owners a
+composition root builds and drives (`WidgetsBinding`, `BuildOwner`, `ElementTree` and its
+`ElementNode`, the root element and render view, the presentation's capability source, its
+`GlobalKeyScope`, `BuildInProgress`, and what a frame's build and a contained panic report), the
 `GlobalKey` registry activation, the frame-phase stamp at the build-to-finalize boundary
 (`FramePhaseMarker`), the multi-presentation `GlobalKeyRegistryComposite`, and the terminal
-lifecycle ladder (`LifecycleSource`). The module is always
-compiled, so no build configuration changes what `WidgetsBinding` holds, and it has no semver
-promise. The methods it adds to `WidgetsBinding` are on the sealed `BindingRuntime` trait
-rather than inherent, so they resolve only where the trait is imported and are not part of the
-binding's surface as `flui::view` and `flui_sdk::view` expose it. Those two re-export this
-crate as a glob module with a private `mod __runtime {}` that shadows the glob's, so the seam
-is not reachable through them; a `compile_fail,E0603` doctest on each pins it. Pinned from
-outside the crate by `tests/runtime_seam.rs`.
+lifecycle ladder (`LifecycleSource`). A test that drives a bare owner names it there too. The
+module is always compiled, so no build configuration changes what `WidgetsBinding` holds, and it
+has no semver promise. The methods it adds to `WidgetsBinding` are on the sealed
+`BindingRuntime` trait rather than inherent, so they resolve only where the trait is imported.
+`flui::view` and `flui_sdk::view` re-export this crate as a glob module with a private
+`mod __runtime {}` that shadows the glob's, so the seam is not reachable through them; a
+`compile_fail,E0603` doctest on each pins it. Pinned from outside the crate by
+`tests/runtime_seam.rs`.
 
 ### A presentation's URL owner is a slot below the catalog
 

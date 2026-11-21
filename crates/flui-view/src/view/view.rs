@@ -515,7 +515,7 @@ pub trait ElementBase: Downcast + 'static {
     ///
     /// * `parent` - Parent `ElementId`, or `None` for the root element.
     /// * `slot` - Slot/depth position assigned by the parent.
-    /// * `owner` - Split-borrow handle into [`BuildOwner`](crate::BuildOwner)
+    /// * `owner` - Split-borrow handle into [`BuildOwner`](crate::owner::BuildOwner)
     ///   (see [`ElementOwner`](crate::ElementOwner)). Implementations
     ///   may use it to register `GlobalKey`s, schedule rebuilds, or
     ///   thread it into recursive child `mount` calls.
@@ -592,7 +592,7 @@ pub trait ElementBase: Downcast + 'static {
     /// `build_or_recover` / `build_proxy_style` half) and returns the
     /// owned child views WITHOUT touching any child storage — there is no
     /// child storage on the element any more. The reconcile half is
-    /// hoisted out to [`BuildOwner::build_scope`](crate::BuildOwner),
+    /// hoisted out to [`BuildOwner::build_scope`](crate::owner::BuildOwner),
     /// which feeds the returned views to `reconcile_children_by_id` against
     /// the slab-resident [`ElementTree`](crate::tree::ElementTree) with a
     /// fresh `&mut tree` borrow. No `&mut element` is ever live across a
@@ -609,7 +609,7 @@ pub trait ElementBase: Downcast + 'static {
     ///
     /// The split-borrow `owner` handle is threaded through so the build
     /// half can still register `GlobalKey`s or schedule downstream
-    /// rebuilds without re-borrowing the [`BuildOwner`](crate::BuildOwner).
+    /// rebuilds without re-borrowing the [`BuildOwner`](crate::owner::BuildOwner).
     fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> crate::view::ChildViews;
 
     // ========================================================================

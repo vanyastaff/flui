@@ -158,7 +158,7 @@ pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 pub struct FrameReport {
     /// The build owner's report for the frame (distinct elements rebuilt,
     /// builds run, per-reason split).
-    pub build: flui_view::FrameBuildReport,
+    pub build: flui_view::__runtime::FrameBuildReport,
     /// The pipeline's work, differenced across the frame.
     pub pipeline: flui_rendering::pipeline::PipelineCounters,
     /// The retained scene's work: what the frame's patch changed and what

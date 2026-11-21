@@ -1852,7 +1852,7 @@ mod tests {
 
     use super::*;
     use crate::view::RenderView;
-    use crate::{BuildOwner, ElementTree};
+    use crate::{owner::BuildOwner, tree::ElementTree};
 
     // -------------------------------------------------------------------------
     // Shared test fixture — minimal item view used as a list placeholder.
@@ -1970,10 +1970,10 @@ mod tests {
         assert!(did_work, "the substituted requested item was mounted");
         let recovered = build_owner.take_recovered_panics();
         assert_eq!(recovered.len(), 1, "one builder call yields one record");
-        assert_eq!(recovered[0].hook, crate::LifecycleHook::Build);
+        assert_eq!(recovered[0].hook, crate::owner::LifecycleHook::Build);
         assert!(matches!(
             recovered[0].at,
-            crate::RecoveredAt::LazyDelegate {
+            crate::owner::RecoveredAt::LazyDelegate {
                 host: recorded_host,
                 index: Some(1),
                 ..

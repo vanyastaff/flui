@@ -1,10 +1,10 @@
-error[E0277]: `Rc<RefCell<reactive::Inner>>` cannot be sent between threads safely
+error[E0277]: `Rc<RefCell<flui_view::reactive::Inner>>` cannot be sent between threads safely
  --> tests/ui/thread_boundary/writer_stays_on_its_thread.rs:8:32
   |
 8 |     require_thread_spawnable::<Writer>();
-  |                                ^^^^^^ `Rc<RefCell<reactive::Inner>>` cannot be sent between threads safely
+  |                                ^^^^^^ `Rc<RefCell<flui_view::reactive::Inner>>` cannot be sent between threads safely
   |
-  = help: within `Writer`, the trait `Send` is not implemented for `Rc<RefCell<reactive::Inner>>`
+  = help: within `Writer`, the trait `Send` is not implemented for `Rc<RefCell<flui_view::reactive::Inner>>`
 note: required because it appears within the type `Reactive`
  --> crates/flui-view/src/reactive/mod.rs
   |

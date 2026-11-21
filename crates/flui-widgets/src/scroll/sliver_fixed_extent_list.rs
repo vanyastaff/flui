@@ -5,9 +5,9 @@
 use std::fmt;
 use std::rc::Rc;
 
+use flui_view::ViewSeq;
 use flui_view::element::{SemanticSetMapping, StaticChildren};
 use flui_view::prelude::StatelessView;
-use flui_view::seq::ViewSeq;
 use flui_view::{BuildContext, IntoView};
 
 /// A sliver that places its box children sequentially along the scroll axis,

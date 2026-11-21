@@ -6,14 +6,14 @@ Keys control how the reconciler matches a new `View` against an existing `Elemen
 rebuilds. Without one, matching falls back to position and type, which breaks state when a list
 of children is reordered or filtered.
 
-The key types live in `flui::view::key`: `ValueKey`, `UniqueKey` and the `ViewKey` trait, plus two
-widget-layer keys. A view holds its key in a field marked `#[view(key)]`, which the
-`StatelessView` and `StatefulView` derives read: the field is a key, an `Option` of one, or an
-`Rc<dyn ViewKey>` or `Box<dyn ViewKey>`.
+The key types a view writes are at `flui::view`: `ValueKey` and two widget-layer keys; `UniqueKey`
+and the `ViewKey` trait every key implements are at `flui::foundation`. A view holds its key in a
+field marked `#[view(key)]`, which the `StatelessView` and `StatefulView` derives read: the field
+is a key, an `Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`.
 
 ```rust
 # use flui::prelude::*;
-use flui::view::key::ValueKey;
+use flui::view::ValueKey;
 
 #[derive(Clone, StatelessView)]
 struct TodoRow {
@@ -41,7 +41,7 @@ The two widget-layer key types:
 
 ```rust
 use std::rc::Rc;
-use flui::view::key::{GlobalKey, ObjectKey};
+use flui::view::{GlobalKey, ObjectKey};
 
 struct Note { title: String }
 

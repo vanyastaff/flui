@@ -453,33 +453,33 @@ pub trait LifecycleContext: BuildContext {
     /// installed one.
     ///
     /// Spawn subscriptions from `create_state` / `init_state` / `did_change_dependencies`
-    /// and hold the returned [`crate::TaskToken`] in the state — dropping it cancels.
+    /// and hold the returned [`flui_scheduler::TaskToken`] in the state — dropping it cancels.
     ///
     /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
     /// unit test), reported honestly rather than by silently spawning into a
     /// driver nobody polls. Never reach for some OTHER binding's or UI runtime's
     /// `UpdateScheduler` from a widget: each `UiRuntime`, a headless host's
     /// included, owns its own — a task spawned into the wrong one would never run.
-    fn async_driver(&self) -> Option<crate::AsyncDriver>;
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver>;
 
-    /// The UI runtime's timer: [`Sleep`](crate::Sleep) futures that resolve
+    /// The UI runtime's timer: [`Sleep`](flui_scheduler::Sleep) futures that resolve
     /// on the runtime's clock (the testing kit's virtual clock in a test),
     /// for a task spawned on [`async_driver`](Self::async_driver) to await.
     ///
     /// `None` exactly when [`async_driver`](Self::async_driver) is: a tree
     /// bound to no UI runtime has no clock to sleep on. Acquire it in a
     /// lifecycle hook, like the driver.
-    fn timer(&self) -> Option<crate::TimerHandle> {
+    fn timer(&self) -> Option<flui_scheduler::TimerHandle> {
         self.async_driver().map(|driver| driver.timer())
     }
 
     /// The binding's post-frame capability — schedule work that must observe this
-    /// frame's committed layout. The callback receives [`crate::FrameTiming`].
+    /// frame's committed layout. The callback receives [`flui_scheduler::FrameTiming`].
     ///
     /// `None` when no binding installed one. Acquire it in a lifecycle hook
     /// (`create_state` / `init_state` / `did_change_dependencies`), never in `build`/layout/paint —
     /// the same rule `rebuild_handle` follows.
-    fn post_frame_handle(&self) -> Option<crate::PostFrameHandle>;
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle>;
 
     /// The binding's IME/text-input attach-detach capability, if a binding
     /// installed one.

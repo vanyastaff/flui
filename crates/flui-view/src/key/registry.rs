@@ -51,7 +51,7 @@ use flui_foundation::{ElementId, ViewKey};
 /// Snapshot of the framework's global-key lookup surface that
 /// `GlobalKey::current_element` / `with_current_state` consult.
 ///
-/// Held by one [`WidgetsBinding`](crate::WidgetsBinding) and activated only
+/// Held by one [`WidgetsBinding`](crate::binding::WidgetsBinding) and activated only
 /// while its owning UI runtime is entered.
 ///
 /// The struct is `Clone` so internal copies stay cheap — both

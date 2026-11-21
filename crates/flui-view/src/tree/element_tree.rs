@@ -101,7 +101,7 @@ pub struct ElementNode {
     /// The actual Element.
     ///
     /// Normally `Some`. A `None` hole exists ONLY transiently inside
-    /// [`BuildOwner::build_scope`](crate::BuildOwner), between
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner), between
     /// [`ElementTree::take_element`] and [`ElementTree::put_element`], while
     /// the element runs its own `build()` against a live read view of the
     /// rest of the tree. By-value extraction is what lets the element be
@@ -706,7 +706,7 @@ impl ElementTree {
     /// This is the **low-level element-tree attach** primitive. It does **not**
     /// install [`PipelineOwner::root_id`](flui_rendering::PipelineOwner::root_id)
     /// for an ordinary render-producing view — only
-    /// [`crate::RootRenderView`] / `RootRenderElement` owns that invariant.
+    /// [`crate::view::RootRenderView`] / `RootRenderElement` owns that invariant.
     /// The UI runtime therefore wraps the user view in
     /// `RootRenderView` before calling this (`WidgetsBinding::attach_root_widget`).
     ///
@@ -1646,7 +1646,7 @@ impl ElementTree {
     /// `None` hole (see [`ElementNode::element`]).
     ///
     /// Companion to [`Self::put_element`]:
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) takes the element out
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner) takes the element out
     /// so it can run that element's own `build()` against a shared `&` view
     /// of the rest of the slab without aliasing, then puts it back in the
     /// same iteration. Returns `None` for a stale/absent id or an
@@ -1702,13 +1702,13 @@ impl ElementTree {
             return;
         };
         let node = &self.nodes[index];
-        let mut panic = crate::RecoveredPanic::from_payload(
-            crate::RecoveredAt::Element {
+        let mut panic = crate::owner::RecoveredPanic::from_payload(
+            crate::owner::RecoveredAt::Element {
                 element: id,
                 parent: node.parent(),
             },
             node.element().view_type_id(),
-            crate::LifecycleHook::Dispose,
+            crate::owner::LifecycleHook::Dispose,
             payload.as_ref(),
             "running an unmount hook",
         )
@@ -1855,7 +1855,7 @@ impl ElementTree {
     ///   This enables same-frame state migration: a subsequent
     ///   `insert` with the same GlobalKey pulls the element back via
     ///   `try_retake_global_key` (private). End-of-frame
-    ///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) drains any stragglers via
+    ///   [`BuildOwner::finalize_tree`](crate::owner::BuildOwner::finalize_tree) drains any stragglers via
     ///   [`Self::remove_finalized`] (full slab-remove + unregister).
     /// - **Eager (un-keyed):** Behaves as before — `Element::unmount`
     ///   then slab-remove. No deferred queue entry.
@@ -2969,7 +2969,7 @@ mod tests {
     #[path = "exhaustion_refusal_tests.rs"]
     mod exhaustion_refusal_tests;
 
-    use crate::{BuildContext, BuildOwner, GlobalKey, RenderView, StatelessView, View};
+    use crate::{BuildContext, GlobalKey, RenderView, StatelessView, View, owner::BuildOwner};
 
     #[derive(Clone)]
     struct UnitRenderHost;

@@ -108,7 +108,7 @@
 //!   listener runs inside a frame, and an `on_closed` that calls
 //!   `show_snack_bar` there would mutate the queue in the middle of the
 //!   frame's animation pass. `MessengerCore::pop_and_advance` instead defers
-//!   the fire through the [`flui_sdk::view::PostFrameHandle`] acquired in
+//!   the fire through the [`flui_sdk::scheduler::PostFrameHandle`] acquired in
 //!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
 //!   after this frame's build/layout/paint have committed, its own reentrant
 //!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
@@ -188,7 +188,7 @@ use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, PlaybackRate, Vsync,
 };
 use flui_sdk::foundation::ElementId;
-use flui_sdk::view::PostFrameHandle;
+use flui_sdk::scheduler::PostFrameHandle;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{RebuildHandle, impl_inherited_view};

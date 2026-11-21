@@ -5,7 +5,7 @@ use flui_rendering::{
     parent_data::{SliverCrossAxisAllocation, SliverCrossAxisParentData},
     protocol::SliverProtocol,
 };
-use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, seq::ViewSeq};
+use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, ViewSeq};
 use std::{fmt, num::NonZeroU32};
 
 /// Presents multiple slivers as parallel tracks in one scrolling coordinate.

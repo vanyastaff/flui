@@ -17,7 +17,7 @@
 //!   (`finalize_tree`), reporting a duplicate when two parents reserved one
 //!   key. The losing parent is repaired so teardown does not cascade. The
 //!   verification is not debug-only, and the duplicate arrives as a typed
-//!   [`DuplicateGlobalKey`](flui_view::DuplicateGlobalKey) on
+//!   [`DuplicateGlobalKey`](flui_view::__runtime::DuplicateGlobalKey) on
 //!   `BuildOwner::take_global_key_diagnostics` instead of being thrown —
 //!   a duplicate key is caller-controlled input, so the frame completes.
 //!
@@ -33,12 +33,13 @@
 // satisfy clippy — the sibling `global_key.rs` carries the same waiver for the
 // same reason, and a future UiRuntime/`Rc` migration removes both.
 
-use flui_foundation::ViewKey;
+use flui_foundation::{ElementId, ViewKey};
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::LifecycleContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, KeyLookup, RenderView,
-    StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, GlobalKey, IntoView, KeyLookup, RenderView, StatefulView, StatelessView, View,
+    ViewExt, ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;

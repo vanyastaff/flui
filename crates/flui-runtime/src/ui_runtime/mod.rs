@@ -63,7 +63,7 @@ use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]
 use flui_scheduler::SchedulerPhase;
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
-use flui_view::{BuildInProgress, GlobalKeyScope};
+use flui_view::__runtime::{BuildInProgress, GlobalKeyScope};
 #[cfg(test)]
 use parking_lot::RwLock;
 

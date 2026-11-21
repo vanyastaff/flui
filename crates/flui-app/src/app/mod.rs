@@ -103,8 +103,8 @@ pub use flui_runtime::execution::{
 };
 
 // Re-export RootRenderView and RootRenderElement from flui-view
-pub use flui_view::{LifecycleHook, RecoveredAt};
-pub use flui_view::{RootRenderElement, RootRenderView};
+pub use flui_view::__runtime::{LifecycleHook, RecoveredAt};
+pub use flui_view::__runtime::{RootRenderElement, RootRenderView};
 
 #[cfg(all(
     not(target_os = "android"),

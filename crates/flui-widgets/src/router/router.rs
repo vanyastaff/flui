@@ -7,15 +7,15 @@ use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-use flui_foundation::BuildPhase;
-use flui_foundation::ChangeNotifier;
+use flui_foundation::{BuildPhase, ChangeNotifier};
+use flui_scheduler::{AsyncDriver, FrameTiming, PostFrameHandle, TaskToken};
 use flui_view::__runtime::{UrlOwnerRegistration, UrlOwnerSlot};
 use flui_view::element::ElementKind;
 use flui_view::navigation::{
     NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath, UrlOwner,
 };
 use flui_view::prelude::*;
-use flui_view::{AsyncDriver, BoxedView, BuildContextExt, FrameTiming, PostFrameHandle, TaskToken};
+use flui_view::{BoxedView, BuildContextExt};
 
 use crate::navigator::lifecycle::{RetiredValues, Terminal};
 

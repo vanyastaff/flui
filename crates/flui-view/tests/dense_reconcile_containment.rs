@@ -15,10 +15,8 @@ use flui_objects::{RenderFlex, RenderSizedBox};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{
-    BoxedView, BuildOwner, ElementTree, ErrorView, LifecycleHook, RebuildReason, RecoveredAt,
-    RenderView, View, ViewExt,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
+use flui_view::{BoxedView, ErrorView, RebuildReason, RenderView, View, ViewExt};
 
 pub(super) const DENSE_CHILD_COUNT: usize = 10;
 pub(super) const PANICKING_SLOT: usize = 7;

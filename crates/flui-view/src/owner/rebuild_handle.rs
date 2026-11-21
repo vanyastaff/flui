@@ -187,8 +187,9 @@ mod tests {
     };
 
     use crate::{
-        BuildOwner, LifecycleContext, RebuildHandle, RebuildReason,
+        LifecycleContext, RebuildHandle, RebuildReason,
         context::BuildContext,
+        owner::BuildOwner,
         tree::ElementTree,
         view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewState},
     };

@@ -1,11 +1,12 @@
 //! [`ClipRSuperellipse`] — clips its child to a rounded superellipse.
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::Radius;
 use flui_objects::RenderClipRSuperellipse;
 use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to a rounded superellipse whose corners follow
 /// `border_radius` and blend continuously into the straight edges.

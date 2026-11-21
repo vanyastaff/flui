@@ -4,7 +4,7 @@
 //! # The production reconciler
 //!
 //! This is the reconciler the production build path runs after the E3
-//! atomic box→arena swap: [`BuildOwner::build_scope`](crate::BuildOwner)
+//! atomic box→arena swap: [`BuildOwner::build_scope`](crate::owner::BuildOwner)
 //! feeds each dirty element's freshly-built child views to
 //! [`reconcile_children_by_id`], which permutes the parent's
 //! [`ElementNode::child_ids`](super::ElementNode) list, reusing /
@@ -638,7 +638,7 @@ fn update_child(
 /// `registered_global_key_hash` BEFORE touching anything:
 /// - **Keyed top** → soft-removes via `remove` into the inactive queue and
 ///   returns immediately, leaving the subtree intact in the slab.
-///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) later
+///   [`BuildOwner::finalize_tree`](crate::owner::BuildOwner::finalize_tree) later
 ///   re-collects that subtree and tears it down deepest-first, preserving
 ///   the same-frame GlobalKey retake window. The subtree snapshot below is
 ///   never needed for this branch, so checking keyed-ness first avoids

@@ -360,7 +360,7 @@ impl ElementOwner<'_> {
 
     /// Atomically remove and return the element registered under
     /// `key` for a reparent operation. Wrapper around
-    /// [`BuildOwner::take_global_key_for_reparent`](crate::BuildOwner::take_global_key_for_reparent)
+    /// [`BuildOwner::take_global_key_for_reparent`](crate::owner::BuildOwner::take_global_key_for_reparent)
     /// for the split-borrow `ElementOwner` handle that the
     /// reconciler holds.
     pub fn take_global_key_for_reparent(&mut self, key: &dyn ViewKey) -> Option<ElementId> {
@@ -372,7 +372,7 @@ impl ElementOwner<'_> {
     /// Every path that attaches or re-declares a keyed child funnels through
     /// here, so the frame boundary can tell an ordinary `GlobalKey` reparent
     /// (one declaring parent) from a duplicate (two). Verified and cleared
-    /// by [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree).
+    /// by [`BuildOwner::finalize_tree`](crate::owner::BuildOwner::finalize_tree).
     pub fn reserve_global_key(&mut self, parent: ElementId, child: ElementId, key: &dyn ViewKey) {
         self.global_key_reservations.reserve(parent, child, key);
     }

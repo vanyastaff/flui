@@ -1,8 +1,9 @@
 //! [`IntrinsicWidth`] — sizes child to its maximum intrinsic width.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderIntrinsicWidth;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to the child's maximum intrinsic width.
 ///

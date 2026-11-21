@@ -199,9 +199,10 @@ pub use bindings::{
 pub use flui_foundation::{AppId, AppIdError};
 pub use flui_log::identity::AppIdentity;
 // Convenience re-exports from flui-view
+pub use flui_view::__runtime::{BuildOwner, ElementTree};
+pub use flui_view::element::StatelessElement;
 pub use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,
-    StatelessElement, StatelessView, View,
+    BuildContext, BuildContextExt, ElementBase, StatefulView, StatelessView, View,
 };
 
 // ============================================================================

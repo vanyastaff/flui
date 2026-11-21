@@ -363,7 +363,7 @@ mod tests {
     use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
     use crate::view::{ErrorView, ViewExt};
-    use crate::{BuildOwner, tree::ElementTree};
+    use crate::{owner::BuildOwner, tree::ElementTree};
 
     /// Deliberately neither `Clone` nor `Copy`, to prove the surface needs neither.
     #[derive(Debug, PartialEq)]

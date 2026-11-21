@@ -13,11 +13,9 @@ use std::task::{Context, Waker};
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::__runtime::{CloseGuardSource, LifecycleEvent, OwnerNotify, Undeliverable};
-use flui_view::{
-    BuildContext, BuildOwner, ElementTree, IntoView, RenderView, StatefulView, View, ViewExt,
-    ViewState,
-};
+use flui_view::{BuildContext, IntoView, RenderView, StatefulView, View, ViewExt, ViewState};
 use flui_view::{CloseChanged, CloseGuard, CloseHold, CloseReason, PendingClose, StaleClose};
 
 // ============================================================================

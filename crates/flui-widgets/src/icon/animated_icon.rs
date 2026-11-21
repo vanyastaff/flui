@@ -5,14 +5,13 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_animation::{Animation, AnimationController, ConstantAnimation, DrivenController};
-use flui_foundation::Listenable;
-use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Size};
+use flui_foundation::{CreationSite, Listenable, TextDirection};
 use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
+use flui_view::ViewExt;
 use flui_view::prelude::*;
-use flui_view::{CreationSite, ViewExt};
 
 use super::symbol_effect::{ContentKey, SymbolEffectHost};
 use super::{AnimatedIconData, IconTheme, PathEffect, SymbolEffect};

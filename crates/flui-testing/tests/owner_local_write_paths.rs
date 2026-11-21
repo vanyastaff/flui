@@ -8,7 +8,8 @@
 use flui_view::LifecycleContext;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use flui_view::{BuildOwner, SignalWriteExt};
+use flui_view::__runtime::BuildOwner;
+use flui_view::SignalWriteExt;
 
 pub(crate) fn nested_writer_source_inside_an_event_ctx() {
     let owner = BuildOwner::new();

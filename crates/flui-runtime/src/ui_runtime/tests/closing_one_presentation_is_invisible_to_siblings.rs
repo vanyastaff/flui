@@ -389,7 +389,7 @@ impl flui_interaction::gesture::GestureArenaMember for CloseArenaMember {
 type SiblingHandles = (
     Rc<FocusManager>,
     TextInputHandle,
-    Rc<std::cell::RefCell<Option<flui_view::reactive::Reactive>>>,
+    Rc<std::cell::RefCell<Option<flui_view::Reactive>>>,
 );
 
 /// Disposed while its UI runtime drops: the sibling presentation it saved handles

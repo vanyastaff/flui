@@ -20,9 +20,8 @@
 use flui_objects::RenderSizedBox;
 use flui_rendering::RenderUpdateImpact;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_view::{
-    BuildContext, BuildOwner, ElementTree, IntoView, RenderView, StatelessView, View, ViewExt,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 // ============================================================================
 // Fixtures
