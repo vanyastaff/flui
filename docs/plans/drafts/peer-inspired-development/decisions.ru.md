@@ -1,0 +1,30 @@
+# Статус решений
+
+Этот файл сохраняет выводы обсуждения. Разрешено временное хранение в draft PR; новые архитектурные решения не считаются принятыми. Обоснования, исходники и критерии приёмки находятся в [плане](development-plan.ru.md) и [исследовании](research.ru.md).
+
+| Вопрос | Статус | Зафиксированная позиция | Условие следующего шага |
+|---|---|---|---|
+| Существующие feature specs и ADR | Действующие контракты | Продолжать утверждённые lifecycle, persistence, input и flui-driver работы; не заменять их новым трекером | Сверить профильные tasks с текущим кодом и прогонами |
+| Владение UI | Действующая ADR-0266 на базе исследования | Один owner thread и runtime-local state; изоляция состояния не обещает изоляцию времени кадра | Изменение требует нового архитектурного решения |
+| Dedicated raster | Предложенный эксперимент; ADR-0045 остаётся Proposed | Использовать owned scene boundary; проверить ограниченную очередь, recovery и shutdown | Baseline, реальный backend/OS, измеримый выигрыш, сохранение изображения |
+| Parallel paint/build/layout | Отдельные непринятые решения | Не включать их автоматически в raster experiment; для parallel repaint соблюдать ADR-0027 §10 | Независимость subtrees, анализ shaping locks, deep/wide/text benchmarks |
+| Копирование чужого кода | Предложенный способ работы | Выбирать конкретный алгоритм или API, проверять лицензию и provenance, адаптировать ownership и failure paths | Реальный consumer и тест, различающий правильное и сломанное поведение |
+| Материалы и GPU effects | Предложенный приоритет | Довести существующий blur до catalog/SDK; изучить glass/refraction и typed effects | Проверить свежие backdrop changes, reference/readback, bounds и damage |
+| Editor и формы | Предложенный consumer | Начать с панелей, docking, property editor и typed field projections; затем graph и timeline | Согласовать прикладной сценарий, проверять focus/IME, undo, identity и cancellation |
+| Реактивность и placement | Кандидаты после измерений | Сохранить существующие fast paths; выбирать механизм по подтверждённой стоимости работы | Phase instrumentation и воспроизводимый baseline |
+| Локализация, theme и motion | Предложенные прикладные улучшения | Развивать текущую основу через реальные locale/theme changes, а не дублирующий engine | Сохранение состояния и корректные зависимости обновления |
+| Inspector, preview и reload | Приоритет внутри существующего графа driver | Переиспользовать runtime/driver; явно различать совместимую правку и restart | Не обходить зависимости утверждённого flui-driver scope |
+| Media, native content, embedding | Условные кандидаты | Субстрат Texture/platform hooks не равен готовой возможности | Названный consumer, capability/failure/lifecycle contract |
+| Доставка и продвижение | Предложенный результат | Внешний проект, installable artifact и воспроизводимые примеры на точном SHA | Реальные платформенные прогоны; без неподтверждённых speed/platform claims |
+| Сравнительные benchmarks | Предложенная программа измерений | Общая сцена FLUI/Knots/egui/ImGui; отдельно Raven local-update, layout engines и GPU/effects cohorts; переиспользовать существующие perf/testing средства | [План сравнений](benchmark-plan.ru.md): correctness parity, A/A, source pins, реальные samples и per-target budgets до любых speed claims |
+
+## Открытые выборы
+
+- Какой backend и платформа первыми докажут пользу отдельного raster thread.
+- Какие пределы очередей и performance budgets следуют из baseline и существующих требований.
+- Какой небольшой editor станет вторым сквозным потребителем.
+- Какие участки upstream-кода оправданно переносить после проверки лицензии и стоимости сопровождения.
+- Какие предложения становятся утверждённым feature scope после обсуждения.
+- Какие физические hosts доступны для Windows instrumentation, Linux Wayland comparison и macOS/Rosin; какие practical thresholds подтверждаются A/A до первого A/B.
+
+До разрешения этих вопросов таблица сохраняет кандидатов и критерии выбора, а не назначает сроки или объявляет завершённые возможности.
