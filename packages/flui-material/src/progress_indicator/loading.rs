@@ -15,10 +15,11 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Matrix4, Point, Size};
+use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::{Canvas, Color, Morph, Paint, Path, PathCommand, material_shapes};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{CustomPaint, CustomPainter};
+use flui_sdk::widgets::CustomPaint;
 
 use super::{Fraction, moves, progress_semantics};
 use crate::ColorScheme;

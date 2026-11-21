@@ -5,7 +5,7 @@
 //!
 //! The field composes a raw [`EditableText`] and [`InputDecorator`] inline,
 //! with no
-//! [`flui_sdk::widgets::RawTextField`](flui_sdk::widgets::text::text_field::RawTextField)
+//! [`flui_sdk::widgets::RawTextField`](flui_sdk::widgets::RawTextField)
 //! in the middle â€” that type is this crate's theme-free sibling for a tree
 //! with no `Theme` ancestor, named `RawTextField` (not `TextField`)
 //! specifically so this Material type gets to be the one thing named
@@ -91,9 +91,9 @@
 //! the text does, never on a tap: the field's double-tap holds a tap for the
 //! double-tap time, and focus requested then would take the focus back from
 //! wherever the keyboard moved it meanwhile. `Listener`'s default
-//! [`flui_sdk::widgets::HitTestBehavior::DeferToChild`] is sufficient here
+//! [`flui_sdk::rendering::HitTestBehavior::DeferToChild`] is sufficient here
 //! because `InputDecorator`'s own inner `MouseRegion` defaults to
-//! [`flui_sdk::widgets::HitTestBehavior::Opaque`] and spans the full decorated
+//! [`flui_sdk::rendering::HitTestBehavior::Opaque`] and spans the full decorated
 //! rect, so every point within it already resolves a hit for the outer
 //! listener to defer to. The helper/error line below the container is
 //! outside that rect and ignores pointers, so a press there focuses nothing.

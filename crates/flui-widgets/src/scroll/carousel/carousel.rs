@@ -36,9 +36,10 @@ use crate::scroll::ScrollView;
 use crate::scroll::scroll_owner::SharedSnapPolicy;
 use crate::scroll::{ScrollController, Scrollable, Viewport};
 use crate::{
-    Align, Column, CustomPaint, CustomPainter, Directionality, Expanded, Focus, Listener,
-    MouseRegion, RawButton, Semantics, SizedBox, TickerMode,
+    Align, Column, CustomPaint, Directionality, Expanded, Focus, Listener, MouseRegion, RawButton,
+    Semantics, SizedBox, TickerMode,
 };
+use flui_rendering::delegates::CustomPainter;
 use flui_view::environment::MediaQuery;
 use flui_view::environment::VsyncScope;
 

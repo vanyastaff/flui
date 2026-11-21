@@ -14,8 +14,8 @@
 //! - **Inner `Option<V>` inside the [`WidgetStateProperty`]** — the property
 //!   IS configured, but has nothing to say for the *current* states (that one
 //!   resolution falls through, per [`WidgetStateProperty`]'s own
-//!   `Option`-fallthrough contract — see `flui_sdk::widgets::widget_state`'s
-//!   module docs, the substrate this button family was built against).
+//!   `Option`-fallthrough contract — see the `widget_state` module docs of `flui-widgets`,
+//!   the substrate this button family was built against).
 //!
 //! Both signals fall through identically in
 //! `crate::button_style_button`'s resolver: an unset *property* and a property

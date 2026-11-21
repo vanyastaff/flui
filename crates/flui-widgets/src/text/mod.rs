@@ -11,9 +11,9 @@ mod selection_menu;
 mod selection_style;
 mod text;
 
-pub mod controller;
-pub mod editable_text;
-pub mod text_field;
+mod controller;
+mod editable_text;
+mod text_field;
 mod text_store;
 
 pub use animated_default_text_style::AnimatedDefaultTextStyle;

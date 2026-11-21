@@ -19,7 +19,8 @@ use flui_view::{BoxedView, RebuildHandle, RebuildReason, View};
 
 use crate::interaction::{ExcludeFocus, GestureDetector};
 use crate::localization::{BoxedWidgetsLocalizations, Directionality};
-use crate::{ExcludeSemantics, Padding, Semantics, SemanticsRole, Text};
+use crate::{ExcludeSemantics, Padding, Semantics, Text};
+use flui_semantics::SemanticsRole;
 
 /// Whether a [`ToolbarItems`] shows its left-over items in place of its row,
 /// and which items its last layout left over.

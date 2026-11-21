@@ -17,8 +17,8 @@
 //! `from_path`; `from_path` tries the patterns from the most specific, so a
 //! literal segment wins over a parameter whatever the declaration order.
 //!
-//! The generated code names only `flui_widgets` items: the trait, `RoutePath`,
-//! `RouteParseError` and the hidden `router::__derive` helpers.
+//! The generated code names only `flui_widgets` items: the trait and the hidden
+//! `__derive` helpers, which also carry `RoutePath` and `RouteParseError`.
 
 mod pattern;
 
@@ -98,7 +98,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                 None => {
                     let ty = field.ty;
                     quote_spanned! {ty.span()=>
-                        #widgets::router::__derive::assert_segment::<#ty>();
+                        #widgets::__derive::assert_segment::<#ty>();
                     }
                 }
                 Some(QueryField {
@@ -106,10 +106,10 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                     value,
                     ..
                 }) => quote_spanned! {value.span()=>
-                    #widgets::router::__derive::assert_query_defaulted::<#value>();
+                    #widgets::__derive::assert_query_defaulted::<#value>();
                 },
                 Some(QueryField { value, .. }) => quote_spanned! {value.span()=>
-                    #widgets::router::__derive::assert_segment::<#value>();
+                    #widgets::__derive::assert_segment::<#value>();
                 },
             });
 
@@ -122,23 +122,23 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     Ok(quote! {
         #[automatically_derived]
         impl #widgets::Routable for #name {
-            fn to_path(&self) -> #widgets::RoutePath {
+            fn to_path(&self) -> #widgets::__derive::RoutePath {
                 match self {
                     #(#to_path_arms)*
                 }
             }
 
             fn from_path(
-                #path: &#widgets::RoutePath,
-            ) -> ::core::result::Result<Self, #widgets::RouteParseError> {
+                #path: &#widgets::__derive::RoutePath,
+            ) -> ::core::result::Result<Self, #widgets::__derive::RouteParseError> {
                 #(#assertions)*
-                let #decoded = #widgets::router::__derive::segments(#path);
+                let #decoded = #widgets::__derive::segments(#path);
                 let #segments: ::std::vec::Vec<&str> = #decoded
                     .iter()
                     .map(|#segment| ::core::convert::AsRef::<str>::as_ref(#segment))
                     .collect();
                 let #segments = #segments.as_slice();
-                let mut #matcher = #widgets::router::__derive::Matcher::new(#path);
+                let mut #matcher = #widgets::__derive::Matcher::new(#path);
                 #(#candidates)*
                 ::core::result::Result::Err(#matcher.finish())
             }
@@ -531,7 +531,7 @@ fn to_path_arm(route: &Route<'_>, widgets: &Path) -> TokenStream {
     });
     quote! {
         #pattern => {
-            let #path = #widgets::RoutePath::root() #(#joins)*;
+            let #path = #widgets::__derive::RoutePath::root() #(#joins)*;
             #(#queries)*
             #path
         }

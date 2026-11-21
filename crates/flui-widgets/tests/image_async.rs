@@ -198,7 +198,7 @@ fn opaque(width: u32, height: u32) -> PixelImage {
 /// under is retired, so a result that reaches the publish point anyway is
 /// dropped there. This test asserts the end-to-end outcome; the generation
 /// guard's own behaviour is pinned by the unit tests in
-/// `flui_widgets::image::resolve`.
+/// `crates/flui-widgets/src/image/resolve.rs`.
 fn a_retired_providers_late_completion_cannot_replace_the_current_image() {
     let (old_provider, old_completer) = ControlledProvider::new("out-of-order-old");
     let (new_provider, new_completer) = ControlledProvider::new("out-of-order-new");

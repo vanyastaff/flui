@@ -20,6 +20,7 @@ use flui_interaction::drag::{
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
+use flui_objects::StackFit;
 use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::transfer::data::{TransferActions, TransferFormat};
 use flui_platform::transfer::drag::OsDragEnd;
@@ -32,7 +33,7 @@ use flui_widgets::{
     AlternativeKind, CommandAppearance, CopySelectionTextIntent, Directionality, DragAnchor,
     DragCommands, Draggable, DropCommands, DropHover, DropTarget, InsertPosition, Overlay,
     OverlayEntry, OverlayHandle, Padding, PasteTextIntent, Positioned, SingleActivator, SizedBox,
-    Stack, StackFit, Text,
+    Stack, Text,
 };
 
 use crate::common::{LaidOut, lay_out, tight};

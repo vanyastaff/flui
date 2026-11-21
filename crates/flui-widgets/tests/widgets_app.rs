@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use flui_view::prelude::*;
 use flui_widgets::__test_access::NavigatorHandle;
 use flui_widgets::SizedBox;
-use flui_widgets::app::WidgetsApp;
+use flui_widgets::WidgetsApp;
 
 use crate::common::harness::mount;
 
@@ -60,7 +60,7 @@ fn captured_value<T: Clone>(cell: &Arc<Mutex<Option<T>>>) -> Option<T> {
 pub(crate) fn locale_override_removal_uses_the_nearest_current_preferences() {
     use flui_platform::Locale;
     use flui_view::environment::{MediaQuery, MediaQueryData};
-    use flui_widgets::localization::Localizations;
+    use flui_widgets::Localizations;
 
     let arabic = Locale::try_new("ar", None::<&str>).expect("valid Arabic locale");
     let (probe, captured) = capture(Localizations::locale_of);

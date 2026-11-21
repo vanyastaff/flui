@@ -26,7 +26,7 @@ use super::effect::{Effect, Pose, Stages};
 ///
 /// ```
 /// use std::time::Duration;
-/// use flui_widgets::motion::Effects;
+/// use flui_widgets::Effects;
 ///
 /// let ms = Duration::from_millis;
 /// let effects = Effects::new()

@@ -15,7 +15,7 @@ the entry attribute is `flui::main`.
 | `#[derive(Inspect)]` | `impl Inspect` for a struct or an enum | `flui_foundation::inspect` |
 | `#[derive(MotionValue)]` | `impl MotionValue` from each field's vector and rest thresholds | `flui_animation` |
 | `#[derive(Lerp)]` | a fieldwise `impl Lerp` | `flui_foundation::geometry` |
-| `#[derive(Routable)]` | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router` |
+| `#[derive(Routable)]` | `impl Routable` from `#[route("…")]` patterns | `flui_widgets` |
 | `#[flui::main]` | the entry every platform starts an application from | `flui` |
 
 The attributes each macro takes, what it refuses and why are in its rustdoc

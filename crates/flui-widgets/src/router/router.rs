@@ -47,7 +47,8 @@ type UnknownHook = Rc<dyn Fn(&RoutePath)>;
 ///
 /// ```
 /// use flui_widgets::prelude::*;
-/// use flui_widgets::{Routable, RouteParseError, RoutePath, Router, Text};
+/// use flui_view::navigation::{RouteParseError, RoutePath};
+/// use flui_widgets::{Routable, Router, Text};
 ///
 /// #[derive(Clone, PartialEq)]
 /// enum AppRoute { Home, About }

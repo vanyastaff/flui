@@ -2966,7 +2966,7 @@ pub(crate) fn reveal_and_assistive_scroll_go_through_the_chain() {
     let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
     let target = flui_widgets::Semantics::new()
         .container(true)
-        .role(flui_widgets::SemanticsRole::Button)
+        .role(flui_semantics::SemanticsRole::Button)
         .label("reveal target")
         .child(SizedBox::new(40.0, 40.0));
     let content = Column::new(vec![
@@ -3063,7 +3063,7 @@ pub(crate) fn a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own() {
     );
     let target = flui_widgets::Semantics::new()
         .container(true)
-        .role(flui_widgets::SemanticsRole::Button)
+        .role(flui_semantics::SemanticsRole::Button)
         .label("nested target")
         .child(SizedBox::new(300.0, 40.0));
     let inner_list = SingleChildScrollView::new()
@@ -3500,7 +3500,7 @@ pub(crate) fn a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewher
                         .child(SizedBox::new(300.0, 1000.0)),
                 ))
                 .boxed(),
-            flui_widgets::interaction::Focus::new(SizedBox::new(40.0, 40.0))
+            flui_widgets::Focus::new(SizedBox::new(40.0, 40.0))
                 .focus_node(Rc::clone(&elsewhere))
                 .boxed(),
         ]),

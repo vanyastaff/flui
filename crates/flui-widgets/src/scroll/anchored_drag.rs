@@ -58,11 +58,12 @@ use crate::interaction::raw_gesture_detector::ContactAdmission;
 use crate::transitions::transform_view::AnimatedTransformView;
 use crate::{
     Action, ActionOutcome, Actions, Directionality, GestureAlternatives, Intent, Listener,
-    Semantics, SemanticsRole, Shortcuts, SingleActivator,
+    Semantics, Shortcuts, SingleActivator,
 };
 use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::TransformMotion;
 use flui_platform::input::keyboard::NamedKey;
+use flui_semantics::SemanticsRole;
 
 /// The largest distance from zero an anchor may lie at, in logical pixels:
 /// far past any display, and small enough that spans, velocities and their

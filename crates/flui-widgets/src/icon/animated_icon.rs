@@ -15,7 +15,8 @@ use flui_view::prelude::*;
 
 use super::symbol_effect::{ContentKey, SymbolEffectHost};
 use super::{AnimatedIconData, IconTheme, PathEffect, SymbolEffect};
-use crate::{AnimatedBuilder, CustomPaint, CustomPainter, Directionality, Semantics, TickerMode};
+use crate::{AnimatedBuilder, CustomPaint, Directionality, Semantics, TickerMode};
+use flui_rendering::delegates::CustomPainter;
 use flui_view::environment::VsyncScope;
 
 /// An icon whose vector paths move with an animation: a play button that turns into pause,

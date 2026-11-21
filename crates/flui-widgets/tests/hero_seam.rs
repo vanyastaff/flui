@@ -18,7 +18,7 @@ use flui_view::{BoxedView, ViewExt};
 use std::cell::RefCell;
 
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
-use flui_widgets::navigator::{PageRoute, RouteAnimation, RouteId};
+use flui_widgets::{PageRoute, RouteAnimation, RouteId};
 use flui_widgets::{SizedBox, Text};
 
 use crate::common::harness::{Harness, mount};

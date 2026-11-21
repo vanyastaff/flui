@@ -17,9 +17,10 @@
 
 use crate::common::{lay_out, tight};
 use flui_foundation::TextDirection;
+use flui_objects::CrossAxisAlignment;
 use flui_painting::{Alignment, AlignmentDirectional};
 use flui_rendering::constraints::AxisDirection;
-use flui_widgets::{Align, Column, CrossAxisAlignment, Directionality, SizedBox, Stack, Viewport};
+use flui_widgets::{Align, Column, Directionality, SizedBox, Stack, Viewport};
 
 /// Dependents of the ambient `Directionality` for a `Column` with `cross`.
 fn directionality_dependents(cross: CrossAxisAlignment) -> usize {

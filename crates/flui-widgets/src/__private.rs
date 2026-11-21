@@ -10,8 +10,9 @@
 //! navigation, text editing) needs from this one but that is not author API:
 //! focus-tree wiring, the render-id anchor, a repaint-boundary keying
 //! option, the impl macro for generic multi-child render views, the state
-//! every text form field shares whichever input it draws, and the flight seat
-//! a widget leaves behind while a copy of it flies in an overlay.
+//! every text form field shares whichever input it draws, the flight seat
+//! a widget leaves behind while a copy of it flies in an overlay, and the one
+//! element a catalog control mounts for its behaviours (`node`).
 
 pub use crate::__generic_render_view_element as generic_render_view_element;
 pub use crate::anchored_box::AnchoredBox;
@@ -19,5 +20,8 @@ pub use crate::form::text_form_field_core::{
     TextFormFieldConfig, TextFormFieldCore, TextFormFieldInput,
 };
 pub use crate::interaction::focus::{enclosing_focus_parent, install_rect_provider};
+// `InteractiveNode`, the one element a catalog control mounts for its
+// behaviours (ADR-0322 §1).
+pub use crate::interaction::node;
 pub use crate::navigator::flight_seat::{FlightSeat, SeatClaim, SeatHold};
 pub use crate::paint::repaint_boundary::SaltingChildKey;

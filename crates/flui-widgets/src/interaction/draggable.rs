@@ -54,7 +54,8 @@ use super::gesture_alternatives::{
 use super::recognizer_attachment::RecognizerAttachment;
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
-use crate::{IgnorePointer, Listener, MouseRegion, Positioned, Stack, StackFit};
+use crate::{IgnorePointer, Listener, MouseRegion, Positioned, Stack};
+use flui_objects::StackFit;
 
 /// Where a drag's feedback sits relative to the pointer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

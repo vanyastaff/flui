@@ -1812,7 +1812,7 @@ pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
     let taps = Rc::new(std::cell::Cell::new(0_u32));
     let counted = Rc::clone(&taps);
     let root = flui_widgets::GestureDetector::new()
-        .behavior(flui_widgets::HitTestBehavior::Opaque)
+        .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
         .on_tap(move |_| {
             counted.set(counted.get() + 1);
             assert!(counted.get() > 1, "the first tap's handler failed");
@@ -1993,7 +1993,7 @@ fn fail_the_tap() {
 fn exit_code_after_a_tap_handler_panic() {
     let panics = CallbackPanics::default();
     let root = flui_widgets::GestureDetector::new()
-        .behavior(flui_widgets::HitTestBehavior::Opaque)
+        .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
         .on_tap(|_| fail_the_tap())
         .child(flui_widgets::SizedBox::square(100.0));
     let application = Application::new().config(reporting_callback_panics(&panics));
@@ -2246,7 +2246,7 @@ impl flui_view::ViewState<NoteView> for NoteViewState {
         };
         let counted = Rc::clone(&self.0.0);
         flui_widgets::GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .on_tap(move |_| {
                 let rebuild = {
                     let mut shared = counted.borrow_mut();

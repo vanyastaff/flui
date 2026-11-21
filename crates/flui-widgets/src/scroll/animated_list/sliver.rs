@@ -101,7 +101,7 @@ impl fmt::Debug for SliverLayout {
 /// ```
 /// use flui_widgets::prelude::*;
 /// use flui_widgets::SliverAnimatedList;
-/// use flui_widgets::motion::Transition;
+/// use flui_widgets::Transition;
 ///
 /// #[derive(Clone)]
 /// struct Todo {

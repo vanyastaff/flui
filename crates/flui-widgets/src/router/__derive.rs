@@ -5,7 +5,9 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::str::FromStr;
 
-use flui_view::navigation::{RouteParseError, RoutePath};
+// The route vocabulary the generated signatures name, at the path the derive
+// emits whichever facade the application reaches the crate through.
+pub use flui_view::navigation::{RouteParseError, RoutePath};
 
 /// The decoded segments of `path`, first to last.
 #[must_use]

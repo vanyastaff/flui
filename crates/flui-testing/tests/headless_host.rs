@@ -1085,7 +1085,7 @@ fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another()
     let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
     host.attach(
         &flui_widgets::Listener::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .child(
                 flui_widgets::Focus::new(flui_widgets::SizedBox::new(100.0, 100.0))
                     .focus_node(Rc::clone(&node))

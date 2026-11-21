@@ -268,7 +268,7 @@ fn pathological_extents_defer(nesting: usize) {
             }),
         );
         Viewport::new(
-            flui_widgets::ScrollPosition::fixed(ENTRY as f64 * SEED),
+            flui_rendering::view::ScrollPosition::fixed(ENTRY as f64 * SEED),
             (rows,),
         )
         .boxed()

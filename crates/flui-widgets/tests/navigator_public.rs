@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{child_process, lay_out, loose};
-use flui_widgets::RouteParseError;
+use flui_view::navigation::RouteParseError;
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path.
@@ -223,10 +223,11 @@ pub(crate) fn explicit_finish_commits_an_authored_page_and_retires_the_old_route
     use std::cell::Cell;
     use std::time::Duration;
 
+    use flui_animation::AnimationRunFuture;
     use flui_animation::{Animation, AnimationController, AnimationError, DrivenController, Vsync};
     use flui_layer::Layer;
     use flui_painting::{DrawOp, styling::Color};
-    use flui_widgets::{AnimationRunFuture, FadeTransition, PushCompletion};
+    use flui_widgets::{FadeTransition, PushCompletion};
 
     struct AuthoredPage {
         settings: RouteSettings,

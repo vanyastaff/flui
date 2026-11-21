@@ -49,7 +49,8 @@ use super::binding::PopPacing;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
-use crate::{Directionality, Listener, Positioned, SizedBox, Stack, StackFit};
+use crate::{Directionality, Listener, Positioned, SizedBox, Stack};
+use flui_objects::StackFit;
 
 /// The width of the edge-anchored hit region that can start a drag.
 pub(crate) const BACK_GESTURE_WIDTH: f64 = 20.0;

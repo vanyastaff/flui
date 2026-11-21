@@ -14,7 +14,7 @@
 //!   and `flui::widgets::Text` are one type. [`view`] is a glob of the whole
 //!   `flui-view` crate that shadows its `__runtime` seam (ADR-0081 §4).
 //! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
-//!   [`platform`], [`rendering`] and [`scheduler`] hold the subset of the
+//!   [`platform`], [`rendering`], [`scheduler`] and [`semantics`] hold the subset of the
 //!   facade's module that packages use, as the same items, not wrappers.
 //! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
 //!   and development hooks the facade does not expose. A package's exposure to
@@ -248,6 +248,7 @@ pub mod interaction {
     pub use flui_interaction::gesture::ContestCancel;
     pub use flui_interaction::gesture::DownTake;
     pub use flui_interaction::gesture::DragDownDetails;
+    pub use flui_interaction::gesture::DragEndDetails;
     pub use flui_interaction::gesture::GestureArena;
     pub use flui_interaction::gesture::GestureArenaEntry;
     pub use flui_interaction::gesture::GestureArenaMember;
@@ -263,6 +264,8 @@ pub mod interaction {
     pub use flui_interaction::gesture::GestureSettings;
     pub use flui_interaction::gesture::GestureSettingsProvider;
     pub use flui_interaction::gesture::MotionRole;
+    pub use flui_interaction::gesture::MultiTapCount;
+    pub use flui_interaction::gesture::MultiTapCountError;
     pub use flui_interaction::gesture::ObservedComposition;
     pub use flui_interaction::gesture::ObservedMember;
     pub use flui_interaction::gesture::ObserverHandle;
@@ -294,6 +297,7 @@ pub mod interaction {
     pub use flui_interaction::text_input::SelectionText;
     pub use flui_platform::EventTime;
     pub use flui_platform::input::capabilities::PointerKindSet;
+    pub use flui_platform::input::pointer::ButtonChange;
     pub use flui_platform::input::pointer::PointerKind;
 
     /// Drag-and-drop (ADR-0211): what a source widget starts through the
@@ -368,6 +372,7 @@ pub mod painting {
     pub use flui_painting::typography::TextDecorationLines;
     pub use flui_painting::typography::TextDecorationStyle;
     pub use flui_painting::typography::TextStyle;
+    pub use flui_rendering::delegates::CustomPainter;
     pub use flui_semantics::SemanticsRegion;
     pub use flui_semantics::SemanticsRegionKey;
 }
@@ -376,13 +381,50 @@ pub mod painting {
 pub mod rendering {
     pub use flui_interaction::pointer::HitTestBehavior;
     pub use flui_rendering::constraints::BoxConstraints;
+    pub use flui_rendering::delegates::FlowDelegate;
+    pub use flui_rendering::delegates::FlowPaintingContext;
+    pub use flui_rendering::delegates::MultiChildLayoutContext;
+    pub use flui_rendering::delegates::MultiChildLayoutDelegate;
+    pub use flui_rendering::delegates::SingleChildLayoutDelegate;
+    pub use flui_rendering::parent_data::TableCellVerticalAlignment;
     pub use flui_rendering::protocol::BoxProtocol;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 
-    /// The built-in render objects packages compose, at `flui::rendering::objects`.
+    /// The built-in render objects packages compose and the configuration types the widgets
+    /// take from them, at `flui::rendering::objects`.
     pub mod objects {
+        pub use flui_objects::CarouselLayout;
+        pub use flui_objects::CrossAxisAlignment;
+        pub use flui_objects::FloatingHeaderSnapConfiguration;
+        pub use flui_objects::FocusRingStyle;
+        pub use flui_objects::HitShape;
+        pub use flui_objects::MainAxisAlignment;
+        pub use flui_objects::MainAxisSize;
+        pub use flui_objects::StackFit;
+        pub use flui_objects::TableColumnWidth;
         pub use flui_objects::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction};
     }
+}
+
+/// The semantics vocabulary a package's widgets describe themselves with, at the paths
+/// `flui::semantics` uses.
+pub mod semantics {
+    pub use flui_semantics::AutoComplete;
+    pub use flui_semantics::CellPosition;
+    pub use flui_semantics::Current;
+    pub use flui_semantics::HasPopup;
+    pub use flui_semantics::HeadingLevel;
+    pub use flui_semantics::Invalid;
+    pub use flui_semantics::LiveSetting;
+    pub use flui_semantics::NumericRange;
+    pub use flui_semantics::NumericRangeError;
+    pub use flui_semantics::SemanticsAnchor;
+    pub use flui_semantics::SemanticsRole;
+    pub use flui_semantics::SetSize;
+    pub use flui_semantics::SortDirection;
+    pub use flui_semantics::TableShape;
+    pub use flui_semantics::TextSelection;
+    pub use flui_semantics::Toggled;
 }
 
 /// Render internals that the facade does not expose.

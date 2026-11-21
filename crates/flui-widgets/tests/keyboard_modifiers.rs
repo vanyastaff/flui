@@ -8,7 +8,7 @@ use flui_platform::{
 };
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
-use flui_widgets::interaction::{
+use flui_widgets::{
     Actions, CallbackAction, CallbackShortcuts, Focus, Intent, Shortcuts, SingleActivator,
 };
 use flui_widgets::{EditableText, SizedBox, TextEditingController};

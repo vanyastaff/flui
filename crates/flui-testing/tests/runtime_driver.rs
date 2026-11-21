@@ -737,8 +737,8 @@ fn a_frame_report_counts_only_the_frame_it_drove() {
 /// WAI-ARIA 1.2: the publication leaves it out and reports an author error.
 fn checked_link() -> flui_view::BoxedView {
     Semantics::new()
-        .role(flui_widgets::SemanticsRole::Link)
-        .toggled(flui_widgets::Toggled::On)
+        .role(flui_semantics::SemanticsRole::Link)
+        .toggled(flui_semantics::Toggled::On)
         .label("link")
         .child(SizedBox::new(40.0, 24.0))
         .boxed()

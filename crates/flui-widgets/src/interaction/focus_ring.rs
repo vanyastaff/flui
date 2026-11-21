@@ -17,10 +17,7 @@ use flui_view::prelude::*;
 use super::focus::Focus;
 use crate::DecoratedBox;
 
-/// The colors and widths of a [`FocusRing`]: two bands drawn inside the
-/// child's bounds, `outer` along the edge and `inner` just within it. A
-/// focused link draws the same bands just outside its glyphs.
-pub use flui_objects::FocusRingStyle;
+use flui_objects::FocusRingStyle;
 
 /// Draws the keyboard focus indicator over `child` while the nearest
 /// enclosing [`Focus`] has visible focus.

@@ -7,15 +7,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_interaction::haptics::{HapticObserver, HapticsHandle};
+use flui_interaction::pointer::HitTestBehavior;
 use flui_platform::haptics::{
     HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
 use flui_platform::{HapticFeedback, SystemPreferences};
+use flui_view::HapticsMode;
 use flui_view::element::ElementKind;
 use flui_view::{
     BuildContext, IntoView, LifecycleContext, StatefulView, View, ViewExt as _, ViewState,
 };
-use flui_widgets::{Column, GestureDetector, HapticsMode, HitTestBehavior, SizedBox};
+use flui_widgets::{Column, GestureDetector, SizedBox};
 
 use crate::common::harness::mount;
 

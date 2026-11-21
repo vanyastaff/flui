@@ -36,9 +36,10 @@ pub use wavy::{
 use flui_sdk::animation::MotionPolicy;
 use flui_sdk::geometry::Rect;
 use flui_sdk::painting::{Canvas, Color, Paint};
+use flui_sdk::semantics::{NumericRange, SemanticsRole};
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{NumericRange, Semantics, SemanticsRole, TickerMode};
+use flui_sdk::widgets::{Semantics, TickerMode};
 
 /// The stroke of every indicator, and the height of a flat linear one: 4 dp.
 const STROKE: f64 = 4.0;

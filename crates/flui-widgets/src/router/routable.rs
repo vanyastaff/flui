@@ -26,7 +26,8 @@ use flui_view::navigation::{RouteParseError, RoutePath};
 /// # Example
 ///
 /// ```
-/// use flui_widgets::{Routable, RouteParseError, RoutePath};
+/// use flui_view::navigation::{RouteParseError, RoutePath};
+/// use flui_widgets::Routable;
 ///
 /// #[derive(Routable, Debug, Clone, PartialEq)]
 /// enum AppRoute {

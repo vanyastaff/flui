@@ -1454,7 +1454,7 @@ fn regional_formats_reach_media_query() {
 fn preferred_locales_select_resources_and_direction() {
     use flui_foundation::TextDirection;
     use flui_platform::{Locale, SystemPreferences};
-    use flui_widgets::localization::{
+    use flui_widgets::{
         BoxedLocalizationsDelegate, Directionality, GlobalWidgetsLocalizationsDelegate,
         Localizations, LocalizationsDelegate,
     };

@@ -34,9 +34,6 @@ mod visibility;
 mod visibility_gate;
 mod window_chrome;
 
-/// The pointer-ignoring wrapper lives in `paint`, where lower modules can
-/// reach it; this path keeps existing imports working.
-pub use crate::paint::IgnorePointer;
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
     Action, ActionOutcome, Actions, ActivateIntent, ActivateLinkIntent, ActivationPressIntent,
@@ -52,7 +49,7 @@ pub use draggable::{DragAnchor, DragCommands, Draggable, DraggableState};
 pub use drop_target::{DropCommands, DropHover, DropTarget, DropTargetState};
 pub use first_click::FirstClick;
 pub use focus::{ExcludeFocus, Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
-pub use focus_ring::{DefaultFocusRingStyle, FocusRing, FocusRingStyle};
+pub use focus_ring::{DefaultFocusRingStyle, FocusRing};
 pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
 pub use gesture_alternatives::{
     Alternative, AlternativeKind, CommandAppearance, CommandHandle, CompanionSpec,
@@ -61,8 +58,7 @@ pub use gesture_alternatives::{
     MenuSpec,
 };
 pub use gesture_detector::{
-    DragSlot, ForcePressSlot, GestureDetector, GestureDetectorState, MultiTapCount,
-    MultiTapCountError, TransformSlot,
+    DragSlot, ForcePressSlot, GestureDetector, GestureDetectorState, TransformSlot,
 };
 pub use hit_slop::{ContentShape, HitSlop};
 pub use listener::Listener;

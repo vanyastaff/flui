@@ -9,7 +9,7 @@ use flui_foundation::TextDirection;
 use flui_platform::Locale;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
-use flui_widgets::localization::{
+use flui_widgets::{
     BoxedLocalizationsDelegate, Directionality, GlobalWidgetsLocalizationsDelegate, Localizations,
 };
 

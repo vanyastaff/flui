@@ -18,11 +18,12 @@ use flui_animation::Vsync;
 use flui_foundation::Listenable;
 use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
+use flui_view::navigation::RouteParseError;
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, PageError, PageHandle, PopupRoute, RouteAnimation, RouteId,
-    RouteParseError, RouteResultError, RouterError, Text,
+    RouteResultError, RouterError, Text,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -2164,7 +2165,7 @@ pub(crate) fn a_named_page_is_announced_when_pushed_and_when_uncovered() {
     let polite = |laid: &LaidOut| {
         laid.a11y_tree()
             .expect("semantics enabled")
-            .announcement(flui_widgets::Urgency::Polite)
+            .announcement(flui_semantics::Urgency::Polite)
             .map(str::to_owned)
     };
     assert_eq!(polite(&laid), None, "the first page is not announced");

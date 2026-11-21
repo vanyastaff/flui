@@ -11,7 +11,7 @@ use flui_interaction::focus::FocusNode;
 use flui_platform::TargetPlatform;
 use flui_platform::input::keyboard::{Key, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_view::EventContext;
-use flui_widgets::interaction::{
+use flui_widgets::{
     Action, ActionOutcome, Actions, ActivateIntent, BackIntent, CallbackAction, DismissIntent,
     Focus,
 };

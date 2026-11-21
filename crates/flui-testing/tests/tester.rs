@@ -1731,7 +1731,7 @@ fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
 #[derive(Debug)]
 struct SwatchPainter(flui_painting::styling::Color);
 
-impl flui_widgets::CustomPainter for SwatchPainter {
+impl flui_rendering::delegates::CustomPainter for SwatchPainter {
     fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
         canvas.draw_rect(
             flui_foundation::geometry::Rect::from_origin_size(
@@ -1741,7 +1741,7 @@ impl flui_widgets::CustomPainter for SwatchPainter {
             &flui_painting::paint::Paint::fill(self.0),
         );
     }
-    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::CustomPainter) -> bool {
         true
     }
 }
@@ -1750,7 +1750,7 @@ impl flui_widgets::CustomPainter for SwatchPainter {
 fn named(identifier: &str, child: impl IntoView) -> impl IntoView {
     flui_widgets::Semantics::new()
         .container(true)
-        .role(flui_widgets::SemanticsRole::Group)
+        .role(flui_semantics::SemanticsRole::Group)
         .identifier(identifier)
         .child(child)
 }
@@ -1905,7 +1905,7 @@ fn an_element_is_found_by_the_identifier_on_a_group_around_it() {
         Center::new().child(
             flui_widgets::Semantics::new()
                 .container(true)
-                .role(flui_widgets::SemanticsRole::Group)
+                .role(flui_semantics::SemanticsRole::Group)
                 .identifier("swatch")
                 .child(SizedBox::new(24.0, 16.0)),
         ),
@@ -1942,7 +1942,7 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
             // A published group and a lifted node share "legend".
             flui_widgets::Semantics::new()
                 .container(true)
-                .role(flui_widgets::SemanticsRole::Group)
+                .role(flui_semantics::SemanticsRole::Group)
                 .identifier("legend")
                 .child(SizedBox::new(24.0, 16.0)),
             unpublished("legend").child(SizedBox::new(24.0, 16.0)),
@@ -2022,7 +2022,7 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
 #[derive(Debug)]
 struct OverhangPainter(flui_painting::styling::Color);
 
-impl flui_widgets::CustomPainter for OverhangPainter {
+impl flui_rendering::delegates::CustomPainter for OverhangPainter {
     fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
         use flui_foundation::geometry::{Point, Rect, Size};
         let paint = flui_painting::paint::Paint::fill(self.0);
@@ -2032,7 +2032,7 @@ impl flui_widgets::CustomPainter for OverhangPainter {
             &paint,
         );
     }
-    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::CustomPainter) -> bool {
         true
     }
 }
@@ -2136,7 +2136,7 @@ fn draw_commands_refuse_a_render_object_with_more_children_than_one_inspection()
 #[derive(Debug)]
 struct RegionPainter;
 
-impl flui_widgets::CustomPainter for RegionPainter {
+impl flui_rendering::delegates::CustomPainter for RegionPainter {
     fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
         canvas.draw_rect(
             flui_foundation::geometry::Rect::from_origin_size(
@@ -2146,7 +2146,7 @@ impl flui_widgets::CustomPainter for RegionPainter {
             &flui_painting::paint::Paint::fill(flui_painting::styling::Color::rgb(1, 0, 0)),
         );
     }
-    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+    fn should_repaint(&self, _old: &dyn flui_rendering::delegates::CustomPainter) -> bool {
         false
     }
     fn semantics_regions(

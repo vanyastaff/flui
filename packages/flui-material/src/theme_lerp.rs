@@ -5,7 +5,8 @@
 //! component theme, switches half way: they are choices, not magnitudes.
 
 use flui_sdk::geometry::Lerp;
-use flui_sdk::widgets::{FocusRingStyle, SelectionStyle};
+use flui_sdk::rendering::objects::FocusRingStyle;
+use flui_sdk::widgets::SelectionStyle;
 
 use crate::color_scheme::ColorScheme;
 use crate::text_theme::TextTheme;

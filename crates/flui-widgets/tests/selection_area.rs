@@ -371,11 +371,13 @@ pub(crate) fn a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_
 pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
+    use flui_rendering::delegates::CustomPainter;
+    use flui_semantics::SemanticsRole;
     use flui_semantics::{
         DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsConfiguration,
         SemanticsRegion, SemanticsRegionKey, TextContent, TextRun, TextRunParts,
     };
-    use flui_widgets::{CustomPaint, CustomPainter, SemanticsRole};
+    use flui_widgets::CustomPaint;
 
     /// Static text "héllo" declaring `anchor`, one run, each character ten
     /// wide; 'é' is two bytes.
@@ -642,13 +644,12 @@ pub(crate) fn a_panicking_wake_still_reports_the_committed_selection() {
 /// Red-check: leave a document's children in tree order (every case but
 /// the RTL row reads its texts in authored order).
 pub(crate) fn a_document_reads_its_texts_where_they_are_laid_out() {
+    use flui_objects::CrossAxisAlignment;
     use flui_objects::VerticalDirection;
     use flui_painting::typography::TextStyle;
     use flui_view::{BoxedView, ViewExt};
     use flui_widgets::prelude::Axis;
-    use flui_widgets::{
-        CrossAxisAlignment, Directionality, Positioned, Row, SizedBox, Stack, Wrap,
-    };
+    use flui_widgets::{Directionality, Positioned, Row, SizedBox, Stack, Wrap};
 
     fn cell(text: &'static str) -> SizedBox {
         SizedBox::new(60.0, 20.0).child(Text::new(text))

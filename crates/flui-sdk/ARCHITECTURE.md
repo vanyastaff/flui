@@ -50,7 +50,7 @@ which left the platform contract because only text widgets call them
 (ADR-0151 §6). A package's text field embeds them through the SDK alone.
 
 `painting::SemanticsRegion` and `painting::SemanticsRegionKey` name the values
-returned by `widgets::CustomPainter::semantics_regions` (ADR-0223). A package
+returned by `painting::CustomPainter::semantics_regions` (ADR-0223). A package
 can implement that trait using only the SDK, with configuration from the
 whole `widgets` surface. The measured list and facade identity test pin both
 values.
@@ -195,14 +195,24 @@ facade (ADR-0112). Material drawer callbacks use it to settle cancelled drags
 without release velocity. The existing surface list and type-identity tests
 include this package-author decision.
 
-ADR-0124 adds controlled `Slider` and `Disclosure`, their state types,
-`ExpansionState`, and checked `NumericRange` configuration through the existing
-whole-widget-module export. `surface` names these items as representative
-package-author surface; no new framework dependency is required by a package.
+ADR-0124 adds controlled `Slider` and `Disclosure`, their state types and
+`ExpansionState` through the existing whole-widget-module export, and checked
+`NumericRange` configuration as `semantics::NumericRange`. `surface` names these items as
+representative package-author surface; no new framework dependency is required by a package.
 
 ADR-0125 exposes `animation::VsyncRegistrationError` through the existing whole
 animation-module export. The surface list pins this typed admission refusal;
 package lifecycle owners borrow registration tokens when removing work.
+
+### A widget's value types sit at their owners' paths
+
+`flui-widgets` re-exports only its own items (and the `flui-view` widgets its catalog
+presents), so the value types a widget takes from another crate reach a package where the
+facade places them: semantics roles, states and ranges in `semantics`, layout enums and
+`FocusRingStyle` in `rendering::objects`, `HitTestBehavior`, the layout delegates and
+`TableCellVerticalAlignment` in `rendering`, `CustomPainter` in `painting`, pointer events,
+`ButtonChange` and `MultiTapCount` in `interaction`, and `SliverPersistentHeaderDelegate` in
+`view::element`. The surface list and the identity test pin them there.
 
 ### The custom-recognizer extension surface
 

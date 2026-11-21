@@ -2981,13 +2981,15 @@ fn build_field_view(
     let mut semantics = Semantics::new()
         .container(true)
         .role(if appearance.obscure_text {
-            crate::SemanticsRole::PasswordInput
+            flui_semantics::SemanticsRole::PasswordInput
         } else {
-            crate::SemanticsRole::TextInput
+            flui_semantics::SemanticsRole::TextInput
         })
         .enabled(enabled)
         .focused(focused)
-        .invalid(crate::Invalid::from_bool(appearance.semantics.invalid))
+        .invalid(flui_semantics::Invalid::from_bool(
+            appearance.semantics.invalid,
+        ))
         .required(appearance.semantics.required)
         .identifier_if(appearance.semantics.identifier.as_ref())
         .value(text.clone());

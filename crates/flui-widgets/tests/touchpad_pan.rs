@@ -59,7 +59,7 @@ pub(crate) fn a_touchpad_pan_drives_a_pan_only_gesture_detector() {
     let (started, updated) = (Rc::clone(&starts), Rc::clone(&updates));
     let laid = lay_out(
         GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .drag(
                 DragSlot::pan()
                     .on_start(move |_, _| *started.borrow_mut() += 1)
@@ -79,7 +79,7 @@ pub(crate) fn a_scrollable_inside_a_horizontal_drag_wins_a_vertical_pan() {
     let started = Rc::clone(&drags);
     let laid = lay_out(
         GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .drag(DragSlot::horizontal().on_start(move |_, _| *started.borrow_mut() += 1))
             .child(list(&controller, 1000.0)),
         tight(300.0, 300.0),
@@ -99,7 +99,7 @@ pub(crate) fn a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag() {
     let started = Rc::clone(&drags);
     let laid = lay_out(
         GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .drag(DragSlot::horizontal().on_start(move |_, _| *started.borrow_mut() += 1))
             .child(list(&controller, 1000.0)),
         tight(300.0, 300.0),
@@ -115,7 +115,7 @@ pub(crate) fn a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag() {
     let started = Rc::clone(&drags);
     let laid = lay_out(
         GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .drag(DragSlot::pan().on_start(move |_, _| *started.borrow_mut() += 1))
             .child(list(&controller, 100.0)),
         tight(300.0, 300.0),

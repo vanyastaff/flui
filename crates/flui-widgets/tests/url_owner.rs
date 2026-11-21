@@ -17,12 +17,10 @@ use std::time::Duration;
 use flui_foundation::ChangeNotifier;
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::CloseReason;
+use flui_view::navigation::{NavigationIntent, NavigationOp, NavigationRefused, RouteParseError};
 use flui_view::navigation::{OpenDeclarations, OpenUrlRefused, OpenedUrl};
 use flui_widgets::prelude::*;
-use flui_widgets::{
-    AnimatedBuilder, NavigationIntent, NavigationOp, NavigationRefused, PopScope, RouteParseError,
-    SizedBox, Stack,
-};
+use flui_widgets::{AnimatedBuilder, PopScope, SizedBox, Stack};
 
 const FRAME: Duration = Duration::from_millis(50);
 

@@ -75,6 +75,16 @@ extern crate self as flui_widgets;
 // ============================================================================
 // Modules
 // ============================================================================
+//
+// Every widget module is private: an item has one public path, the crate
+// root (`flui_widgets::Padding`, `flui::widgets::Padding`), as Flutter's
+// `widgets.dart` is one flat library. A module's `pub use` list is what the
+// root re-exports from it. The exceptions are namespaces the root keeps whole
+// rather than flattening (`particles`), and the doc-hidden seams below.
+// A type another crate owns (a semantics role, a pointer event, a render
+// delegate, a layout enum) is reached from its owner's module
+// (`flui::semantics`, `flui::interaction`, `flui::rendering`, …); the
+// prelude imports the ones an app author needs.
 
 mod support;
 
@@ -90,71 +100,56 @@ pub mod __private;
 pub mod __test_access;
 mod anchored_box;
 
-pub mod animated;
-pub mod app;
+mod animated;
+mod app;
 mod async_builders;
-pub mod clip;
+mod clip;
 mod container;
-// `ContextMenuArea` (ADR-0216); re-exported from the crate root.
 mod context_menu;
-pub mod controls;
-pub mod flex;
-pub mod form;
-pub mod icon;
-pub mod image;
-pub mod interaction;
-pub mod layout;
-pub mod localization;
+mod controls;
+mod flex;
+mod form;
+mod icon;
+mod image;
+mod interaction;
+mod layout;
+mod localization;
 mod magnifier;
-mod popup_menu;
-// Effects, reversible transitions and `Animate`; flat re-exports below.
-pub mod motion;
-
-/// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
-/// route stack, its lifecycle, the flush algorithm and the result channel are
-/// not public API (some are nameable only through the doc-hidden, temporary
-/// `__test_access`, ADR-0083 §4); the signed-off surface is re-exported from
-/// the crate root below.
-pub mod navigator;
-// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. The module
-// stays private: the types (ADR-0076) and the mutation surface
-// (`insert`/`rearrange`/`InsertPosition`/the entry lifecycle, ADR-0076) are
-// re-exported from the crate root, and nothing else is nameable, so
-// `OverlayScope` and the `Theater`/`OverlayState` machinery stay private. (A
-// `///` doc here would be concatenated with the module's own `//!` docs and
-// resolve its intra-doc links in the crate root.)
+mod motion;
+// The route stack beneath `Navigator` (ADR-0019, ADR-0330 §4): the pages,
+// routes and heroes an application names are re-exported below, and the stack,
+// its lifecycle and the result channel are not public.
+mod navigator;
+// `Overlay` / `OverlayEntry` (ADR-0076): the types and the lookup contract are
+// re-exported below; `OverlayScope` and the `Theater`/`OverlayState`
+// machinery are not.
 mod overlay;
-pub mod paint;
-pub mod physical_model;
-// The typed `Router` (ADR-0330); its items are re-exported from the crate root.
+mod paint;
+mod physical_model;
+mod popup_menu;
 mod reorderable;
-pub mod router;
-pub mod scroll;
-pub mod semantics;
-pub mod stack;
+// The typed `Router` (ADR-0330).
+mod router;
+mod scroll;
+mod semantics;
+mod stack;
 mod swipe;
-pub mod text;
-pub mod transitions;
+mod text;
+mod transitions;
 mod value_listenable_builder;
-pub mod widget_state;
-pub mod wrap;
+mod widget_state;
+mod wrap;
 
 // ============================================================================
-// Flat re-exports — `flui_widgets::Padding`, one import path for every widget.
+// Re-exports: the crate root is each widget item's one public path.
 // ============================================================================
 
-// Application composition and the
-// `InheritedTheme` trait a theme widget (e.g. `flui_material::Theme`)
-// implements. The Material `Theme`/`ThemeData` widget itself lives in
-// `flui-material` — see `app` module docs.
+// Application composition and the `InheritedTheme` trait a theme widget
+// (e.g. `flui_material::Theme`) implements.
 pub use app::{AppBuilder, InheritedTheme, SafeArea, WidgetsApp, WidgetsAppState, app_root};
 pub use magnifier::{
     InvalidMagnifierScale, MagnifierDecoration, MagnifierScale, MagnifierShape, RawMagnifier,
 };
-// `Brightness` is the value type `MediaQueryData` (and any theme's
-// brightness field) uses; re-exported here so callers need only
-// `use flui_widgets::Brightness`.
-pub use flui_platform::Brightness;
 // Ambient direction + localized-resource infrastructure — see
 // `localization`'s module docs for the sync-only-v1 limits.
 pub use localization::{
@@ -172,12 +167,13 @@ pub use animated::{
     AnimatedSlide, AnimatedSlideState, AnimatedState, MotionBuilder, RotationPath, TickerMode,
     TickerModeState,
 };
-pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRSuperellipse, ClipRect, Oval};
-// `Image` widget over `RenderImage`; provider types live in the same module.
+// `FutureBuilder`/`StreamBuilder` and their snapshot vocabulary are defined in
+// `flui-view` beside their element state; the catalog is their path.
 pub use async_builders::{
     AsyncSnapshot, BoxedResultFuture, BoxedResultStream, ConnectionState, FutureBuilder,
     FutureFactory, InitialDataFactory, SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
 };
+pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRSuperellipse, ClipRect};
 pub use container::Container;
 pub use context_menu::{ContextMenuArea, ContextMenuAreaState};
 pub use controls::{
@@ -185,8 +181,6 @@ pub use controls::{
     ExpansionState, Slider, SliderState,
 };
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
-pub use flui_painting::ImagePlacement;
-pub use flui_painting::paint::ImageRepeat;
 pub use icon::{
     AnimatedIcon, AnimatedIconData, AnimatedIconState, DiscreteEffect, Icon, IconCommand,
     IconCommandBuf, IconData, IconDataError, IconPath, IconPathBuf, IconTheme, IconThemeData,
@@ -209,19 +203,19 @@ pub use interaction::{
     CrossFadeState, DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
     DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, DragCommands,
     Draggable, DraggableState, DropCommands, DropHover, DropTarget, DropTargetState, ExcludeFocus,
-    FirstClick, Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusScope, FocusScopeState,
-    FocusState, FocusTraversalGroup, FocusTraversalGroupState, GestureAlternatives,
-    GestureAlternativesError, GestureAlternativesState, GestureCommand, GestureDetector,
-    GestureDetectorState, GestureRecognizerFactory, HitSlop, Intent, Listener, MenuCause, MenuItem,
-    MenuPresenter, MenuRequest, MenuSpec, MetaData, MouseRegion, NextFocusAction, NextFocusIntent,
-    Offstage, PanClaimRegion, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton,
+    FirstClick, Focus, FocusChangeHandler, FocusRing, FocusScope, FocusScopeState, FocusState,
+    FocusTraversalGroup, FocusTraversalGroupState, GestureAlternatives, GestureAlternativesError,
+    GestureAlternativesState, GestureCommand, GestureDetector, GestureDetectorState,
+    GestureRecognizerFactory, HitSlop, Intent, Listener, MenuCause, MenuItem, MenuPresenter,
+    MenuRequest, MenuSpec, MetaData, MouseRegion, NextFocusAction, NextFocusIntent, Offstage,
+    PanClaimRegion, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton,
     RawGestureDetector, RawGestureDetectorState, RecognizerContext, SelectAllTextIntent,
     ShortcutCallback, Shortcuts, ShortcutsState, ShowContextMenuIntent, SingleActivator,
     SystemGestureExclusion, TransformationController, Visibility, VisibilityGate,
     WindowCaptionButton, WindowChromeState, WindowMovePassThrough, WindowResizeArea,
     WindowTitleBar,
 };
-pub use interaction::{DragSlot, ForcePressSlot, MultiTapCount, MultiTapCountError, TransformSlot};
+pub use interaction::{DragSlot, ForcePressSlot, TransformSlot};
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
@@ -231,41 +225,30 @@ pub use layout::{
 };
 pub use motion::{
     Animate, AnimateExt, AnimateState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder,
-    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, ParticleController,
-    ParticleEmitter, ParticleEmitterState, Shimmer, ShimmerBand, ShimmerState, Skeleton,
-    SkeletonState, Transition, Trigger,
+    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, Shimmer,
+    ShimmerState, Skeleton, SkeletonState, Transition, Trigger,
 };
-pub use popup_menu::PlainSelectionMenu;
-// `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
-// so consumers don't need to reach into `flui_objects`.
-pub use flui_objects::OverflowBoxFit;
-// `HitShape` configures `ContentShape`.
-pub use flui_objects::HitShape;
-// `TableColumnWidth`/`TableCellVerticalAlignment` configure `Table`/`TableCell`;
-// `TableBorder` configures `Table::border`. Re-exported here so widget authors
-// need only import from `flui_widgets`.
-pub use flui_objects::TableColumnWidth;
-pub use flui_painting::styling::TableBorder;
-pub use flui_rendering::parent_data::TableCellVerticalAlignment;
+// Particle effects: `ParticleEmitter`, its checked `ParticleConfig` and the
+// `ParticleController` that fires bursts — a namespace of its own, so its
+// configuration vocabulary (`Sprite`, `Coverage`, `MAX_CAPACITY`, …) does not
+// crowd the catalog.
 pub use form::{
     AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldHandleAlreadyAttached,
     FormFieldSetter, FormFieldState, FormFieldValidator, FormHandle, FormHandleAlreadyAttached,
     FormState, RawTextFormField, RawTextFormFieldState,
 };
+pub use motion::particles;
 pub use navigator::{
-    AnimationRunFuture, FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode,
-    PageError, PageHandle, PageRoute, PageTransitionBuilder, PageTransitions,
-    ParallaxPageTransition, PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route,
-    RouteAnimation, RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult,
-    RouteResultError, RouteSettings, RouteTransitionsBuilder, RunCanceled,
+    FlightDirection, Hero, HeroController, HeroControllerScope, HeroMode, PageError, PageHandle,
+    PageRoute, PageTransitionBuilder, PageTransitions, ParallaxPageTransition, PopInvokedCallback,
+    PopScope, PopupRoute, PushCompletion, Route, RouteAnimation, RouteBindingSlot,
+    RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteResultError, RouteSettings,
+    RouteTransitionsBuilder,
 };
+pub use popup_menu::PlainSelectionMenu;
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
-/// The offset [`SlideTransition`] and [`AnimatedSlide`] take: a fraction of
-/// the child's own size, so an app can build one without naming the render
-/// object crate.
-pub use flui_objects::TranslationFraction;
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{
     AnnotatedRegion, BackdropFilter, BackdropGroup, BackdropGroupState, ColoredBox, CustomPaint,
@@ -276,41 +259,40 @@ pub use reorderable::{
     Reorder, ReorderCause, ReorderHandles, ReorderIntent, ReorderPreview, ReorderableGrid,
     ReorderableGridState, ReorderableItem, ReorderableList, ReorderableListState,
 };
-pub use router::{
-    NavigationIntent, NavigationOp, NavigationRefused, Routable, RouteParseError, RoutePath,
-    Router, RouterError, RouterHandle, RouterState,
-};
+pub use router::{Routable, Router, RouterError, RouterHandle, RouterState};
+// The helpers `#[derive(Routable)]` expands to calls of: no semver guarantee,
+// and no other caller.
+#[doc(hidden)]
+pub use router::__derive;
+pub use scroll::ScrollPositionScope;
 pub use scroll::{AnchorIntent, PageIntent};
 pub use scroll::{
     AnchorSnap, AnchorSnapError, AnchoredDrag, AnchoredDragController, AnchoredDragState,
     AnchorsError, AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics,
     CollapsingHeader, CollapsingHeaderState, CustomScrollView, DefaultScrollBehavior,
-    DraggableAnchors, DraggableAnchorsBuilder, FlingHandoff, FlingStep, FocusableSliver, GridView,
-    HeaderExtents, HeaderExtentsError, HeaderOrder, InvalidExtents, InvalidSliverCrossAxisExtent,
-    InvalidViewportFraction, InvalidWheelScrollDistance, ListView, NestedScroll,
-    NestedScrollConnection, NestedScrollState, OverScrollHeaderStretchConfiguration,
-    OverscrollBehavior, PageController, PageIndicator, PageIndicatorState, PageIndicatorStyle,
-    PageIndicatorStyleError, PageSnap, PageView, PageViewState, RefreshController,
-    RefreshIndicator, RefreshIndicatorPhase, RefreshIndicatorState, RefreshIndicatorStyle,
-    RefreshIntent, ScrollBehavior, ScrollBehaviorDetails, ScrollCause, ScrollConfiguration,
-    ScrollController, ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollPhysics,
-    ScrollPhysicsError, ScrollPhysicsParameter, ScrollStep, ScrollView, ScrollViewConfig,
-    Scrollable, ScrollableDetails, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    SharedScrollPhysics, SharedSnapPolicy, ShrinkWrappingViewport, SingleChildScrollView,
-    SliverAnimatedList, SliverAnimatedListState, SliverChildBuilderDelegate,
-    SliverConstrainedCrossAxis, SliverCrossAxisGroup, SliverCrossAxisItem, SliverFillRemaining,
-    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
-    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
-    SliverPersistentHeaderDelegate, SliverToBoxAdapter, SnapPolicy, StretchTrigger, Viewport,
+    DraggableAnchors, DraggableAnchorsBuilder, FlingHandoff, FlingStep, FocusableSliver,
+    FocusableSliverParts, GridView, HeaderExtents, HeaderExtentsError, HeaderOrder,
+    IntoFocusableSliver, InvalidExtents, InvalidViewportFraction, InvalidWheelScrollDistance,
+    ListView, NestedScroll, NestedScrollConnection, NestedScrollState, OverscrollBehavior,
+    PageController, PageIndicator, PageIndicatorState, PageIndicatorStyle, PageIndicatorStyleError,
+    PageSnap, PageView, PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorPhase,
+    RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent, ScrollBehavior,
+    ScrollBehaviorDetails, ScrollCause, ScrollConfiguration, ScrollController, ScrollDevice,
+    ScrollEndReason, ScrollMetrics, ScrollPhysics, ScrollPhysicsError, ScrollPhysicsParameter,
+    ScrollStep, ScrollView, ScrollViewConfig, Scrollable, ScrollableDetails, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, SharedScrollPhysics, SharedSnapPolicy,
+    ShrinkWrappingViewport, SingleChildScrollView, SliverAnimatedList, SliverAnimatedListState,
+    SliverChildBuilderDelegate, SliverConstrainedCrossAxis, SliverCrossAxisGroup,
+    SliverCrossAxisItem, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+    SliverIgnorePointer, SliverList, SliverMainAxisGroup, SliverOffstage, SliverOpacity,
+    SliverPadding, SliverPersistentHeader, SliverToBoxAdapter, SnapPolicy, Viewport,
     ViewportFraction, WheelScrollDistances,
 };
 pub use scroll::{
     Carousel, CarouselAutoplay, CarouselAutoplayError, CarouselController, CarouselItemScope,
-    CarouselLayout, CarouselLayoutError, CarouselLayoutKind, CarouselState, KeylineSnap,
-    MAX_ITEM_EXTENT, MIN_AUTOPLAY_PERIOD,
+    CarouselState, KeylineSnap, MIN_AUTOPLAY_PERIOD,
 };
-pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use scroll::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
     InteractiveViewerState, PanAxis, PanIntent, WheelScaleGate, ZoomIntent,
@@ -353,58 +335,6 @@ pub use widget_state::{
 pub use widget_state::PressHold;
 pub use wrap::Wrap;
 
-pub use flui_view::HapticsMode;
-
-// Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
-// (re-exported from the `flui-objects` catalog, their home beside
-// the render objects that read them).
-pub use flui_objects::{
-    CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit, VerticalDirection,
-};
-// `WrapAlignment`/`WrapCrossAlignment` configure `Wrap`'s main-axis distribution
-// and per-child cross-axis positioning.
-pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
-// `FlexFit` (the `Flexible` fit mode) lives with the parent-data it configures.
-pub use flui_rendering::parent_data::FlexFit;
-// Grid, custom-paint, flow, and custom layout delegates — always
-// available (un-gated since their companion render objects ship in the
-// default build). Re-exported here so widget authors need only import from
-// `flui_widgets`.
-pub use flui_rendering::delegates::{
-    AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate, FlowPaintingContext,
-    MultiChildLayoutContext, MultiChildLayoutDelegate, SingleChildLayoutDelegate,
-    SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
-    SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
-};
-// Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
-// pointer event types its callbacks receive (`on_pointer_move` also receives
-// `PointerEvent::ButtonChange`).
-pub use flui_interaction::events::ButtonChange;
-// What `MouseRegion::cursor` takes: a system icon, an application's image, or
-// none.
-pub use flui_interaction::{
-    events::{Cursor, CursorIcon, CursorImage, PointerEvent},
-    ids::DeviceId,
-    pointer::{EventPropagation, HitTestBehavior, PointerDispatch},
-};
-// The shared scroll state `ScrollController::position()` returns,
-// `Scrollable::new`'s closure receives and `Viewport::new` takes — a widget
-// author composing a custom scrollable directly on `Viewport` needs to name
-// this type without reaching past `flui-widgets` into `flui-rendering`.
-pub use flui_rendering::view::ScrollPosition;
-// Details a `GestureDetector` drag slot hands its callbacks.
-pub use flui_interaction::gesture::{
-    DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-    TapDetails,
-};
-pub use flui_platform::input::pointer::PanZoomEvent;
-pub use flui_semantics::{
-    ActionCall, AnnounceError, Announcer, AutoComplete, CellPosition, Current, HasPopup,
-    HeadingLevel, Invalid, LiveSetting, NumericRange, NumericRangeError, Reveal,
-    ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
-    SetSize, SortDirection, TableShape, TextSelection, Toggled, Urgency,
-};
-
 // ============================================================================
 // Prelude
 // ============================================================================
@@ -418,40 +348,39 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, Align, AspectRatio,
-        AutovalidateMode, BackdropFilter, BackdropGroup, Baseline, Brightness,
-        ButtonActivateIntent, CallbackAction, CallbackShortcuts, Center, ClipOval, ClipPath,
-        ClipRRect, ClipRSuperellipse, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
-        ContentShape, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
-        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
-        DefaultFocusTraversalState, DefaultSelectionControls, DefaultSelectionStyle,
-        DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState,
-        DotHandles, DragSlot, Draggable, DropTarget, EditableText, EditableTextState, ExcludeFocus,
-        ExcludeSemantics, Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible,
-        FlightDirection, Flow, Focus, FocusScope, FocusTraversalGroup, Form, FormField,
-        FormFieldHandle, FormHandle, FractionalTranslation, FractionallySizedBox, FutureBuilder,
-        GestureDetector, GridView, HandleInfo, HandleSide, Hero, HeroController, HeroMode,
-        HitShape, HitSlop, Icon, IconData, IconTheme, IconThemeData, IgnoreBaseline, IgnorePointer,
-        Image, ImagePlacement, ImageProvider, ImageRepeat, IndexedSemantics, IndexedStack,
-        InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId,
-        LimitedBox, ListBody, ListView, Listener, Localizations, LocalizationsDelegate,
+        AutovalidateMode, BackdropFilter, BackdropGroup, Baseline, ButtonActivateIntent,
+        CallbackAction, CallbackShortcuts, Center, ClipOval, ClipPath, ClipRRect,
+        ClipRSuperellipse, ClipRect, ColoredBox, Column, ConstrainedBox, Container, ContentShape,
+        CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint, CustomScrollView,
+        CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal, DefaultFocusTraversalState,
+        DefaultSelectionControls, DefaultSelectionStyle, DefaultTextStyle,
+        DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState, DotHandles,
+        DragSlot, Draggable, DropTarget, EditableText, EditableTextState, ExcludeFocus,
+        ExcludeSemantics, Expanded, ExpansionState, FittedBox, Flex, Flexible, FlightDirection,
+        Flow, Focus, FocusScope, FocusTraversalGroup, Form, FormField, FormFieldHandle, FormHandle,
+        FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureDetector, GridView,
+        HandleInfo, HandleSide, Hero, HeroController, HeroMode, HitSlop, Icon, IconData, IconTheme,
+        IconThemeData, IgnoreBaseline, IgnorePointer, Image, ImageProvider, IndexedSemantics,
+        IndexedStack, InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder,
+        LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations, LocalizationsDelegate,
         MergeSemantics, MouseRegion, NextFocusAction, NextFocusIntent, Offstage, Opacity,
-        OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle, Padding,
-        PageController, PageHandle, PageRoute, PageView, PanClaimRegion, PasteTextIntent,
-        PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize,
-        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton, RawTextField,
-        RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable,
-        RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, ScrollView, Scrollable,
-        Scrollbar, SelectAllTextIntent, SelectionArea, SelectionContainer, SelectionController,
-        SelectionHandles, SelectionStyle, Semantics, Shortcuts, ShrinkWrappingViewport,
-        SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider, SliderState,
-        SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
-        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
-        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
-        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
-        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
-        WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
+        OverflowBox, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle, Padding, PageController,
+        PageHandle, PageRoute, PageView, PanClaimRegion, PasteTextIntent, PhysicalModel,
+        PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize, PreferredSizeView,
+        PreviousFocusAction, PreviousFocusIntent, RawButton, RawTextField, RawTextFieldState,
+        RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable, Router, RouterHandle,
+        Row, SafeArea, ScrollController, ScrollView, Scrollable, Scrollbar, SelectAllTextIntent,
+        SelectionArea, SelectionContainer, SelectionController, SelectionHandles, SelectionStyle,
+        Semantics, Shortcuts, ShrinkWrappingViewport, SingleActivator, SingleChildScrollView,
+        SizedBox, SizedOverflowBox, Slider, SliderState, SliverChildBuilderDelegate,
+        SliverFadeTransition, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, SubmitCallback, Table, TableCell,
+        TableRow, Text, TextEditingController, TickerMode, Transform, UnconstrainedBox,
+        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
+        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
+        WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // The implicit widgets' duration/curve/spring builders.
@@ -460,18 +389,14 @@ pub mod prelude {
     // Effects on any view (`view.animate(effects)`) and the vocabulary they take.
     pub use crate::{Animate, AnimateExt, Effects, Transition};
 
-    // Common configuration value types, so an app author needs only this import.
+    // Localization configuration.
     pub use crate::basic_locale_list_resolution;
     pub use crate::{
-        AspectRatioDelegate, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
-        CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
-        FlowPaintingContext, HeadingLevel, LiveSetting, MultiChildLayoutContext,
-        MultiChildLayoutDelegate, NumericRange, NumericRangeError, SemanticsAnchor,
-        SemanticsConfiguration, SemanticsRole, SingleChildLayoutDelegate, SliverGridDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
-        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth, Toggled,
-        Urgency,
+        BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizationsDelegate,
     };
+
+    // The value types the widgets above take, from the crates that own them, so
+    // an app author needs only this import.
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};
     pub use flui_interaction::gesture::{
@@ -484,17 +409,27 @@ pub mod prelude {
         pointer::{EventPropagation, HitTestBehavior, PointerDispatch},
     };
     pub use flui_objects::{
-        CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit, VerticalDirection,
+        CrossAxisAlignment, HitShape, MainAxisAlignment, MainAxisSize, OverflowBoxFit, StackFit,
+        TableColumnWidth, VerticalDirection, WrapAlignment, WrapCrossAlignment,
     };
-    pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
-    pub use flui_painting::Alignment;
-    pub use flui_painting::BoxFit;
-    pub use flui_painting::paint::Clip;
-    pub use flui_painting::styling::Color;
+    pub use flui_painting::paint::{Clip, ImageRepeat};
+    pub use flui_painting::styling::{Color, TableBorder};
     pub use flui_painting::typography::TextBaseline;
+    pub use flui_painting::{Alignment, BoxFit, ImagePlacement};
     pub use flui_platform::input::pointer::PanZoomEvent;
-    pub use flui_platform::{InvalidLocale, Locale};
-    pub use flui_rendering::constraints::AxisDirection;
-    pub use flui_rendering::constraints::BoxConstraints;
+    pub use flui_platform::{Brightness, InvalidLocale, Locale};
+    pub use flui_rendering::constraints::{AxisDirection, BoxConstraints};
+    pub use flui_rendering::delegates::{
+        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
+        FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
+        SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+        SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+    };
+    pub use flui_rendering::parent_data::{FlexFit, TableCellVerticalAlignment};
     pub use flui_rendering::view::ScrollPosition;
+    pub use flui_semantics::{
+        HeadingLevel, LiveSetting, NumericRange, NumericRangeError, SemanticsAnchor,
+        SemanticsConfiguration, SemanticsRole, Toggled, Urgency,
+    };
+    pub use flui_view::navigation::RoutePath;
 }

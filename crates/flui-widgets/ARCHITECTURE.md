@@ -644,6 +644,22 @@ Cross-crate protocol decisions belong in an ADR (`docs/adr/`). What belongs
 here is a decision local to this crate: a widget's internal shape, a callback
 bound, a payload type.
 
+## One public path
+
+Every top-level module is private, and the crate root re-exports each public item once:
+`flui_widgets::Padding`, never `flui_widgets::layout::Padding`, as Flutter's `widgets.dart` is
+one flat library. `particles` is the one namespace the root keeps whole (its configuration
+vocabulary — `Sprite`, `Coverage`, `MAX_CAPACITY` — would crowd the catalog), and the root does
+not also flatten its items. A type another crate owns is not re-exported: a semantics role, a
+pointer event, a layout enum or a render delegate is reached from its owner (`flui::semantics`,
+`flui::interaction`, `flui::rendering`, `flui::painting`), and the `prelude` imports the ones an
+app author needs from their owning crates. The widgets `flui-view` defines beside their element
+state (`LayoutBuilder`, `SliverList`, `SliverGrid`, `FutureBuilder`, `StreamBuilder` and its
+snapshot vocabulary) are catalog items, re-exported at the root. The doc-hidden seams are
+`__private` (the catalogs' `node`, form-field core, flight seat), `__derive` (what
+`#[derive(Routable)]` expands to calls of, and the `RoutePath`/`RouteParseError` it names) and
+the `testing`-only `__test_access`.
+
 ## Module layers
 
 The crate is one crate with a declared import direction between its top-level
@@ -2346,7 +2362,7 @@ undelivered.
 ### 26. Global widgets localizations live in the catalog, not in a separate package
 
 **Choice:** `GlobalWidgetsLocalizations`, `GlobalWidgetsLocalizationsDelegate`
-and `RTL_LANGUAGES` live in `flui_widgets::localization`, next to the
+and `RTL_LANGUAGES` live in `flui-widgets`' `localization` module, next to the
 `WidgetsLocalizations` contract they implement.
 
 **Why not a separate package.** A separate package pays off when it carries

@@ -68,7 +68,7 @@ proptest! {
 }
 
 fn canonical_location(input: &str, expected: &str, name: &str) {
-    let path = flui_widgets::RoutePath::parse(input).expect("valid encoded location");
+    let path = flui_view::navigation::RoutePath::parse(input).expect("valid encoded location");
     assert_eq!(path.as_str(), expected);
     assert_eq!(
         TestRoute::from_path(&path),
@@ -122,8 +122,8 @@ fn dot_segments_are_literal_route_values() {
 fn malformed_location(input: &str) {
     assert!(
         matches!(
-            flui_widgets::RoutePath::parse(input),
-            Err(flui_widgets::RouteParseError::Malformed { location, .. }) if location == input
+            flui_view::navigation::RoutePath::parse(input),
+            Err(flui_view::navigation::RouteParseError::Malformed { location, .. }) if location == input
         ),
         "invalid location must be rejected without replacing data: {input:?}"
     );
@@ -156,7 +156,7 @@ fn out_of_range_unicode_is_rejected() {
     malformed_location("/tag/%F4%90%80%80");
 }
 fn query_location(input: &str, expected: &str, pairs: &[(&str, &str)]) {
-    let path = flui_widgets::RoutePath::parse(input).expect("valid encoded location");
+    let path = flui_view::navigation::RoutePath::parse(input).expect("valid encoded location");
     assert_eq!(path.as_str(), expected, "{input:?}");
     let read: Vec<(String, String)> = path
         .query()
@@ -168,7 +168,7 @@ fn query_location(input: &str, expected: &str, pairs: &[(&str, &str)]) {
         .collect();
     assert_eq!(read, pairs, "{input:?}");
     assert_eq!(
-        flui_widgets::RoutePath::parse(expected).as_ref(),
+        flui_view::navigation::RoutePath::parse(expected).as_ref(),
         Ok(&path),
         "the printed location parses back"
     );
@@ -194,7 +194,9 @@ fn query_empty_pairs_are_dropped() {
     query_location("/?", "/", &[]);
     query_location("/s?=&q=1&=", "/s?q=1", &[("q", "1")]);
     assert_eq!(
-        flui_widgets::RoutePath::root().with_query("", "").as_str(),
+        flui_view::navigation::RoutePath::root()
+            .with_query("", "")
+            .as_str(),
         "/",
         "a pair with no key and no value appends nothing"
     );
@@ -211,14 +213,14 @@ fn query_bad_escape_is_rejected() {
     malformed_location("/s?q=%FF");
 }
 fn query_is_kept_by_the_last_prefix_only() {
-    let path = flui_widgets::RoutePath::parse("/a/b?q=1").expect("valid location");
+    let path = flui_view::navigation::RoutePath::parse("/a/b?q=1").expect("valid location");
     assert_eq!(
         path.prefixes()
             .map(|prefix| prefix.to_string())
             .collect::<Vec<_>>(),
         ["/", "/a", "/a/b?q=1"],
     );
-    let root = flui_widgets::RoutePath::parse("/?q=1").expect("valid location");
+    let root = flui_view::navigation::RoutePath::parse("/?q=1").expect("valid location");
     assert_eq!(
         root.prefixes()
             .map(|prefix| prefix.to_string())
@@ -226,7 +228,7 @@ fn query_is_kept_by_the_last_prefix_only() {
         ["/?q=1"],
     );
     assert_eq!(
-        flui_widgets::RoutePath::root()
+        flui_view::navigation::RoutePath::root()
             .with_query("q", 1)
             .join("a")
             .as_str(),
@@ -236,7 +238,9 @@ fn query_is_kept_by_the_last_prefix_only() {
 }
 fn query_fields_parse_and_default() {
     let parse = |location: &str| {
-        TestRoute::from_path(&flui_widgets::RoutePath::parse(location).expect("valid location"))
+        TestRoute::from_path(
+            &flui_view::navigation::RoutePath::parse(location).expect("valid location"),
+        )
     };
     assert_eq!(
         parse("/search?tag=a&utm=x&q=rust&tag=b&page=2"),
@@ -257,14 +261,17 @@ fn query_fields_parse_and_default() {
     );
     assert_eq!(
         parse("/search?page=two"),
-        Err(flui_widgets::RouteParseError::Param {
-            path: flui_widgets::RoutePath::parse("/search?page=two").expect("valid location"),
+        Err(flui_view::navigation::RouteParseError::Param {
+            path: flui_view::navigation::RoutePath::parse("/search?page=two")
+                .expect("valid location"),
             field: "page",
             segment: "two".to_owned(),
         })
     );
     assert_eq!(
-        TestRoute::back_stack(&flui_widgets::RoutePath::parse("/search?q=a").expect("valid")),
+        TestRoute::back_stack(
+            &flui_view::navigation::RoutePath::parse("/search?q=a").expect("valid")
+        ),
         Ok(vec![
             TestRoute::Home,
             TestRoute::Search {

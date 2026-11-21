@@ -19,7 +19,7 @@ use flui_widgets::__test_access::{
     NavigatorProbe as _, OverlayEntryProbe as _, RouteProbe as _, TransitionHandle,
 };
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{PageRoute, RouteAnimation, RouteId};
+use flui_widgets::{PageRoute, RouteAnimation, RouteId};
 
 use crate::common::harness::{Harness, mount};
 
