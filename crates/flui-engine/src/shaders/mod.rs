@@ -4,7 +4,7 @@
 //! every entry below is a concatenation whose piece order is load-bearing, and
 //! the assembly is what earns the indirection. Shaders that are a single file
 //! (`effects/*.wgsl`, the remaining `common/*.wgsl`) stay
-//! `include_str!`-loaded by their consumers, including `effects_pipeline.rs`
+//! `include_str!`-loaded by their consumers, including `pipelines/effects.rs`
 //! for the shadow pipeline.
 //!
 //! A shader that imports a shared module (`import package::color_filter::…;`)
@@ -31,7 +31,7 @@ pub(crate) use composed_wgsl;
 // `wgpu::Features::DUAL_SOURCE_BLENDING` cannot compile the second one at all:
 // naga rejects `@blend_src` without the matching validator capability. The
 // owning pipeline cache picks between them per device and per blend mode —
-// `PipelineCache` for the tessellated shape, `GradientPipelines` for the three
+// `PipelineVariants` for the tessellated shape, `GradientPipelines` for the three
 // gradients.
 //
 // The pieces are the same in every assembly and in the same order: the clip
@@ -53,7 +53,7 @@ pub(crate) use composed_wgsl;
 macro_rules! coverage_correct_shader {
     // A gradient: the module, after the stops it reads (`gradients/stops.wgsl`).
     (gradient $module:literal, $vertex:literal) => {
-        crate::pipeline_cache::CoverageShaderSources {
+        crate::pipelines::variants::CoverageShaderSources {
             folded: concat!(
                 include_str!("common/clip.wgsl"),
                 include_str!("common/coverage.wgsl"),
@@ -80,7 +80,7 @@ macro_rules! coverage_correct_shader {
         }
     };
     ($module:literal, $vertex:literal) => {
-        crate::pipeline_cache::CoverageShaderSources {
+        crate::pipelines::variants::CoverageShaderSources {
             folded: concat!(
                 include_str!("common/clip.wgsl"),
                 include_str!("common/coverage.wgsl"),
@@ -110,25 +110,25 @@ macro_rules! coverage_correct_shader {
 /// Tessellated geometry has no instances to hang a clip slot on, so its clip
 /// arrives in a per-batch uniform rather than per instance; the clip block is
 /// the same either way.
-pub(crate) const SHAPE: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
+pub(crate) const SHAPE: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
     "shape.wgsl",
     "@vertex fn vs_isolation(input: VertexInput) -> VertexOutput { return isolateVertex(vertexStage(input)); }\n"
 );
 
 /// Instanced linear gradient shader — folded, dual-source and isolation assemblies.
-pub(crate) const LINEAR_GRADIENT: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
+pub(crate) const LINEAR_GRADIENT: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
     gradient "gradients/linear.wgsl",
     "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
 );
 
 /// Instanced radial gradient shader — folded, dual-source and isolation assemblies.
-pub(crate) const RADIAL_GRADIENT: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
+pub(crate) const RADIAL_GRADIENT: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
     gradient "gradients/radial.wgsl",
     "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
 );
 
 /// Instanced sweep gradient shader — folded, dual-source and isolation assemblies.
-pub(crate) const SWEEP_GRADIENT: crate::pipeline_cache::CoverageShaderSources = coverage_correct_shader!(
+pub(crate) const SWEEP_GRADIENT: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
     gradient "gradients/sweep.wgsl",
     "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
 );

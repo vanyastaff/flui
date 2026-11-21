@@ -56,7 +56,7 @@ wgpu = { workspace = true, default-features = false }
 # box a `HandleError` directly into `EngineError::SurfaceCreation` via the typed
 # `#[source] Box<dyn Error + Send + Sync + 'static>` ctor instead of stringifying.
 raw-window-handle = { version = "0.6", features = ["std"] }
-# Glyph atlas packer (`crate::glyph_atlas`): the bucketed shelf allocator
+# Glyph atlas packer (`crate::resources::glyph_atlas`): the bucketed shelf allocator
 # glyphon used, now driven directly — the engine rasterises through
 # `flui_painting::glyphs::SwashRasterizer` and owns the atlas (ADR-0067).
 etagere = "0.3"
@@ -80,7 +80,7 @@ parking_lot = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-# Portable Instant for GPU-path diagnostic spans (issue #1045). Same pin the
+# Portable Instant for GPU-path diagnostic spans. Same pin the
 # foundation clock and the app runner already use — std::time::Instant panics
 # on wasm32-unknown-unknown before surface acquire/present can complete.
 web-time = { workspace = true }
@@ -97,7 +97,7 @@ static_assertions = { workspace = true }
 # target-scoped entries are feature-unified with the base `wgpu` dependency
 # above, so every consumer of flui-engine gets the native backend for the
 # compile target without opting in. The mapping mirrors
-# `gpu_backend::Family::order`; the named features above (`vulkan`, `metal`,
+# `device::backend::Family::order`; the named features above (`vulkan`, `metal`,
 # `dx12`, `webgpu`, `gles`) remain available to enable additional backends.
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, default-features = false, features = ["dx12"] }
@@ -161,7 +161,7 @@ trybuild = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 flui-testing = { path = "../flui-testing" }
 
-# Executing wasm32 tests for the frame-timing helper (issue #1045). Pinned
+# Executing wasm32 tests for the frame-timing helper. Pinned
 # exactly like flui-foundation / flui-app: 0.3.77 pairs with the locked
 # wasm-bindgen 0.2.127; an unpinned `"0.3"` would bump the workspace lock.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

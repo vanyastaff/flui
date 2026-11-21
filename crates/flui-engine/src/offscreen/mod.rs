@@ -1,6 +1,6 @@
 //! Cached intermediate-to-surface presentation blit.
 //! Layer masks and backdrops use ordered painter IR, not this helper.
-use crate::device_domain::{DeviceDomain, PreparedCost};
+use crate::device::domain::{DeviceDomain, PreparedCost};
 use crate::error::EngineResult;
 use std::sync::Arc;
 mod blit;

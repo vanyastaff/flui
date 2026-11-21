@@ -10,7 +10,7 @@
 //! | B4 | GPU | Zero-sigma identity (ABSOLUTE — not GPU==oracle) |
 //! | B5 | GPU | grown_bounds halo extent: pixels at col=3 or col=57 are non-zero for sigma=4 |
 //!
-//! ## Premultiplied-direct invariant (PINNED #2)
+//! ## Premultiplied-direct invariant
 //!
 //! The Gaussian kernel operates on **premultiplied** RGBA in **sRGB-encoded** space.
 //! NO unpremultiply step, NO linearise — matching Impeller
@@ -38,8 +38,8 @@ mod gpu_tests {
     use flui_painting::styling::Color;
 
     use crate::{
-        command_ir::ImageFilterSpec, effects::kernel_radius, painter::WgpuPainter,
-        render_target::RenderTarget,
+        frame::render_target::RenderTarget, painter::WgpuPainter,
+        record::command_ir::ImageFilterSpec, record::effects::kernel_radius,
     };
 
     // ── Harness constants ─────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ mod gpu_tests {
     /// CPU oracle for separable Gaussian blur operating **premultiplied-direct**
     /// on a flat pixel grid.
     ///
-    /// ## Contract (matches PINNED #2 and the WGSL shader exactly)
+    /// ## Contract (matches the WGSL shader exactly)
     ///
     /// - Premultiplied-direct: NO unpremultiply/repremultiply step.
     /// - Weights: `exp(-0.5 × i² / σ²)`, running-sum renormalised (divide by

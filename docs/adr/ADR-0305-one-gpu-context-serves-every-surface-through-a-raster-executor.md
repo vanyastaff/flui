@@ -64,8 +64,8 @@ has neither. Evidence is at `e5ba8fe8f`.
 
 | Fact | Evidence |
 |---|---|
-| Each window builds a private instance, adapter, device and queue, its own pipeline set and its own glyph atlas | `crates/flui-engine/src/renderer.rs:836-890`, `:995-1009`; `crates/flui-engine/src/painter/mod.rs:213`, `:221` |
-| The instance takes its display from the first window's target; wgpu keeps it "for keepalive and validation", queries it with `expect` at every `create_surface`, and refuses a surface from another display | `renderer.rs:1550-1558`; `crates/flui-engine/src/window_target.rs:50-55`; `wgpu-core/src/instance.rs:56-62`, `:205-215` |
+| Each window builds a private instance, adapter, device and queue, its own pipeline set and its own glyph atlas | `crates/flui-engine/src/painter/mod.rs:213`, `:221` |
+| The instance takes its display from the first window's target; wgpu keeps it "for keepalive and validation", queries it with `expect` at every `create_surface`, and refuses a surface from another display | `renderer.rs:1550-1558`; `crates/flui-engine/src/surface/target.rs:50-55`; `wgpu-core/src/instance.rs:56-62`, `:205-215` |
 | A retired window's target answers `Unavailable` from then on, so an instance holding it panics at the next surface it creates | `crates/flui-platform/src/surface_target.rs:28-56`; `crates/flui-native/src/window/linux/wayland.rs:2547-2575`; `crates/flui-native/src/window/linux/x11/window.rs:1180-1230` |
 | A surface is made only on the main thread (Apple) or the looper thread (Android) | `surface_target.rs:18-25` |
 | The lane sits behind `Arc<Mutex<_>>`, justified by callbacks that "require `Send` closures"; the registrations take none, and the frame driver beside it already holds a `std::rc::Weak` | `desktop.rs:245-252`, `:419-425`; the former `raster_lane.rs:72-81`; `crates/flui-app/src/app/runner/window_routes.rs:185-237`; `crates/flui-app/src/app/runner/window_install.rs:269` |
@@ -129,26 +129,26 @@ pub struct GpuContext {
   reference into it, it is never a `static`, and it is never reached ambiently (ADR-0097, ADR-0091
   §3). It is `Send`, so a threaded executor can take it, and `!Sync`, so no `&GpuContext` crosses
   a thread; the only locks inside are the device domain's, which wgpu's callbacks share
-  (`crates/flui-engine/src/device_domain.rs:390-402`).
+  (`crates/flui-engine/src/device/domain.rs:390-402`).
 - **What is keyed by content is shared; what is keyed by the presentation is the slot's.** The
   context holds pipelines, rasterised glyphs, decoded images and tessellated paths. Their keys
   hold everything the value depends on: a `GlyphKey` names the face by a font blob id, the glyph,
   the exact size bits, the variation, the subpixel bin, hinting and synthesis
   (`crates/flui-painting/src/glyphs/key.rs:154-162`), blob ids come from a process-wide counter
   that never repeats (`linebender_resource_handle`, its src/blob.rs line 90), and the atlas's registry
-  holds each blob while an entry names it (`crates/flui-engine/src/glyph_atlas.rs:7-11`); a
+  holds each blob while an entry names it (`crates/flui-engine/src/resources/glyph_atlas.rs:7-11`); a
   `TextureKey` holds the image handle, so its address cannot be reused while cached
-  (`crates/flui-engine/src/texture_cache.rs:64-94`); and the pipeline key gains the target
+  (`crates/flui-engine/src/resources/texture_cache.rs:64-94`); and the pipeline key gains the target
   format, because two windows can be configured with different formats while `PipelineCache`
-  holds one today (`crates/flui-engine/src/pipeline_cache.rs:429-451`). The slot holds the
+  holds one today (`crates/flui-engine/src/pipelines/variants.rs:429-451`). The slot holds the
   surface and its configuration, its frame protocol and damage history
-  (`crates/flui-engine/src/frame_protocol.rs:1-9`), its committed images (ADR-0100), its viewport,
+  (`crates/flui-engine/src/frame/protocol.rs:1-9`), its committed images (ADR-0100), its viewport,
   its `SurfaceGeneration` counter (§6) and its external textures, whose `TextureId`s each
   presentation's registry mints on its own (`TextureRegistry::register`, `crates/flui-layer/src/texture_registry.rs:118-134`).
 - **The content caches live in the one painter every slot shares.** The context keeps one
   `WgpuPainter` (`crates/flui-engine/src/painter/mod.rs`) that holds the pipeline library, the
   glyph atlas, the image cache, the path caches and the chunk recordings derived from them
-  (`crates/flui-engine/src/recording_cache.rs`). A frame takes the painter, is lent its slot's
+  (`crates/flui-engine/src/record/cache.rs`). A frame takes the painter, is lent its slot's
   external textures, and puts it back. Holding the caches and the recordings in one owner is
   what keeps a recording from outliving the texels it names: whatever moves those texels
   advances the recording cache's `ResourceEpoch` (ADR-0304 §9), and a painter that is dropped
@@ -156,7 +156,7 @@ pub struct GpuContext {
   `WgpuPainter` of their own, so the caches keep one owning form.
 - **The first format's pipelines are built while the first frame is.** The first slot to name a
   target format starts that format's `PipelineLibrary` on a worker thread
-  (`crates/flui-engine/src/pipeline_warmup.rs`): a window slot at its attach, from the format its
+  (`crates/flui-engine/src/pipelines/warmup.rs`): a window slot at its attach, from the format its
   surface's capabilities give before any size is known; an offscreen slot at its attach; the
   headless renderer when it is made. The frame that first needs the library joins the worker, so
   the driver's compilation overlaps the application's first build instead of following it. A
@@ -174,9 +174,9 @@ pub struct GpuContext {
 - **On Vulkan the pipelines are built through a `wgpu::PipelineCache` kept between runs.** A
   device is requested with `Features::PIPELINE_CACHE` where the adapter offers it, which wgpu
   implements on Vulkan alone (`wgpu-types/src/features.rs:1163-1172`), and every pipeline site
-  creates through the context's cache (`crates/flui-engine/src/pipeline_device.rs`); elsewhere
+  creates through the context's cache (`crates/flui-engine/src/pipelines/device.rs`); elsewhere
   there is none. Its data lives in the application's machine-local storage under one name,
-  `gpu-pipeline-cache` (`crates/flui-engine/src/pipeline_store.rs`), loaded by
+  `gpu-pipeline-cache` (`crates/flui-engine/src/pipelines/store.rs`), loaded by
   `GpuContext::load_pipeline_cache` before the first window attaches. The stored value is an
   envelope: a tag, the adapter's `wgpu::util::pipeline_cache_key` (vendor and device), the
   payload's length and a 64-bit `FxHasher` digest over key and payload (a crate the engine
@@ -242,7 +242,7 @@ pub struct GpuBootstrap {
   (`wgpu-core/src/instance.rs:205-215`; `wgpu-types/src/instance.rs:50-61`). Each instance is
   built from its window's target today; shared, an instance built that way would panic on the
   next window's surface once its first window had closed, because a retired target answers
-  `Unavailable` from then on (`crates/flui-engine/src/window_target.rs:63-69`). Each host hands
+  `Unavailable` from then on (`crates/flui-engine/src/surface/target.rs:63-69`). Each host hands
   out one `DisplayConnection` for its life: the X11 and Wayland connections, winit's
   `OwnedDisplayHandle`, and on hosts without a connection a constant handle. A host's connection
   answers the same `RawDisplayHandle` as its targets.
@@ -443,7 +443,7 @@ executor runs each command under its own catch, in both placements.
   the panic tore is rebuilt from the owner's next scene as ADR-0304 decides. The other slots keep
   their committed images, which only a completed commit changes (ADR-0100).
 - The pipeline library is kept: an entry is inserted after its pipeline is built
-  (`pipeline_cache.rs:551-552`), so a panic leaves a complete entry or none.
+  (`pipelines/variants.rs`), so a panic leaves a complete entry or none.
 - A panic inside a submission quarantines the device domain, which is a device loss (ADR-0100;
   §8).
 - User code the executor runs: the host's wake, `pre_present_notify`, a `tracing` subscriber, and
@@ -475,7 +475,7 @@ executor runs each command under its own catch, in both placements.
   so the owner runs the next turn.
   The rebuild asks for its adapter on the executor's thread, since the adapter must present to a
   slot's surface and the request only enumerates the instance's adapters, and for its device on
-  a worker of its own (`crates/flui-engine/src/device_worker.rs`), since a driver may take
+  a worker of its own (`crates/flui-engine/src/device/worker.rs`), since a driver may take
   hundreds of milliseconds to answer after a reset. The turn that starts the request does not
   wait for it. The device stays lost meanwhile, and the owner's deadline (`device_retry_at`) is
   the request's own, `DEVICE_REQUEST_DEADLINE` (five seconds) after it started: a request
@@ -752,7 +752,7 @@ the facade. Every production use of `with_backend` becomes:
     `a_device_rebuild_drops_a_warm_up_under_way` and, in `headless.rs`,
     `a_new_renderer_warms_its_capture_pipelines_and_the_first_capture_takes_them` (the warm-up of
     §1), with the cold first frame timed by `crates/flui-engine/benches/first_frame.rs`;
-  - the persisted cache of §1: `pipeline_store::tests::bytes_the_envelope_does_not_prove_are_refused_with_their_reason`,
+  - the persisted cache of §1: `pipelines::store::tests::bytes_the_envelope_does_not_prove_are_refused_with_their_reason`,
     `a_corrupt_stored_pipeline_cache_is_emptied_and_the_context_starts_cold`,
     `a_finished_warm_up_saves_the_pipeline_cache_for_this_adapter`,
     `a_saved_pipeline_cache_seeds_the_next_context`
@@ -821,7 +821,7 @@ the facade. Every production use of `with_backend` becomes:
   (§8): `a_device_request_answered_after_its_turn_is_installed_by_the_next`,
   `a_device_request_unanswered_past_its_deadline_fails_its_attempt`,
   `an_answer_nobody_waits_for_installs_nothing` and
-  `a_failed_device_request_waits_its_backoff_from_its_answer`, with `device_worker.rs`'s
+  `a_failed_device_request_waits_its_backoff_from_its_answer`, with `device/worker.rs`'s
   `a_worker_hands_over_its_answer_or_its_panic_and_wakes_the_executor` and
   `a_request_nobody_waits_for_holds_nobody`; the raster host's
   `an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it`, and `gpu_context.rs`'s

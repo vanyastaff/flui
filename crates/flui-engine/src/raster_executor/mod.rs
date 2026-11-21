@@ -4,7 +4,7 @@
 //! The owner holds a [`RasterSender`]: it mints a [`SlotId`], attaches the
 //! slot, sends frames and configuration changes, and drains the slot's
 //! settlements. The [`RasterExecutor`] holds the backend (a
-//! [`GpuContext`], or the testing stand-in) and applies
+//! [`GpuContext`](crate::GpuContext), or the testing stand-in) and applies
 //! what was sent in [`turns`](RasterExecutor::turn): first the lifecycle
 //! queue in order, then each slot's inbox, where a later frame supersedes a
 //! pending one and each kind of change keeps its latest value.

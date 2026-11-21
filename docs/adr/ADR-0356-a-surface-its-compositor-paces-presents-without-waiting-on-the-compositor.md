@@ -126,7 +126,7 @@ pub(crate) fn present_mode(pacing: FramePacing, offered: &[wgpu::PresentMode]) -
 
 ### Confirmation
 
-- `flui-engine`'s `surface_pacing::tests::the_pacer_chooses_the_present_mode`: the mode for each
+- `flui-engine`'s `surface::pacing::tests::the_pacer_chooses_the_present_mode`: the mode for each
   pacing and each set of offered modes.
 - `flui-app`'s `native_linux::an_app_whose_window_is_never_drawn_still_quits`: an animating
   application on the native Wayland host under the scripted compositor, which answers no frame

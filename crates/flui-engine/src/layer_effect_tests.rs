@@ -419,7 +419,7 @@ fn fractional_dpr_clip_and_mask(renderer: &HeadlessRenderer) {
     }
 }
 fn partial_mask_matches_public_capture(renderer: &HeadlessRenderer) {
-    use crate::damage::FramePlan;
+    use crate::frame::damage::FramePlan;
     let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::GREEN));
     let mask = tree.push_child(
         tree.root(),
@@ -875,7 +875,7 @@ fn arbitrary_affine_terminal_shader_matches_direct_paint(renderer: &HeadlessRend
 }
 
 fn partial_backdrop_reconstructs_halo_before_later_sibling(renderer: &HeadlessRenderer) {
-    use crate::damage::FramePlan;
+    use crate::frame::damage::FramePlan;
     let build = |color| {
         let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::BLACK));
         tree.push_child(
@@ -1250,8 +1250,8 @@ fn large_sweep_phase_preserves_pixels(renderer: &HeadlessRenderer) {
         end_angle,
     };
     // Compare large phases against independently equivalent small phases.
-    // A one-radian span previously collapsed; a 64-radian span survived but
-    // lost its wrapped phase during f32 subtraction in the fragment shader.
+    // A one-radian span can collapse; a 64-radian span can survive but
+    // lose its wrapped phase during f32 subtraction in the fragment shader.
     for span in [64.0, 1.0] {
         for mode in [BlendMode::SrcOver, BlendMode::Multiply] {
             for masked in [false, true] {
@@ -1442,7 +1442,7 @@ fn backdrop_resize_attachment_coordinates(_renderer: &HeadlessRenderer) {
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             painter
                 .render(
-                    crate::render_target::RenderTarget::sampleable(&view, texture),
+                    crate::frame::render_target::RenderTarget::sampleable(&view, texture),
                     &mut encoder,
                 )
                 .expect("render acquired resize attachment");

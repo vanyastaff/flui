@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::WgpuPainter;
 use crate::{
-    device_domain::{DeviceDomain, PreparedPermit},
+    device::domain::{DeviceDomain, PreparedPermit},
     error::EngineResult,
 };
 
@@ -28,7 +28,7 @@ impl WgpuPainter {
     ///
     /// # Errors
     /// Returns a resource admission, owner, or device-progress failure. On failure
-    /// the consumed encoder is discarded; previously submitted work still retires.
+    /// the consumed encoder is discarded; work already submitted still retires.
     pub(crate) fn submit_encoder(
         &mut self,
         encoder: wgpu::CommandEncoder,

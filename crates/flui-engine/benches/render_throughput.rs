@@ -17,13 +17,13 @@
 //! ## `alloc_micro`
 //!
 //! Pure CPU micro-benchmarks that require no GPU and isolate the hot-path
-//! allocation sites targeted by GLM audit #8:
+//! allocation sites of the record path:
 //!
 //! - `path_cache_warm_hit` — measures the cost of keying a path and a warm `PathCache::get` hit
-//!   (the borrowed-slice path; baseline proves no allocation after the fix).
+//!   (the borrowed-slice path; a warm hit allocates nothing).
 //! - `draw_segment_seal` — measures `DrawBatcher::finish_current_segment` with a
-//!   populated segment, isolating the per-seal allocation cost.  After the
-//!   `mem::take` fix the slot is left as a zero-cap default (`DrawSegment::default`)
+//!   populated segment, isolating the per-seal allocation cost.  The sealed
+//!   slot is left as a zero-cap default (`DrawSegment::default`)
 //!   rather than calling `DrawSegment::new()` (7 × `Vec::with_capacity` burst).
 
 use std::hint::black_box;
@@ -38,7 +38,7 @@ use flui_painting::paint::{Paint, Path};
 use flui_painting::{paint::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
-// Platform backend: the preferred one of gpu_backend::Family::order
+// Platform backend: the preferred one of device::backend::Family::order
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
@@ -233,8 +233,8 @@ fn render_throughput(c: &mut Criterion) {
 
     // Each iteration measures: fill draw-list → encode GPU commands → submit.
     // `device.poll(wait_indefinitely())` ensures the GPU has consumed the
-    // commands so each measurement covers the full CPU-observable round-trip —
-    // which is what the Phase-1 allocation-reduction work optimised.
+    // commands so each measurement covers the full CPU-observable round-trip,
+    // the cost that per-frame allocation counts drive.
     c.bench_function("painter_render_50rects_gradient_text", |b| {
         b.iter(|| {
             painter.begin_frame().expect("benchmark frame begins");

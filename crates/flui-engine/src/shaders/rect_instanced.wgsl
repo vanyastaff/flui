@@ -101,7 +101,7 @@ fn vs_main(
     // diagonal/rotated edges, where an outside-center pixel can still be ~50%
     // covered. Expanding the quad gives those fringe pixels fragments; the SDF
     // distance is still measured to the TRUE rect (via `out.uv` below), so the
-    // shape is unchanged — only the previously-missing outer fringe is added.
+    // shape is unchanged — only the outer fringe is added.
     //
     // Margin is applied in LOCAL units = fringe_device / per-axis scale, so the
     // fringe is ~1.5 device-px at any zoom/rotation. Column lengths of the 2×2

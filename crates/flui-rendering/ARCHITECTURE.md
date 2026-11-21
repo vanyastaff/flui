@@ -786,7 +786,7 @@ enclosing boundary's content, through `RenderClip<S>::paint_effects` /
   `ClipRectLayer::clips()`/`ClipRRectLayer::clips()`/`ClipPathLayer::clips()`
   (`crates/flui-layer/src/layer/clip_rect.rs` and its rrect/path
   siblings) gate `LayerRender::render`/`cleanup`
-  (`crates/flui-engine/src/layer_render.rs`) — so crossing `Clip::None` never
+  (`crates/flui-engine/src/layers/render.rs`) — so crossing `Clip::None` never
   changes the layer count. **Unasserted:** no test pins this. A token-driven path clip is reported as
   `PaintClip::PathTarget` (`ClipGeometry::path_target_descriptor`) and
   resolved exactly once, by the walk, never by the setter and never on a

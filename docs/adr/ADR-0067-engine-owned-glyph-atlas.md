@@ -21,7 +21,7 @@ wire are gone.*
   growth rule are unchanged.
 - **Deciders:** @vanyastaff
 - **Original scope (2026-09-18):** `flui_painting::{TextLayout::placed_glyphs, SharedFontSystem::rasterize, GlyphKey, PlacedGlyph, GlyphImage}`;
-  `flui_engine::{glyph_atlas, batches::text, GlyphInstance, DrawSegment::glyph_batch, Phase::Glyph}`.
+  `flui_engine::{resources::glyph_atlas, record::batches::text, GlyphInstance, DrawSegment::glyph_batch, Phase::Glyph}`.
   Completes [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
   (which named this as its end state) and amends
   [ADR-0016](https://github.com/vanyastaff/flui/blob/6af2cf426809dbf8a33bbb415e904f0bfdc847c4/docs/adr/ADR-0016-unified-font-system-registration.md) (the glyphon↔cosmic-text
@@ -170,7 +170,7 @@ outside shaping and without that font lock; it does not restore the old ambient 
 ## Replacement tests
 
 `swash_glyphs_land_and_equal_keys_share_a_slot`
-(`crates/flui-engine/src/glyph_atlas.rs`); `glyph_colour_lands_as_recorded`
+(`crates/flui-engine/src/resources/glyph_atlas.rs`); `glyph_colour_lands_as_recorded`
 and the strengthened `the_engine_does_not_shape`
 (`crates/flui-engine/src/paragraph_readback_tests.rs`). The
 benchmark is `crates/flui-engine/benches/text_throughput.rs`.

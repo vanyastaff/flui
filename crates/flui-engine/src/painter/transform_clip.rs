@@ -1,7 +1,8 @@
-// ===== Transform Stack & Clipping =====
-//
-// Moved from `painter.rs` into `painter/transform_clip.rs` as part of the
-// C1 LOC-cap refactor.  Zero behaviour changes.
+//! Transform and clip state of `WgpuPainter`: `save` / `restore`, the
+//! transform operations (`translate`, `rotate`, `scale`, `transform`) and the
+//! rect, rrect, superellipse and path clips. Each operation validates its
+//! geometry before it reaches the state stack and records a typed error for a
+//! frame that cannot be drawn.
 
 use flui_foundation::geometry::{Offset, RRect, Rect};
 use flui_painting::paint::Path;
@@ -17,23 +18,23 @@ use super::WgpuPainter;
 )]
 impl WgpuPainter {
     fn validate_current_transform(&mut self) {
-        if let Err(error) = crate::clip_geometry::ValidatedAffine::try_new(
+        if let Err(error) = crate::record::clip_geometry::ValidatedAffine::try_new(
             glam::DMat4::from_cols_array(&self.state.current_transform_matrix().m),
         ) {
             self.current_segment
                 .budget
-                .record_error(crate::command_ir::RecordError::Geometry(error));
+                .record_error(crate::record::command_ir::RecordError::Geometry(error));
         }
     }
 
     fn append_validated_clip(
         &mut self,
-        shape: Result<crate::clip_geometry::ValidatedClip, crate::error::GeometryError>,
-        op: crate::clip_chain::ClipOp,
+        shape: Result<crate::record::clip_geometry::ValidatedClip, crate::error::GeometryError>,
+        op: crate::record::clip_chain::ClipOp,
         hard: bool,
     ) -> bool {
         let result = shape
-            .map_err(crate::command_ir::RecordError::Geometry)
+            .map_err(crate::record::command_ir::RecordError::Geometry)
             .and_then(|shape| {
                 self.state
                     .append_clip(shape, op, hard, &self.current_segment.budget)
@@ -52,9 +53,9 @@ impl WgpuPainter {
         self.validate_current_transform();
     }
 
-    pub(crate) fn captured_group_clip(&self) -> crate::command_ir::GroupClip {
-        crate::command_ir::GroupClip {
-            legacy: crate::state_stack::ResolvedClip::NONE,
+    pub(crate) fn captured_group_clip(&self) -> crate::record::command_ir::GroupClip {
+        crate::record::command_ir::GroupClip {
+            legacy: crate::record::state_stack::ResolvedClip::NONE,
             chain: self.state.clip_chain(),
         }
     }
@@ -124,14 +125,14 @@ impl WgpuPainter {
 
     /// Intersect with a captured rectangle; AA coverage is resolved with the full chain.
     pub fn clip_rect(&mut self, rect: Rect<f64>, clip: flui_painting::paint::Clip) {
-        self.clip_rect_operation(rect, clip, crate::clip_chain::ClipOp::Intersect);
+        self.clip_rect_operation(rect, clip, crate::record::clip_chain::ClipOp::Intersect);
     }
 
     pub(crate) fn clip_rect_operation(
         &mut self,
         rect: Rect<f64>,
         clip: flui_painting::paint::Clip,
-        op: crate::clip_chain::ClipOp,
+        op: crate::record::clip_chain::ClipOp,
     ) {
         if self.current_segment.recording_result().is_err() {
             return;
@@ -140,10 +141,14 @@ impl WgpuPainter {
             return;
         }
         let hard = matches!(clip, flui_painting::paint::Clip::HardEdge);
-        if !self.append_validated_clip(crate::clip_geometry::ValidatedClip::rect(rect), op, hard) {
+        if !self.append_validated_clip(
+            crate::record::clip_geometry::ValidatedClip::rect(rect),
+            op,
+            hard,
+        ) {
             return;
         }
-        if op == crate::clip_chain::ClipOp::Intersect {
+        if op == crate::record::clip_chain::ClipOp::Intersect {
             if hard {
                 self.state.clip_rect(rect, self.size);
             } else {
@@ -161,14 +166,14 @@ impl WgpuPainter {
 
     /// Intersect with a captured rounded rectangle, retaining both corner radii.
     pub fn clip_rrect(&mut self, rrect: RRect, clip: flui_painting::paint::Clip) {
-        self.clip_rrect_operation(rrect, clip, crate::clip_chain::ClipOp::Intersect);
+        self.clip_rrect_operation(rrect, clip, crate::record::clip_chain::ClipOp::Intersect);
     }
 
     pub(crate) fn clip_rrect_operation(
         &mut self,
         rrect: RRect,
         clip: flui_painting::paint::Clip,
-        op: crate::clip_chain::ClipOp,
+        op: crate::record::clip_chain::ClipOp,
     ) {
         if self.current_segment.recording_result().is_err() {
             return;
@@ -177,11 +182,14 @@ impl WgpuPainter {
             return;
         }
         let hard = matches!(clip, flui_painting::paint::Clip::HardEdge);
-        if !self.append_validated_clip(crate::clip_geometry::ValidatedClip::rrect(rrect), op, hard)
-        {
+        if !self.append_validated_clip(
+            crate::record::clip_geometry::ValidatedClip::rrect(rrect),
+            op,
+            hard,
+        ) {
             return;
         }
-        if op == crate::clip_chain::ClipOp::Intersect {
+        if op == crate::record::clip_chain::ClipOp::Intersect {
             self.state.clip_rrect(rrect, self.size, hard);
         }
     }
@@ -217,12 +225,15 @@ impl WgpuPainter {
     pub(crate) fn clip_rsuperellipse_at_composite(
         &mut self,
         rse: flui_foundation::geometry::RSuperellipse,
-    ) -> crate::command_ir::GroupClip {
+    ) -> crate::record::command_ir::GroupClip {
         self.clip_rsuperellipse(rse, flui_painting::paint::Clip::AntiAlias);
         self.captured_group_clip()
     }
 
-    pub(crate) fn clip_rrect_at_composite(&mut self, rrect: RRect) -> crate::command_ir::GroupClip {
+    pub(crate) fn clip_rrect_at_composite(
+        &mut self,
+        rrect: RRect,
+    ) -> crate::record::command_ir::GroupClip {
         self.clip_rrect(rrect, flui_painting::paint::Clip::AntiAlias);
         self.captured_group_clip()
     }
@@ -233,14 +244,14 @@ impl WgpuPainter {
         rse: flui_foundation::geometry::RSuperellipse,
         clip: flui_painting::paint::Clip,
     ) {
-        self.clip_rsuperellipse_operation(rse, clip, crate::clip_chain::ClipOp::Intersect);
+        self.clip_rsuperellipse_operation(rse, clip, crate::record::clip_chain::ClipOp::Intersect);
     }
 
     pub(crate) fn clip_rsuperellipse_operation(
         &mut self,
         rse: flui_foundation::geometry::RSuperellipse,
         clip: flui_painting::paint::Clip,
-        op: crate::clip_chain::ClipOp,
+        op: crate::record::clip_chain::ClipOp,
     ) {
         if self.current_segment.recording_result().is_err() {
             return;
@@ -250,13 +261,13 @@ impl WgpuPainter {
         }
         let hard = matches!(clip, flui_painting::paint::Clip::HardEdge);
         if !self.append_validated_clip(
-            crate::clip_geometry::ValidatedClip::rsuperellipse(rse),
+            crate::record::clip_geometry::ValidatedClip::rsuperellipse(rse),
             op,
             hard,
         ) {
             return;
         }
-        if op == crate::clip_chain::ClipOp::Intersect {
+        if op == crate::record::clip_chain::ClipOp::Intersect {
             self.state.clip_rsuperellipse(rse, self.size, hard);
         }
     }
@@ -267,7 +278,7 @@ impl WgpuPainter {
         self.clip_path_operation(
             path,
             flui_painting::paint::Clip::HardEdge,
-            crate::clip_chain::ClipOp::Intersect,
+            crate::record::clip_chain::ClipOp::Intersect,
         );
     }
 
@@ -275,7 +286,7 @@ impl WgpuPainter {
         &mut self,
         path: &Path,
         clip: flui_painting::paint::Clip,
-        op: crate::clip_chain::ClipOp,
+        op: crate::record::clip_chain::ClipOp,
     ) {
         if self.current_segment.recording_result().is_err() {
             return;
@@ -285,13 +296,16 @@ impl WgpuPainter {
         }
         let hard = matches!(clip, flui_painting::paint::Clip::HardEdge);
         if !self.append_validated_clip(
-            crate::clip_geometry::ValidatedClip::path(path, crate::clip_chain::MAX_PATH_COMMANDS),
+            crate::record::clip_geometry::ValidatedClip::path(
+                path,
+                crate::record::clip_chain::MAX_PATH_COMMANDS,
+            ),
             op,
             hard,
         ) {
             return;
         }
-        if op == crate::clip_chain::ClipOp::Intersect {
+        if op == crate::record::clip_chain::ClipOp::Intersect {
             self.state
                 .clip_rect_enclosing(path.compute_bounds(), self.size);
         }
