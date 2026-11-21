@@ -103,3 +103,52 @@ fn covered_maintained_entry_build_plan() {
         "a covered modal entry hides nothing beyond what is already offstage"
     );
 }
+
+/// An entry's builder may own a value whose `Drop` calls back into the
+/// overlay: the overlay holds no borrow of its cells when that `Drop` runs, so
+/// every call it makes lands instead of meeting a `BorrowMutError`.
+#[test]
+fn an_entry_builder_drop_may_reenter_its_overlay() {
+    use super::{InsertPosition, OverlayHandle};
+
+    struct ReenterOnDrop {
+        overlay: OverlayHandle,
+        late: OverlayEntry,
+    }
+    impl Drop for ReenterOnDrop {
+        fn drop(&mut self) {
+            self.overlay.insert(&self.late, &InsertPosition::Top);
+            self.late.set_opaque(true);
+            self.late.mark_needs_build();
+            self.overlay.rearrange(std::slice::from_ref(&self.late));
+            self.late.remove();
+            self.overlay.insert(&self.late, &InsertPosition::Top);
+        }
+    }
+
+    let overlay = OverlayHandle::new();
+    let late = OverlayEntry::new(|_ctx| SizedBox::new(1.0, 1.0).into_view().boxed());
+    let reenter = ReenterOnDrop {
+        overlay: overlay.clone(),
+        late: late.clone(),
+    };
+    let removed = OverlayEntry::new(move |_ctx| {
+        std::hint::black_box(&reenter);
+        SizedBox::new(1.0, 1.0).into_view().boxed()
+    });
+    let kept = OverlayEntry::new(|_ctx| SizedBox::new(1.0, 1.0).into_view().boxed());
+    overlay.insert(&removed, &InsertPosition::Top);
+    overlay.insert(&kept, &InsertPosition::Top);
+    overlay.rearrange(&[kept.clone(), removed.clone()]);
+    removed.remove();
+    assert_eq!(overlay.ids_bottom_to_top(), vec![kept.id()]);
+
+    // The last handle: the builder, and the value it owns, drop here.
+    drop(removed);
+    assert_eq!(
+        overlay.ids_bottom_to_top(),
+        vec![kept.id(), late.id()],
+        "every call the dropping builder made landed"
+    );
+    assert!(late.is_attached() && late.opaque());
+}

@@ -2,7 +2,7 @@
 
 use std::any::Any;
 use std::f64::consts::{FRAC_PI_2, TAU};
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
@@ -171,7 +171,7 @@ impl ActivityArc {
 /// its registration with the ambient [`Vsync`](flui_animation::Vsync).
 pub struct ActivityIndicatorState {
     controller: DrivenController,
-    motion: Arc<ActivityArc>,
+    motion: Rc<ActivityArc>,
 }
 
 impl std::fmt::Debug for ActivityIndicatorState {
@@ -190,7 +190,7 @@ impl StatefulView for ActivityIndicator {
             controller: AnimationController::builder(CYCLE)
                 .debug_label("ActivityIndicator")
                 .build_on(None),
-            motion: Arc::new(ActivityArc::new()),
+            motion: Rc::new(ActivityArc::new()),
         }
     }
 }
@@ -215,7 +215,7 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
         let painter = ArcPainter {
             controller: (self.controller.is_bound() && enabled && !reduced)
                 .then(|| self.controller.controller().clone()),
-            motion: Arc::clone(&self.motion),
+            motion: Rc::clone(&self.motion),
             color: view.color,
         };
         Semantics::new()
@@ -239,7 +239,7 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
 #[derive(Debug)]
 struct ArcPainter {
     controller: Option<AnimationController>,
-    motion: Arc<ActivityArc>,
+    motion: Rc<ActivityArc>,
     color: Color,
 }
 
@@ -266,13 +266,13 @@ impl CustomPainter for ArcPainter {
         (old as &dyn Any).downcast_ref::<Self>().is_none_or(|old| {
             old.color != self.color
                 || old.controller.is_some() != self.controller.is_some()
-                || !Arc::ptr_eq(&old.motion, &self.motion)
+                || !Rc::ptr_eq(&old.motion, &self.motion)
         })
     }
 
-    fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
         self.controller
             .as_ref()
-            .map(|controller| std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Listenable>)
+            .map(|controller| Rc::new(controller.clone()) as Rc<dyn Listenable>)
     }
 }

@@ -53,7 +53,7 @@ Preserved exactly, because apps observe them:
 state reference cannot escape and a nested lookup inside the callback would take a second lock.
 `Navigator::of`/`maybe_of`/`maybe_of_root` clone an owned `NavigatorHandle` out of the state
 inside the callback; every mutation runs after the borrow is released. The route stack lives
-behind a private lock in shared state, and navigator and overlay couple through that shared
+in a private `RefCell` of shared state, and navigator and overlay couple through that shared
 state, not through the element tree — so Flutter's `GlobalKey<OverlayState>` is not ported.
 Neither is `OverlayEntry`'s `GlobalKey`: each entry publishes its own `RebuildHandle`, and a
 `ValueKey<OverlayEntryId>` preserves entry state across `rearrange` through keyed

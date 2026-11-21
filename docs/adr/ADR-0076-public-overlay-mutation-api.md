@@ -108,7 +108,7 @@ FLUI-specific: `Draggable`'s drag session is a `Send + Sync` gesture object with
 `BuildContext`, so it cannot re-run the lookup mid-drag as Flutter's `_DragAvatar` does. The
 handle is resolved ahead of time in `init_state`/`did_change_dependencies` and cached; the
 dependency re-notifies the state if a different overlay identity replaces the resolved one
-(`OverlayScope::update_should_notify` compares handles with `Arc::ptr_eq`).
+(`OverlayScope::update_should_notify` compares handles with `Rc::ptr_eq`).
 
 The lookup is an ordinary inherited read, like `Theme::of`, not a lifecycle capability.
 

@@ -55,11 +55,6 @@ flui-interaction = { workspace = true }
 # (`text_boundaries`) `TextEditingController` moves and deletes by, which the
 # obscuring mask counts too.
 flui-painting = { workspace = true }
-# Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
-# `Overlay`'s entry list and its published `RebuildHandle` live behind private
-# `Mutex`es: the list is mutated from outside the tree, and
-# `ViewState::build` takes `&self`.
-parking_lot = { workspace = true }
 # The nested scroll chain a sequence snapshots: four participants inline, so
 # steady-state dispatch allocates nothing (ADR-0209 §7).
 smallvec = { workspace = true }
@@ -89,6 +84,8 @@ criterion = { workspace = true }
 flui-animation = { workspace = true, features = ["diagnostics"] }
 tracing-subscriber = { workspace = true }
 static_assertions = { workspace = true }
+# Integration tests record what callbacks saw in shared logs.
+parking_lot = { workspace = true }
 # Integration tests drive the real layout pipeline through the render harness, and
 # wake-counting tests take their wakers from the foundation kit.
 flui-foundation = { workspace = true, features = ["testing"] }

@@ -16,7 +16,7 @@
 //! Both problems dissolve the same way. `Navigator::of` clones an owned,
 //! `'static` [`NavigatorHandle`] out of the state *inside* the callback and does
 //! nothing else there; every mutation runs after the borrow is released. Navigator
-//! and Overlay couple through an `Arc`, not through the tree — so no
+//! and Overlay couple through an `Rc`, not through the tree — so no
 //! `GlobalKey<OverlayState>` is needed.
 //!
 //! # Not implemented, and not claimed

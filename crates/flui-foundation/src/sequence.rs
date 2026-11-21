@@ -370,6 +370,13 @@ impl<I: MintedId> AtomicIdMint<I> {
         }
     }
 
+    /// Never issue `value` or any value below it, from any thread, for an
+    /// owner that hands out the low identities itself. Never moves the mint
+    /// backwards: a value at or below the last one issued changes nothing.
+    pub fn reserve_through(&self, value: u64) {
+        self.last.fetch_max(value, Ordering::Relaxed);
+    }
+
     /// Issue the next identity, from any thread that shares `&self`.
     ///
     /// # Errors
@@ -402,5 +409,39 @@ impl<I: MintedId> AtomicIdMint<I> {
 impl<I: MintedId> Default for AtomicIdMint<I> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use super::{AtomicIdMint, IdExhausted};
+
+    #[test]
+    fn atomic_reserve_through_skips_ahead_and_never_moves_back() {
+        let mint = AtomicIdMint::<NonZeroU64>::new();
+        assert_eq!(mint.next().map(NonZeroU64::get), Ok(1));
+        mint.reserve_through(10);
+        assert_eq!(
+            mint.next().map(NonZeroU64::get),
+            Ok(11),
+            "the reserved values are never issued"
+        );
+        mint.reserve_through(5);
+        assert_eq!(
+            mint.next().map(NonZeroU64::get),
+            Ok(12),
+            "a reservation below the last issued value changes nothing"
+        );
+        mint.reserve_through(u64::MAX - 1);
+        assert_eq!(mint.next().map(NonZeroU64::get), Ok(u64::MAX));
+        assert_eq!(mint.next(), Err(IdExhausted));
+        mint.reserve_through(3);
+        assert_eq!(
+            mint.next(),
+            Err(IdExhausted),
+            "an exhausted mint stays exhausted"
+        );
     }
 }

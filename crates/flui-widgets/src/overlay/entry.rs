@@ -18,28 +18,34 @@
 //!   doing that under a `BuildContext`'s tree borrow is a lock-order hazard.
 //! - **No mid-frame deferral.** [`RebuildHandle::schedule`] only inserts an
 //!   id into an inbox drained by the next `build_scope`, so `remove` is already
-//!   safe from any phase and any thread; there is no need to defer it to a
-//!   post-frame callback.
+//!   safe from any phase; there is no need to defer it to a post-frame
+//!   callback.
 //! - **No ticker muting for covered entries.** There is no per-subtree ticker
 //!   gate, so the animations of a `maintain_state` entry that an opaque entry
 //!   covers keep running. Recorded, not claimed.
 //! - **No overlay sizing under unbounded constraints.** It only bites there; see
 //!   [`RenderTheater`](flui_objects::RenderTheater).
 //! - **Not a listenable, no separate `dispose()`.** `OverlayEntry`
-//!   is a cheap `Arc`-backed handle with no listener list and
+//!   is a cheap `Rc`-backed handle with no listener list and
 //!   no disposal step of its own; dropping every clone is enough. A second
 //!   `remove()` is inert rather than panicking.
+//! - **Owner-thread state.** The builder is an `Rc<dyn Fn>`, so an entry never
+//!   leaves the thread that built it: its state is `Cell`/`RefCell` behind an
+//!   `Rc` (ADR-0323 §1). No borrow of a cell is held across code this module
+//!   does not own (a builder's `Drop`, a [`RebuildHandle`]'s `schedule` or
+//!   `Drop`, a `tracing` event), so such code may call back into the entry or
+//!   its overlay and finds every cell free.
 //!
 //! [`Overlay`]: super::Overlay
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
+use std::cell::{Cell, RefCell};
 use std::fmt;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::num::NonZeroU64;
+use std::rc::{Rc, Weak};
 
+use flui_foundation::{AtomicIdMint, IdExhausted};
 use flui_view::{BoxedView, BuildContext, RebuildHandle};
-use parking_lot::Mutex;
 
 use super::OverlayShared;
 
@@ -52,12 +58,18 @@ pub(crate) type OverlayBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 
 /// Process-unique identity for an [`OverlayEntry`].
 ///
+/// Issued by one process-wide [`AtomicIdMint`] (ADR-0313), never reissued:
+/// once every nonzero `u64` has been issued the mint refuses with
+/// [`IdExhausted`] forever. Atomic rather than an owner-local `IdMint`
+/// because the domain is the process's: every thread that hosts a UI
+/// runtime (each test of a parallel run is one) mints from it.
+///
 /// Not a slab index, so the repo's 1-based `NonZeroUsize` ID-offset convention
 /// does not apply. It exists to key the entry's view (so keyed reconciliation
 /// preserves subtree state across a reorder) and to find the entry for removal
 /// without requiring `PartialEq` on the builder closure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OverlayEntryId(u64);
+pub struct OverlayEntryId(NonZeroU64);
 
 impl OverlayEntryId {
     /// Mint the next identity.
@@ -65,29 +77,39 @@ impl OverlayEntryId {
     /// `pub(crate)` so an operation that publishes something before it builds
     /// its entry can reserve the identity first: capacity refusal then fails
     /// the operation before any of its side effects.
+    ///
+    /// # Panics
+    ///
+    /// Once the process mint is exhausted; [`OverlayEntry::try_new`] reports
+    /// that as [`IdExhausted`] instead.
     pub(crate) fn next() -> Self {
-        Self::from_counter(Self::counter())
+        Self::next_from(Self::mint())
     }
 
-    fn counter() -> &'static AtomicU64 {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        &COUNTER
+    /// The process mint every production identity comes from.
+    fn mint() -> &'static AtomicIdMint<NonZeroU64> {
+        static MINT: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
+        &MINT
     }
 
-    pub(crate) fn from_counter(counter: &AtomicU64) -> Self {
-        // Zero is a permanent exhausted sentinel, never an admitted identity.
-        // The final nonzero identity remains usable without wrapping to one.
-        let id = counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                (next != 0).then(|| next.checked_add(1).unwrap_or(0))
-            })
-            .expect("overlay entry identity space exhausted");
-        Self(id)
+    /// [`next`](Self::next) from `mint`: a test passes a mint of its own near
+    /// exhaustion and leaves the process mint alone.
+    pub(crate) fn next_from(mint: &AtomicIdMint<NonZeroU64>) -> Self {
+        match Self::try_next_from(mint) {
+            Ok(id) => id,
+            Err(IdExhausted) => panic!(
+                "overlay entry identities exhausted; OverlayEntry::try_new reports it as IdExhausted"
+            ),
+        }
+    }
+
+    fn try_next_from(mint: &AtomicIdMint<NonZeroU64>) -> Result<Self, IdExhausted> {
+        mint.next().map(Self)
     }
 
     /// The raw value, used as the `ValueKey` payload of the entry's view.
     pub(crate) fn get(self) -> u64 {
-        self.0
+        self.0.get()
     }
 }
 
@@ -103,28 +125,33 @@ struct EntryInner {
     /// [`OverlayEntry::mark_needs_build`] correctly inert in both windows.
     ///
     /// Acquired in `init_state` — never in `build`.
-    rebuild: Mutex<Option<RebuildHandle>>,
+    ///
+    /// Borrowed only to read, clone, put or take the handle: `schedule` runs on
+    /// a clone and a replaced handle drops after the borrow ends, so no code
+    /// this module does not own runs while it is borrowed.
+    rebuild: RefCell<Option<RebuildHandle>>,
 
     /// Whether this entry occludes the whole overlay, so the ones below it need
     /// not be built.
-    opaque: AtomicBool,
+    opaque: Cell<bool>,
 
     /// Whether this entry stays in the tree even when an [`opaque`] entry covers
     /// it.
     ///
     /// [`opaque`]: EntryInner::opaque
-    maintain_state: AtomicBool,
+    maintain_state: Cell<bool>,
 
     /// Whether this entry is modal: while it is onstage, the entries below it
     /// stay visible but are hidden from assistive technology.
-    modal: AtomicBool,
+    modal: Cell<bool>,
 
     /// The overlay currently holding this entry, or `None` when detached.
     ///
     /// `Weak`, so an entry outliving its overlay does not keep the overlay's
     /// entry list alive, and so [`OverlayEntry::remove`] on a dropped overlay is
-    /// a no-op rather than a resurrection.
-    overlay: Mutex<Option<Weak<OverlayShared>>>,
+    /// a no-op rather than a resurrection. Borrowed only to upgrade, put or
+    /// take the `Weak`; dropping a `Weak` runs no destructor of the overlay.
+    overlay: RefCell<Option<Weak<OverlayShared>>>,
 }
 
 impl Drop for EntryInner {
@@ -144,7 +171,7 @@ impl Drop for EntryInner {
 /// one in its list, and the view tree hold a third.
 #[derive(Clone)]
 pub struct OverlayEntry {
-    inner: Arc<EntryInner>,
+    inner: Rc<EntryInner>,
 }
 
 impl OverlayEntry {
@@ -156,14 +183,41 @@ impl OverlayEntry {
     ///
     /// # Panics
     ///
-    /// Panics if the process has exhausted all nonzero entry identities. Once
-    /// exhausted, further construction is permanently refused rather than
-    /// reusing an identity held by an existing entry or reconciliation key.
-    /// The rejected builder is destroyed by the capacity panic's unwind
-    /// (ADR-0281). Accepted builders keep their ordinary lifetime policy.
+    /// Panics if the process has exhausted all nonzero entry identities; use
+    /// [`try_new`](Self::try_new) to handle that. Exhaustion is permanent:
+    /// catching the panic cannot make an identity held by an existing entry or
+    /// reconciliation key available again.
     #[must_use]
     pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
-        Self::new_allocated(builder, OverlayEntryId::next)
+        match Self::try_new(builder) {
+            Ok(entry) => entry,
+            Err(IdExhausted) => panic!(
+                "overlay entry identities exhausted; OverlayEntry::try_new reports it as IdExhausted"
+            ),
+        }
+    }
+
+    /// [`new`](Self::new), or [`IdExhausted`] once the process has issued its
+    /// last entry identity (permanently, from every thread).
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`] when no identity is left. The refused `builder` is
+    /// dropped before the error returns; an accepted builder keeps its ordinary
+    /// lifetime.
+    pub fn try_new(
+        builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
+    ) -> Result<Self, IdExhausted> {
+        Self::try_new_from(OverlayEntryId::mint(), builder)
+    }
+
+    /// [`try_new`](Self::try_new) from `mint`: the seam that keeps an
+    /// exhaustion test away from the process mint.
+    fn try_new_from(
+        mint: &AtomicIdMint<NonZeroU64>,
+        builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
+    ) -> Result<Self, IdExhausted> {
+        OverlayEntryId::try_next_from(mint).map(|id| Self::with_reserved_id(id, builder))
     }
 
     /// [`new`](Self::new) under an identity the caller already reserved with
@@ -172,23 +226,15 @@ impl OverlayEntry {
         id: OverlayEntryId,
         builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
     ) -> Self {
-        Self::new_allocated(builder, move || id)
-    }
-
-    fn new_allocated(
-        builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static,
-        allocate_id: impl FnOnce() -> OverlayEntryId,
-    ) -> Self {
-        let id = allocate_id();
         Self {
-            inner: Arc::new(EntryInner {
+            inner: Rc::new(EntryInner {
                 id,
                 builder: crate::support::retirement::Terminal::new(Rc::new(builder)),
-                rebuild: Mutex::new(None),
-                opaque: AtomicBool::new(false),
-                maintain_state: AtomicBool::new(false),
-                modal: AtomicBool::new(false),
-                overlay: Mutex::new(None),
+                rebuild: RefCell::new(None),
+                opaque: Cell::new(false),
+                maintain_state: Cell::new(false),
+                modal: Cell::new(false),
+                overlay: RefCell::new(None),
             }),
         }
     }
@@ -197,39 +243,37 @@ impl OverlayEntry {
     /// yet attached (so no rebuild is needed).
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_opaque(self, opaque: bool) -> Self {
-        self.inner.opaque.store(opaque, Ordering::Relaxed);
+        self.inner.opaque.set(opaque);
         self
     }
 
     /// Builder form of [`set_maintain_state`](Self::set_maintain_state).
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_maintain_state(self, maintain_state: bool) -> Self {
-        self.inner
-            .maintain_state
-            .store(maintain_state, Ordering::Relaxed);
+        self.inner.maintain_state.set(maintain_state);
         self
     }
 
     /// Builder form of the modal flag, for an entry not yet attached: while
     /// it is onstage, the entries below it are hidden from semantics.
     pub(crate) fn with_modal(self, modal: bool) -> Self {
-        self.inner.modal.store(modal, Ordering::Relaxed);
+        self.inner.modal.set(modal);
         self
     }
 
     /// Whether this entry hides the entries below it from semantics.
     pub(crate) fn modal(&self) -> bool {
-        self.inner.modal.load(Ordering::Relaxed)
+        self.inner.modal.get()
     }
 
     /// Whether this entry occludes the entire overlay.
     pub(crate) fn opaque(&self) -> bool {
-        self.inner.opaque.load(Ordering::Relaxed)
+        self.inner.opaque.get()
     }
 
     /// Whether this entry stays built even when covered by an opaque entry.
     pub(crate) fn maintain_state(&self) -> bool {
-        self.inner.maintain_state.load(Ordering::Relaxed)
+        self.inner.maintain_state.get()
     }
 
     /// Set whether this entry covers the whole overlay, so the entries below it
@@ -253,8 +297,8 @@ impl OverlayEntry {
     }
 
     /// Store `value`, and rebuild the whole overlay only if it changed.
-    fn set_build_flag(&self, flag: &AtomicBool, value: bool) {
-        if flag.swap(value, Ordering::Relaxed) == value {
+    fn set_build_flag(&self, flag: &Cell<bool>, value: bool) {
+        if flag.replace(value) == value {
             return;
         }
         if let Some(shared) = self.attached_overlay() {
@@ -276,7 +320,7 @@ impl OverlayEntry {
     pub(crate) fn is_mounted(&self) -> bool {
         self.inner
             .rebuild
-            .lock()
+            .borrow()
             .as_ref()
             .is_some_and(RebuildHandle::is_active)
     }
@@ -303,7 +347,7 @@ impl OverlayEntry {
     pub(crate) fn element_id(&self) -> Option<flui_foundation::ElementId> {
         self.inner
             .rebuild
-            .lock()
+            .borrow()
             .as_ref()
             .and_then(RebuildHandle::element_id)
     }
@@ -324,7 +368,9 @@ impl OverlayEntry {
     ///
     /// [`remove`]: Self::remove
     pub fn mark_needs_build(&self) {
-        if let Some(handle) = self.inner.rebuild.lock().as_ref() {
+        // Scheduled on a clone, so the slot is free if scheduling calls back.
+        let handle = self.inner.rebuild.borrow().clone();
+        if let Some(handle) = handle {
             handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
@@ -370,15 +416,15 @@ impl OverlayEntry {
 
     /// Take the overlay back-reference, upgrading it. `None` when this entry is
     /// attached to nothing, or when its overlay's shared state has been dropped.
-    pub(super) fn attached_overlay(&self) -> Option<Arc<OverlayShared>> {
-        self.inner.overlay.lock().as_ref().and_then(Weak::upgrade)
+    pub(super) fn attached_overlay(&self) -> Option<Rc<OverlayShared>> {
+        self.inner.overlay.borrow().as_ref().and_then(Weak::upgrade)
     }
 
     /// Clear the back-reference and return the overlay it pointed at, so a
     /// second [`remove`](Self::remove) finds nothing and cannot evict a
     /// same-position entry that took this one's place.
-    fn detach(&self) -> Option<Arc<OverlayShared>> {
-        let weak = self.inner.overlay.lock().take()?;
+    fn detach(&self) -> Option<Rc<OverlayShared>> {
+        let weak = self.inner.overlay.borrow_mut().take()?;
         weak.upgrade()
     }
 
@@ -386,14 +432,21 @@ impl OverlayEntry {
     ///
     /// Re-attaching a previously removed entry is legal: removal only clears the
     /// back-reference and does not poison the entry.
-    pub(crate) fn attach(&self, shared: &Arc<OverlayShared>) {
-        *self.inner.overlay.lock() = Some(Arc::downgrade(shared));
+    pub(crate) fn attach(&self, shared: &Rc<OverlayShared>) {
+        let previous = self
+            .inner
+            .overlay
+            .borrow_mut()
+            .replace(Rc::downgrade(shared));
+        drop(previous);
     }
 
     /// Publish the mounted subtree's rebuild capability. Called from the entry
     /// view's `init_state`.
     pub(crate) fn publish_rebuild(&self, handle: RebuildHandle) {
-        let _prev = self.inner.rebuild.lock().replace(handle);
+        // The replaced handle drops once the borrow has ended.
+        let previous = self.inner.rebuild.borrow_mut().replace(handle);
+        drop(previous);
     }
 
     /// Drop the rebuild capability, but only if `element` published it.
@@ -405,23 +458,30 @@ impl OverlayEntry {
     /// An unconditional clear would then revoke the live view's capability,
     /// leaving `mark_needs_build` inert on an entry that is on screen.
     pub(crate) fn clear_rebuild(&self, element: Option<flui_foundation::ElementId>) {
-        let mut slot = self.inner.rebuild.lock();
-        if slot
-            .as_ref()
-            .is_some_and(|held| held.element_id() == element)
-        {
-            let _prev = slot.take();
-        }
+        let revoked = {
+            let mut slot = self.inner.rebuild.borrow_mut();
+            if slot
+                .as_ref()
+                .is_some_and(|held| held.element_id() == element)
+            {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        // Dropped once the borrow has ended.
+        drop(revoked);
     }
 
     /// Whether two handles name the same entry.
     pub(crate) fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Rc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
-/// The local counter drives the exact production allocator and entry admission
-/// path without mutating the process-global counter used by unrelated tests.
+/// A local mint drives the production admission path (`try_new_from`, the
+/// seam `try_new` uses) without spending the process mint unrelated tests
+/// share.
 #[cfg(test)]
 pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
     use std::cell::Cell;
@@ -442,15 +502,15 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
         }
     }
 
-    let counter = AtomicU64::new(u64::MAX - 1);
+    let mint = AtomicIdMint::<NonZeroU64>::starting_after(u64::MAX - 2);
     let entry = || {
-        OverlayEntry::new_allocated(
-            |_| BoxedView::new(crate::SizedBox::new(10.0, 10.0)),
-            || OverlayEntryId::from_counter(&counter),
-        )
+        OverlayEntry::try_new_from(&mint, |_| BoxedView::new(crate::SizedBox::new(10.0, 10.0)))
+            .expect("the mint has identities left")
     };
     let first = entry();
     let last = entry();
+    assert_eq!(first.id().get(), u64::MAX - 1);
+    assert_eq!(last.id().get(), u64::MAX, "the last identity is admitted");
     let overlay = OverlayHandle::new();
     overlay.insert(&first, &InsertPosition::Top);
     overlay.insert(&last, &InsertPosition::Top);
@@ -472,25 +532,19 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
     let rejected_drops = Rc::new(Cell::new(0));
     for attempt in 1..=4 {
         let capture = BuilderCapture(Rc::clone(&rejected_drops));
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            OverlayEntry::new_allocated(
-                move |_| {
-                    capture.observe();
-                    BoxedView::new(crate::SizedBox::new(10.0, 10.0))
-                },
-                || OverlayEntryId::from_counter(&counter),
-            )
-        }))
-        .expect_err("exhausted counter must refuse every entry admission");
-        assert!(
-            flui_foundation::panic::payload_text(failure.as_ref())
-                .is_some_and(|message| message.contains("overlay entry identity space exhausted")),
-            "capacity refusal remains the original failure"
+        let refused = OverlayEntry::try_new_from(&mint, move |_| {
+            capture.observe();
+            BoxedView::new(crate::SizedBox::new(10.0, 10.0))
+        });
+        assert_eq!(
+            refused.err(),
+            Some(IdExhausted),
+            "an exhausted mint refuses every entry admission, typed"
         );
         assert_eq!(
             rejected_drops.get(),
             attempt,
-            "each rejected builder capture is destroyed during the capacity unwind"
+            "each rejected builder capture is destroyed by the refusal"
         );
         assert_eq!(
             overlay.ids_bottom_to_top(),
@@ -498,6 +552,13 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
             "refused admission cannot alias or replace existing entries"
         );
     }
+    let failure = std::panic::catch_unwind(|| OverlayEntryId::next_from(&mint))
+        .expect_err("the panicking reservation refuses too");
+    assert_eq!(
+        flui_foundation::panic::payload_text(failure.as_ref()),
+        Some("overlay entry identities exhausted; OverlayEntry::try_new reports it as IdExhausted"),
+        "the panic names the typed twin"
+    );
     overlay.rearrange(&[last.clone(), first.clone()]);
     let moved_first = OverlayEntryView::new(first.clone(), overlay.clone());
     assert!(first_key.key_eq(moved_first.key().expect("reordered entry keeps its key")));
@@ -537,10 +598,13 @@ pub(super) fn overlay_entry_identity_exhaustion_preserves_existing_entries() {
 
 impl fmt::Debug for OverlayEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Read before the formatter runs: its writer is the caller's code.
+        let mounted = self.is_mounted();
+        let attached = self.inner.overlay.borrow().is_some();
         f.debug_struct("OverlayEntry")
             .field("id", &self.inner.id.get())
-            .field("mounted", &self.is_mounted())
-            .field("attached", &self.inner.overlay.lock().is_some())
+            .field("mounted", &mounted)
+            .field("attached", &attached)
             .finish()
     }
 }
