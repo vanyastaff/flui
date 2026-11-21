@@ -19,7 +19,7 @@ use flui_devtools::inspector::InspectorCounters;
 use flui_objects::RenderSizedBox;
 use flui_sdk::foundation::observe::TreeObserver;
 use flui_sdk::foundation::{ElementId, ValueKey, ViewKey};
-use flui_sdk::view::{RebuildReason, RenderView, View, ViewExt};
+use flui_sdk::view::{BoxedView, RebuildReason, RenderView, View, ViewExt};
 use flui_view::__runtime::{BuildOwner, ElementTree};
 
 #[derive(Clone)]
@@ -105,7 +105,7 @@ impl RenderView for MultiBox {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -148,7 +148,10 @@ fn setup(
     }
     let mut tree = ElementTree::new();
     let order: Vec<u32> = (0..64).collect();
-    let root = tree.mount_root(&MultiBox::keyed(&order), &mut owner.element_owner_mut());
+    let root = tree.mount_root(
+        &MultiBox::keyed(&order).boxed(),
+        &mut owner.element_owner_mut(),
+    );
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     (owner, tree, root, order)

@@ -66,7 +66,7 @@ use flui_scheduler::{AsyncDriver, BoxedTask, PostFrameHandle, TaskToken};
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView, IntoView,
-    LifecycleContext, RebuildHandle, RebuildReason, View, ViewExt, ViewState, WriterSource,
+    LifecycleContext, RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
     impl_inherited_view,
 };
 
@@ -302,7 +302,7 @@ impl InheritedView for RefreshIndicatorStyle {
         &self.builder
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

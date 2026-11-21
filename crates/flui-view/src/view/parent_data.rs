@@ -13,7 +13,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_view::{ParentDataView, View};
+//! use flui_view::{BoxedView, ParentDataView};
 //!
 //! /// Data for positioning a child in a Stack
 //! #[derive(Clone, Default)]
@@ -31,14 +31,14 @@
 //!     top: Option<f64>,
 //!     right: Option<f64>,
 //!     bottom: Option<f64>,
-//!     child: Box<dyn View>,
+//!     child: BoxedView,
 //! }
 //!
 //! impl ParentDataView for Positioned {
 //!     type ParentData = StackParentData;
 //!
-//!     fn child(&self) -> &dyn View {
-//!         &*self.child
+//!     fn child(&self) -> &BoxedView {
+//!         &self.child
 //!     }
 //!
 //!     fn create_parent_data(&self) -> Self::ParentData {
@@ -61,7 +61,7 @@
 //! impl_parent_data_view!(Positioned);
 //! ```
 
-use super::view::View;
+use super::into_view::BoxedView;
 
 /// Marker trait for types that can be used as parent-data configuration.
 ///
@@ -131,7 +131,7 @@ pub trait ParentDataView: Clone + 'static + Sized {
     type ParentData: ParentDataConfig;
 
     /// Get the child View.
-    fn child(&self) -> &dyn View;
+    fn child(&self) -> &BoxedView;
 
     /// Create the parent data to attach to the child's RenderObject.
     fn create_parent_data(&self) -> Self::ParentData;
@@ -177,7 +177,7 @@ pub trait ParentDataView: Clone + 'static + Sized {
 /// ```rust,ignore
 /// impl ParentDataView for Positioned {
 ///     type ParentData = StackParentData;
-///     fn child(&self) -> &dyn View { &*self.child }
+///     fn child(&self) -> &BoxedView { &self.child }
 ///     fn create_parent_data(&self) -> Self::ParentData { ... }
 ///     fn apply_parent_data(&self, data: &mut Self::ParentData) -> RenderUpdateImpact { ... }
 /// }

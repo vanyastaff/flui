@@ -7,17 +7,16 @@
 //! - **Static tuple path** — `(A, B, C, …): ViewSeq` for tuple
 //!   arities `0..=16`, expanded by the `impl_view_seq_for_tuple!`
 //!   macro in `tuple_impls.rs`. Each tuple position keeps its
-//!   concrete `View` type to the boundary; the per-position
-//!   callback in [`ViewSeq::for_each`] pays exactly one `&dyn View`
-//!   `dyn`-call per child.
+//!   concrete `View` type in the widget; [`ViewSeq::for_each`] erases
+//!   each position into a `BoxedView` of its own clone, the form the
+//!   reconciler takes.
 //! - **Dynamic `Vec` path** — `Vec<V: View>: ViewSeq` for the
 //!   homogeneous case and `Vec<BoxedView>: ViewSeq` for the
 //!   heterogeneous case, the canonical shape for every scrolling
 //!   widget in the catalog (`ListView`, `GridView`,
-//!   `CustomScrollView`, `DataTable`). The dynamic path pays one
-//!   `dyn`-call per child via the boxed `BoxedView` — equivalent
-//!   to the tuple path's `&dyn View` boundary, so the per-child
-//!   cost matches.
+//!   `CustomScrollView`, `DataTable`). A `Vec<BoxedView>` hands each
+//!   child on shared, so a child the parent hands back unchanged keeps
+//!   its identity and is not built again.
 //!
 //! Both paths share the same keyed reconciler algorithm (FR-016);
 //! the difference is the per-position monomorphism the tuple path
@@ -31,14 +30,14 @@
 mod tuple_impls;
 mod vec_impls;
 
-use crate::view::{BoxedView, View};
+use crate::view::BoxedView;
 
 /// Heterogeneous-children trait for multi-child widget configuration.
 ///
 /// Implemented for:
 ///
 /// - Tuples of arities `0..=16` whose elements all implement
-///   [`View`] — see the crate's `seq::tuple_impls` module. The
+///   [`View`](crate::View) — see the crate's `seq::tuple_impls` module. The
 ///   tuple path keeps each position's concrete type to the
 ///   element boundary.
 /// - `Vec<V: View>` (homogeneous dynamic case) — see the crate's
@@ -55,7 +54,7 @@ use crate::view::{BoxedView, View};
 /// # Object safety
 ///
 /// `ViewSeq` is **not** object-safe: [`for_each`](Self::for_each)
-/// takes a generic `F: FnMut(usize, &dyn View)`. Multi-child widgets
+/// takes a generic `F: FnMut(usize, &BoxedView)`. Multi-child widgets
 /// bind `C: ViewSeq` as a type parameter (or land on `Vec<BoxedView>`
 /// directly); no `dyn ViewSeq` use exists or is needed.
 #[diagnostic::on_unimplemented(
@@ -72,19 +71,15 @@ pub trait ViewSeq {
         self.len() == 0
     }
 
-    /// Per-position iteration with a type-erased `&dyn View` handle.
+    /// Per-position iteration, each child handed as a [`BoxedView`].
     ///
-    /// The callback receives `(index, &dyn View)` for each child in
-    /// declaration order. Tuple-static impls expand to an explicit
-    /// sequence of `f(i, &self.i)` calls — each call site is
-    /// monomorphic per position, the closure inlines, and the tuple
-    /// element is concrete.
-    ///
-    /// The `&dyn View` parameter pays one `dyn`-call per child at
-    /// the closure boundary; this per-child cost is sanctioned by
-    /// FR-029 point 1 (the element-storage enum's inner
-    /// `Box<dyn …>`).
-    fn for_each<F: FnMut(usize, &dyn View)>(&self, f: F);
+    /// The callback receives `(index, &BoxedView)` for each child in
+    /// declaration order, which the render element hands on to the
+    /// reconciler as it is. A child already held as a `BoxedView` is
+    /// handed shared, so its element keeps that allocation and a child
+    /// handed back unchanged is not built again; any other child is erased
+    /// into a `BoxedView` of its own clone.
+    fn for_each<F: FnMut(usize, &BoxedView)>(&self, f: F);
 
     /// Consume into the dynamic-path representation.
     ///

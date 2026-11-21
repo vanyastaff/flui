@@ -101,7 +101,7 @@ impl InheritedView for HapticsModeScope {
         &self.enabled
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

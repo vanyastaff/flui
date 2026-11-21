@@ -433,7 +433,7 @@ impl<R: PersistentHeaderRenderObject> RenderView for PersistentHeaderView<R> {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&BoxedView)) {}
 }
 
 impl<R: PersistentHeaderRenderObject> View for PersistentHeaderView<R> {

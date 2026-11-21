@@ -10,7 +10,7 @@ use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
 use super::{ReconcileSource, SparseChildren, item_exists};
-use crate::view::{RenderView, View};
+use crate::view::{RenderView, View, ViewExt};
 use crate::{BoxedView, owner::BuildOwner, tree::ElementTree};
 
 #[derive(Clone)]
@@ -87,7 +87,7 @@ fn fixture() -> Fixture {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
     let host = tree.mount_root_with_pipeline_owner(
-        &HostBox,
+        &HostBox.boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );
@@ -118,7 +118,7 @@ fn seed(fx: &mut Fixture, ids: &[(usize, u32)]) -> Vec<flui_foundation::ElementI
         let mut element_owner = fx.owner.element_owner_mut();
         out.push(fx.sparse.ensure(
             index,
-            &KeyedBox::new(id),
+            &KeyedBox::new(id).boxed(),
             fx.host,
             &mut fx.tree,
             &mut element_owner,
@@ -165,7 +165,7 @@ fn keyless_residents_outside_the_band_are_carried_over_not_rebuilt() {
         [0usize, 1].map(|index| {
             fx.sparse.ensure(
                 index,
-                &PlainBox,
+                &PlainBox.boxed(),
                 fx.host,
                 &mut fx.tree,
                 &mut element_owner,
@@ -272,7 +272,7 @@ fn view_type_of(fx: &Fixture, id: flui_foundation::ElementId) -> std::any::TypeI
 /// leaves every other index mounted. Without it the panic unwinds out of
 /// `reconcile`, through the service pass, and takes the frame down.
 /// Mount `view` at `index` the way the band walker does.
-fn ensure_at(fx: &mut Fixture, index: usize, view: &dyn View) -> flui_foundation::ElementId {
+fn ensure_at(fx: &mut Fixture, index: usize, view: &BoxedView) -> flui_foundation::ElementId {
     let mut element_owner = fx.owner.element_owner_mut();
     fx.sparse.ensure(
         index,
@@ -286,9 +286,9 @@ fn ensure_at(fx: &mut Fixture, index: usize, view: &dyn View) -> flui_foundation
 
 fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
     let mut fx = fixture();
-    ensure_at(&mut fx, 0, &KeyedBox::new(0));
-    ensure_at(&mut fx, 1, &PanicsOnCreate);
-    ensure_at(&mut fx, 2, &KeyedBox::new(2));
+    ensure_at(&mut fx, 0, &KeyedBox::new(0).boxed());
+    ensure_at(&mut fx, 1, &PanicsOnCreate.boxed());
+    ensure_at(&mut fx, 2, &KeyedBox::new(2).boxed());
 
     assert_eq!(fx.sparse.len(), 3, "every index is resident");
     let failed = fx.sparse.get(1).expect("index 1 is resident");

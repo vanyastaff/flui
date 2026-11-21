@@ -38,8 +38,8 @@ use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtoco
 use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::LifecycleContext;
 use flui_view::{
-    BuildContext, GlobalKey, IntoView, KeyLookup, RenderView, StatefulView, StatelessView, View,
-    ViewExt, ViewState,
+    BoxedView, BuildContext, GlobalKey, IntoView, KeyLookup, RenderView, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -159,7 +159,7 @@ impl RenderView for SlotHost {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -200,7 +200,8 @@ fn tree_with_parents(
     let root = tree.borrow_mut().mount_root_with_pipeline_owner(
         &SlotHost {
             children: Vec::new(),
-        },
+        }
+        .boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),
@@ -211,7 +212,8 @@ fn tree_with_parents(
             tree.borrow_mut().insert(
                 &SlotHost {
                     children: Vec::new(),
-                },
+                }
+                .boxed(),
                 root,
                 slot,
                 &mut owner.borrow_mut().element_owner_mut(),
@@ -359,12 +361,13 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
 
     let root = tree
         .borrow_mut()
-        .mount_root(&Filler, &mut owner.borrow_mut().element_owner_mut());
+        .mount_root(&Filler.boxed(), &mut owner.borrow_mut().element_owner_mut());
     let parent_a = tree.borrow_mut().insert(
         &KeyedParent {
             key: key.clone(),
             tag: 1,
-        },
+        }
+        .boxed(),
         root,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -373,7 +376,8 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
         &KeyedParent {
             key: key.clone(),
             tag: 2,
-        },
+        }
+        .boxed(),
         root,
         1,
         &mut owner.borrow_mut().element_owner_mut(),

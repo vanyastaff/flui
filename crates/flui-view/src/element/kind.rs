@@ -194,12 +194,7 @@ where
 // `Root`/`Error` variants + their marker traits above). Both are standalone
 // `ElementBase` impls (not `Element<V, A, Behavior>`), so a dedicated sealed
 // sub-trait is the type-safe home — no unsealed `Box<dyn ElementBase>`.
-impl<V> RootElementBase for crate::view::RootRenderElement<V>
-where
-    V: crate::view::View + Clone + 'static,
-    crate::view::RootRenderElement<V>: ElementBase,
-{
-}
+impl RootElementBase for crate::view::RootRenderElement {}
 
 // ============================================================================
 // ElementKind closed enum

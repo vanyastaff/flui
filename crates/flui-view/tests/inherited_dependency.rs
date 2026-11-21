@@ -36,8 +36,8 @@ use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::element::InheritedElement;
 use flui_view::testing::ElementBuildContext;
 use flui_view::{
-    BuildContext, BuildContextExt, InheritedView, IntoView, RenderView, StatelessView, View,
-    ViewExt,
+    BoxedView, BuildContext, BuildContextExt, ElementBase, InheritedView, IntoView, RenderView,
+    StatelessView, View, ViewExt,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -75,7 +75,13 @@ impl View for DummyChild {
 #[derive(Clone)]
 struct ThemeProvider {
     theme: MyTheme,
-    child: DummyChild,
+    child: BoxedView,
+}
+
+/// The provider's element, downcast through the trait object's `Any` upcast.
+fn theme_provider_element(element: &dyn ElementBase) -> Option<&InheritedElement<ThemeProvider>> {
+    let element: &dyn std::any::Any = element;
+    element.downcast_ref::<InheritedElement<ThemeProvider>>()
 }
 
 impl InheritedView for ThemeProvider {
@@ -85,7 +91,7 @@ impl InheritedView for ThemeProvider {
         &self.theme
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -161,15 +167,16 @@ pub(crate) fn inherited_update_notifies_dependents() {
 
     let provider_v1 = ThemeProvider {
         theme: MyTheme { color: 0x00FF_0000 },
-        child: DummyChild,
+        child: DummyChild.boxed(),
     };
 
-    let provider_id = tree
-        .borrow_mut()
-        .mount_root(&provider_v1, &mut owner.borrow_mut().element_owner_mut());
+    let provider_id = tree.borrow_mut().mount_root(
+        &provider_v1.boxed(),
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
 
     let child_id = tree.borrow_mut().insert(
-        &DummyChild,
+        &DummyChild.boxed(),
         provider_id,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -193,7 +200,7 @@ pub(crate) fn inherited_update_notifies_dependents() {
     // Now rebuild the InheritedView with a different MyTheme.
     let provider_v2 = ThemeProvider {
         theme: MyTheme { color: 0x0000_FF00 },
-        child: DummyChild,
+        child: DummyChild.boxed(),
     };
     tree.borrow_mut().update(
         provider_id,
@@ -271,7 +278,8 @@ pub(crate) fn missing_inherited_reads_refresh_lifecycle_and_survive_build_recove
                 changes: std::rc::Rc::clone(&changes),
                 read_in_build,
                 fail_build: std::rc::Rc::clone(&fail_build),
-            },
+            }
+            .boxed(),
             &mut owner.borrow_mut().element_owner_mut(),
         );
         owner
@@ -325,15 +333,16 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
 
     let provider_v1 = ThemeProvider {
         theme: MyTheme { color: 0x00FF_0000 },
-        child: DummyChild,
+        child: DummyChild.boxed(),
     };
 
-    let provider_id = tree
-        .borrow_mut()
-        .mount_root(&provider_v1, &mut owner.borrow_mut().element_owner_mut());
+    let provider_id = tree.borrow_mut().mount_root(
+        &provider_v1.boxed(),
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
 
     let child_id = tree.borrow_mut().insert(
-        &DummyChild,
+        &DummyChild.boxed(),
         provider_id,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -353,9 +362,7 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
     {
         let tree_guard = tree.borrow();
         let provider_node = tree_guard.get(provider_id).expect("provider exists");
-        let provider = provider_node
-            .element()
-            .downcast_ref::<InheritedElement<ThemeProvider>>()
+        let provider = theme_provider_element(provider_node.element())
             .expect("provider is InheritedElement<ThemeProvider>");
         assert!(
             provider.dependent(child_id).is_none(),
@@ -368,7 +375,7 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
     // dependents cannot accumulate in a long-lived provider.
     let provider_v2 = ThemeProvider {
         theme: MyTheme { color: 0x0000_FF00 },
-        child: DummyChild,
+        child: DummyChild.boxed(),
     };
     tree.borrow_mut().update(
         provider_id,
@@ -391,14 +398,15 @@ pub(crate) fn a_provider_with_many_dependents_keeps_exactly_the_mounted_ones() {
     let provider_id = tree.borrow_mut().mount_root(
         &ThemeProvider {
             theme: MyTheme { color: 1 },
-            child: DummyChild,
-        },
+            child: DummyChild.boxed(),
+        }
+        .boxed(),
         &mut owner.borrow_mut().element_owner_mut(),
     );
     let children: Vec<_> = (0..20)
         .map(|slot| {
             let child = tree.borrow_mut().insert(
-                &DummyChild,
+                &DummyChild.boxed(),
                 provider_id,
                 slot,
                 &mut owner.borrow_mut().element_owner_mut(),
@@ -418,12 +426,13 @@ pub(crate) fn a_provider_with_many_dependents_keeps_exactly_the_mounted_ones() {
     }
     {
         let tree_guard = tree.borrow();
-        let provider = tree_guard
-            .get(provider_id)
-            .expect("provider exists")
-            .element()
-            .downcast_ref::<InheritedElement<ThemeProvider>>()
-            .expect("provider is InheritedElement<ThemeProvider>");
+        let provider = theme_provider_element(
+            tree_guard
+                .get(provider_id)
+                .expect("provider exists")
+                .element(),
+        )
+        .expect("provider is InheritedElement<ThemeProvider>");
         for (slot, child) in children.iter().enumerate() {
             assert_eq!(
                 provider.dependent(*child).is_some(),
@@ -436,7 +445,7 @@ pub(crate) fn a_provider_with_many_dependents_keeps_exactly_the_mounted_ones() {
         provider_id,
         &ThemeProvider {
             theme: MyTheme { color: 2 },
-            child: DummyChild,
+            child: DummyChild.boxed(),
         },
         &mut owner.borrow_mut().element_owner_mut(),
     );
@@ -494,8 +503,9 @@ pub(crate) fn a_provider_with_many_dependents_finds_ones_added_after_compaction(
     let provider_id = tree.borrow_mut().mount_root(
         &ThemeProvider {
             theme: MyTheme { color: 1 },
-            child: DummyChild,
-        },
+            child: DummyChild.boxed(),
+        }
+        .boxed(),
         &mut owner.borrow_mut().element_owner_mut(),
     );
     let mount = |tag: usize| {
@@ -505,7 +515,8 @@ pub(crate) fn a_provider_with_many_dependents_finds_ones_added_after_compaction(
                 // One dependent reads the provider twice in each build.
                 reads: if tag == 5 { 2 } else { 1 },
                 log: Rc::clone(&log),
-            },
+            }
+            .boxed(),
             provider_id,
             tag,
             &mut owner.borrow_mut().element_owner_mut(),
@@ -558,12 +569,13 @@ pub(crate) fn a_provider_with_many_dependents_finds_ones_added_after_compaction(
     );
     {
         let tree_guard = tree.borrow();
-        let provider = tree_guard
-            .get(provider_id)
-            .expect("provider exists")
-            .element()
-            .downcast_ref::<InheritedElement<ThemeProvider>>()
-            .expect("provider is InheritedElement<ThemeProvider>");
+        let provider = theme_provider_element(
+            tree_guard
+                .get(provider_id)
+                .expect("provider exists")
+                .element(),
+        )
+        .expect("provider is InheritedElement<ThemeProvider>");
         for (slot, child) in children.iter().enumerate() {
             assert_eq!(
                 provider.dependent(*child).is_some(),
@@ -578,7 +590,7 @@ pub(crate) fn a_provider_with_many_dependents_finds_ones_added_after_compaction(
         provider_id,
         &ThemeProvider {
             theme: MyTheme { color: 2 },
-            child: DummyChild,
+            child: DummyChild.boxed(),
         },
         &mut owner.borrow_mut().element_owner_mut(),
     );
@@ -680,7 +692,7 @@ mod did_change_dependencies_on_inherited_update {
     #[derive(Clone)]
     struct PanicThemeProvider {
         theme: MyTheme,
-        child: DcdHost,
+        child: BoxedView,
     }
 
     impl InheritedView for PanicThemeProvider {
@@ -690,7 +702,7 @@ mod did_change_dependencies_on_inherited_update {
             &self.theme
         }
 
-        fn child(&self) -> &dyn View {
+        fn child(&self) -> &BoxedView {
             &self.child
         }
 
@@ -733,8 +745,8 @@ mod did_change_dependencies_on_inherited_update {
             true
         }
 
-        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-            self.children.iter().for_each(|child| visitor(child));
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
+            self.children.iter().for_each(visitor);
         }
     }
 
@@ -772,14 +784,15 @@ mod did_change_dependencies_on_inherited_update {
                     PanicDcd.boxed(),
                     CountingSibling(sibling_builds.clone()).boxed(),
                 ],
-            },
+            }
+            .boxed(),
         };
         // Production shape (the bootstrap idiom): the provider sits under a
         // render root, so `DcdHost`'s render object mounts with a render
         // parent instead of orphaning under a render-less owner-carrying
         // root.
         let render_root_element = tree.mount_root_with_pipeline_owner(
-            &flui_view::__runtime::RootRenderView::new(provider_v1.clone()),
+            &flui_view::__runtime::RootRenderView::new(provider_v1.clone()).boxed(),
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(
                     flui_rendering::TextContextHandle::standalone(),
@@ -904,14 +917,14 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
     #[derive(Clone)]
     struct Shade {
         color: u32,
-        child: Dependent,
+        child: BoxedView,
     }
     impl InheritedView for Shade {
         type Data = u32;
         fn data(&self) -> &u32 {
             &self.color
         }
-        fn child(&self) -> &dyn View {
+        fn child(&self) -> &BoxedView {
             &self.child
         }
         fn update_should_notify(&self, old: &Self) -> bool {
@@ -964,7 +977,7 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             Shade {
                 color: self.color,
-                child: self.child.clone(),
+                child: self.child.clone().boxed(),
             }
         }
     }
@@ -988,9 +1001,10 @@ pub(crate) fn a_failing_frame_request_while_a_provider_notifies_keeps_its_subtre
         color,
         child: dependent.clone(),
     };
-    let root = tree
-        .borrow_mut()
-        .mount_root(&host(1), &mut owner.borrow_mut().element_owner_mut());
+    let root = tree.borrow_mut().mount_root(
+        &host(1).boxed(),
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
     owner
         .borrow_mut()
         .schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);

@@ -735,8 +735,8 @@ impl InheritedView for HeroScope {
         &self.registry
     }
 
-    fn child(&self) -> &dyn View {
-        &*self.child
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
@@ -1448,7 +1448,7 @@ impl InheritedView for HeroModeScope {
         &self.enabled
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

@@ -100,7 +100,7 @@ impl InheritedView for Directionality {
         &self.direction
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

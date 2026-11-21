@@ -8,7 +8,7 @@
 //! - `NotificationListener` is the widget that handles notifications
 //! - `NotifiableElement` is the element-side typed handler
 
-use std::any::{Any, TypeId};
+use std::any::Any;
 
 /// A notification that can bubble up the element tree.
 ///
@@ -41,32 +41,6 @@ use std::any::{Any, TypeId};
 /// boundary; user-impls don't need to provide any methods, the empty
 /// body `impl Notification for MyEvent {}` is enough.
 pub trait Notification: Any + 'static {
-    /// Get the type ID of this notification for type checking.
-    ///
-    /// Default impl uses `TypeId::of::<Self>()`; override is rarely
-    /// needed. Kept for API ergonomics — `dispatch_notification` itself
-    /// reads the `TypeId` off the static `N` at the generic call-site
-    /// rather than via this virtual call.
-    fn notification_type_id(&self) -> TypeId
-    where
-        Self: Sized,
-    {
-        TypeId::of::<Self>()
-    }
-
-    /// Get this notification as an `Any` reference for downcasting.
-    ///
-    /// Default impl returns `self` — sound because `Notification: Any`
-    /// makes the `&Self` -> `&dyn Any` coercion automatic. User-impls
-    /// like `impl Notification for ScrollNotification {}` work without
-    /// any method body.
-    fn as_any(&self) -> &dyn Any
-    where
-        Self: Sized,
-    {
-        self
-    }
-
     /// Dispatch this notification to the element tree.
     ///
     /// The notification will bubble up from the target BuildContext

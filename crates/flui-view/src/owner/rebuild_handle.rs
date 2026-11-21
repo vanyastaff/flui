@@ -191,7 +191,7 @@ mod tests {
         context::BuildContext,
         owner::BuildOwner,
         tree::ElementTree,
-        view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewState},
+        view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewExt, ViewState},
     };
 
     /// A stateful view whose state captures a `RebuildHandle` in `init_state` —
@@ -294,7 +294,7 @@ mod tests {
         // would orphan `Leaf`'s render object (the mount-time refusal shape).
         let render_root = RootRenderView::new(view);
         let render_root_element = tree.mount_root_with_pipeline_owner(
-            &render_root,
+            &render_root.boxed(),
             Some(PipelineCell::new(PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),
             ))),

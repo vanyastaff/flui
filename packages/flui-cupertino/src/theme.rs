@@ -313,7 +313,7 @@ impl InheritedView for CupertinoTheme {
         &self.data
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

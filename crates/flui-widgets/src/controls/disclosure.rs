@@ -497,9 +497,9 @@ impl ViewSeq for GuardedChildren {
         self.0.len()
     }
 
-    fn for_each<F: FnMut(usize, &dyn View)>(&self, mut f: F) {
+    fn for_each<F: FnMut(usize, &BoxedView)>(&self, mut f: F) {
         for (index, child) in self.0.iter().enumerate() {
-            f(index, &**child);
+            f(index, child);
         }
     }
 

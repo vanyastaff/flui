@@ -3303,7 +3303,12 @@ mod tests {
         parent: ElementId,
         slot: usize,
     ) -> ElementId {
-        tree.insert(&TestView, parent, slot, &mut owner.element_owner_mut())
+        tree.insert(
+            &TestView.boxed(),
+            parent,
+            slot,
+            &mut owner.element_owner_mut(),
+        )
     }
 
     fn settle_initial_builds(tree: &mut ElementTree, owner: &mut BuildOwner) {
@@ -3313,7 +3318,7 @@ mod tests {
     fn nested_scope_quarantines_work_until_its_own_drain() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        let root = tree.mount_root(&TestView.boxed(), &mut owner.element_owner_mut());
         settle_initial_builds(&mut tree, &mut owner);
         let outer = insert_child(&mut tree, &mut owner, root, 0);
         settle_initial_builds(&mut tree, &mut owner);
@@ -3423,7 +3428,7 @@ mod tests {
             true
         }
 
-        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
             for child in &self.children {
                 visitor(child);
             }
@@ -3443,7 +3448,7 @@ mod tests {
             flui_rendering::TextContextHandle::standalone(),
         ));
         let root = tree.mount_root_with_pipeline_owner(
-            &TestView,
+            &TestView.boxed(),
             Some(pipeline),
             &mut owner.element_owner_mut(),
         );
@@ -3461,7 +3466,12 @@ mod tests {
             build_calls: Arc::clone(&build_calls),
             dependency_calls: Arc::clone(&dependency_calls),
         };
-        let moved = tree.insert(&keyed, scope_a, 0, &mut owner.element_owner_mut());
+        let moved = tree.insert(
+            &keyed.clone().boxed(),
+            scope_a,
+            0,
+            &mut owner.element_owner_mut(),
+        );
         // Its first build creates the state the dependency change reaches.
         owner.schedule_build_for(moved, 2, RebuildReason::InitialMount);
         owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope_a));
@@ -3475,7 +3485,12 @@ mod tests {
         assert!(owner.pending_rebuild_reasons(moved).is_some());
 
         tree.remove(moved, &mut owner.element_owner_mut());
-        let migrated = tree.insert(&keyed, scope_b, 0, &mut owner.element_owner_mut());
+        let migrated = tree.insert(
+            &keyed.clone().boxed(),
+            scope_b,
+            0,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(migrated, moved, "GlobalKey reparent preserves identity");
         assert_eq!(
             tree.get(moved).and_then(crate::tree::ElementNode::parent),
@@ -3502,7 +3517,7 @@ mod tests {
         assert!(owner.pending_rebuild_reasons(moved).is_some());
 
         tree.remove(moved, &mut owner.element_owner_mut());
-        let migrated_global = tree.insert(&keyed, root, 2, &mut owner.element_owner_mut());
+        let migrated_global = tree.insert(&keyed.boxed(), root, 2, &mut owner.element_owner_mut());
         assert_eq!(migrated_global, moved);
         assert_eq!(
             tree.get(moved).and_then(crate::tree::ElementNode::parent),
@@ -3550,7 +3565,7 @@ mod tests {
         let mut tree_a = ElementTree::new();
         let mut owner_a = BuildOwner::new();
         owner_a.set_global_key_scope(scope.clone());
-        let root_a = tree_a.mount_root(&keyed, &mut owner_a.element_owner_mut());
+        let root_a = tree_a.mount_root(&keyed.clone().boxed(), &mut owner_a.element_owner_mut());
         assert_eq!(tree_a.len(), 1);
         let tag_a = owner_a.owner_tag();
 
@@ -3560,7 +3575,7 @@ mod tests {
         let tag_b = owner_b.owner_tag();
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
+            tree_b.mount_root(&keyed.clone().boxed(), &mut owner_b.element_owner_mut());
         }));
         let payload = outcome.expect_err("b must not silently alias a's live GlobalKey");
         let message = panic_message(&*payload);
@@ -3595,8 +3610,13 @@ mod tests {
         let mut tree_a = ElementTree::new();
         let mut owner_a = BuildOwner::new();
         owner_a.set_global_key_scope(scope.clone());
-        let root_a = tree_a.mount_root(&TestView, &mut owner_a.element_owner_mut());
-        let child_a = tree_a.insert(&keyed, root_a, 0, &mut owner_a.element_owner_mut());
+        let root_a = tree_a.mount_root(&TestView.boxed(), &mut owner_a.element_owner_mut());
+        let child_a = tree_a.insert(
+            &keyed.clone().boxed(),
+            root_a,
+            0,
+            &mut owner_a.element_owner_mut(),
+        );
 
         // Full release: finalize runs inside a's own segment, exactly the
         // discipline the scope's claim-lifetime contract assumes.
@@ -3613,7 +3633,7 @@ mod tests {
         owner_b.set_global_key_scope(scope);
 
         assert_eq!(owner_b.element_for_global_key(&key), None);
-        let root_b = tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
+        let root_b = tree_b.mount_root(&keyed.boxed(), &mut owner_b.element_owner_mut());
         assert_eq!(tree_b.len(), 1);
         assert_eq!(owner_b.element_for_global_key(&key), Some(root_b));
     }
@@ -3808,7 +3828,8 @@ mod tests {
         let root = tree.mount_root(
             &MidDrainRootPanic {
                 trigger_panic: Arc::clone(&trigger_panic),
-            },
+            }
+            .boxed(),
             &mut owner.element_owner_mut(),
         );
         // The state `did_change_dependencies` reaches is created by a first build.
@@ -3869,7 +3890,8 @@ mod tests {
                 build_calls: Arc::clone(&build_calls),
                 should_reschedule: Arc::clone(&should_reschedule),
                 handle_slot: Arc::clone(&handle_slot),
-            },
+            }
+            .boxed(),
             &mut owner.element_owner_mut(),
         );
         owner.schedule_build_for(root, 0, RebuildReason::InitialMount);

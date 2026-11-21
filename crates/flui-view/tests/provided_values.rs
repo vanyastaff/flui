@@ -148,7 +148,7 @@ impl InheritedView for Inherit {
         &self.tone
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -340,7 +340,7 @@ impl RenderView for Group {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.0 {
             visitor(child);
         }
@@ -427,7 +427,7 @@ struct Unmounted {
 }
 
 impl Unmounted {
-    fn mounted(self, view: &dyn View) -> Frames {
+    fn mounted(self, view: &BoxedView) -> Frames {
         let Self { tree, owner } = self;
         let root = tree
             .borrow_mut()
@@ -439,7 +439,7 @@ impl Unmounted {
 }
 
 impl Frames {
-    fn mount(view: &dyn View) -> Self {
+    fn mount(view: &BoxedView) -> Self {
         Self::empty().mounted(view)
     }
 
@@ -536,7 +536,7 @@ pub(crate) fn provided_value_follows_a_moved_subtree() {
             };
             Group(vec![(kind.provider)(1, first), (kind.provider)(2, second)])
         };
-        let frames = Frames::mount(&view(true));
+        let frames = Frames::mount(&view(true).boxed());
         assert_eq!(probe.seen.get(), Some(1), "{}: under the first", kind.name);
 
         frames.update(&view(false));
@@ -584,7 +584,7 @@ pub(crate) fn provided_value_unmount_releases_dependents() {
 
         // The provider leaves with a reader under it, and another mounts.
         let probe = Seen::default();
-        let frames = Frames::mount(&Group(vec![(kind.provider)(1, (kind.reader)(&probe))]));
+        let frames = Frames::mount(&Group(vec![(kind.provider)(1, (kind.reader)(&probe))]).boxed());
         frames.update(&Group(vec![Leaf.boxed()]));
         let late = Seen::default();
         frames.update(&Group(vec![(kind.provider)(3, (kind.reader)(&late))]));
@@ -902,7 +902,7 @@ pub(crate) fn a_subtree_moved_to_another_depth_reads_its_new_ancestry() {
             ])
         };
 
-        let frames = Frames::mount(&view(false));
+        let frames = Frames::mount(&view(false).boxed());
         expect_chain(
             &shallow,
             &carried,
@@ -949,7 +949,7 @@ pub(crate) fn a_provide_panic_is_recorded_and_keeps_the_frame() {
                 reader::<Palette>(&probe),
             )])
         };
-        let frames = Frames::mount(&view(1));
+        let frames = Frames::mount(&view(1).boxed());
         assert_eq!(probe.seen.get(), Some(1), "{name}: published");
 
         fail.set(true);
@@ -1055,12 +1055,15 @@ pub(crate) fn a_failure_after_provide_ends_the_build_phase() {
     let writer = frames.owner.borrow().writer_source();
     let armed = Rc::new(Cell::new(false));
     let mounted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        frames.mounted(&Group(vec![
-            Brittle {
-                armed: Rc::clone(&armed),
-            }
+        frames.mounted(
+            &Group(vec![
+                Brittle {
+                    armed: Rc::clone(&armed),
+                }
+                .boxed(),
+            ])
             .boxed(),
-        ]))
+        )
     }));
     assert!(!armed.get(), "the authored failure fired");
     drop(mounted);

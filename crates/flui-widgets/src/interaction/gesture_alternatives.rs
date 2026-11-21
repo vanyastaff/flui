@@ -1759,7 +1759,7 @@ impl InheritedView for MenuHoldScope {
     fn data(&self) -> &Self::Data {
         &self.hold
     }
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
     fn update_should_notify(&self, old: &Self) -> bool {

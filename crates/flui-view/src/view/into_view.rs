@@ -62,10 +62,9 @@ impl<V: View> IntoView for V {
 /// [`BoxedView`] does), so the blanket `impl<V: View> IntoView for V`
 /// above does not cover it. This impl is the explicit bridge that wraps
 /// a `Box<dyn View>` into a [`BoxedView`] so any code path that already
-/// produces an erased pointer (`ErrorView::build_error_view`,
-/// `dyn_clone::clone_box`, legacy `Box<dyn View>`-returning
-/// `StatelessView::build` impls) can flow into an `impl IntoView`
-/// position without an explicit `.boxed()` wrap.
+/// produces an erased pointer (`ErrorView::build_error_view`, legacy
+/// `Box<dyn View>`-returning `StatelessView::build` impls) can flow into an
+/// `impl IntoView` position without an explicit `.boxed()` wrap.
 ///
 /// The recommended authoring shape is still to return a concrete
 /// `impl IntoView` (or `BoxedView` via `.boxed()` at the recursion edge);
@@ -131,29 +130,22 @@ impl IntoElement for Box<dyn View> {
     }
 }
 
-/// Create the element of a view the caller holds by reference: a
-/// [`BoxedView`] hands the element its shared allocation, any other view is
-/// copied into one.
-pub(crate) fn create_element_of(view: &dyn View) -> ElementKind {
-    match view.as_any().downcast_ref::<BoxedView>() {
-        Some(boxed) => Rc::clone(boxed.shared()).create_element(),
-        None => Rc::<dyn View>::from(dyn_clone::clone_box(view)).create_element(),
-    }
-}
-
 /// The view `view` offers, as a `V` in a shared allocation: the innermost
-/// [`BoxedView`]'s own `Rc` when `view` is one, otherwise a copy. `None` when
-/// the view is not a `V`.
+/// [`BoxedView`]'s own `Rc` when `view` is one, otherwise a typed clone of the
+/// `V` offered by reference. `None` when the view is not a `V`.
 pub(crate) fn shared_view_of<V: View + Clone>(view: &dyn View) -> Option<Rc<V>> {
     let mut effective = view;
     let mut shared: Option<&Rc<dyn View>> = None;
-    while let Some(boxed) = effective.as_any().downcast_ref::<BoxedView>() {
+    while let Some(boxed) = (effective as &dyn Any).downcast_ref::<BoxedView>() {
         shared = Some(boxed.shared());
         effective = boxed.as_view();
     }
     match shared {
-        Some(shared) => Rc::clone(shared).downcast_rc::<V>().ok(),
-        None => effective.as_any().downcast_ref::<V>().cloned().map(Rc::new),
+        Some(shared) => (Rc::clone(shared) as Rc<dyn Any>).downcast::<V>().ok(),
+        None => (effective as &dyn Any)
+            .downcast_ref::<V>()
+            .cloned()
+            .map(Rc::new),
     }
 }
 
@@ -242,13 +234,26 @@ impl BoxedView {
     pub(crate) fn shared(&self) -> &Rc<dyn View> {
         &self.0
     }
+
+    /// The view in `shared`, which becomes this view's identity. A `BoxedView`
+    /// in `shared` stays a layer of its own: the dispatch unwraps it.
+    pub(crate) fn from_shared(shared: Rc<dyn View>) -> Self {
+        Self(shared)
+    }
+
+    /// Create the element of the view inside, which keeps this very shared
+    /// allocation as its configuration.
+    pub(crate) fn create_shared_element(&self) -> ElementKind {
+        Rc::clone(&self.0).create_element()
+    }
 }
 
 impl From<Box<dyn View>> for BoxedView {
     fn from(view: Box<dyn View>) -> Self {
-        let inner: &dyn View = &*view;
-        if inner.as_any().is::<BoxedView>() {
-            return match view.into_any().downcast::<BoxedView>() {
+        let inner: &dyn Any = &*view;
+        if inner.is::<BoxedView>() {
+            let erased: Box<dyn Any> = view;
+            return match erased.downcast::<BoxedView>() {
                 Ok(erased) => *erased,
                 Err(_) => unreachable!("BUG: the view was just checked to be a BoxedView"),
             };

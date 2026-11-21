@@ -32,10 +32,11 @@
 
 mod tree_cell;
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
+
+// The build-phase flag is a debug assertion: release builds carry no `Cell`.
+#[cfg(debug_assertions)]
+use std::cell::Cell;
 
 use flui_foundation::ElementId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
@@ -48,7 +49,7 @@ use tree_cell::TreePhase;
 use crate::{
     owner::{BuildOwner, RecoveredPanic},
     tree::ElementTree,
-    view::{RootRenderView, View},
+    view::{BoxedView, RootRenderView, View},
 };
 
 /// Application lifecycle states.
@@ -469,24 +470,11 @@ impl WidgetsBinding {
 
         // Wrap the user view in `RootRenderView` so the render tree is
         // bootstrapped through `RootRenderElement` instead of mounting the
-        // user view directly.
-        //
-        // The user view is cloned (not `BoxedView`-wrapped) so the
-        // concrete `V` is preserved as the `RootRenderView<V>` /
-        // `RootRenderElement<V>` type parameter. On subsequent root
-        // rebuilds `RootRenderElement::perform_build` hands the stored
-        // child to `Element<V>::update_view` via `&dyn View`; that
-        // method downcasts the trait object back to `V`. A `BoxedView`
-        // wrap would make the runtime type `BoxedView` (not `V`), the
-        // downcast in `ElementCore::update_view` would fail, and the
-        // root update would be silently skipped — this was caught as a
-        // real regression, so keep the clone-not-wrap shape.
-        //
-        // The `Clone + 'static` bound is no real
-        // restriction in practice — every concrete `View` in this
-        // codebase already satisfies it (see `Element<V, A, B>`'s
-        // own bound).
-        let root_render_view = RootRenderView::new(view.clone());
+        // user view directly. The root holds its child as a `BoxedView`
+        // (a `BoxedView` passed here is held as it is) and hands that shared
+        // allocation to the reconciler, which unwraps it to update the
+        // child's `Element<V>` in place.
+        let root_render_view = BoxedView::new(RootRenderView::new(view.clone()));
 
         // Mount the `RootRenderView` as the element-tree root with the
         // PipelineOwner. This ensures `RootRenderElement` (and the
@@ -1052,6 +1040,7 @@ mod tests {
     use super::*;
     use crate::__runtime::BindingRuntime as _;
     use crate::view::RootRenderElement;
+    use std::cell::Cell;
 
     // Carries a `PipelineCell` (via `CoreState::pipeline_owner`), so it must
     // stay pinned `!Send + !Sync` -- a stray `unsafe impl` here would let a
@@ -1236,10 +1225,9 @@ mod tests {
         // The RootRenderElement created a RenderView and registered it
         // as the PipelineOwner's root node.
         binding.with_element_tree(|tree| {
-            let element = tree.get(root_id).expect("root node").element();
+            let element: &dyn std::any::Any = tree.get(root_id).expect("root node").element();
             let root_render_element = element
-                .as_any()
-                .downcast_ref::<RootRenderElement<LeafView>>()
+                .downcast_ref::<RootRenderElement>()
                 .expect("root is RootRenderElement");
             assert!(
                 root_render_element.render_id().is_some(),

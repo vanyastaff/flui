@@ -15,7 +15,7 @@
 //! types. `Memo<V>` is the opt-in surface; non-`PartialEq` views use the
 //! safe default ([`View::should_skip_rebuild`] returns `false` = always
 //! rebuild). `Clone` is *not* part of the trap — the whole view universe
-//! is already `Clone`/`DynClone` (`View: DynClone`, `ProxyView: Clone`),
+//! is already `Clone` (`ProxyView: Clone`, and an element's view type is),
 //! so `Memo<V>` requires `V: Clone` like any other proxy wrapper.
 //!
 //! # Warning — unsafe for callback views
@@ -31,7 +31,9 @@
 //! do not use `Memo<V>` — the default `should_skip_rebuild = false` is
 //! always safe.
 
-use super::view::View;
+use std::rc::Rc;
+
+use super::{into_view::BoxedView, view::View};
 
 /// Memoization wrapper that skips rebuilds when the inner view is
 /// [`PartialEq`]-equal to the previous version.
@@ -70,7 +72,10 @@ use super::view::View;
 ///   coexisting; zero `dyn` at the comparison site.
 #[derive(Clone, Debug)]
 pub struct Memo<V> {
-    inner: V,
+    /// The wrapped view, compared by `should_skip_rebuild`.
+    inner: Rc<V>,
+    /// `inner`'s allocation erased, the child the proxy element is given.
+    child: BoxedView,
 }
 
 impl<V: View + PartialEq + Clone> Memo<V> {
@@ -82,7 +87,9 @@ impl<V: View + PartialEq + Clone> Memo<V> {
     #[inline]
     #[must_use]
     pub fn new(inner: V) -> Self {
-        Self { inner }
+        let inner = Rc::new(inner);
+        let child = BoxedView::from_shared(Rc::clone(&inner) as Rc<dyn View>);
+        Self { inner, child }
     }
 
     /// Borrow the wrapped inner view.
@@ -111,10 +118,11 @@ impl<V: View + PartialEq + Clone> View for Memo<V> {
     }
 }
 
-/// Proxy the child view: `Memo<V>` forwards `child()` to the inner view so
-/// `ProxyBehavior` can locate the single child element during build.
+/// Proxy the child view: `Memo<V>` hands the inner view on shared, so
+/// `ProxyBehavior` mounts the single child element with the very allocation
+/// the memo holds.
 impl<V: View + PartialEq + Clone> crate::ProxyView for Memo<V> {
-    fn child(&self) -> &dyn View {
-        &self.inner
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 }

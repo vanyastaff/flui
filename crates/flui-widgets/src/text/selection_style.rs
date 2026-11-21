@@ -3,7 +3,7 @@
 
 use flui_painting::styling::Color;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, InheritedView, View, ViewExt, impl_inherited_view};
+use flui_view::{BoxedView, InheritedView, ViewExt, impl_inherited_view};
 
 /// How a [`SelectionArea`](crate::SelectionArea) highlights its selection.
 ///
@@ -74,7 +74,7 @@ impl InheritedView for DefaultSelectionStyle {
         &self.style
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

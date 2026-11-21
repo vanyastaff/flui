@@ -61,8 +61,8 @@ impl StatelessView for KeyedView {
 /// tags.
 fn plain_views(tags: &[u32]) -> crate::view::ChildViews {
     tags.iter()
-        .map(|&t| Box::new(TestView::new(t)) as Box<dyn View>)
-        .collect::<Vec<Box<dyn View>>>()
+        .map(|&t| TestView::new(t).boxed())
+        .collect::<Vec<crate::BoxedView>>()
         .into()
 }
 
@@ -70,8 +70,8 @@ fn plain_views(tags: &[u32]) -> crate::view::ChildViews {
 /// keys.
 fn keyed_views(keys: &[u32]) -> crate::view::ChildViews {
     keys.iter()
-        .map(|&k| Box::new(KeyedView::new(k)) as Box<dyn View>)
-        .collect::<Vec<Box<dyn View>>>()
+        .map(|&k| KeyedView::new(k).boxed())
+        .collect::<Vec<crate::BoxedView>>()
         .into()
 }
 
@@ -79,7 +79,7 @@ fn keyed_views(keys: &[u32]) -> crate::view::ChildViews {
 fn fixture() -> (ElementTree, BuildOwner, ElementId) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root_id = tree.mount_root(&TestView::new(0), &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&TestView::new(0).boxed(), &mut owner.element_owner_mut());
     (tree, owner, root_id)
 }
 

@@ -15,7 +15,9 @@ use flui_rendering::{
     protocol::BoxProtocol,
 };
 use flui_view::__runtime::{BuildOwner, ElementTree};
-use flui_view::{RebuildReason, RenderObjectContext, RenderView, View, element::ElementKind};
+use flui_view::{
+    RebuildReason, RenderObjectContext, RenderView, View, ViewExt, element::ElementKind,
+};
 
 #[derive(Clone)]
 struct Leaf;
@@ -59,7 +61,7 @@ fn insert_child(
     parent: ElementId,
     slot: usize,
 ) -> ElementId {
-    tree.insert(&Leaf, parent, slot, &mut owner.element_owner_mut())
+    tree.insert(&Leaf.boxed(), parent, slot, &mut owner.element_owner_mut())
 }
 
 fn insert_render_node(pipeline: &PipelineCell) -> RenderId {
@@ -83,7 +85,7 @@ fn no_scope_fixture(dirty_count: usize) -> Fixture {
     let pipeline = PipelineCell::new(PipelineOwner::new(
         flui_rendering::TextContextHandle::standalone(),
     ));
-    let root = tree.mount_root(&Leaf, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&Leaf.boxed(), &mut owner.element_owner_mut());
     owner.build_scope(&mut tree);
     for slot in 0..dirty_count {
         let child = insert_child(&mut owner, &mut tree, root, slot);

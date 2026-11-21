@@ -36,8 +36,13 @@ fn exhausted_generation_refuses_removal(mode: u8) {
     let view = TestView {
         name: "live".into(),
     };
-    let root = tree.mount_root(&view, &mut owner.element_owner_mut());
-    let candidate = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view.clone().boxed(), &mut owner.element_owner_mut());
+    let candidate = tree.insert(
+        &view.clone().boxed(),
+        root,
+        0,
+        &mut owner.element_owner_mut(),
+    );
     // Counter exhaustion is unreachable in a bounded consumer run. Only
     // this injection is private; refusal and reuse go through the public tree.
     tree.generations
@@ -73,7 +78,12 @@ fn exhausted_generation_refuses_removal(mode: u8) {
         );
         assert_eq!(node.parent(), Some(root));
     }
-    let sibling = tree.insert(&view, root, 1, &mut owner.element_owner_mut());
+    let sibling = tree.insert(
+        &view.clone().boxed(),
+        root,
+        1,
+        &mut owner.element_owner_mut(),
+    );
     assert_ne!(
         sibling.index(),
         candidate.index(),
@@ -83,7 +93,7 @@ fn exhausted_generation_refuses_removal(mode: u8) {
         tree.remove(sibling, &mut owner.element_owner_mut())
             .is_some()
     );
-    let replacement = tree.insert(&view, root, 1, &mut owner.element_owner_mut());
+    let replacement = tree.insert(&view.boxed(), root, 1, &mut owner.element_owner_mut());
     assert!(!tree.contains(sibling), "ordinary stale IDs remain refused");
     assert!(tree.contains(candidate) && tree.contains(replacement));
 }
@@ -96,11 +106,31 @@ fn exhausted_subtree_refuses_before_teardown(target: usize, mode: SubtreeRemoval
     let view = TestView {
         name: "subtree".into(),
     };
-    let parent = tree.mount_root(&view, &mut owner.element_owner_mut());
-    let root = tree.insert(&view, parent, 0, &mut owner.element_owner_mut());
-    let middle = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
-    let leaf = tree.insert(&view, middle, 0, &mut owner.element_owner_mut());
-    let sibling = tree.insert(&view, root, 1, &mut owner.element_owner_mut());
+    let parent = tree.mount_root(&view.clone().boxed(), &mut owner.element_owner_mut());
+    let root = tree.insert(
+        &view.clone().boxed(),
+        parent,
+        0,
+        &mut owner.element_owner_mut(),
+    );
+    let middle = tree.insert(
+        &view.clone().boxed(),
+        root,
+        0,
+        &mut owner.element_owner_mut(),
+    );
+    let leaf = tree.insert(
+        &view.clone().boxed(),
+        middle,
+        0,
+        &mut owner.element_owner_mut(),
+    );
+    let sibling = tree.insert(
+        &view.clone().boxed(),
+        root,
+        1,
+        &mut owner.element_owner_mut(),
+    );
     let mut ids = [root, middle, leaf, sibling];
     ids[target] = terminal_generation(&mut tree, ids[target]);
     let [root, middle, leaf, sibling] = ids;
@@ -134,7 +164,12 @@ fn exhausted_subtree_refuses_before_teardown(target: usize, mode: SubtreeRemoval
         );
         assert_refused_subtree_intact(&tree, parent, ids);
     }
-    let healthy = tree.insert(&view, parent, 1, &mut owner.element_owner_mut());
+    let healthy = tree.insert(
+        &view.clone().boxed(),
+        parent,
+        1,
+        &mut owner.element_owner_mut(),
+    );
     tree.remove_subtree(
         healthy,
         &mut owner.element_owner_mut(),
@@ -142,7 +177,7 @@ fn exhausted_subtree_refuses_before_teardown(target: usize, mode: SubtreeRemoval
     );
     assert!(!tree.contains(healthy));
     assert_eq!(observer.0.load(std::sync::atomic::Ordering::Relaxed), 1);
-    let replacement = tree.insert(&view, parent, 1, &mut owner.element_owner_mut());
+    let replacement = tree.insert(&view.boxed(), parent, 1, &mut owner.element_owner_mut());
     assert_ne!(healthy, replacement);
     assert!(!tree.contains(healthy));
     assert!(ids.iter().all(|id| tree.contains(*id)) && tree.contains(replacement));
@@ -196,17 +231,27 @@ fn exhausted_wrapper_refuses_before_keyed_descendant_deactivation() {
     let view = TestView {
         name: "wrapper".into(),
     };
-    let parent = tree.mount_root(&view, &mut owner.element_owner_mut());
-    let wrapper = tree.insert(&view, parent, 0, &mut owner.element_owner_mut());
+    let parent = tree.mount_root(&view.clone().boxed(), &mut owner.element_owner_mut());
+    let wrapper = tree.insert(
+        &view.clone().boxed(),
+        parent,
+        0,
+        &mut owner.element_owner_mut(),
+    );
     let wrapper = terminal_generation(&mut tree, wrapper);
     let key = GlobalKey::new();
     let keyed = tree.insert(
-        &KeyedTestView { key: key.clone() },
+        &KeyedTestView { key: key.clone() }.boxed(),
         wrapper,
         0,
         &mut owner.element_owner_mut(),
     );
-    let leaf = tree.insert(&view, keyed, 0, &mut owner.element_owner_mut());
+    let leaf = tree.insert(
+        &view.clone().boxed(),
+        keyed,
+        0,
+        &mut owner.element_owner_mut(),
+    );
     tree.get_mut(parent)
         .expect("parent")
         .set_child_ids(&[wrapper]);
@@ -238,7 +283,7 @@ fn exhausted_wrapper_refuses_before_keyed_descendant_deactivation() {
             );
         }
     }
-    let healthy = tree.insert(&view, parent, 1, &mut owner.element_owner_mut());
+    let healthy = tree.insert(&view.boxed(), parent, 1, &mut owner.element_owner_mut());
     tree.remove_subtree(
         healthy,
         &mut owner.element_owner_mut(),
@@ -254,11 +299,16 @@ fn terminal_keyed_subtree_soft_removal_needs_no_generation_advance() {
     let view = TestView {
         name: "wrapper".into(),
     };
-    let parent = tree.mount_root(&view, &mut owner.element_owner_mut());
-    let wrapper = tree.insert(&view, parent, 0, &mut owner.element_owner_mut());
+    let parent = tree.mount_root(&view.clone().boxed(), &mut owner.element_owner_mut());
+    let wrapper = tree.insert(
+        &view.clone().boxed(),
+        parent,
+        0,
+        &mut owner.element_owner_mut(),
+    );
     let key = GlobalKey::new();
     let keyed = tree.insert(
-        &KeyedTestView { key: key.clone() },
+        &KeyedTestView { key: key.clone() }.boxed(),
         wrapper,
         0,
         &mut owner.element_owner_mut(),
@@ -266,7 +316,7 @@ fn terminal_keyed_subtree_soft_removal_needs_no_generation_advance() {
     let keyed = terminal_generation(&mut tree, keyed);
     owner.element_owner_mut().unregister_global_key(&key);
     owner.element_owner_mut().register_global_key(&key, keyed);
-    let leaf = tree.insert(&view, keyed, 0, &mut owner.element_owner_mut());
+    let leaf = tree.insert(&view.boxed(), keyed, 0, &mut owner.element_owner_mut());
     let leaf = terminal_generation(&mut tree, leaf);
     tree.get_mut(parent)
         .expect("parent")

@@ -203,7 +203,7 @@ impl InheritedView for LocalizationsScope {
         &self.snapshot
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

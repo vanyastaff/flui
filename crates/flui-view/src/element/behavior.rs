@@ -1309,15 +1309,15 @@ where
             self.render_id
         );
 
-        // Collect the render element's OWNED child views. The
-        // RenderObject-attach side-effects already ran in `on_mount`
-        // (they touch the pipeline owner / render tree, not the element
-        // slab); here we only surface the element-child views for the
-        // slab id-reconciler to reconcile in `build_scope`.
+        // Collect the render element's child views, shared as the view holds
+        // them. The RenderObject-attach side-effects already ran in
+        // `on_mount` (they touch the pipeline owner / render tree, not the
+        // element slab); here we only surface the element-child views for
+        // the slab id-reconciler to reconcile in `build_scope`.
         let mut child_views = crate::view::ChildViews::none();
         if core.view().has_children() {
             core.view().visit_child_views(&mut |child_view| {
-                child_views.push_copy_of(child_view);
+                child_views.push_shared(child_view);
             });
         }
 

@@ -491,7 +491,7 @@ impl InheritedView for SelectionControlsScope {
         &self.controls
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

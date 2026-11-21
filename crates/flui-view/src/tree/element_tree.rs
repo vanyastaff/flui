@@ -20,7 +20,7 @@ use smallvec::SmallVec;
 
 use crate::element::ElementKind;
 use crate::owner::LifecycleHook;
-use crate::view::{ElementBase, View};
+use crate::view::{BoxedView, ElementBase, View};
 
 use super::containment::{ChildHookPanic, contain_window};
 
@@ -687,14 +687,15 @@ impl ElementTree {
 
     /// Mount a View as the root of the tree.
     ///
-    /// Returns the ElementId of the root element.
+    /// Returns the ElementId of the root element, which keeps `view`'s shared
+    /// allocation as its configuration.
     ///
     /// Note: This method does NOT pass PipelineOwner to the element.
     /// For RenderObjectElements that need PipelineOwner, use
     /// `mount_root_with_pipeline_owner` instead.
     pub fn mount_root(
         &mut self,
-        view: &dyn View,
+        view: &BoxedView,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
         self.mount_root_with_pipeline_owner(view, None, owner)
@@ -717,7 +718,8 @@ impl ElementTree {
     ///
     /// # Arguments
     ///
-    /// * `view` - The root View to mount
+    /// * `view` - The root View to mount; its element keeps this shared
+    ///   allocation as its configuration
     /// * `pipeline_owner` - Optional PipelineOwner for render tree management
     /// * `owner` - Split-borrow handle into the `BuildOwner`
     ///   ([`ElementOwner`](crate::ElementOwner)) threaded into the
@@ -727,11 +729,11 @@ impl ElementTree {
     /// Returns the ElementId of the root element.
     pub fn mount_root_with_pipeline_owner(
         &mut self,
-        view: &dyn View,
+        view: &BoxedView,
         pipeline_owner: Option<PipelineCell>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
-        let mut element = crate::view::create_element_of(view);
+        let mut element = view.create_shared_element();
 
         // Pass the pipeline cell to the element BEFORE mounting.
         // This is critical for RenderObjectElements to create their RenderObjects
@@ -799,7 +801,8 @@ impl ElementTree {
 
     /// Insert a new element as a child of the given parent.
     ///
-    /// Returns the ElementId of the new element.
+    /// Returns the ElementId of the new element, which keeps `view`'s shared
+    /// allocation as its configuration.
     ///
     /// The split-borrow `owner` handle is threaded into the new
     /// element's `mount` call.
@@ -814,7 +817,7 @@ impl ElementTree {
     /// state survive.
     pub fn insert(
         &mut self,
-        view: &dyn View,
+        view: &BoxedView,
         parent: ElementId,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
@@ -848,7 +851,7 @@ impl ElementTree {
         &mut self,
         parent: ElementId,
         slot: usize,
-        view: &dyn View,
+        view: &BoxedView,
         owner: &mut crate::ElementOwner<'_>,
     ) -> ElementId {
         assert!(
@@ -921,7 +924,7 @@ impl ElementTree {
     /// rule.
     pub(super) fn try_insert_with_provisional_order(
         &mut self,
-        view: &dyn View,
+        view: &BoxedView,
         parent: ElementId,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
@@ -988,7 +991,7 @@ impl ElementTree {
         // always did.
         let mut inserted: Option<InsertedChild> = None;
         let mount_result = contain_window(|| -> ElementId {
-            let mut element = crate::view::create_element_of(view);
+            let mut element = view.create_shared_element();
 
             // Read the parent's render-tree propagation context in ONE fresh,
             // immediately-dropped `&ElementTree` borrow, then apply it to the
@@ -3108,13 +3111,15 @@ mod tests {
         let root = tree.mount_root(
             &TestView {
                 name: "root".into(),
-            },
+            }
+            .boxed(),
             &mut owner.element_owner_mut(),
         );
         let wrapper = tree.insert(
             &TestView {
                 name: "unkeyed-wrapper".into(),
-            },
+            }
+            .boxed(),
             root,
             0,
             &mut owner.element_owner_mut(),
@@ -3122,7 +3127,8 @@ mod tests {
         let keyed = tree.insert(
             &KeyedTestView {
                 key: crate::key::GlobalKey::<()>::new(),
-            },
+            }
+            .boxed(),
             wrapper,
             0,
             &mut owner.element_owner_mut(),
@@ -3171,41 +3177,56 @@ mod tests {
             flui_rendering::TextContextHandle::standalone(),
         ));
         let root = tree.mount_root_with_pipeline_owner(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
-        let donor = tree.insert(&UnitRenderHost, root, 0, &mut owner.element_owner_mut());
-        let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let donor = tree.insert(
+            &UnitRenderHost.boxed(),
+            root,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let destination = tree.insert(
+            &UnitRenderHost.boxed(),
+            root,
+            1,
+            &mut owner.element_owner_mut(),
+        );
         let key = GlobalKey::<()>::new();
         let keyed = KeyedTransparentView { key };
-        let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
+        let candidate = tree.insert(
+            &keyed.clone().boxed(),
+            donor,
+            0,
+            &mut owner.element_owner_mut(),
+        );
         let first_boundary = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             candidate,
             0,
             &mut owner.element_owner_mut(),
         );
         let second_boundary = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             candidate,
             1,
             &mut owner.element_owner_mut(),
         );
         let nested = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             first_boundary,
             0,
             &mut owner.element_owner_mut(),
         );
         let prefix = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             destination,
             0,
             &mut owner.element_owner_mut(),
         );
         let suffix = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             destination,
             2,
             &mut owner.element_owner_mut(),
@@ -3257,7 +3278,7 @@ mod tests {
 
         let _guard = tree.begin_reconcile(destination);
         let moved = tree.mount_or_substitute(
-            &keyed,
+            &keyed.boxed(),
             destination,
             1,
             &mut owner.element_owner_mut(),
@@ -3307,21 +3328,21 @@ mod tests {
         let root = TestView {
             name: "root".to_string(),
         };
-        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+        let root_id = tree.mount_root(&root.boxed(), &mut owner.element_owner_mut());
 
         // Insert child A, then eagerly remove it (un-keyed → slab slot freed,
         // generation bumped).
         let child_a = TestView {
             name: "a".to_string(),
         };
-        let id_a = tree.insert(&child_a, root_id, 0, &mut owner.element_owner_mut());
+        let id_a = tree.insert(&child_a.boxed(), root_id, 0, &mut owner.element_owner_mut());
         assert!(tree.remove(id_a, &mut owner.element_owner_mut()).is_some());
 
         // Insert child B — the slab hands back the slot A just vacated.
         let child_b = TestView {
             name: "b".to_string(),
         };
-        let id_b = tree.insert(&child_b, root_id, 0, &mut owner.element_owner_mut());
+        let id_b = tree.insert(&child_b.boxed(), root_id, 0, &mut owner.element_owner_mut());
 
         // Same slot, different generation → distinct ids.
         assert_eq!(
@@ -3361,7 +3382,7 @@ mod tests {
     #[derive(Clone)]
     struct Theme {
         data: ThemeData,
-        child: TestView,
+        child: BoxedView,
     }
 
     impl crate::view::InheritedView for Theme {
@@ -3371,7 +3392,7 @@ mod tests {
             &self.data
         }
 
-        fn child(&self) -> &dyn View {
+        fn child(&self) -> &BoxedView {
             &self.child
         }
 
@@ -3391,7 +3412,8 @@ mod tests {
             data: ThemeData { color },
             child: TestView {
                 name: "unused".to_string(),
-            },
+            }
+            .boxed(),
         }
     }
 
@@ -3405,9 +3427,9 @@ mod tests {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
 
-        let outer = tree.mount_root(&theme(1), &mut owner.element_owner_mut());
-        let inner = tree.insert(&theme(2), outer, 0, &mut owner.element_owner_mut());
-        let leaf_id = tree.insert(&leaf("l"), inner, 0, &mut owner.element_owner_mut());
+        let outer = tree.mount_root(&theme(1).boxed(), &mut owner.element_owner_mut());
+        let inner = tree.insert(&theme(2).boxed(), outer, 0, &mut owner.element_owner_mut());
+        let leaf_id = tree.insert(&leaf("l").boxed(), inner, 0, &mut owner.element_owner_mut());
 
         let theme_ty = TypeId::of::<Theme>();
         // Nearest-wins: the leaf resolves the inner provider, not the outer.
@@ -3430,7 +3452,7 @@ mod tests {
     #[derive(Clone)]
     struct Tier<const N: usize> {
         data: ThemeData,
-        child: TestView,
+        child: BoxedView,
     }
 
     impl<const N: usize> crate::view::InheritedView for Tier<N> {
@@ -3440,7 +3462,7 @@ mod tests {
             &self.data
         }
 
-        fn child(&self) -> &dyn View {
+        fn child(&self) -> &BoxedView {
             &self.child
         }
 
@@ -3458,7 +3480,7 @@ mod tests {
     fn tier<const N: usize>() -> Tier<N> {
         Tier {
             data: ThemeData { color: 0 },
-            child: leaf("unused"),
+            child: leaf("unused").boxed(),
         }
     }
 
@@ -3470,15 +3492,50 @@ mod tests {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
 
-        let first = tree.mount_root(&tier::<0>(), &mut owner.element_owner_mut());
-        let second = tree.insert(&tier::<1>(), first, 0, &mut owner.element_owner_mut());
-        let branch = tree.insert(&leaf("branch"), second, 1, &mut owner.element_owner_mut());
-        let third = tree.insert(&tier::<2>(), second, 0, &mut owner.element_owner_mut());
-        let fourth = tree.insert(&tier::<3>(), third, 0, &mut owner.element_owner_mut());
-        let fifth = tree.insert(&tier::<4>(), fourth, 0, &mut owner.element_owner_mut());
-        let sixth = tree.insert(&tier::<5>(), fifth, 0, &mut owner.element_owner_mut());
-        let again = tree.insert(&tier::<0>(), sixth, 0, &mut owner.element_owner_mut());
-        let leaf_id = tree.insert(&leaf("l"), again, 0, &mut owner.element_owner_mut());
+        let first = tree.mount_root(&tier::<0>().boxed(), &mut owner.element_owner_mut());
+        let second = tree.insert(
+            &tier::<1>().boxed(),
+            first,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let branch = tree.insert(
+            &leaf("branch").boxed(),
+            second,
+            1,
+            &mut owner.element_owner_mut(),
+        );
+        let third = tree.insert(
+            &tier::<2>().boxed(),
+            second,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let fourth = tree.insert(
+            &tier::<3>().boxed(),
+            third,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let fifth = tree.insert(
+            &tier::<4>().boxed(),
+            fourth,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let sixth = tree.insert(
+            &tier::<5>().boxed(),
+            fifth,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let again = tree.insert(
+            &tier::<0>().boxed(),
+            sixth,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let leaf_id = tree.insert(&leaf("l").boxed(), again, 0, &mut owner.element_owner_mut());
 
         let provider =
             |at: ElementId, type_id: TypeId| tree.get(at).unwrap().inherited_provider(type_id);

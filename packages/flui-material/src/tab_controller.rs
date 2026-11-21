@@ -988,7 +988,7 @@ impl InheritedView for TabControllerScope {
         &self.controller
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

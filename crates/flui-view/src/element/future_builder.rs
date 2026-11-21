@@ -474,7 +474,10 @@ mod tests {
             owner.set_async_driver(owner_frame.async_driver());
             let mut tree = ElementTree::new();
 
-            let root = tree.mount_root(view, &mut owner.element_owner_mut());
+            let root = tree.mount_root(
+                &crate::BoxedView::new(view.clone()),
+                &mut owner.element_owner_mut(),
+            );
             owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
             // The mount build: `init_state` runs here.
             owner.build_scope(&mut tree);

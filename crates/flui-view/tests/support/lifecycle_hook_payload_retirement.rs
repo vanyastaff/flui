@@ -183,7 +183,7 @@ pub(crate) fn dispatch_child(kind: &str) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let parent = tree.mount_root_with_pipeline_owner(
-        &row,
+        &row.clone().boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );

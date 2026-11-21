@@ -91,7 +91,7 @@ where
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&flui_view::BoxedView)) {
         self.children.for_each(|_index, child| visitor(child));
     }
 }

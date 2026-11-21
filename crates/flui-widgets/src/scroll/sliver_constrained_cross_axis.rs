@@ -2,7 +2,7 @@
 
 use flui_objects::{InvalidSliverCrossAxisExtent, RenderSliverConstrainedCrossAxis};
 use flui_rendering::protocol::SliverProtocol;
-use flui_view::{BoxedView, IntoView, View, ViewExt};
+use flui_view::{BoxedView, IntoView, ViewExt};
 
 /// Limits cross-axis size while retaining the child's scrolling protocol.
 #[derive(Clone, Debug)]
@@ -52,7 +52,7 @@ impl flui_view::RenderView for SliverConstrainedCrossAxis {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         visitor(&self.child);
     }
 }

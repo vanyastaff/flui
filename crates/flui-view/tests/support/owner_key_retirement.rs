@@ -642,7 +642,7 @@ fn frame(kind: &str) {
     };
     let mut tree = ElementTree::new();
     let parent = tree.mount_root_with_pipeline_owner(
-        &initial,
+        &initial.boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),

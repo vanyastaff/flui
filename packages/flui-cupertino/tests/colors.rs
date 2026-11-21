@@ -81,7 +81,7 @@ impl View for RetainedChild {
 }
 
 impl ProxyView for RetainedChild {
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.0
     }
 }

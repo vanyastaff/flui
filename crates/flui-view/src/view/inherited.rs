@@ -6,7 +6,7 @@
 //! `ctx.depend_on::<T>()` is one hash lookup rather than an O(depth) parent
 //! walk.
 
-use super::view::View;
+use super::into_view::BoxedView;
 
 use std::marker::PhantomData;
 
@@ -264,7 +264,7 @@ pub trait InheritedData: Clone + 'static {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::{InheritedView, BuildContext, IntoView};
+/// use flui_view::{BoxedView, BuildContext, InheritedView, IntoView};
 ///
 /// #[derive(Clone)]
 /// struct Theme {
@@ -273,7 +273,7 @@ pub trait InheritedData: Clone + 'static {
 ///
 /// struct ThemeProvider {
 ///     theme: Theme,
-///     child: Box<dyn View>,
+///     child: BoxedView,
 /// }
 ///
 /// impl InheritedView for ThemeProvider {
@@ -283,8 +283,8 @@ pub trait InheritedData: Clone + 'static {
 ///         &self.theme
 ///     }
 ///
-///     fn child(&self) -> &dyn View {
-///         &*self.child
+///     fn child(&self) -> &BoxedView {
+///         &self.child
 ///     }
 ///
 ///     fn update_should_notify(&self, old: &Self) -> bool {
@@ -301,7 +301,7 @@ pub trait InheritedData: Clone + 'static {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not implement `InheritedView`",
     label = "missing `impl InheritedView for {Self}`",
-    note = "an inherited view publishes `type Data` to its subtree: `impl InheritedView for {Self} {{ type Data = ..; fn data(&self) -> &Self::Data {{ .. }} fn child(&self) -> &dyn View {{ .. }} fn update_should_notify(&self, old: &Self) -> bool {{ .. }} }}`; descendants read it with `ctx.depend_on::<{Self}>()`"
+    note = "an inherited view publishes `type Data` to its subtree: `impl InheritedView for {Self} {{ type Data = ..; fn data(&self) -> &Self::Data {{ .. }} fn child(&self) -> &BoxedView {{ .. }} fn update_should_notify(&self, old: &Self) -> bool {{ .. }} }}`; descendants read it with `ctx.depend_on::<{Self}>()`"
 )]
 pub trait InheritedView: Clone + 'static + Sized {
     /// The data type this InheritedView provides.
@@ -311,7 +311,7 @@ pub trait InheritedView: Clone + 'static + Sized {
     fn data(&self) -> &Self::Data;
 
     /// Get the child View.
-    fn child(&self) -> &dyn View;
+    fn child(&self) -> &BoxedView;
 
     /// Should dependents be notified when this View updates?
     ///

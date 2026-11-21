@@ -13,7 +13,7 @@
 
 use flui_foundation::geometry::Offset;
 use flui_rendering::parent_data::{FlexFit, FlexParentData};
-use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_data_view};
+use flui_view::{BoxedView, IntoView, ParentDataView, ViewExt, impl_parent_data_view};
 
 /// Gives its child a share of the main axis of a [`Row`]/[`Column`]/[`Flex`],
 /// proportional to `flex` relative to the other flexible siblings.
@@ -63,7 +63,7 @@ impl Flexible {
 impl ParentDataView for Flexible {
     type ParentData = FlexParentData;
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -126,7 +126,7 @@ impl Expanded {
 impl ParentDataView for Expanded {
     type ParentData = FlexParentData;
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

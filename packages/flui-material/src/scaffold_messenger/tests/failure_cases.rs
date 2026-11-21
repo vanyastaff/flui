@@ -48,7 +48,7 @@ impl MountedProbe {
         let mut owner = flui_view::__runtime::BuildOwner::new();
         owner.set_on_build_scheduled(wake);
         let mut tree = flui_view::__runtime::ElementTree::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let root = tree.mount_root(&view.boxed(), &mut owner.element_owner_mut());
         owner.schedule_build_for(root, 0, flui_sdk::view::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
         let handle = handle

@@ -1,36 +1,36 @@
 //! Typed-dispatch entry point for element-view updates.
 //!
-//! The dispatch gates on the concrete runtime `TypeId` (via
-//! `Downcast::as_any().type_id()`); only once that guard has matched
-//! `V` does it take a `downcast_ref::<V>()` and compare through it. The
-//! element then takes the offered view's shared allocation when it came in
-//! a `BoxedView`, and copies `V` into an allocation of its own only when the
-//! view was offered by reference alone. No downcast runs on a value the
+//! The dispatch gates on the concrete runtime `TypeId` of the offered view,
+//! read by upcasting the `&dyn View` to `&dyn Any` (`View: Any`); only once
+//! that guard has matched `V` does it downcast to `V` and compare through it.
+//! The element then takes the offered view's shared allocation when it came
+//! in a `BoxedView`, and copies `V` into an allocation of its own only when
+//! the view was offered by reference alone. No downcast runs on a value the
 //! guard has not matched.
 //! After unwrapping any `BoxedView` (below), a genuine concrete-type
 //! mismatch is [`ViewUpdate::Mismatch`]: the reconciler replaces the
 //! element, and no silent stale state remains in the tree.
 //!
-//! ## `BoxedView` unwrap, then `as_any().type_id()`
+//! ## `BoxedView` unwrap, then the upcast's `type_id()`
 //!
 //! Two facts make a raw concrete-`TypeId` comparison wrong on its
 //! own. (1) `View::view_type_id()` is **overridable**, and
 //! `BoxedView` (`view/into_view.rs`) forwards it to its inner, so
 //! the reconciler's `can_update_by_id` treats `Inner.boxed()` as
 //! type-`Inner` and *reuses* the element rather than replacing it.
-//! (2) The single-child build path boxes a child through
-//! `Box<dyn View>: IntoView` (yielding a `BoxedView`), and user
-//! code routinely returns `child.boxed()` — yet the mounted
-//! element is `Element<Inner>` (`BoxedView::create_element`
+//! (2) Every child the reconciler offers is held in a `BoxedView`
+//! (`ChildViews`), and user code routinely returns `child.boxed()` —
+//! yet the mounted element is `Element<Inner>` (`BoxedView::create_element`
 //! delegates to the inner). So the value reaching this dispatch is
-//! frequently a `BoxedView` whose **concrete** runtime TypeId is
+//! usually a `BoxedView` whose **concrete** runtime TypeId is
 //! `BoxedView`, not `V`.
 //!
 //! Therefore the dispatch first **unwraps** nested `BoxedView`
-//! wrappers to the inner `&dyn View`, then compares its concrete
-//! `Downcast::as_any().type_id()` (non-overridable — the blanket
-//! `impl<T: 'static + ?Sized> Any for T` reads the discriminant
-//! from the vtable) against `TypeId::of::<V>()`. On match the element
+//! wrappers to the inner `&dyn View`, then upcasts that trait object to
+//! `&dyn Any` and compares its `type_id()` (non-overridable — it is read
+//! from the vtable of the concrete type) against `TypeId::of::<V>()`. The
+//! upcast is of the trait object itself: `type_id()` on a `&&dyn View`
+//! would name the reference type. On match the element
 //! takes the `BoxedView`'s shared `Rc<V>`, or a copy of a view offered by
 //! reference alone (so the element
 //! updates in place — consistent with `can_update_by_id`); on a real mismatch it returns
@@ -43,7 +43,7 @@
 //! to be called from outside `flui-view` (the call site is
 //! [`ElementCore::update_view`] inside [`super::generic`]).
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::rc::Rc;
 
 use super::{arity::ElementArity, generic::ElementCore};
@@ -51,25 +51,21 @@ use crate::view::{BoxedView, View};
 
 /// Typed view-update dispatch.
 ///
-/// Compares the *concrete runtime* `TypeId` of `new_view` (via
-/// `Downcast::as_any().type_id()`, **not** the overridable
-/// `View::view_type_id()`) against `TypeId::of::<V>()` to
-/// discriminate the dispatch. On match, the guarded
-/// `downcast_ref::<V>()` yields the typed view, and the element takes the
-/// shared allocation of the `BoxedView` that offered it, or a copy when it
-/// was offered by reference alone.
-/// On mismatch — and on the defense-in-depth case
-/// where the downcast still fails despite the TypeId check —
-/// the function returns [`ViewUpdate::Mismatch`]; the reconciler replaces the
-/// element via the type-mismatch path the keyed reconciler's
-/// "different concrete type" branch already exercises.
+/// Downcasts `new_view`, once unwrapped of its `BoxedView` layers, through
+/// its upcast to `&dyn Any` — the *concrete runtime* type, **not** the
+/// overridable `View::view_type_id()` — to `V`. On match the element takes
+/// the shared allocation of the `BoxedView` that offered it, or a copy when it
+/// was offered by reference alone. On mismatch the function returns
+/// [`ViewUpdate::Mismatch`]; the reconciler replaces the element via the
+/// type-mismatch path the keyed reconciler's "different concrete type" branch
+/// already exercises.
 ///
 /// # Why a free function rather than a method?
 ///
 /// This settles the signature as the canonical typed
 /// dispatch surface. The free-function shape keeps
 /// `ElementCore::update_view`'s body to a single line so future
-/// `ElementKind`-discriminated dispatch (Phase 4+) can replace
+/// `ElementKind`-discriminated dispatch can replace
 /// this module's body in one place rather than touch every
 /// behavior implementation.
 pub(crate) fn dispatch_view_update<V, A>(
@@ -80,46 +76,32 @@ where
     V: View + Clone + 'static,
     A: ElementArity,
 {
-    // Use the CONCRETE runtime TypeId — `Any::type_id()` via
-    // `Downcast::as_any` — rather than the overridable
-    // `View::view_type_id()`. `BoxedView` forwards
-    // `view_type_id()` to its inner so an `Inner.boxed()` rebuild
-    // would pass a naive `view_type_id()` check (inner's TypeId ==
-    // `V`'s TypeId for an `ElementCore<V>`) and then crash on the
-    // downcast (actual runtime type is `BoxedView`, not `V`). The
-    // `as_any().type_id()` guard discriminates the wrapper from
-    // the wrapped concretely.
     // Unwrap framework/user `BoxedView` wrappers so an `Inner.boxed()` rebuild
-    // updates the `Inner` element in place. The single-child build path boxes
-    // a child through `Box<dyn View>: IntoView` (→ `BoxedView`), and user code
-    // routinely returns `child.boxed()`; in both cases the mounted element is
-    // `Element<Inner>` (BoxedView::create_element delegates to the inner). The
-    // raw `as_any().type_id()` below sees `BoxedView`, not `V`, while the
-    // reconciler's `can_update_by_id` matched on the BoxedView-forwarded
-    // `view_type_id()` (the inner type) — so without this unwrap such a rebuild
-    // is neither updated (TypeId mismatch here) nor replaced (can_update said
-    // reuse), leaving the element silently stale. After the unwrap the
-    // downcast below runs on the inner concrete value.
+    // updates the `Inner` element in place. Every child the reconciler offers
+    // is a `BoxedView`, and user code routinely returns `child.boxed()`; in
+    // both cases the mounted element is `Element<Inner>`
+    // (`BoxedView::create_element` delegates to the inner). The upcast's
+    // `type_id()` sees `BoxedView`, not `V`, while the reconciler's
+    // `can_update_by_id` matched on the BoxedView-forwarded `view_type_id()`
+    // (the inner type) — so without this unwrap such a rebuild is neither
+    // updated (type mismatch here) nor replaced (`can_update` said reuse),
+    // leaving the element silently stale.
     let mut effective: &dyn View = new_view;
     let mut shared: Option<&Rc<dyn View>> = None;
-    loop {
-        // Each hop strips one BoxedView layer: this downcasts to the
-        // `BoxedView` *wrapper* to unwrap it, not to the concrete view type.
-        let wrapper = effective.as_any().downcast_ref::<BoxedView>(); // unwrap BoxedView wrapper, not V-type smuggling
-        match wrapper {
-            Some(boxed) => {
-                shared = Some(boxed.shared());
-                effective = boxed.as_view();
-            }
-            None => break,
-        }
+    // Each hop strips one `BoxedView` layer: this downcasts to the wrapper to
+    // unwrap it, not to the concrete view type.
+    while let Some(boxed) = (effective as &dyn Any).downcast_ref::<BoxedView>() {
+        shared = Some(boxed.shared());
+        effective = boxed.as_view();
     }
-    if effective.as_any().type_id() != TypeId::of::<V>() {
-        // Genuinely different concrete type → caller (`Phase 2 reconciler`)
-        // replaces the element. No tracing::warn — "different type → new
-        // element" is the normal reconciliation outcome.
+    // The upcast of the trait object itself reads the concrete type from its
+    // vtable; `View::view_type_id` is overridable and is not consulted.
+    let Some(new_ref) = (effective as &dyn Any).downcast_ref::<V>() else {
+        // Genuinely different concrete type → the reconciler replaces the
+        // element. No tracing::warn — "different type → new element" is the
+        // normal reconciliation outcome.
         return ViewUpdate::Mismatch;
-    }
+    };
 
     // The very view the element was last given, offered again: a parent that
     // rebuilt handed its child back untouched. Nothing about the element's
@@ -133,16 +115,9 @@ where
         return ViewUpdate::Unchanged;
     }
 
-    // Memoization equality-bail (`should_skip_rebuild`).
-    //
-    // Evaluate on a BORROW before the clone below —
-    // every skip must pay zero clone cost. The downcast_ref here is
-    // sanctioned: the `as_any().type_id() == TypeId::of::<V>()` guard
-    // above means the ref is guaranteed to succeed.
-    let nv = effective.as_any().downcast_ref::<V>(); // type-id guarded
-    if let Some(new_ref) = nv
-        && new_ref.should_skip_rebuild(core.view())
-    {
+    // Memoization equality-bail (`should_skip_rebuild`), evaluated on the
+    // borrow before the element takes anything, so a skip costs no clone.
+    if new_ref.should_skip_rebuild(core.view()) {
         tracing::debug!(
             view_type = ?TypeId::of::<V>(),
             "dispatch_view_update: skip rebuild (configs equal)",
@@ -152,13 +127,13 @@ where
 
     // The element takes the offered view's shared allocation when it came in
     // a `BoxedView`, so the update copies nothing; a view offered by
-    // reference alone is copied into an allocation of its own. The downcast
-    // is fallible on principle: should an override ever break
-    // `as_any().type_id() == TypeId::of::<V>() ⇒ downcastable to V`, the
-    // element is replaced instead of the dispatch panicking.
+    // reference alone is copied into an allocation of its own. The shared
+    // allocation holds the `V` just downcast by reference, so its own
+    // downcast cannot fail; should it, the element is replaced instead of the
+    // dispatch panicking.
     let next = match shared {
-        Some(shared) => Rc::clone(shared).downcast_rc::<V>().ok(),
-        None => nv.map(|new_ref| Rc::new(new_ref.clone())),
+        Some(shared) => (Rc::clone(shared) as Rc<dyn Any>).downcast::<V>().ok(),
+        None => Some(Rc::new(new_ref.clone())),
     };
     match next {
         Some(next) => {

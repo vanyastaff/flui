@@ -32,7 +32,7 @@ impl ViewSeq for () {
     }
 
     #[inline]
-    fn for_each<F: FnMut(usize, &dyn View)>(&self, _f: F) {}
+    fn for_each<F: FnMut(usize, &BoxedView)>(&self, _f: F) {}
 
     #[inline]
     fn into_boxed_vec(self) -> Vec<BoxedView> {
@@ -48,12 +48,12 @@ impl ViewSeq for () {
 /// names (e.g. `A B C`). The expansion produces:
 ///
 /// ```ignore
-/// impl<A: View, B: View, C: View> ViewSeq for (A, B, C) {
+/// impl<A: View + Clone, B: View + Clone, C: View + Clone> ViewSeq for (A, B, C) {
 ///     fn len(&self) -> usize { 3 }
-///     fn for_each<F: FnMut(usize, &dyn View)>(&self, mut f: F) {
-///         f(0, &self.0);
-///         f(1, &self.1);
-///         f(2, &self.2);
+///     fn for_each<F: FnMut(usize, &BoxedView)>(&self, mut f: F) {
+///         f(0, &BoxedView::new(self.0.clone()));
+///         f(1, &BoxedView::new(self.1.clone()));
+///         f(2, &BoxedView::new(self.2.clone()));
 ///     }
 ///     fn into_boxed_vec(self) -> Vec<BoxedView> {
 ///         vec![self.0.boxed(), self.1.boxed(), self.2.boxed()]
@@ -62,7 +62,7 @@ impl ViewSeq for () {
 /// ```
 macro_rules! impl_view_seq_for_tuple {
     ($count:literal; $( ($idx:tt, $name:ident) ),+ $(,)?) => {
-        impl<$($name: View),+> ViewSeq for ($($name,)+) {
+        impl<$($name: View + Clone),+> ViewSeq for ($($name,)+) {
             #[inline]
             fn len(&self) -> usize {
                 $count
@@ -72,8 +72,8 @@ macro_rules! impl_view_seq_for_tuple {
             // clash with the tuple's own `F` generic at arity 6+
             // (the tuple letters run A..=P, and `F` is the sixth).
             #[inline]
-            fn for_each<__Visitor: FnMut(usize, &dyn View)>(&self, mut visitor: __Visitor) {
-                $( visitor($idx, &self.$idx); )+
+            fn for_each<__Visitor: FnMut(usize, &BoxedView)>(&self, mut visitor: __Visitor) {
+                $( visitor($idx, &BoxedView::new(self.$idx.clone())); )+
             }
 
             #[inline]

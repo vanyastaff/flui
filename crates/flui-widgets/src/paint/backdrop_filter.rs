@@ -9,7 +9,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::LifecycleContext;
 use flui_view::prelude::{BuildContext, BuildContextExt, StatefulView, StatelessView, ViewState};
 use flui_view::{
-    BoxedView, Child, InheritedView, IntoView, RenderView, View, ViewExt, impl_inherited_view,
+    BoxedView, Child, InheritedView, IntoView, RenderView, ViewExt, impl_inherited_view,
     impl_render_view,
 };
 
@@ -201,7 +201,7 @@ impl InheritedView for BackdropGroupScope {
         &self.key
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

@@ -22,14 +22,13 @@
 //! be wrong here: two distinct notifiers that happen to hold equal values
 //! are still a listenable swap, and must still unsubscribe the old one.
 //!
-//! # Limitation: `child` passthrough is not a rebuild-skip
+//! # `child` passthrough keeps its identity
 //!
-//! A framework that tracks child identity can skip rebuilding a pre-built
-//! `child` subtree when the same instance is handed back. FLUI's
-//! [`BoxedView`] instead clones the child view's configuration (`dyn_clone`)
-//! on every read, so `child` reaches `builder` **unchanged in content** on
-//! every rebuild, but the framework does not special-case skipping that
-//! subtree's own reconciliation. This is not visible to `builder`'s caller.
+//! `child` is a [`BoxedView`], and cloning one shares its allocation, so
+//! `builder` receives the very view the widget holds on every call. A
+//! `builder` that places it in its output unchanged hands the reconciler the
+//! view the child's element already holds, and that element and everything
+//! below it are not built again (ADR-0245).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -41,11 +40,11 @@ use flui_view::{BuildContext, LifecycleContext};
 
 /// Builds a widget from the current value of a [`ValueListenable<T>`].
 ///
-/// If `child` is `Some`, it is handed back unchanged in content on every
-/// call (the module doc's limitation note explains why identity is not
-/// preserved through `BoxedView`'s dyn-clone) — build the value-independent
-/// part of the subtree once (outside the closure) and incorporate it here,
-/// rather than reconstructing it every notification.
+/// If `child` is `Some`, the very `BoxedView` the widget holds is handed back
+/// on every call (the module doc explains why its subtree is then not built
+/// again) — build the value-independent part of the subtree once (outside the
+/// closure) and incorporate it here, rather than reconstructing it every
+/// notification.
 pub type ValueWidgetBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedView>) -> BoxedView>;
 
 /// A widget whose content stays synced with a [`ValueListenable`].
