@@ -143,9 +143,9 @@ use std::rc::Rc;
 
 use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{BorderSide, BorderStyle};
-use flui_sdk::painting::{Paint, Path};
+use flui_sdk::painting::paint::{Paint, Path};
+use flui_sdk::painting::styling::{BorderSide, BorderStyle};
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisSize};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
@@ -158,7 +158,7 @@ use flui_sdk::widgets::{
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Point, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -331,7 +331,7 @@ fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> Bor
 
 /// The default container shape: an 8dp rounded rectangle.
 fn chip_default_shape() -> MaterialShape {
-    use flui_sdk::painting::BorderRadius;
+    use flui_sdk::painting::styling::BorderRadius;
     MaterialShape::RoundedRect(BorderRadius::all(flui_sdk::geometry::Radius::circular(
         CORNER_RADIUS,
     )))

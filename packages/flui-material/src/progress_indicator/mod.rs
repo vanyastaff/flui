@@ -35,7 +35,9 @@ pub use wavy::{
 
 use flui_sdk::animation::MotionPolicy;
 use flui_sdk::geometry::Rect;
-use flui_sdk::painting::{Canvas, Color, Paint};
+use flui_sdk::painting::Canvas;
+use flui_sdk::painting::paint::Paint;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::semantics::{NumericRange, SemanticsRole};
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;

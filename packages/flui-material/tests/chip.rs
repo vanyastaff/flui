@@ -86,7 +86,8 @@ fn chip_only_point() -> (f64, f64) {
 /// edge activates the chip.
 pub fn a_right_to_left_chip_puts_its_delete_icon_on_the_left() {
     use flui_material::FilterChip;
-    use flui_sdk::painting::{Color, TextDirection};
+    use flui_sdk::foundation::TextDirection;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::view::{BoxedView, ViewExt};
     use flui_sdk::widgets::{ColoredBox, Directionality, SizedBox};
 

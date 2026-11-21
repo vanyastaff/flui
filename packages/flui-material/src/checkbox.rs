@@ -78,8 +78,8 @@ use std::rc::Rc;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::{BorderSide, BorderStyle};
-use flui_sdk::painting::{Paint, Path};
+use flui_sdk::painting::paint::{Paint, Path};
+use flui_sdk::painting::styling::{BorderSide, BorderStyle};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::node::Description;
@@ -88,7 +88,7 @@ use flui_sdk::widgets::{
 };
 use flui_sdk::{
     geometry::{Point, RRect, Rect, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
 use crate::color_scheme::ColorScheme;

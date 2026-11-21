@@ -24,7 +24,7 @@
 
 use flui_sdk::{
     geometry::{Point, RRect, Radius, Rect, Size},
-    painting::BorderRadius,
+    painting::styling::BorderRadius,
 };
 
 /// The shape a [`crate::material::Material`] surface clips and paints to.
@@ -77,12 +77,12 @@ impl MaterialShape {
         }
     }
 
-    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_sdk::painting::Path`]
+    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_sdk::painting::paint::Path`]
     /// — what [`crate::material::Material`] registers as its owner-lane path
     /// clipper.
     #[must_use]
-    pub fn to_path(self, size: Size) -> flui_sdk::painting::Path {
-        flui_sdk::painting::Path::from_rrect(self.to_rrect(size))
+    pub fn to_path(self, size: Size) -> flui_sdk::painting::paint::Path {
+        flui_sdk::painting::paint::Path::from_rrect(self.to_rrect(size))
     }
 }
 

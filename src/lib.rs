@@ -275,7 +275,7 @@ pub mod foundation {
 
     /// A holder of memory it can give back when the system asks.
     pub mod memory {
-        pub use flui_foundation::memory::ReclaimMemory;
+        pub use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
     }
 
     /// The scope an observer of a notification runs user code in, so a panic is caught once.

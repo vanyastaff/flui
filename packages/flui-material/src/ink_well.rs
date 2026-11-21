@@ -95,7 +95,7 @@ use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::Point;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::interaction::{ButtonChange, PointerDispatch, PointerEvent};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::HitTestBehavior;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;

@@ -17,7 +17,8 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_sdk::geometry::{EdgeInsets, Radius};
-use flui_sdk::painting::{BorderRadius, Clip, Color};
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::{BorderRadius, Color};
 use flui_sdk::rendering::objects::CarouselLayout;
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::prelude::*;

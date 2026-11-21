@@ -128,7 +128,7 @@ use flui_sdk::widgets::{
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
 use crate::ThemeData;

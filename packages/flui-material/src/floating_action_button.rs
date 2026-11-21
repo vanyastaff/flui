@@ -74,8 +74,8 @@
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::Radius;
 use flui_sdk::geometry::Size;
-use flui_sdk::painting::BorderRadius;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::BorderRadius;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::RebuildHandle;

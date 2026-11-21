@@ -431,7 +431,7 @@ pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
 /// `TextField` builds its `EditableText` — the store keeps reporting free text.
 pub fn the_text_input_reaches_the_text_store() {
     use flui_material::TextFormField;
-    use flui_sdk::platform::{EnterAction, TextInputOptions, TextInputPurpose};
+    use flui_sdk::platform::text_store::{EnterAction, TextInputOptions, TextInputPurpose};
 
     let controller = TextEditingController::new();
     let focus_node = FocusNode::with_debug_label("purpose");

@@ -48,13 +48,13 @@ pub fn open_drawer_settling_uses_the_captured_fling_profile() {
 }
 
 pub fn a_drawer_release_keeps_finger_speed() {
-    use flui_sdk::painting::Color;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::ColoredBox;
     let color = Color::rgb(17, 83, 149);
     let painted_x = |laid: &common::LaidOut| {
         drawer_scene_sample(laid.layer_tree().expect("committed scene"), color).0
     };
-    use flui_sdk::painting::TextDirection::{Ltr, Rtl};
+    use flui_sdk::foundation::TextDirection::{Ltr, Rtl};
     use flui_sdk::widgets::Directionality;
     // A right-to-left start drawer opens from the right and an end drawer
     // from the left: the drag follows the finger and the fling keeps its
@@ -173,7 +173,7 @@ fn grabbing_closing_drawer(
     closing_millis: u64,
     above_half: bool,
 ) {
-    use flui_sdk::painting::Color;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::ColoredBox;
 
     let vsync = Vsync::new();
@@ -328,7 +328,7 @@ fn grabbing_closing_drawer(
 /// compositor ancestors that move and fade a retained picture.
 fn drawer_scene_sample(
     tree: &flui_layer::LayerTree,
-    color: flui_sdk::painting::Color,
+    color: flui_sdk::painting::styling::Color,
 ) -> (f64, f64) {
     use flui_layer::Layer;
     use flui_sdk::geometry::Point;
@@ -369,7 +369,7 @@ fn drawer_scene_sample(
 
 pub fn drawer_slides_without_rebuilding_per_frame() {
     use flui_sdk::geometry::Offset;
-    use flui_sdk::painting::Color;
+    use flui_sdk::painting::styling::Color;
 
     use flui_sdk::widgets::ColoredBox;
     use flui_testing::PointerScript;
@@ -539,7 +539,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
 }
 
 pub fn incoming_end_drawer_scrim_covers_the_outgoing_start_panel() {
-    use flui_sdk::painting::Color;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::ColoredBox;
 
     let vsync = Vsync::new();
@@ -1187,13 +1187,14 @@ pub fn retained_drawer_recomputes_its_extent_after_a_collapsed_resize() {
 /// (the left ones), and a direction flip while it is open moves the panel to
 /// the other side at the same progress, rounding the other corners.
 pub fn a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction() {
+    use flui_sdk::foundation::TextDirection::{self, Ltr, Rtl};
     use flui_sdk::geometry::Point;
-    use flui_sdk::painting::TextDirection::{self, Ltr, Rtl};
-    use flui_sdk::painting::{Color, DrawOp};
+    use flui_sdk::painting::DrawOp;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::Directionality;
 
     // The panel's fill: the outline of its `Material`, in its own coordinates.
-    fn panel_outline(laid: &common::LaidOut, fill: Color) -> flui_sdk::painting::Path {
+    fn panel_outline(laid: &common::LaidOut, fill: Color) -> flui_sdk::painting::paint::Path {
         let tree = laid.layer_tree().expect("committed scene");
         tree.iter()
             .filter_map(|(_, node)| match node.layer() {
@@ -1211,7 +1212,7 @@ pub fn a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction()
     }
     // Which corners of the 304 x 400 panel the outline rounds off: top left,
     // top right, bottom right, bottom left.
-    fn rounded_corners(outline: &flui_sdk::painting::Path) -> [bool; 4] {
+    fn rounded_corners(outline: &flui_sdk::painting::paint::Path) -> [bool; 4] {
         [(1.0, 1.0), (303.0, 1.0), (303.0, 399.0), (1.0, 399.0)]
             .map(|(x, y)| !outline.contains(Point::new(x, y)))
     }
@@ -1425,8 +1426,8 @@ pub fn a_drawer_mirrors_its_strip_inset_and_corners_with_the_reading_direction()
 /// moves it to the other side, and the contact's next move is signed by the
 /// new side: toward the interior from the left now opens it further.
 pub fn a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_new_side() {
-    use flui_sdk::painting::Color;
-    use flui_sdk::painting::TextDirection::{self, Ltr, Rtl};
+    use flui_sdk::foundation::TextDirection::{self, Ltr, Rtl};
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::widgets::{ColoredBox, Directionality};
 
     let color = Color::rgb(17, 83, 149);

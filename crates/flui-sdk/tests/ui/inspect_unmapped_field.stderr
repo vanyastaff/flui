@@ -17,9 +17,9 @@ help: the trait `ToValue` is not implemented for `Handle`
             &T
             Axis
             AxisDirection
+            BlendMode
             Box<T>
             BoxFit
-            Clip
             Cow<'_, str>
             CrossAxisAlignment
           and $N others
@@ -51,9 +51,9 @@ help: the trait `ToValue` is not implemented for `Handle`
              &T
              Axis
              AxisDirection
+             BlendMode
              Box<T>
              BoxFit
-             Clip
              Cow<'_, str>
              CrossAxisAlignment
            and $N others

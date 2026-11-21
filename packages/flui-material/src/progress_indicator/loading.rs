@@ -15,8 +15,10 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Matrix4, Point, Size};
+use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::{Canvas, Color, Morph, Paint, Path, PathCommand, material_shapes};
+use flui_sdk::painting::paint::{Morph, Paint, Path, PathCommand, material_shapes};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::CustomPaint;
@@ -42,7 +44,7 @@ const SPRING_DAMPING_RATIO: f64 = 0.6;
 const CYCLE_MORPHS: u32 = 28;
 
 /// The shapes an indeterminate indicator morphs through, in order, back to the first.
-const SEQUENCE: [fn() -> flui_sdk::painting::RoundedPolygon; 7] = [
+const SEQUENCE: [fn() -> flui_sdk::painting::paint::RoundedPolygon; 7] = [
     material_shapes::soft_burst,
     material_shapes::cookie_9,
     material_shapes::pentagon,

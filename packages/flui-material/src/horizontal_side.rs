@@ -8,8 +8,9 @@
 //! the direction pointing into the screen. Layout and gestures never see a
 //! reading edge, so they cannot resolve it twice and disagree.
 
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::{Alignment, TextDirection};
+use flui_sdk::painting::Alignment;
 
 /// The left or right side of the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

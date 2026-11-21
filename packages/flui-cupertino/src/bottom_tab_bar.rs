@@ -50,7 +50,7 @@
 use std::rc::Rc;
 
 use flui_sdk::geometry::Size;
-use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::rendering::HitTestBehavior;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisAlignment};
 use flui_sdk::semantics::SemanticsRole;

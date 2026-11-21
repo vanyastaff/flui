@@ -142,8 +142,9 @@
 use std::any::Any;
 
 use flui_sdk::foundation::ElementId;
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::{EdgeInsets, Offset, Size};
-use flui_sdk::painting::{Color, TextDirection};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::rendering::{MultiChildLayoutContext, MultiChildLayoutDelegate};
 use flui_sdk::view::environment::MediaQuery;

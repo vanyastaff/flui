@@ -86,13 +86,13 @@ use std::any::Any;
 use std::rc::Rc;
 
 use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpec};
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, RRect, Rect, Size};
 use flui_sdk::painting::Canvas;
-use flui_sdk::painting::Color;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::Paint;
-use flui_sdk::painting::TextDirection;
+use flui_sdk::painting::paint::Paint;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;

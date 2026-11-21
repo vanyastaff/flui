@@ -51,7 +51,7 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{BuildPhase, ChangeNotifier, Listenable, MutatedDuringBuild};
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::BoxDecoration;
+use flui_sdk::painting::styling::BoxDecoration;
 use flui_sdk::rendering::objects::StackFit;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::MediaQuery;

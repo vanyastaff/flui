@@ -19,7 +19,7 @@ use crate::common;
 
 use common::{lay_out, loose};
 use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::SizedBox;
@@ -90,7 +90,7 @@ impl StatelessView for PaintedThemeRoles {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         use flui_painting::typography::TextSpan;
         use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
-        use flui_sdk::painting::TextStyle;
+        use flui_sdk::painting::typography::TextStyle;
         use flui_sdk::widgets::{Column, RichText, Text};
 
         let theme = Theme::of(ctx).text_theme;

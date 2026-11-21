@@ -42,7 +42,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Locale;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
@@ -252,7 +252,11 @@ impl StatelessView for CupertinoApp {
 
 impl CupertinoApp {
     /// The shell configuration every routing form shares.
-    fn configure(&self, app: WidgetsApp, text_style: flui_sdk::painting::TextStyle) -> WidgetsApp {
+    fn configure(
+        &self,
+        app: WidgetsApp,
+        text_style: flui_sdk::painting::typography::TextStyle,
+    ) -> WidgetsApp {
         let app = match &self.builder {
             Some(builder) => {
                 let builder = Rc::clone(builder);

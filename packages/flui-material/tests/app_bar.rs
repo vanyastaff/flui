@@ -124,7 +124,7 @@ pub fn tapping_the_implied_back_button_pops_the_route() {
 /// leading slot takes the right edge, the title starts against it, and the
 /// actions sit at the left edge.
 pub fn a_right_to_left_app_bar_starts_its_toolbar_at_the_right() {
-    use flui_sdk::painting::TextDirection;
+    use flui_sdk::foundation::TextDirection;
     use flui_sdk::widgets::{Directionality, SizedBox};
 
     let laid = lay_out(

@@ -83,10 +83,11 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::painting::{Alignment, AlignmentDirectional};
-use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_sdk::painting::{TextDirection, TextStyle};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::rendering::TableCellVerticalAlignment;
 use flui_sdk::rendering::objects::TableColumnWidth;

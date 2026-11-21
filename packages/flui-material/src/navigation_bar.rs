@@ -133,10 +133,11 @@ use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpe
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
 use flui_sdk::painting::Alignment;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{Canvas, Paint};
+use flui_sdk::painting::paint::Paint;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::objects::MainAxisAlignment;
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::environment::VsyncScope;

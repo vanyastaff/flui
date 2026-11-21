@@ -95,11 +95,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_sdk::animation::Vsync;
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::foundation::panic::FirstPanic;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{EdgeInsets, Rect, Size};
+use flui_sdk::painting::Canvas;
 use flui_sdk::painting::CustomPainter;
-use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
+use flui_sdk::painting::paint::Paint;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::objects::CrossAxisAlignment;
 use flui_sdk::semantics::{SemanticsAnchor, SemanticsRole};
 use flui_sdk::view::environment::VsyncScope;
