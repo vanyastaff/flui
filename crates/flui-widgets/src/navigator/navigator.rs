@@ -398,8 +398,8 @@ impl NavigatorShared {
         //    the pop observation is only queued there and delivered afterwards.
         //
         //    Note what this order does NOT do. FLUI permits navigating
-        //    from a callback fired here, deliberately (ARCHITECTURE.md mapping
-        //    decision 13), which makes the resulting "effect observed before its
+        //    from a callback fired here, deliberately (`ARCHITECTURE.md`, "A `PopScope`
+        //    callback runs before the observers"), which makes the resulting "effect observed before its
         //    cause" sequence reachable.
         //
         //    With **no borrow held**: these are user callbacks, they may call

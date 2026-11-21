@@ -241,7 +241,8 @@ impl EditableTextState {
     /// detection by hand inside `Listener`'s handlers instead of composing
     /// the real recognizer would duplicate
     /// `flui_interaction::gesture::DoubleTapGestureRecognizer` rather than reuse
-    /// it — see this crate's `ARCHITECTURE.md` Mapping decision for this
+    /// it; see this crate's `ARCHITECTURE.md`, "`GestureDetector` composes AROUND
+    /// `Listener`, not inside it, for double-tap word selection", for this
     /// composition.
     ///
     /// `on_double_tap_down`, not `on_double_tap`: the word selection should

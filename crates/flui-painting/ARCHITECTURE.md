@@ -739,7 +739,7 @@ against a clone):
   snaps a caret to grapheme edges. FLUI does not, because a text store answers
   an input method's rect queries per scalar and platform selection is exact
   ([ADR-0090](../../docs/adr/ADR-0090-ime-pull-text-store-contract.md);
-  flui-widgets mapping decision 35).
+  [flui-widgets](../flui-widgets/ARCHITECTURE.md#platform-selection-is-exact-user-selection-snaps)).
 - **A hit snaps to a grapheme.** `get_position_for_offset` takes the cluster
   under the point, the edge the point is nearer, and then the nearer of the
   enclosing ICU4X grapheme's two edges on the hit line, so a tap never lands

@@ -1360,8 +1360,9 @@ fn terminal_mounted_router_retires_accepted_values() {
     );
 }
 
-/// Divergence (ARCHITECTURE.md mapping decision 23): a Router never pops its
-/// last page, through its own handle or through the navigator facade.
+/// Divergence (`ARCHITECTURE.md`, "A Router never pops or removes its last
+/// page"): a Router never pops its last page, through its own handle or through
+/// the navigator facade.
 pub(crate) fn router_never_pops_its_last_page() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();

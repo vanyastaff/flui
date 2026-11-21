@@ -51,8 +51,9 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///   [`crate::Expanded`] / [`crate::Positioned`] *around* the container
 ///   (`Row → Expanded → Container`), not inside it.
 ///
-/// The divergence is recorded in `ARCHITECTURE.md` mapping decision 15, and
-/// the geometry is pinned against the stack it replaces by
+/// The divergence is recorded in `ARCHITECTURE.md`, "`Container` is one render
+/// object, not a conditional widget stack", and the geometry is pinned against
+/// the stack it replaces by
 /// `harness_container_matches_the_widget_stack_it_collapses`.
 ///
 /// # Decoration limits

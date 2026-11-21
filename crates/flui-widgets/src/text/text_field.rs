@@ -22,9 +22,9 @@
 //! technically sound, but `TextField`'s meaning then depended on whether the
 //! `material` feature happened to be on, which is a feature-additivity
 //! violation (enabling a Cargo feature is supposed to only ADD symbols, not
-//! change what an existing name resolves to). See `ARCHITECTURE.md`'s
-//! `## Mapping decisions` entry for the record of both the original
-//! shadowing decision and this rename that superseded it.
+//! change what an existing name resolves to). See `ARCHITECTURE.md`,
+//! "`RawTextField` and `RawTextFormField`, not `TextField` and
+//! `TextFormField`".
 
 use std::rc::Rc;
 
