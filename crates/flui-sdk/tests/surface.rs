@@ -1,8 +1,6 @@
 //! The SDK's surface is the measured list, and each re-export is the item it
 //! names, not a copy.
-//!
-//! The list starts with the package imports measured in ARCHITECTURE.md and
-//! pins subsequent consumer additions and removals, plus `painting::DrawOp`,
+//! The list pins the package imports, plus `painting::DrawOp`,
 //! which the design systems' paint tests read, `painting::Shadow` and
 //! `painting::BlurSigma`, which a text style's shadows and the op a
 //! paragraph's shadow records name (ADR-0309), the four decoration types
