@@ -298,7 +298,7 @@ impl ViewState<ToolbarItems> for ToolbarItemsState {
     }
 }
 
-/// The plain overflow button: "â‹¯" in the row and "â€¹" over the column,
+/// The plain overflow button: "⋯" in the row and "‹" over the column,
 /// labelled for assistive technology, flipping the toolbar when chosen. It
 /// never takes the focus.
 fn plain_button(controller: &ToolbarItemsController, ctx: &dyn BuildContext) -> BoxedView {

@@ -86,7 +86,7 @@ struct Inner {
     reach: RefCell<Option<Reach>>,
     /// The controller of the enclosing scrollable: the list asks it to jump,
     /// so the move is a programmatic step of the scrollable's chain
-    /// (ADR-0209 Â§3). Used only while its position is the list's own.
+    /// (ADR-0209 §3). Used only while its position is the list's own.
     requests: RefCell<Option<ScrollController>>,
     /// Reads the axis and direction a list over a sliver was laid out with;
     /// `None` for a list over a box viewport, which takes them from its

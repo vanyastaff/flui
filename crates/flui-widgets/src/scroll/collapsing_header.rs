@@ -1,4 +1,4 @@
-//! [`CollapsingHeader`] â€” a header above scrolling content that the
+//! [`CollapsingHeader`] — a header above scrolling content that the
 //! content's own scroll collapses and expands, as a participant of the
 //! nested scroll channel (ADR-0209).
 //!
