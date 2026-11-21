@@ -7,11 +7,12 @@
 //! opens it defers.
 
 use std::{
-    collections::HashMap,
     rc::Rc,
     sync::{Arc, Weak, atomic::Ordering},
     thread::{self, ThreadId},
 };
+
+use rustc_hash::FxHashMap;
 
 use crate::host::MemoryClipboard;
 use flui_foundation::geometry::Point;
@@ -238,7 +239,7 @@ pub(crate) struct OsDrags {
     pub(crate) session: Option<OsDragSession>,
     /// The providers behind offers still open at the system, by id, so a
     /// target may fetch after the drop until it concludes it.
-    pub(crate) open: HashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
+    pub(crate) open: FxHashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
 }
 
 /// One drag session in flight at the simulated system.
@@ -364,7 +365,12 @@ pub(crate) struct HeadlessState {
     /// The values each application on this platform keeps without a root, one
     /// store per application, for as long as the platform lives; never the
     /// user's data directories.
-    pub(crate) memory: HashMap<flui_platform::AppDataDir, crate::storage::MemoryStore>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by the data directories the application supplies"
+    )]
+    pub(crate) memory:
+        std::collections::HashMap<flui_platform::AppDataDir, crate::storage::MemoryStore>,
     /// What `Platform::preferences` reports, which the OS may change from any
     /// thread, as Linux's portal source does.
     pub(crate) preferences: Arc<Mutex<SimulatedPreferences>>,
@@ -424,7 +430,7 @@ impl HeadlessLoop {
             drags: Arc::new(Mutex::new(OsDrags {
                 table: H::offers(),
                 session: None,
-                open: HashMap::new(),
+                open: FxHashMap::default(),
             })),
             os_drag_start: None,
             owner_signal: Weak::new(),
@@ -450,7 +456,11 @@ impl HeadlessLoop {
             session_end_releases: Arc::default(),
             session_end_support: flui_platform::SessionEndSupport::Hold,
             data_root: None,
-            memory: HashMap::new(),
+            #[expect(
+                clippy::disallowed_types,
+                reason = "keyed by the data directories the application supplies"
+            )]
+            memory: std::collections::HashMap::default(),
             preferences: Arc::default(),
             drag_source: H::drag_source,
         };

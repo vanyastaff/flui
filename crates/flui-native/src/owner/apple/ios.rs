@@ -47,7 +47,7 @@ pub use scene::{IOSSceneAttachmentId, IOSSceneSessionId};
 pub(crate) use scene::{SceneConsumer, SceneInstallation};
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -64,6 +64,7 @@ use objc2_ui_kit::{
     UISceneActivationState, UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate,
     UISceneSession, UIWindowScene,
 };
+use rustc_hash::FxHashSet;
 
 use crate::error::PlatformError;
 use crate::host;
@@ -441,7 +442,7 @@ enum SceneAction {
     Open(SceneOrigin, Vec<String>, flui_platform::Launch),
 }
 struct SceneState {
-    terminal_sessions: HashSet<IOSSceneSessionId>,
+    terminal_sessions: FxHashSet<IOSSceneSessionId>,
     session: Option<SessionRecord>,
     handler: Option<Box<dyn SceneConsumer>>,
     registered: bool,
@@ -567,7 +568,7 @@ impl IOSLoop {
             running: Cell::new(true),
             scenes: NativeOwner::new(
                 RefCell::new(SceneState {
-                    terminal_sessions: HashSet::new(),
+                    terminal_sessions: FxHashSet::default(),
                     session: None,
                     handler: None,
                     registered: false,

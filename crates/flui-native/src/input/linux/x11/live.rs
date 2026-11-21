@@ -1,7 +1,7 @@
 //! The loop's input over the platform's connection.
 
+use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,11 +92,11 @@ struct CoreKeyboard {
 struct State {
     pointers: X11Pointers,
     /// The open windows, by their X id.
-    windows: HashMap<xproto::Window, InputTarget>,
+    windows: FxHashMap<xproto::Window, InputTarget>,
     keyboard: Option<CoreKeyboard>,
     cursors: Option<x11rb::cursor::Handle>,
     /// The theme's cursors loaded so far.
-    loaded: HashMap<CursorIcon, xproto::Cursor>,
+    loaded: FxHashMap<CursorIcon, xproto::Cursor>,
     /// The cursor of no pixels, made at its first use: a hidden cursor's
     /// and a locked pointer's.
     blank: Option<xproto::Cursor>,
@@ -406,10 +406,10 @@ impl X11Input {
         let layout = keyboard.as_ref().map_or_default(CoreKeyboard::layout_name);
         let state = State {
             pointers: X11Pointers::new(clock),
-            windows: HashMap::new(),
+            windows: FxHashMap::default(),
             keyboard,
             cursors,
-            loaded: HashMap::new(),
+            loaded: FxHashMap::default(),
             blank: None,
             image: None,
             argb32: None,

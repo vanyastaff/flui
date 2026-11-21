@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::num::NonZeroU8;
 
 use smallvec::SmallVec;
@@ -438,12 +438,12 @@ fn first_valuators<T: Clone>(listed: &[T]) -> Vec<T> {
 #[derive(Debug)]
 pub struct X11Pointers {
     contacts: ContactRegistry,
-    devices: HashMap<XiSlave, Known>,
-    masters: HashMap<XiMaster, Master>,
+    devices: FxHashMap<XiSlave, Known>,
+    masters: FxHashMap<XiMaster, Master>,
     /// The last value of each scroll valuator, by device and number.
-    scrolled: HashMap<(XiSlave, u16), f64>,
+    scrolled: FxHashMap<(XiSlave, u16), f64>,
     /// The hovering contacts inside each window: entered and not left.
-    inside: HashSet<(NativeSurface, NativeDevice, NativeContact)>,
+    inside: FxHashSet<(NativeSurface, NativeDevice, NativeContact)>,
     next_label: u64,
 }
 
@@ -454,10 +454,10 @@ impl X11Pointers {
     pub fn new(clock: NativeClock) -> Self {
         Self {
             contacts: ContactRegistry::new(clock),
-            devices: HashMap::new(),
-            masters: HashMap::new(),
-            scrolled: HashMap::new(),
-            inside: HashSet::new(),
+            devices: FxHashMap::default(),
+            masters: FxHashMap::default(),
+            scrolled: FxHashMap::default(),
+            inside: FxHashSet::default(),
             next_label: 0,
         }
     }

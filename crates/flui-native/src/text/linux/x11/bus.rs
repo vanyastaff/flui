@@ -13,13 +13,14 @@
 //! Nothing here runs on the owner thread or reaches application code: what
 //! is heard waits in [`Inbox`] until the owner's turn takes it.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use parking_lot::Mutex;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::mpsc;
 use zbus::message::Type as MessageType;
 use zbus::{Connection, Message, MessageStream};
@@ -31,6 +32,13 @@ use crate::text::linux::input_context::{
     endpoints, fcitx_capability, ibus_address, ibus_address_file, ibus_content,
 };
 use crate::text::linux::text_input::ContentType;
+
+/// A D-Bus `a{sv}` dictionary: the map type zbus serializes it from.
+#[expect(
+    clippy::disallowed_types,
+    reason = "the dictionary type zbus (de)serializes, keyed by the peer's strings"
+)]
+pub(super) type DBusDict<K, V> = std::collections::HashMap<K, V>;
 
 /// How long a daemon has to answer the connection and the question whether
 /// it runs.
@@ -197,7 +205,7 @@ struct Heards {
     /// The contexts something was dropped of: until the owner takes their
     /// [`Heard::Spilled`], nothing more of them is queued, so no answer or
     /// edit applies past the gap.
-    spilled: HashSet<ContextId>,
+    spilled: FxHashSet<ContextId>,
 }
 
 impl Inbox {
@@ -545,11 +553,15 @@ impl Awaited {
 struct Session {
     link: Link,
     inbox: Arc<Inbox>,
-    contexts: HashMap<ContextId, Context>,
-    paths: HashMap<OwnedObjectPath, ContextId>,
+    contexts: FxHashMap<ContextId, Context>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by object paths the IBus daemon names"
+    )]
+    paths: std::collections::HashMap<OwnedObjectPath, ContextId>,
     /// The calls awaiting an answer, each until its deadline, at most
     /// [`MAX_CALLS`].
-    calls: HashMap<NonZeroU32, (tokio::time::Instant, Awaited)>,
+    calls: FxHashMap<NonZeroU32, (tokio::time::Instant, Awaited)>,
     /// The calls making a context that were given up on, newest last, at most
     /// [`MAX_ABANDONED`]: a context made late after all is destroyed.
     abandoned: VecDeque<NonZeroU32>,
@@ -626,9 +638,13 @@ async fn serve(
     let mut session = Session {
         link,
         inbox,
-        contexts: HashMap::new(),
-        paths: HashMap::new(),
-        calls: HashMap::new(),
+        contexts: FxHashMap::default(),
+        #[expect(
+            clippy::disallowed_types,
+            reason = "keyed by object paths the IBus daemon names"
+        )]
+        paths: std::collections::HashMap::default(),
+        calls: FxHashMap::default(),
         abandoned: VecDeque::new(),
     };
     loop {
@@ -1202,12 +1218,12 @@ fn message<'a>(
 fn ibus_text(text: &str) -> Value<'static> {
     let attributes = Value::from((
         "IBusAttrList",
-        HashMap::<String, Value<'static>>::new(),
+        DBusDict::<String, Value<'static>>::new(),
         Vec::<Value<'static>>::new(),
     ));
     Value::from((
         "IBusText",
-        HashMap::<String, Value<'static>>::new(),
+        DBusDict::<String, Value<'static>>::new(),
         text.to_owned(),
         attributes,
     ))
