@@ -32,10 +32,11 @@
 
 mod tree_cell;
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
+
+// The build-phase flag is a debug assertion: release builds carry no `Cell`.
+#[cfg(debug_assertions)]
+use std::cell::Cell;
 
 use flui_foundation::ElementId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
@@ -1039,6 +1040,7 @@ mod tests {
     use super::*;
     use crate::__runtime::BindingRuntime as _;
     use crate::view::RootRenderElement;
+    use std::cell::Cell;
 
     // Carries a `PipelineCell` (via `CoreState::pipeline_owner`), so it must
     // stay pinned `!Send + !Sync` -- a stray `unsafe impl` here would let a
