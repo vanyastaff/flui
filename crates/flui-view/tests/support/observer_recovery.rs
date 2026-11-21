@@ -1,7 +1,8 @@
 //! Public observer callbacks run in children; payloads and failed captures are destroyed.
 use flui_foundation::observe::{ElementMounted, ElementRebuilt, TreeObserver};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_view::{BuildOwner, ElementTree, RebuildReason};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::RebuildReason;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

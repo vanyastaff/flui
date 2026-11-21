@@ -1,6 +1,7 @@
 //! [`PreferredSizeView`] and [`PreferredSize`] — a view that can advertise the
 //! size it would prefer if it were otherwise unconstrained.
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::Size;
 use flui_view::prelude::*;
 

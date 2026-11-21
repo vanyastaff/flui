@@ -51,7 +51,7 @@ fn graph_of(ui_runtime: &UiRuntime, id: PresentationId) -> Reactive {
 fn writer_of(ui_runtime: &UiRuntime, id: PresentationId) -> flui_view::WriterSource {
     ui_runtime
         .presentation_widgets_for_test(id)
-        .with_build_owner(flui_view::BuildOwner::writer_source)
+        .with_build_owner(flui_view::__runtime::BuildOwner::writer_source)
 }
 
 pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
@@ -133,7 +133,7 @@ pub(crate) fn cross_thread_signal_write_opens_the_owner_writer_source() {
     ui_runtime
         .command_sender()
         .send_signal_write(sig_b.detach(), move |own, ctx| {
-            let opened_on = flui_view::ReadGraph::graph_id(ctx);
+            let opened_on = flui_foundation::read_scope::ReadGraph::graph_id(ctx);
             let own_write = own.set(ctx, 7);
             let sibling_write = sibling.attach().set(ctx, 7);
             tx.send((opened_on, own_write, sibling_write))

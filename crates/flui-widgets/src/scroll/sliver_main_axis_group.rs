@@ -6,7 +6,7 @@ use std::fmt;
 use flui_objects::RenderSliverMainAxisGroup;
 use flui_rendering::protocol::SliverProtocol;
 use flui_view::BoxedView;
-use flui_view::seq::ViewSeq;
+use flui_view::ViewSeq;
 
 use crate::__private::generic_render_view_element;
 

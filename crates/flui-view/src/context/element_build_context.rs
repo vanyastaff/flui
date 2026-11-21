@@ -1,5 +1,5 @@
 //! The build-time [`BuildContext`]/[`LifecycleContext`] implementation a
-//! behavior constructs during [`BuildOwner::build_scope`](crate::BuildOwner):
+//! behavior constructs during [`BuildOwner::build_scope`](crate::owner::BuildOwner):
 //! a borrowed view of the live tree and the deferred dependent-record sink,
 //! plus the shared [`DependentRecord`] and [`BuildCapabilities`] it carries.
 
@@ -490,7 +490,7 @@ impl LifecycleContext for LiveBuildContext<'_> {
 /// Resolve a typed capability from the presentation's source, or refuse it by
 /// name when the runtime registered none.
 pub(crate) fn acquire_capability(
-    source: Option<&dyn crate::CapabilitySource>,
+    source: Option<&dyn crate::owner::CapabilitySource>,
     capability: std::any::TypeId,
     name: &'static str,
 ) -> Result<Box<dyn std::any::Any>, flui_platform::Unsupported> {

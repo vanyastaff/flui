@@ -25,7 +25,8 @@ use crate::owner::BuildOwner;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::{RootElement, BuildOwner, ElementBase};
+/// use flui_view::ElementBase;
+/// use flui_view::__runtime::{BuildOwner, RootElement};
 ///
 /// struct MyRootElement {
 ///     owner: Option<Arc<BuildOwner>>,

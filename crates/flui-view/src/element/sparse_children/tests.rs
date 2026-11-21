@@ -3,9 +3,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use flui_foundation::Leaf;
-use flui_foundation::ViewKey;
 use flui_foundation::geometry::Size;
+use flui_foundation::{Leaf, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::{BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
@@ -14,7 +13,7 @@ use super::SparseChildren;
 use crate::GlobalKey;
 use crate::owner::RecoveredAt;
 use crate::view::{RenderView, View};
-use crate::{BuildOwner, ElementTree};
+use crate::{owner::BuildOwner, tree::ElementTree};
 
 /// A minimal render-bearing leaf view used as both host and child in these
 /// tests — mirrors the `SizedBoxView` in `view/render.rs` tests.
@@ -185,7 +184,7 @@ fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
         "the keyed child must relocate, preserving element identity, not mount a duplicate"
     );
     assert_eq!(
-        tree.get(moved).and_then(crate::ElementNode::parent),
+        tree.get(moved).and_then(crate::tree::ElementNode::parent),
         Some(host_b),
         "the relocated child must be reparented onto the new host"
     );
@@ -317,7 +316,10 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
         "exactly one panic must be recorded, not double-counted across the retake \
              and its substitute mount"
     );
-    assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Activate);
+    assert_eq!(
+        recovered_panics[0].hook,
+        crate::owner::LifecycleHook::Activate
+    );
     // `StatefulBehavior::on_activate` catches its OWN panic and records
     // it under its own accurate identity — `first`,
     // the retaken candidate itself, since `activate` panicked on the

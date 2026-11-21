@@ -26,7 +26,7 @@ use crate::{
 
 /// The `BuildContext` a behavior hands to user `build()` / lifecycle code.
 ///
-/// During a [`BuildOwner::build_scope`](crate::BuildOwner) drain the owner
+/// During a [`BuildOwner::build_scope`](crate::owner::BuildOwner) drain the owner
 /// carries a [`BuildHandle`](crate::ElementOwner) — a borrowed live view of
 /// the real tree — so the variant resolves to [`LiveBuildContext`] and ancestor
 /// walks / `depend_on` hit real nodes (PR-K). A component build outside a
@@ -311,7 +311,7 @@ where
     /// children in place. Now it runs only the build half (today's
     /// `build_or_recover` / `build_proxy_style` producer) and returns the
     /// owned child views; the reconcile half is hoisted to
-    /// [`BuildOwner::build_scope`](crate::BuildOwner), which feeds the
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner), which feeds the
     /// returned views to the slab id-reconciler with a fresh `&mut tree`.
     /// The element holds no child storage, so this method never touches a
     /// child graph and there is no double-borrow with the slab.

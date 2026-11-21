@@ -31,7 +31,7 @@
 //! Widgets favour a constructor + chainable-config surface (with
 //! `bon` builders reserved for the widest future configuration objects). Single
 //! children are taken as `impl IntoView`; a list of children is a
-//! [`ViewSeq`](flui_view::seq::ViewSeq): a tuple (the static path), an array
+//! [`ViewSeq`](flui_view::ViewSeq): a tuple (the static path), an array
 //! of one type, or `Vec<BoxedView>` (the dynamic path).
 //!
 //! ```rust

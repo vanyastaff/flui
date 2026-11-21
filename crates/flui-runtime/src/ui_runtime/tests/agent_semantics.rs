@@ -6,6 +6,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::AtomicU32;
 
+use flui_foundation::RenderId;
 use flui_protocol::method;
 use flui_protocol::{
     act::ActParams, act::EffectKind, error::ErrorCode, error::ErrorObject, error::HandleKind,

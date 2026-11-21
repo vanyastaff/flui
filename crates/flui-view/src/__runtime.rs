@@ -1,16 +1,20 @@
 //! The composition-root seam of ADR-0081 §4.
 //!
-//! These items let the crates that own a UI runtime drive a [`WidgetsBinding`]
-//! from outside `flui-view`: activating its `GlobalKey` registry for one
-//! UI runtime entry, stamping the frame phase at the build-to-finalize boundary,
-//! and running the presentation's terminal lifecycle ladder; the host's sides
-//! of a presentation's close guard ([`CloseGuardSource`]) and of the flush
-//! registry ([`FlushHost`]), and the [`OwnerNotify`] channel both signal
-//! through; and the
-//! development agent's port ([`AgentPort`]), which only the runtime
+//! These items let the crates that own a UI runtime build and drive a
+//! [`WidgetsBinding`] from outside `flui-view`: the owners themselves (the
+//! binding, its [`BuildOwner`] and [`ElementTree`], the root element and
+//! render view it mounts, the presentation's [`CapabilitySource`] and
+//! [`GlobalKeyScope`], and what a frame's build and a contained panic report);
+//! activating the binding's `GlobalKey` registry for one UI runtime entry,
+//! stamping the frame phase at the build-to-finalize boundary, and running the
+//! presentation's terminal lifecycle ladder; the host's sides of a
+//! presentation's close guard ([`CloseGuardSource`]) and of the flush registry
+//! ([`FlushHost`]), and the [`OwnerNotify`] channel both signal through; and
+//! the development agent's port ([`AgentPort`]), which only the runtime
 //! implements and through which it builds the [`AgentWindow`]s a
 //! [`DevAgentHook`](crate::dev_agent::DevAgentHook) is handed. Their intended
-//! users are `flui-runtime`, `flui-app`, `flui-testing` and `flui-hot-reload`.
+//! users are `flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`, and
+//! tests that drive a bare owner.
 //!
 //! **No semver promise.** Anything here may change or disappear in any
 //! release. The module is always compiled and `#[doc(hidden)]`, and the
@@ -38,16 +42,28 @@ use flui_protocol::{
     error::ErrorObject, events::Event, events::EventFilter, record::RecordParams, tree::WindowId,
 };
 
-use crate::WidgetsBinding;
+// The owners a composition root builds and drives: the binding, the build
+// owner and its element tree, the root element they mount, the presentation's
+// capability source and key scope, and what a frame's build reports.
+pub use crate::binding::{AttachError, WidgetsBinding};
 pub use crate::close_guard::{CloseGuardSource, SettledClose};
 use crate::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow};
+pub use crate::element::render_object_element::RenderTreeRootElement;
+pub use crate::element::root::{RootElement, RootElementImpl};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
     FlushWriter, SESSION_END_BUDGET, WritesInFlight,
 };
 pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource};
 pub use crate::navigation::url_owner::{UrlOwnerRegistration, UrlOwnerSlot};
+pub use crate::owner::{
+    BuildOwner, BuildPremise, CapabilitySource, DuplicateGlobalKey, FrameBuildReport,
+    GlobalKeyScope, LifecycleHook, PresentationCapabilities, RecoveredAt, RecoveredPanic,
+};
 pub use crate::owner_notify::{LifecycleEvent, OwnerNotify, Undeliverable};
+pub use crate::reactive::{BuildInProgress, SlotInfo};
+pub use crate::tree::{ElementNode, ElementTree};
+pub use crate::view::{RootRenderElement, RootRenderView};
 pub use crate::window_handle::WindowSource;
 
 /// What an [`AgentWindow`] calls: one window's requests, enqueued on its
@@ -491,7 +507,7 @@ impl GlobalKeyRegistryComposite {
 
 mod sealed {
     pub trait Sealed {}
-    impl Sealed for crate::WidgetsBinding {}
+    impl Sealed for crate::binding::WidgetsBinding {}
 }
 
 /// One GlobalKey claim withdrawn from a closing owner. Dropping it retires

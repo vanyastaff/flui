@@ -29,7 +29,7 @@
 pub use flui_interaction::binding::GestureBinding;
 pub use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 pub use flui_scheduler::UpdateScheduler;
-pub use flui_view::WidgetsBinding;
+pub use flui_view::__runtime::WidgetsBinding;
 // The per-presentation rendering binding lives with the ui_runtime in the frame
 // runtime (ADR-0083); its public path stays `flui_app::bindings`.
 pub use flui_runtime::renderer_binding::RenderingBinding;

@@ -15,9 +15,11 @@ use flui_view::LifecycleContext;
 // The duplicate-key fixture runs only where the debug check panics.
 #[cfg(debug_assertions)]
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::StatefulElement;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, KeyLookup,
-    StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, ElementBase, GlobalKey, IntoView, KeyLookup, StatefulView, StatelessView, View,
+    ViewExt, ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;

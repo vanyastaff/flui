@@ -32,7 +32,8 @@ use flui_interaction::ids::PointerId;
 use flui_painting::Alignment;
 use flui_platform::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
-use flui_view::{ElementNode, View, ViewExt};
+use flui_view::__runtime::ElementNode;
+use flui_view::{View, ViewExt};
 use flui_widgets::Align;
 
 use super::host::WidgetHost;
@@ -159,7 +160,7 @@ impl Harness {
             .ui_runtime()
             .ui_runtime()
             .widgets()
-            .with_build_owner(flui_view::BuildOwner::focus_manager)
+            .with_build_owner(flui_view::__runtime::BuildOwner::focus_manager)
     }
 
     /// The clipboard this tree's widgets acquire through
@@ -185,7 +186,7 @@ impl Harness {
     /// knob (the error-view factory) the public widget surface does not expose.
     pub fn with_build_owner_mut<R>(
         &mut self,
-        f: impl FnOnce(&mut flui_view::BuildOwner) -> R,
+        f: impl FnOnce(&mut flui_view::__runtime::BuildOwner) -> R,
     ) -> R {
         self.host
             .ui_runtime()

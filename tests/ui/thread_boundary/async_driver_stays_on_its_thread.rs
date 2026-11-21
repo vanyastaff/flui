@@ -5,7 +5,7 @@
 // The `Send + 'static` bound is `std::thread::spawn`'s, stated here so the
 // diagnostic names no std source: without `rust-src` rustc omits std
 // snippets, and the expected output would differ between toolchains.
-use flui::view::AsyncDriver;
+use flui::scheduler::AsyncDriver;
 
 fn require_thread_spawnable<T: Send + 'static>(_: T) {}
 

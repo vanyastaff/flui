@@ -649,7 +649,7 @@ pub(crate) fn a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own() {
         .get(id)
         .expect("installed")
         .widgets()
-        .with_build_owner(flui_view::BuildOwner::lifecycle_handle)
+        .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
         .expect("presentation lifecycle handle")
         .subscribe(|state| {
             assert_ne!(
@@ -744,7 +744,7 @@ pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
         .get(b)
         .expect("installed")
         .widgets()
-        .with_build_owner(flui_view::BuildOwner::lifecycle_handle)
+        .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
         .expect("presentation lifecycle handle")
         .subscribe(|state| {
             assert_ne!(

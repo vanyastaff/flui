@@ -12,8 +12,8 @@ use flui_objects::{CrossAxisAlignment, MainAxisSize};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
 use flui_rendering::delegates::CustomPainter;
+use flui_view::ViewSeq;
 use flui_view::prelude::*;
-use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, RebuildHandle, RebuildReason, WriterSource};
 
 use crate::support::retirement::Terminal;

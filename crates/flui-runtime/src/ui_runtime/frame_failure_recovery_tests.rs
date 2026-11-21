@@ -13,7 +13,7 @@ use crate::frame_failure::{
     DeviceRecovery, FailureDisposition, FrameFailureHandler, FrameFailureKind, PanicText,
 };
 use crate::testing::ScriptedSink;
-use flui_view::{LifecycleHook, RecoveredAt};
+use flui_view::__runtime::{LifecycleHook, RecoveredAt};
 
 #[derive(Debug, Clone, PartialEq)]
 struct ObservedFailure {

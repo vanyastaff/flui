@@ -55,19 +55,19 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, DrivenController, Vsync};
-use flui_foundation::InputSequenceId;
-use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
+use flui_foundation::{InputSequenceId, TextDirection};
 #[cfg(test)]
 use flui_platform::TargetPlatform;
 use flui_platform::input::keyboard::NamedKey;
+use flui_scheduler::{AsyncDriver, BoxedTask, PostFrameHandle, TaskToken};
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView,
-    IntoView, LifecycleContext, PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, View,
-    ViewExt, ViewState, WriterSource, impl_inherited_view,
+    BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView, IntoView,
+    LifecycleContext, RebuildHandle, RebuildReason, View, ViewExt, ViewState, WriterSource,
+    impl_inherited_view,
 };
 
 use super::nested::{

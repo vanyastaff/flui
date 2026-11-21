@@ -803,6 +803,7 @@ flui-rendering = { workspace = true }
 flui-semantics = { workspace = true }
 flui-objects = { workspace = true }
 flui-interaction = { workspace = true }
+flui-scheduler = { workspace = true }
 flui-testing = { workspace = true, optional = true }
 flui-material = { workspace = true, optional = true }
 flui-cupertino = { workspace = true, optional = true }

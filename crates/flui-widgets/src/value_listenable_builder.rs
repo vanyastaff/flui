@@ -35,9 +35,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::ValueListenable;
-use flui_view::context::{BuildContext, LifecycleContext};
 use flui_view::element::ElementKind;
 use flui_view::{BoxedView, IntoView, RebuildHandle, StatefulView, View, ViewExt, ViewState};
+use flui_view::{BuildContext, LifecycleContext};
 
 /// Builds a widget from the current value of a [`ValueListenable<T>`].
 ///

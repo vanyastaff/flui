@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::{IntoView, View, ViewExt};
-use crate::{BuildContext, BuildOwner, StatelessView};
+use crate::{BuildContext, StatelessView, owner::BuildOwner};
 use flui_foundation::ValueKey;
 
 /// A keyless leaf-ish stateless test view. `tag` distinguishes
@@ -199,7 +199,7 @@ mod emission {
     use super::{fixture, keyed_views};
     use std::sync::OnceLock;
 
-    use crate::BuildOwner;
+    use crate::owner::BuildOwner;
     use crate::tree::ElementTree;
     use crate::tree::ReconcileEventKind;
     use crate::tree::test_utils::{CollectedEvent, ReconcileEventCollector};

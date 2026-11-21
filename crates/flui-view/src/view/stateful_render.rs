@@ -151,7 +151,7 @@ macro_rules! impl_stateful_render_view {
                 $crate::element::ElementKind::stateful_render(self)
             }
 
-            fn creation_site(&self) -> $crate::CreationSite {
+            fn creation_site(&self) -> $crate::__private::CreationSite {
                 self.$field
             }
         }

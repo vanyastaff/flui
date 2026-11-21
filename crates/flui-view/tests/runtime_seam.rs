@@ -10,10 +10,11 @@ use std::{
 use flui_foundation::ElementId;
 use flui_objects::RenderSizedBox;
 use flui_rendering::{RenderUpdateImpact, protocol::BoxProtocol};
+use flui_view::__runtime::WidgetsBinding;
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker, GlobalKeyRegistryComposite},
     AppLifecycleState, BuildContext, GlobalKey, IntoView, KeyLookup, LifecycleClosed,
-    RenderObjectContext, RenderView, StatelessView, View, WidgetsBinding,
+    RenderObjectContext, RenderView, StatelessView, View,
     element::ElementKind,
 };
 

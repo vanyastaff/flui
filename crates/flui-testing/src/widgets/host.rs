@@ -17,8 +17,9 @@ use flui_foundation::ElementId;
 use flui_interaction::events::PointerEvent;
 use flui_platform::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
+use flui_view::__runtime::ElementTree;
+use flui_view::BoxedView;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, ElementTree};
 
 use crate::host::{HeadlessHost, HeadlessWindow};
 
@@ -233,7 +234,10 @@ fn shallowest_of(
 }
 
 fn is_descendant(tree: &ElementTree, mut id: ElementId, ancestor: ElementId) -> bool {
-    while let Some(parent) = tree.get(id).and_then(flui_view::ElementNode::parent) {
+    while let Some(parent) = tree
+        .get(id)
+        .and_then(flui_view::__runtime::ElementNode::parent)
+    {
         if parent == ancestor {
             return true;
         }

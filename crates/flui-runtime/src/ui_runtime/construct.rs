@@ -23,7 +23,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::AppLifecycleState;
 #[cfg(any(test, feature = "testing"))]
 use flui_scheduler::ClockSource;
-use flui_view::{BuildInProgress, GlobalKeyScope};
+use flui_view::__runtime::{BuildInProgress, GlobalKeyScope};
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};

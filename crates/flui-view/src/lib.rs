@@ -91,25 +91,29 @@
 )]
 extern crate self as flui_view;
 
+// Open modules: namespaces whose items are named through the module and
+// nowhere else. Closed modules are private; the items of theirs that other
+// crates name are re-exported at the root below, and the ones only the
+// composition roots name are re-exported from `__runtime`.
 pub mod background;
-pub mod binding;
-pub mod child;
-pub mod context;
+mod binding;
+mod child;
+mod context;
 pub mod dev_agent;
 pub mod dev_reload;
 pub mod element;
 pub mod environment;
 mod inspect;
-pub mod key;
+mod key;
 pub mod navigation;
-pub mod owner;
+mod owner;
 pub mod persist;
-pub mod reactive;
-pub mod seq;
+mod reactive;
+mod seq;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-pub mod tree;
-pub mod view;
+mod tree;
+mod view;
 
 // Legacy test-only global-key registry shims. Live in `lib.rs` rather than
 // `key/mod.rs` so the public name is `flui_view::test_only_*` — short,
@@ -172,6 +176,13 @@ mod table_test;
 // Runtime seam for flui-runtime, flui-testing and flui-app (ADR-0081 §4)
 #[doc(hidden)]
 pub mod __runtime;
+/// The paths this crate's exported macros expand to. No semver promise: only
+/// the expansions of `impl_render_view!` and `impl_stateful_render_view!`
+/// name it.
+#[doc(hidden)]
+pub mod __private {
+    pub use flui_foundation::CreationSite;
+}
 // Lifecycle notifications
 mod lifecycle;
 mod observation;
@@ -189,37 +200,19 @@ mod flush_registry;
 mod haptics_mode;
 pub use haptics_mode::HapticsMode;
 mod owner_notify;
-// Binding
-pub use binding::{AppLifecycleState, AttachError, WidgetsBinding};
+// The application lifecycle a `LifecycleHandle` reports
+pub use binding::AppLifecycleState;
 // Child helpers
 pub use child::{Child, Children};
 // Context
 pub use context::{BuildContext, BuildContextExt, LifecycleContext, LifecycleContextExt};
-// Element types
-pub use element::Lifecycle;
 // Notification system
-pub use element::{
+pub use element::notification::{
     DragEndNotification, DragStartNotification, FocusNotification, KeepAliveNotification,
-    LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
-    SizeChangedNotification,
+    LayoutChangedNotification, Notification, ScrollNotification, SizeChangedNotification,
 };
-// Slot types for multi-child elements (re-exported from flui-foundation)
-pub use element::{ElementSlot, IndexedSlot};
-// Render-tree root element marker trait
-pub use element::RenderTreeRootElement;
-// Root element
-pub use element::{RootElement, RootElementImpl};
-// Behavior types
-pub use element::{Provided, ProvidedRef, ProvidedValue, StatefulBehavior, StatelessBehavior};
-// Re-export from flui-foundation
-pub use flui_foundation::{CreationSite, ElementId, RenderId};
-pub use flui_rendering::RenderUpdateImpact;
-
-// Nameable lifecycle capabilities and callback values for widget authors.
-pub use flui_scheduler::{
-    AsyncDriver, BoxedTask, FrameId, FramePhase, FrameTiming, FrameWaker, Instant, PostFrameHandle,
-    PostFrameScheduleError, Sleep, TaskToken, TimerHandle,
-};
+// Values a view or a state publishes to its subtree
+pub use element::provided::{Provided, ProvidedValue};
 // Keys
 pub use key::{GlobalKey, KeyLookup, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
@@ -227,81 +220,63 @@ pub use key::{GlobalKey, KeyLookup, ObjectKey, ValueKey};
 pub use test_only_global_key_registry::{
     test_only_clear_global_key_registry, test_only_set_global_key_registry,
 };
-// Tree management
+// An element's owner, and the handles a state keeps
 pub use owner::{
-    BuildOwner, BuildPremise, CapabilitySource, DuplicateGlobalKey, ElementOwner, FrameBuildReport,
-    GlobalKeyScope, LifecycleHook, PresentationCapabilities, RebuildHandle, RebuildReason,
-    RebuildReasons, RecoveredAt, RecoveredPanic, UnmountHook,
+    ElementOwner, KeepAliveHandle, KeepAliveLease, RebuildHandle, RebuildReason, UnmountHook,
 };
 pub use reactive::{
-    BuildInProgress, EventContext, EventContextError, EventError, EventOutcome, Reactive,
-    ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
-    SignalWriteExt, SlotInfo, WriteTarget, Writer, WriterSource, callback, callback_ref,
-    callback_with,
+    EventContext, EventContextError, EventError, EventOutcome, Reactive, ReadScope, Signal,
+    SignalError, SignalSender, SignalSlot, SignalWriteExt, WriteTarget, Writer, WriterSource,
+    callback, callback_ref, callback_with,
 };
-pub use tree::{ElementNode, ElementTree};
+// Heterogeneous children
+pub use seq::ViewSeq;
+// The keyed reconciler's trace stream
+pub use tree::{RECONCILE_TARGET, ReconcileEvent, ReconcileEventKind};
 pub use view::{
-    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ChildViews, ElementBase, ElementDepth,
-    ElementExt, ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData,
-    InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
-    ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
-    RenderObjectContextError, RenderView, RenderViewState, RootRenderElement, RootRenderView,
-    StatefulElement, StatefulRenderView, StatefulView, StatelessElement, StatelessView, View,
-    ViewExt, ViewState,
+    AnimatedView, BoxedElement, BoxedView, ChildViews, ElementBase, ElementDepth, ElementExt,
+    ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData, InheritedView,
+    IntoElement, IntoView, Memo, ParentDataConfig, ParentDataView, ProxyView, RenderObjectContext,
+    RenderObjectContextError, RenderView, RenderViewState, StatefulRenderView, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
 // Prelude
 // ============================================================================
 
-/// Commonly used types for convenient importing.
+/// The forms a widget author writes with: the view and state traits and their
+/// derives, the build and lifecycle contexts, signals and event callbacks,
+/// children, keys, rebuild handles, notifications and the environment scopes a
+/// tree is wrapped in.
 ///
 /// ```rust,ignore
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
-    // Straight from `tracing`. A framework crate emits events and has no
-    // opinion about where they go, so nothing here reaches the backend.
-    pub use flui_foundation::{CreationSite, ElementId, RenderId};
-    pub use flui_rendering::RenderUpdateImpact;
-
-    pub use tracing::{debug, error, info, trace, warn};
     // The view traits with their derives, which share the traits' names.
     pub use crate::{InheritedData, StatefulView, StatelessView};
 
-    // Logging
-    pub use crate::context::{
-        BuildContext, BuildContextExt, LifecycleContext, LifecycleContextExt,
-    };
+    pub use crate::{BuildContext, BuildContextExt, LifecycleContext, LifecycleContextExt};
     // Signal writes (`set`/`update`/`set_if_changed`). Reads need no import:
     // `Signal::get` is inherent and takes the context as a `ReadScope`, so
     // `ReadScope` is not in the prelude. `ctx.scope()` still resolves on any
-    // `BuildContext` without it (a supertrait's methods do); a `ScopeRef` is
-    // opaque, so that reaches nothing but a signal read.
-    pub use crate::reactive::SignalWriteExt;
+    // `BuildContext` without it (a supertrait's methods do); the scope it
+    // returns is opaque, so that reaches nothing but a signal read.
+    pub use crate::SignalWriteExt;
     // The write capability an event callback receives, the handle it writes,
     // the source a widget opens it from, the outcome a callback reports, and
     // the helpers that fix a `let`-bound callback's signature (ADR-0086).
-    pub use crate::reactive::{
-        EventContext, EventContextError, EventError, EventOutcome, Signal, WriterSource, callback,
-        callback_ref, callback_with,
+    pub use crate::{
+        AnimatedView, AppLifecycleState, BoxedView, Child, Children, GlobalKey, InheritedView,
+        IntoView, LayoutChangedNotification, Memo, Notification, ObjectKey, ParentDataConfig,
+        ParentDataView, ProxyView, RebuildHandle, RebuildReason, RenderObjectContext,
+        RenderObjectContextError, RenderView, ValueKey, View, ViewExt, ViewState,
+        environment::{GestureArenaScope, GesturePolicy, MediaQuery, MediaQueryData, VsyncScope},
     };
     pub use crate::{
-        binding::{AppLifecycleState, WidgetsBinding},
-        child::{Child, Children},
-        element::{
-            ElementSlot, IndexedSlot, LayoutChangedNotification, Lifecycle, NotifiableElement,
-            Notification, RootElement,
-        },
-        environment::{GestureArenaScope, GesturePolicy, MediaQuery, MediaQueryData, VsyncScope},
-        key::{GlobalKey, ObjectKey, ValueKey},
-        owner::{BuildOwner, ElementOwner, RebuildHandle, RebuildReason, RebuildReasons},
-        tree::{ElementNode, ElementTree},
-        view::{
-            AnimatedView, BoxedView, InheritedView, IntoView, Memo, ParentDataConfig,
-            ParentDataView, ProxyView, RenderObjectContext, RenderObjectContextError, RenderView,
-            View, ViewExt, ViewState,
-        },
+        EventContext, EventContextError, EventError, EventOutcome, Signal, WriterSource, callback,
+        callback_ref, callback_with,
     };
 }
 

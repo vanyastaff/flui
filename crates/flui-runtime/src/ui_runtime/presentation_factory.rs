@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use flui_interaction::pointer::InteractionDispatchHandle;
 use flui_scheduler::{AsyncDriver, ClockSource, PresentationScopeFactory, WeakUpdateScheduler};
-use flui_view::{BuildInProgress, GlobalKeyScope};
+use flui_view::__runtime::{BuildInProgress, GlobalKeyScope};
 
 use super::{UiCommandSender, UiRuntime};
 use crate::presentation::{PresentationState, PresentationWindow, RuntimeCapabilities};

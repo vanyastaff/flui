@@ -9,9 +9,10 @@ use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RebuildReason, RebuildReasons, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::{RenderUpdateImpact, protocol::BoxProtocol};
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
 use flui_view::{
-    BoxedView, BuildContext, BuildOwner, ElementTree, ErrorView, IntoView, LifecycleHook,
-    RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, ErrorView, IntoView, RenderView, StatefulView, View, ViewExt,
+    ViewState,
 };
 
 use crate::dense_reconcile_containment::{

@@ -25,7 +25,7 @@ use std::rc::Rc;
 use crate::common::{lay_out, tight};
 use flui_view::BoxedView;
 use flui_view::IntoView;
-use flui_view::view::ViewExt;
+use flui_view::ViewExt;
 use flui_widgets::{
     ColoredBox, CustomScrollView, SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate,
     SliverToBoxAdapter,

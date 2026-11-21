@@ -25,11 +25,12 @@ pub use self::toolbar_items::{ToolbarItems, ToolbarItemsController, ToolbarItems
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::CreationSite;
 use flui_objects::SubtreeAnchor;
 use flui_platform::TargetPlatform;
 use flui_rendering::pipeline::PipelineCell;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, CreationSite, InheritedView, View, ViewExt, impl_inherited_view};
+use flui_view::{BoxedView, InheritedView, View, ViewExt, impl_inherited_view};
 
 use crate::interaction::{
     CopySelectionTextIntent, GestureCommand, MenuItem, MenuPresenter, PasteTextIntent,

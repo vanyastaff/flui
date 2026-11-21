@@ -37,7 +37,7 @@ enum SeenKind {
         error: String,
     },
     RecoveredPanic {
-        hook: flui_view::LifecycleHook,
+        hook: flui_view::__runtime::LifecycleHook,
     },
     DeviceLost {
         recovery: crate::frame_failure::DeviceRecovery,

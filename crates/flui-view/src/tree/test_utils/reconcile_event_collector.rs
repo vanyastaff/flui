@@ -27,7 +27,7 @@
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
-//! use flui_view::tree::test_utils::ReconcileEventCollector;
+//! use flui_view::testing::ReconcileEventCollector;
 //! use tracing_subscriber::{Registry, layer::SubscriberExt};
 //!
 //! let collector = ReconcileEventCollector::new();

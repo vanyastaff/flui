@@ -237,7 +237,7 @@ struct Debounce {
 
 struct DebounceState {
     view: Debounce,
-    task: Option<flui_view::TaskToken>,
+    task: Option<flui_scheduler::TaskToken>,
 }
 
 impl StatefulView for Debounce {
@@ -253,7 +253,7 @@ impl StatefulView for Debounce {
 
 impl ViewState<Debounce> for DebounceState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let timer: flui_view::TimerHandle = ctx.timer().expect("a hosted tree has a timer");
+        let timer: flui_scheduler::TimerHandle = ctx.timer().expect("a hosted tree has a timer");
         self.view.started.set(Some(timer.now()));
         let sleep = timer.sleep(DEBOUNCE);
         let done = Rc::clone(&self.view.done);

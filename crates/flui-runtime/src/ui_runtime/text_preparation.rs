@@ -11,7 +11,7 @@ use flui_painting::{
     RetiredTextSizingCohort, TextPreparationPending, TextSizing, TextSizingCohort, TextSizingSource,
 };
 use flui_rendering::{LayoutPremise, constraints::BoxConstraints, pipeline::PipelineOwner};
-use flui_view::BuildPremise;
+use flui_view::__runtime::BuildPremise;
 use web_time::{Duration, Instant};
 
 use super::UiRuntime;
@@ -368,7 +368,7 @@ pub(crate) fn admit(
         layout: presentation.pipeline().with(PipelineOwner::layout_premise),
         build: presentation
             .widgets()
-            .with_build_owner(flui_view::BuildOwner::build_premise),
+            .with_build_owner(flui_view::__runtime::BuildOwner::build_premise),
         frontier: None,
         wait: Wait::Running,
         serviced: false,
@@ -386,7 +386,7 @@ pub(crate) fn pending(presentation: &PresentationState, frontier: TextPreparatio
     let layout = presentation.pipeline().with(PipelineOwner::layout_premise);
     let build = presentation
         .widgets()
-        .with_build_owner(flui_view::BuildOwner::build_premise);
+        .with_build_owner(flui_view::__runtime::BuildOwner::build_premise);
     if let Some(saved) = presentation.text_preparation.borrow_mut().segment.as_mut() {
         saved.layout = layout;
         saved.build = build;

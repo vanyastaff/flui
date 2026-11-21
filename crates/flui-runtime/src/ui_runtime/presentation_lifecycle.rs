@@ -1241,7 +1241,7 @@ mod tests {
         let heard_by_subscriber = Rc::clone(&heard);
         let (_, _subscription) = ui_runtime
             .presentation_widgets_for_test(id)
-            .with_build_owner(flui_view::BuildOwner::lifecycle_handle)
+            .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
             .expect("presentation lifecycle handle")
             .subscribe(move |state| heard_by_subscriber.borrow_mut().push(state))
             .expect("lifecycle subscription while open");

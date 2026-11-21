@@ -1,13 +1,14 @@
 //! [`PhysicalModel`] — a shadow-casting, filled, `BoxShape`-clipped surface
 //! around a single child.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderPhysicalModel;
 use flui_painting::BoxShape;
 use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
 use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A physical layer that clips its child to a [`BoxShape`] (optionally
 /// rounded via `border_radius` when the shape is

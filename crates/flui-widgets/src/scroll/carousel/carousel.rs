@@ -20,11 +20,10 @@ use flui_painting::Alignment;
 use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
+use flui_scheduler::PostFrameHandle;
 use flui_view::element::{CarouselSliverConfig, SliverCarousel};
 use flui_view::prelude::*;
-use flui_view::{
-    LifecycleSubscription, PostFrameHandle, RebuildHandle, RebuildReason, WriterSource,
-};
+use flui_view::{LifecycleSubscription, RebuildHandle, RebuildReason, WriterSource};
 
 use super::autoplay::CarouselAutoplay;
 use super::controller::{Attachment, CarouselController};

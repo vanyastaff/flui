@@ -878,7 +878,7 @@ impl BuildOwner {
     /// # Example
     ///
     /// ```
-    /// use flui_view::{BuildOwner, GlobalKeyScope};
+    /// use flui_view::__runtime::{BuildOwner, GlobalKeyScope};
     ///
     /// let scope = GlobalKeyScope::new();
     /// let mut owner_a = BuildOwner::new();
@@ -2931,7 +2931,7 @@ impl BuildOwner {
     /// # Examples
     ///
     /// ```
-    /// use flui_view::BuildOwner;
+    /// use flui_view::__runtime::BuildOwner;
     ///
     /// let mut owner = BuildOwner::new();
     /// let recovered = owner.take_recovered_panics();
@@ -3066,7 +3066,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        BoxedView, ErrorView, LifecycleHook, RecoveredAt, View, ViewExt, element::LayoutBuilder,
+        BoxedView, ErrorView, View, ViewExt,
+        element::LayoutBuilder,
+        owner::{LifecycleHook, RecoveredAt},
         tree::ElementTree,
     };
 

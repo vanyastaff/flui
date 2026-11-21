@@ -5,7 +5,7 @@
 struct Mine;
 
 impl flui_view::ReadScope for Mine {
-    fn scope(&self) -> flui_view::ScopeRef<'_> {
+    fn scope(&self) -> flui_foundation::read_scope::ScopeRef<'_> {
         unimplemented!()
     }
 }

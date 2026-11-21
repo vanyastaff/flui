@@ -1,9 +1,10 @@
 //! [`LimitedBox`] — caps its child's size only when the incoming constraint on
 //! that axis is unbounded.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderLimitedBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Caps the maximum size of its child *only when* the corresponding incoming
 /// constraint is unbounded; bounded constraints pass through untouched.

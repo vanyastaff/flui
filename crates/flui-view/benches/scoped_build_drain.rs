@@ -14,10 +14,8 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
-use flui_view::{
-    BuildOwner, RebuildReason, RenderObjectContext, RenderView, View, element::ElementKind,
-    tree::ElementTree,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::{RebuildReason, RenderObjectContext, RenderView, View, element::ElementKind};
 
 #[derive(Clone)]
 struct Leaf;

@@ -82,9 +82,10 @@ use flui_sdk::animation::{AnimationStatus, Curve, SharedCurve, curves};
 use flui_sdk::foundation::Subscription;
 use flui_sdk::geometry::Rect;
 use flui_sdk::painting::{Alignment, BorderRadius, BorderRadiusExt, Clip, Color};
+use flui_sdk::scheduler::AsyncDriver;
 use flui_sdk::view::element::ElementKind;
 use flui_sdk::view::prelude::*;
-use flui_sdk::view::{AsyncDriver, BoxedView, RebuildHandle, RebuildReason, ViewExt};
+use flui_sdk::view::{BoxedView, RebuildHandle, RebuildReason, ViewExt};
 use flui_sdk::widgets::__private::{AnchoredBox, FlightSeat, SeatClaim, SeatHold};
 use flui_sdk::widgets::prelude::BoxFit;
 use flui_sdk::widgets::{

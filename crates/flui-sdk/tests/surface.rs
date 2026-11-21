@@ -163,6 +163,9 @@ mod measured {
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
         RenderResult as _, RenderUpdateImpact as _,
     };
+    use flui_sdk::scheduler::{
+        AsyncDriver as _, FrameWaker as _, PostFrameHandle as _, TaskToken as _,
+    };
     use flui_sdk::view::LifecycleContextExt as _;
     use flui_sdk::view::dev_agent::{
         AgentAnswer as _, AgentEvents as _, AgentWindow as _, DevAgentHook as _,
@@ -173,14 +176,13 @@ mod measured {
     use flui_sdk::view::environment::{MediaQuery as _, MediaQueryData as _};
     use flui_sdk::view::prelude::{BuildContext as _, InheritedData as _, StatelessView as _};
     use flui_sdk::view::{
-        AnimatedView as _, AsyncDriver as _, BoxedView as _, BuildContext as _,
-        BuildContextExt as _, Child as _, FieldMask as _, FrameWaker as _, GlobalKey as _,
-        HostNoticeSubscription as _, InheritedData as _, InheritedView as _, IntoView as _,
-        LifecycleHandle as _, PostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
-        RenderObjectContext as _, RenderView as _, StatefulView as _, View as _, ViewExt as _,
-        ViewState as _, WindowClosed as _, WindowHandle as _, WindowSubscription as _,
-        impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
-        single_child_view_children as _,
+        AnimatedView as _, BoxedView as _, BuildContext as _, BuildContextExt as _, Child as _,
+        FieldMask as _, GlobalKey as _, HostNoticeSubscription as _, InheritedData as _,
+        InheritedView as _, IntoView as _, LifecycleHandle as _, RebuildHandle as _,
+        RebuildReason as _, RenderObjectContext as _, RenderView as _, StatefulView as _,
+        View as _, ViewExt as _, ViewState as _, WindowClosed as _, WindowHandle as _,
+        WindowSubscription as _, impl_animated_view as _, impl_inherited_view as _,
+        impl_render_view as _, single_child_view_children as _,
     };
     use flui_sdk::widgets::__private::{
         AnchoredBox as _, FlightSeat as _, SeatClaim as _, SeatHold as _, TextFormFieldConfig as _,
@@ -326,7 +328,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::geometry::Rect) -> flui_sdk::geometry::Rect = |x| x;
     let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::Color = |x| x;
     let _: fn(flui::view::RebuildHandle) -> flui_sdk::view::RebuildHandle = |x| x;
-    let _: fn(flui::view::WidgetsBinding) -> flui_sdk::view::WidgetsBinding = |x| x;
+    let _: fn(flui::scheduler::PostFrameHandle) -> flui_sdk::scheduler::PostFrameHandle = |x| x;
     let _: fn(flui::view::dev_reload::ReloadWake) -> flui_sdk::view::dev_reload::ReloadWake = |x| x;
     let _: fn(flui::view::persist::SaveStatus) -> flui_sdk::view::persist::SaveStatus = |x| x;
     let _: fn(flui::widgets::Text) -> flui_sdk::widgets::Text = |x| x;
@@ -511,6 +513,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub mod pipeline {",
         "pub mod platform {",
         "pub mod rendering {",
+        "pub mod scheduler {",
         "pub mod text_input {",
         "pub mod view {",
         "pub use flui_animation::*;",
@@ -737,7 +740,11 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_rendering::protocol::BoxProtocol;",
         "pub use flui_rendering::view::ScrollDirection;",
         "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
+        "pub use flui_scheduler::AsyncDriver;",
         "pub use flui_scheduler::FrameSnapshot;",
+        "pub use flui_scheduler::FrameWaker;",
+        "pub use flui_scheduler::PostFrameHandle;",
+        "pub use flui_scheduler::TaskToken;",
         "pub use flui_semantics::SemanticsRegion;",
         "pub use flui_semantics::SemanticsRegionKey;",
         "pub use flui_view::*;",

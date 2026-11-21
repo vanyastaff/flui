@@ -33,7 +33,7 @@ use flui_platform::{
         WindowRef,
     },
 };
-use flui_view::CapabilitySource;
+use flui_view::__runtime::CapabilitySource;
 use parking_lot::Mutex;
 
 mod built_ins;

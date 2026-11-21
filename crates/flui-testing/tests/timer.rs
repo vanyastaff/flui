@@ -5,9 +5,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_scheduler::{TaskToken, TimerHandle};
 use flui_testing::widgets::{lay_out, tight};
 use flui_view::prelude::*;
-use flui_view::{TaskToken, TimerHandle};
 
 /// Sleeps `after` from `init_state`, then sets `done`; `dropped` is set when
 /// the task's future is dropped, finished or not.

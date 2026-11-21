@@ -14,10 +14,9 @@
 
 use std::any::TypeId;
 
-use flui_view::{
-    BuildContext, BuildOwner, ElementId, ElementTree, IntoView, LifecycleHook, RebuildReason,
-    RecoveredAt, StatelessView, View, ViewExt,
-};
+use flui_foundation::ElementId;
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
+use flui_view::{BuildContext, IntoView, RebuildReason, StatelessView, View, ViewExt};
 
 // ============================================================================
 // Test fixtures

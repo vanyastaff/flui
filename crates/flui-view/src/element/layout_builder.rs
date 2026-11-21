@@ -87,7 +87,7 @@ pub(crate) type LayoutWidgetBuilder = Rc<dyn Fn(&dyn BuildContext, BoxConstraint
 ///
 /// ```
 /// use flui_view::element::LayoutBuilder;
-/// use flui_view::view::ErrorView;
+/// use flui_view::ErrorView;
 ///
 /// let responsive = LayoutBuilder::new(|_ctx, constraints| {
 ///     if constraints.max_width > 600.0 {
@@ -378,7 +378,7 @@ mod tests {
     use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
-    use crate::{BuildOwner, IntoView, tree::ElementTree, view::ViewExt};
+    use crate::{IntoView, owner::BuildOwner, tree::ElementTree, view::ViewExt};
 
     /// A leaf view of a fixed size — the child a builder returns.
     #[derive(Clone, Debug)]

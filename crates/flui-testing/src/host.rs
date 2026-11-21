@@ -1653,8 +1653,8 @@ impl HeadlessHost {
     ///
     /// # Errors
     ///
-    /// [`flui_view::AttachError`] if a root is already attached.
-    pub fn attach<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
+    /// [`flui_view::__runtime::AttachError`] if a root is already attached.
+    pub fn attach<V>(&self, view: &V) -> Result<(), flui_view::__runtime::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {
@@ -2305,7 +2305,7 @@ impl HeadlessHost {
     ///
     /// # Errors
     ///
-    /// [`flui_view::AttachError`] if a root is already attached.
+    /// [`flui_view::__runtime::AttachError`] if a root is already attached.
     ///
     /// # Panics
     ///
@@ -2314,7 +2314,7 @@ impl HeadlessHost {
         &self,
         window: HeadlessWindowId,
         view: &V,
-    ) -> Result<(), flui_view::AttachError>
+    ) -> Result<(), flui_view::__runtime::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {

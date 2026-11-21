@@ -19,7 +19,8 @@ use flui_devtools::inspector::InspectorCounters;
 use flui_objects::RenderSizedBox;
 use flui_sdk::foundation::observe::TreeObserver;
 use flui_sdk::foundation::{ElementId, ValueKey, ViewKey};
-use flui_sdk::view::{BuildOwner, ElementTree, RebuildReason, RenderView, View, ViewExt};
+use flui_sdk::view::{RebuildReason, RenderView, View, ViewExt};
+use flui_view::__runtime::{BuildOwner, ElementTree};
 
 #[derive(Clone)]
 struct KeyedLeafBox {

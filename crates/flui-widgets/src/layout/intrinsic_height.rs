@@ -1,8 +1,9 @@
 //! [`IntrinsicHeight`] — sizes child to its maximum intrinsic height.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderIntrinsicHeight;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to the child's maximum intrinsic height.
 ///

@@ -2,11 +2,12 @@
 
 use std::rc::Rc;
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::Size;
 use flui_objects::RenderCustomPaint;
 use flui_rendering::delegates::CustomPainter;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Provides a canvas for a background and/or foreground [`CustomPainter`] to
 /// draw on, around an optional child.

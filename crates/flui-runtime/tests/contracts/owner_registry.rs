@@ -482,7 +482,7 @@ fn a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings() {
         let seen = Rc::clone(&seen);
         let (_, subscribed) = runtime
             .widgets()
-            .with_build_owner(flui_view::BuildOwner::lifecycle_handle)
+            .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
             .expect("presentation lifecycle handle")
             .subscribe(move |state| {
                 seen.borrow_mut().push(state);

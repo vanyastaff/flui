@@ -32,10 +32,12 @@ use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::InheritedElement;
 use flui_view::testing::ElementBuildContext;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementTree, InheritedElement, IntoView, RenderView,
-    StatelessView, View, ViewExt, view::InheritedView,
+    BuildContext, BuildContextExt, InheritedView, IntoView, RenderView, StatelessView, View,
+    ViewExt,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -619,10 +621,11 @@ mod did_change_dependencies_on_inherited_update {
         },
     };
 
+    use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
     use flui_view::{
-        BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementTree, ErrorView,
-        InheritedView, IntoView, LifecycleContext, LifecycleHook, RebuildReason, RecoveredAt,
-        RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
+        BoxedView, BuildContext, BuildContextExt, ErrorView, InheritedView, IntoView,
+        LifecycleContext, RebuildReason, RenderView, StatefulView, StatelessView, View, ViewExt,
+        ViewState,
     };
 
     use super::{LeafView, MyTheme};
@@ -776,7 +779,7 @@ mod did_change_dependencies_on_inherited_update {
         // parent instead of orphaning under a render-less owner-carrying
         // root.
         let render_root_element = tree.mount_root_with_pipeline_owner(
-            &flui_view::RootRenderView::new(provider_v1.clone()),
+            &flui_view::__runtime::RootRenderView::new(provider_v1.clone()),
             Some(flui_rendering::pipeline::PipelineCell::new(
                 flui_rendering::pipeline::PipelineOwner::new(
                     flui_rendering::TextContextHandle::standalone(),

@@ -1,8 +1,9 @@
 //! Recovery drops opaque payloads once it has recorded them, before invoking factories and diagnostics.
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
 use flui_view::LifecycleContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, ErrorView, IntoView, LifecycleHook, RebuildReason,
-    RecoveredAt, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, ErrorView, IntoView, RebuildReason, StatefulView, StatelessView, View, ViewExt,
+    ViewState,
 };
 use std::{
     any::TypeId,

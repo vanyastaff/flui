@@ -54,9 +54,3 @@ pub use stateful::{StatefulView, ViewState};
 pub use stateful_render::{RenderViewState, StatefulRenderView};
 pub use stateless::StatelessView;
 pub use view::{ChildViews, ElementBase, ElementDepth, View};
-
-// Re-export unified element types from element module
-pub use crate::element::{
-    AnimatedElement, InheritedElement, ParentDataElement, ProxyElement, RenderElement,
-    StatefulElement, StatelessElement,
-};

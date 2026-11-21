@@ -104,6 +104,9 @@ flui-scheduler = { workspace = true }
 # and the pipeline owner the inspector tests lay it out with. Neither is SDK surface.
 flui-objects = { workspace = true }
 flui-rendering = { workspace = true }
+# The inspector tests' and the observer-overhead bench's bare build owner and element
+# tree, which only `flui_view::__runtime` names (ADR-0081 §4).
+flui-view = { workspace = true }
 # The composition an app ships: FLUI's log subscriber plus the profiler layer.
 flui-log = { workspace = true }
 # The observer-overhead bench.

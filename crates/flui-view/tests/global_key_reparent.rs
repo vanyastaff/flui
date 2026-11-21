@@ -16,14 +16,12 @@
 
 #![cfg(feature = "testing")]
 use flui_foundation::ViewKey;
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::LifecycleContext;
+use flui_view::testing::{CollectedEvent, reconcile_children};
 use flui_view::{
-    BuildContext, BuildOwner, ChildViews, ElementTree, GlobalKey, IntoView, StatefulView, View,
-    ViewExt, ViewState,
-    tree::{
-        ReconcileEventKind,
-        test_utils::{CollectedEvent, reconcile_children},
-    },
+    BuildContext, ChildViews, GlobalKey, IntoView, ReconcileEventKind, StatefulView, View, ViewExt,
+    ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;

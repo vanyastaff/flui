@@ -290,6 +290,21 @@ pub use flui_foundation::inspect::Inspect;
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
+/// The frame scheduler's values (`flui-scheduler`) a widget's state holds or
+/// receives: the asynchronous driver and its task tokens, the timer and its
+/// sleeps, the post-frame handle, a frame's timing and phase, and the waker
+/// that requests a frame.
+///
+/// A state acquires the handles from its `LifecycleContext` (`async_driver`,
+/// `timer`, `post_frame_handle`).
+pub mod scheduler {
+    /// The frame scheduler a [`PostFrameHandle`] is made from.
+    pub use flui_scheduler::UpdateScheduler;
+    pub use flui_scheduler::{
+        AsyncDriver, BoxedTask, FrameId, FramePhase, FrameTiming, FrameWaker, Instant,
+        PostFrameHandle, PostFrameScheduleError, Sleep, TaskToken, TimerHandle,
+    };
+}
 /// OS services from capability crates (ADR-0154 §8), each behind the feature
 /// of its name.
 ///
@@ -501,8 +516,8 @@ pub mod platform {
 }
 pub use flui_widgets as widgets;
 
-/// The view layer (`flui-view`): View/Element, `BuildContext`, keys,
-/// signals and the widgets binding.
+/// The view layer (`flui-view`): View/Element, `BuildContext`, keys and
+/// signals.
 ///
 /// A glob module rather than a whole-crate alias, so that it can shadow
 /// `flui_view::__runtime`, the composition roots' seam (ADR-0081 §4), which
@@ -514,8 +529,6 @@ pub use flui_widgets as widgets;
 /// use flui::view::__runtime;
 /// ```
 pub mod view {
-    /// The frame scheduler a [`PostFrameHandle`] is made from.
-    pub use flui_app::bindings::UpdateScheduler;
     pub use flui_view::*;
     #[expect(
         hidden_glob_reexports,

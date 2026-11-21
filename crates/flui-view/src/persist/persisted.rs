@@ -21,11 +21,9 @@ use super::{CodecStep, Document, PersistError, ReadOnlyReason, Revision, SaveSta
 use super::{StorageCapability, StorageHandle};
 use crate::context::CrateToken;
 use crate::flush_registry::{FlushPublisher, FlushRegistry, FlushState};
-use crate::{
-    AppLifecycleState, AsyncDriver, CloseGuard, CloseHold, LifecycleSubscription, TaskToken,
-    TimerHandle,
-};
+use crate::{AppLifecycleState, CloseGuard, CloseHold, LifecycleSubscription};
 use crate::{LifecycleContext, LifecycleContextExt, UnmountHook};
+use flui_scheduler::{AsyncDriver, TaskToken, TimerHandle};
 
 /// The first word of a stored document's header line.
 const HEADER_MAGIC: &str = "flui-document";

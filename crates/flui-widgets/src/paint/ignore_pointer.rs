@@ -1,8 +1,9 @@
 //! [`IgnorePointer`] — makes its subtree invisible to hit-testing.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderIgnorePointer;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// During hit-testing, makes its child (and subtree) invisible to pointer
 /// events while still laying it out and painting it.

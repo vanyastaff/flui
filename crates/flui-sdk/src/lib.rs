@@ -14,8 +14,8 @@
 //!   and `flui::widgets::Text` are one type. [`view`] is a glob of the whole
 //!   `flui-view` crate that shadows its `__runtime` seam (ADR-0081 §4).
 //! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
-//!   [`platform`] and [`rendering`] hold the subset of the facade's module that
-//!   packages use, as the same items, not wrappers.
+//!   [`platform`], [`rendering`] and [`scheduler`] hold the subset of the
+//!   facade's module that packages use, as the same items, not wrappers.
 //! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
 //!   and development hooks the facade does not expose. A package's exposure to
 //!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
@@ -79,6 +79,16 @@ pub mod view {
         reason = "shadows the glob's `__runtime` (ADR-0081 §4): the composition roots' seam is not SDK surface"
     )]
     mod __runtime {}
+}
+
+/// The frame scheduler's handles packages hold, at the facade's path: the
+/// asynchronous driver and the token of a task it runs, the post-frame handle,
+/// and the waker that requests a frame.
+pub mod scheduler {
+    pub use flui_scheduler::AsyncDriver;
+    pub use flui_scheduler::FrameWaker;
+    pub use flui_scheduler::PostFrameHandle;
+    pub use flui_scheduler::TaskToken;
 }
 
 /// Platform values: brightness, locale, a clipboard read's answer and a write, haptic
