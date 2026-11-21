@@ -11,6 +11,8 @@
 //! `flui_platform::PlatformWindow`, and a frame leaves through a
 //! [`FrameSink`](sink::FrameSink) the host implements.
 //!
+//! - [`agent`]: the development agent's service (ADR-0288) — the conversation
+//!   a driver holds with the app, written once for every transport;
 //! - [`capability`]: the registry presentations acquire platform capabilities
 //!   from, and the queue a provider's answers reach the owner through
 //!   (ADR-0152);
@@ -20,21 +22,19 @@
 //! - [`ui_runtime`]: `UiRuntime`, the owner-affine UI runtime — the presentations it
 //!   hosts, their frame transaction, input routing, lifecycle and command
 //!   inbox;
+//! - [`owner`]: the owner-local lifetime and publication of UI runtimes, and the
+//!   dispatchers a host's owner turn reaches them through;
 //! - [`owner_turn`]: the close, quit and session-end steps every host's owner
 //!   turn runs, so a runner and the headless host answer them alike;
 //! - [`presentation`]: one presentation's owner-thread state (a UI runtime keeps
 //!   its presentations in a private, mount-ordered forest);
-//! - [`lifecycle_state`]: the per-presentation application lifecycle
-//!   derivation;
 //! - [`frame_failure`]: what a contained frame failure reports and how the
 //!   application's handler observes it, including sampling provenance and
 //!   whether an admitted presentation attempt was rejected;
+//! - [`frame_rate_demand`]: the refresh rate a presentation asks its display
+//!   for (ADR-0236);
 //! - [`renderer_binding`]: the per-presentation rendering binding over a
 //!   pipeline owner;
-//! - [`epoch`]: the tree revision a presentation's frames advance and whether
-//!   the current one has been acknowledged by a submit;
-//! - [`held_input`]: the bounded pointer input a presentation retains while it
-//!   has no committed tree, and its replay;
 //! - [`execution`]: the loop-scoped background execution services (ADR-0047)
 //!   — the compute and IO lanes, their bounded admission and shutdown, and
 //!   the host-injection seam — which only the host constructs;
@@ -43,13 +43,14 @@
 //!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;
 //! - `reload` (with the `hot-reload` feature): the development reload tier a
 //!   UI runtime applies, translated from the host's hot-reload driver;
-//! - [`semantics_host`]: per-presentation semantics enablement and platform
-//!   accessibility delivery;
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
 //!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the UI runtime
 //!   classifies;
-//! - `testing` (with the `testing` feature): a window double and a
-//!   scripted sink for driving a UI runtime headlessly.
+//! - [`window_system`]: what a host's windows are drawn in, a platform's
+//!   window system or a browser's page, which the policies that differ
+//!   between them read;
+//! - `testing` (with the `testing` feature): a scripted sink and a
+//!   presentation's scene totals, for driving a UI runtime headlessly.
 
 #![warn(clippy::disallowed_types)]
 #![cfg_attr(
@@ -62,15 +63,15 @@
 pub mod agent;
 pub mod capability;
 pub mod dev_agent;
-pub mod epoch;
+mod epoch;
 pub mod execution;
 pub mod frame_failure;
 pub mod frame_rate_demand;
-pub mod held_input;
+mod held_input;
 mod host_input;
 mod input_record;
 mod input_tap;
-pub mod lifecycle_state;
+mod lifecycle_state;
 mod media_query_root;
 mod occluded_frame;
 mod overlay_style;
@@ -86,7 +87,7 @@ mod recording_wire;
 pub mod reload;
 pub mod renderer_binding;
 mod runtime_services;
-pub mod semantics_host;
+mod semantics_host;
 pub mod sink;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -95,15 +96,14 @@ pub mod window_system;
 
 #[cfg(test)]
 mod table_test;
-pub use flui_animation::MotionOverride;
 pub use host_input::{HostInput, ShownFrame};
 pub use input_record::{
     DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
     RecordedSequence, RecordedSurface, RecordingStart, RecordingWindow,
 };
 pub use input_tap::{
-    INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,
-    TapFailure, TapFailureSite,
+    InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete, TapFailure,
+    TapFailureSite,
 };
 pub use recording_wire::Privacy;
 
@@ -116,6 +116,5 @@ pub mod __runtime {
     pub use crate::recording_wire::{
         WireError, device_from_wire, device_to_wire, preferences_row_from_wire,
         preferences_row_to_wire, profiles_from_wire, profiles_to_wire, record_to_wire,
-        start_to_wire,
     };
 }

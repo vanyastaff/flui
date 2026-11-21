@@ -12,8 +12,8 @@
 //!   value it wraps
 //! - [`UpdateScheduler`] - Frame scheduling (from flui-scheduler)
 //! - [`RenderingBinding`] - Rendering integration (from flui-runtime); per-window
-//!   semantics enablement/announce/event delivery lives on `SemanticsHost`
-//!   (`flui_runtime::semantics_host`), not on a process-wide accessibility
+//!   semantics enablement/announce/event delivery lives on flui-runtime's
+//!   per-presentation `SemanticsHost`, not on a process-wide accessibility
 //!   binding
 //!
 //! # No combined binding

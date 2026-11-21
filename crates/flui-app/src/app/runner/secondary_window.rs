@@ -248,7 +248,7 @@ struct SecondaryWindowInstallConfig {
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
     pointer_resampling: flui_runtime::presentation::PointerResampling,
-    motion_override: flui_runtime::MotionOverride,
+    motion_override: flui_animation::MotionOverride,
     error_view_builder: Option<flui_view::ErrorViewBuilder>,
     input_tap: Option<flui_runtime::InputTapFactory>,
 }

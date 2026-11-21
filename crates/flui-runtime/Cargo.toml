@@ -19,12 +19,12 @@ exclude = ["/ARCHITECTURE.md", "/fuzz/"]
 workspace = true
 
 [features]
-# Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
-# that has no production caller yet, and `ExecutionServices::with_limits`/
-# `default_pools_started`), and the `testing` module's `ScriptedSink` and
+# Test hooks (`ExecutionServices::with_limits`/`default_pools_started`, the
+# UI runtime's `for_test` constructors and `*_for_test` probes), and the
+# `testing` module's `ScriptedSink` and
 # `SceneTotals`, and decoding a recording's rows (`__runtime::record_from_wire`,
-# which names a window by value), for this crate's own tests, `flui-testing`'s and `flui-app`'s,
-# which enable it on their dev edge. Never on a normal edge.
+# which names a window by value), for this crate's own tests, `flui-app`'s dev
+# edge, and `flui-testing`, the host of the headless test loop (ADR-0083 §4).
 testing = ["flui-platform/testing", "flui-layer/testing"]
 # `reload::ReloadTier`, the development reload the UI runtime applies. Names no
 # hot-reload crate; `flui-app` always turns it on and translates an installed

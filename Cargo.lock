@@ -1770,6 +1770,7 @@ dependencies = [
  "android-activity",
  "anyhow",
  "crossbeam-channel",
+ "flui-animation",
  "flui-app",
  "flui-engine",
  "flui-foundation",

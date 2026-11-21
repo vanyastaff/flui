@@ -18,7 +18,7 @@ prefers, the animation type decides whether the application follows it.
 ## Decision
 
 The application setting is `flui_animation::MotionOverride`, re-exported by
-`flui-runtime` and `flui-app` under that name. Its variants keep their meaning:
+`flui-app` under that name. Its variants keep their meaning:
 `FollowSystem` resolves the host preference as ADR-0195 describes, `Reduce` and
 `Full` override it. The setters follow the type: `MotionClock::set_override`,
 `UiRuntime::set_motion_override`, `AppConfig::motion_override` and the
