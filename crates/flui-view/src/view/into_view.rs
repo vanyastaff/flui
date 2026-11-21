@@ -56,37 +56,6 @@ impl<V: View> IntoView for V {
     }
 }
 
-/// `IntoView` bridge for already-erased `Box<dyn View>` values.
-///
-/// `Box<dyn View>` does *not* implement [`View`] directly (only
-/// [`BoxedView`] does), so the blanket `impl<V: View> IntoView for V`
-/// above does not cover it. This impl is the explicit bridge that wraps
-/// a `Box<dyn View>` into a [`BoxedView`] so any code path that already
-/// produces an erased pointer (`ErrorView::build_error_view`, legacy
-/// `Box<dyn View>`-returning `StatelessView::build` impls) can flow into an
-/// `impl IntoView` position without an explicit `.boxed()` wrap.
-///
-/// The recommended authoring shape is still to return a concrete
-/// `impl IntoView` (or `BoxedView` via `.boxed()` at the recursion edge);
-/// this impl exists for *interop* with already-erased values, not as a
-/// second authoring path. We do NOT generalize this to
-/// `impl<V: View + ?Sized> IntoView for Box<V>` because it would
-/// conflict (E0119) with the blanket
-/// `impl<V: View> IntoView for V` whenever some future downstream
-/// crate adds `impl View for Box<…>`. Concrete `Box<SomeView>` returns
-/// (`Box::new(SomeView { … })`) are migrated to either bare
-/// `SomeView { … }` (concrete `impl IntoView` via the blanket) or
-/// `SomeView { … }.boxed()` (`BoxedView`, also `impl IntoView` via
-/// the blanket) — not via an interop shim on `Box<concrete>`.
-impl IntoView for Box<dyn View> {
-    type View = BoxedView;
-
-    #[inline]
-    fn into_view(self) -> Self::View {
-        BoxedView::from(self)
-    }
-}
-
 // ============================================================================
 // IntoElement
 // ============================================================================
@@ -122,14 +91,6 @@ impl<V: View> IntoElement for V {
     }
 }
 
-/// Implementation for boxed Views.
-impl IntoElement for Box<dyn View> {
-    #[inline]
-    fn into_element(self) -> ElementKind {
-        Rc::<dyn View>::from(self).create_element()
-    }
-}
-
 /// The view `view` offers, as a `V` in a shared allocation: the innermost
 /// [`BoxedView`]'s own `Rc` when `view` is one, otherwise a typed clone of the
 /// `V` offered by reference. `None` when the view is not a `V`.
@@ -152,7 +113,7 @@ pub(crate) fn shared_view_of<V: View + Clone>(view: &dyn View) -> Option<Rc<V>> 
 /// An element kind for type erasure.
 ///
 /// Used when the concrete Element type cannot be known at compile time.
-pub struct BoxedElement(pub ElementKind);
+pub struct BoxedElement(ElementKind);
 
 impl std::fmt::Debug for BoxedElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -183,14 +144,6 @@ impl BoxedElement {
         self.0
     }
 }
-
-/// Deprecated compatibility marker for the pre-`ElementKind` element boxing API.
-///
-/// The old `.boxed()` helper could wrap any `ElementBase` in
-/// `Box<dyn ElementBase>`, but that loses the closed family variant required by
-/// [`ElementKind`]. New code should create elements through
-/// [`View::create_element`] or [`IntoElement::into_element`].
-pub trait ElementExt: ElementBase + Sized {}
 
 /// A type-erased, shared View.
 ///

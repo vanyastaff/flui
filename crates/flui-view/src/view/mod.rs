@@ -44,7 +44,7 @@ pub(crate) use error::recovery_view_for;
 // together, as `Clone` or `serde::Serialize` do.
 pub use flui_macros::{InheritedData, StatefulView, StatelessView};
 pub use inherited::{FieldMask, FieldSet, InheritedData, InheritedView};
-pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
+pub use into_view::{BoxedElement, BoxedView, IntoElement, IntoView, ViewExt};
 pub use memo::Memo;
 pub use parent_data::{ParentDataConfig, ParentDataView};
 pub use proxy::ProxyView;

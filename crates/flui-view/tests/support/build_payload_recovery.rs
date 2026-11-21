@@ -116,7 +116,7 @@ impl<S: tracing::Subscriber> Layer<S> for FailedTelemetry {
     }
 }
 
-fn failing_factory(_: &flui_view::FrameworkError) -> Box<dyn View> {
+fn failing_factory(_: &flui_view::FrameworkError) -> flui_view::BoxedView {
     panic!("recovery factory failed")
 }
 

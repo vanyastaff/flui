@@ -51,8 +51,8 @@ struct PanickingView {
 
 impl StatelessView for PanickingView {
     // `!` does not implement `IntoView` — bind the panic through an
-    // explicit `Box<dyn View>` so the inference uses the
-    // `IntoView for Box<dyn View>` shim. The line still panics (the
+    // explicit `BoxedView` so the inference has a
+    // concrete `IntoView` type. The line still panics (the
     // assignment never completes); the bind exists purely to anchor
     // a concrete `impl IntoView`-satisfying type.
     #[expect(
@@ -61,7 +61,7 @@ impl StatelessView for PanickingView {
         reason = "panic body — see comment above"
     )]
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let v: Box<dyn View> = panic!("{}", self.message);
+        let v: BoxedView = panic!("{}", self.message);
         v
     }
 }
@@ -177,9 +177,9 @@ fn stateless_build_panic_substitutes_registered_error_view() {
     // the rendered child even under parallel cargo-test runs.
     static BUILDER_HITS: AtomicUsize = AtomicUsize::new(0);
     BUILDER_HITS.store(0, Ordering::SeqCst);
-    fn builder(error: &FrameworkError) -> Box<dyn View> {
+    fn builder(error: &FrameworkError) -> BoxedView {
         BUILDER_HITS.fetch_add(1, Ordering::SeqCst);
-        Box::new(ErrorView::new(format!("custom: {}", error.message)))
+        BoxedView::new(ErrorView::new(format!("custom: {}", error.message)))
     }
 
     let view = PanickingView {

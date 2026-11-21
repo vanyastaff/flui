@@ -68,7 +68,7 @@ impl View for Subject {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
-fn failing_factory(_: &flui_view::FrameworkError) -> Box<dyn View> {
+fn failing_factory(_: &flui_view::FrameworkError) -> flui_view::BoxedView {
     panic!("child recovery factory failed")
 }
 struct FailedTelemetry {

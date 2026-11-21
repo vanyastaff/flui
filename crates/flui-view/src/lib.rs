@@ -115,58 +115,6 @@ pub mod testing;
 mod tree;
 mod view;
 
-// Legacy test-only global-key registry shims. Live in `lib.rs` rather than
-// `key/mod.rs` so the public name is `flui_view::test_only_*` — short,
-// clearly tagged as test-only via the prefix. Production code activates
-// the registry handle owned by `WidgetsBinding`; integration fixtures that
-// bypass a binding still need this entrypoint until they adopt scoped harnesses.
-mod test_only_global_key_registry {
-    use std::{cell::RefCell, rc::Rc};
-
-    use crate::{
-        key::registry::{GlobalKeyRegistryHandle, install_registry, take_registry},
-        owner::BuildOwner,
-        tree::ElementTree,
-    };
-
-    /// Install the given `ElementTree` + `BuildOwner` as the
-    /// current-thread registry source for `GlobalKey::current_*` lookups.
-    ///
-    /// Tests in `tests/global_key.rs` install a handle pointing to a
-    /// local tree, run their assertions, then call
-    /// [`test_only_clear_global_key_registry`].
-    ///
-    /// **Not for production code.** Production activates the UI runtime-owned
-    /// binding handle only inside `UiRuntime::enter`.
-    #[doc(hidden)]
-    pub fn test_only_set_global_key_registry(
-        tree: &Rc<RefCell<ElementTree>>,
-        owner: &Rc<RefCell<BuildOwner>>,
-    ) {
-        let owner_for_lookup = Rc::clone(owner);
-        let tree_for_visit = Rc::clone(tree);
-        let handle = GlobalKeyRegistryHandle::new(
-            move |key| Ok(owner_for_lookup.borrow().element_for_global_key(key)),
-            move |id, f| {
-                let tree = tree_for_visit.borrow();
-                if let Some(node) = tree.get(id) {
-                    f(node.element());
-                }
-                Ok(())
-            },
-        );
-        let _ = install_registry(handle);
-    }
-
-    /// Clear the current-thread registry handle. No-op if no handle was
-    /// installed. Tests call this in their teardown so subsequent
-    /// tests start from a quiescent state.
-    #[doc(hidden)]
-    pub fn test_only_clear_global_key_registry() {
-        let _ = take_registry();
-    }
-}
-
 // ============================================================================
 // Re-exports
 // ============================================================================
@@ -215,11 +163,6 @@ pub use element::notification::{
 pub use element::provided::{Provided, ProvidedValue};
 // Keys
 pub use key::{GlobalKey, KeyLookup, ObjectKey, ValueKey};
-// Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
-// activates the handle through `UiRuntime::enter`; tests bypass the binding.
-pub use test_only_global_key_registry::{
-    test_only_clear_global_key_registry, test_only_set_global_key_registry,
-};
 // An element's owner, and the handles a state keeps
 pub use owner::{
     ElementOwner, KeepAliveHandle, KeepAliveLease, RebuildHandle, RebuildReason, UnmountHook,
@@ -234,8 +177,8 @@ pub use seq::ViewSeq;
 // The keyed reconciler's trace stream
 pub use tree::{RECONCILE_TARGET, ReconcileEvent, ReconcileEventKind};
 pub use view::{
-    AnimatedView, BoxedElement, BoxedView, ChildViews, ElementBase, ElementDepth, ElementExt,
-    ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData, InheritedView,
+    AnimatedView, BoxedElement, BoxedView, ChildViews, ElementBase, ElementDepth, ErrorView,
+    ErrorViewBuilder, FieldMask, FieldSet, FrameworkError, InheritedData, InheritedView,
     IntoElement, IntoView, Memo, ParentDataConfig, ParentDataView, ProxyView, RenderObjectContext,
     RenderObjectContextError, RenderView, RenderViewState, StatefulRenderView, StatefulView,
     StatelessView, View, ViewExt, ViewState,

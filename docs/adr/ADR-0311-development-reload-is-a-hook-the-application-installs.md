@@ -48,7 +48,7 @@ is rejected, so the seam had no accepted record. What `main` holds:
 | Hosts called different methods when this record was accepted: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook did nothing on Android, a scene hook nothing elsewhere ([ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md) has every native host ask the scene hook) | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
 | `flui-app` has no edge to `flui-hot-reload` under any feature | `FACTS` in `tools/xtask/src/workspace/reach.rs` |
 | `flui-hot-reload` is an official package (`tier-kind = "official"`) under `packages/`, implementing both hooks behind its `host-hook` feature | `packages/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
-| Ten manifest exceptions are debt of the dlopen path: in `flui-hot-reload` two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`) | the manifests' `[package.metadata.flui]` |
+| Nine manifest exceptions are debt of the dlopen path: in `flui-hot-reload` two `reach-exceptions` and six `globals`; in `flui-view` one `globals` (`REGISTRY_STACK`, `ManuallyDrop` for a hot-reload `cdylib`) | the manifests' `[package.metadata.flui]` |
 
 What is the contract of the reload seam, independent of the tool behind it, and where do the dlopen
 path's exceptions exit?
@@ -246,7 +246,7 @@ user code:
   the package implements the hooks today. The framework states no rule about them; ADR-0108 and
   ADR-0111 hold their lifetime contracts.
 - What the path keeps in the framework is debt whose `exit` is this record: `flui-view`'s
-  `REGISTRY_STACK` and `TEST_REGISTRY` in `ManuallyDrop` form; the package's `globals` entries
+  `REGISTRY_STACK` in `ManuallyDrop` form; the package's `globals` entries
   (`dispatch::REQUEST_REBUILD`, the three statics `app_plugin!` emits,
   `worker::REGISTRATION_SESSION`, `worker::WORKER_BUILDS`); its `reach-exceptions` for `windows`
   and `android_log-sys`, which the loader needs.

@@ -419,20 +419,31 @@ struct Frames {
     tree: Rc<RefCell<ElementTree>>,
     owner: Rc<RefCell<BuildOwner>>,
     root: ElementId,
+    _registry: flui_view::testing::GlobalKeyRegistryActivation,
 }
 
 struct Unmounted {
     tree: Rc<RefCell<ElementTree>>,
     owner: Rc<RefCell<BuildOwner>>,
+    registry: flui_view::testing::GlobalKeyRegistryActivation,
 }
 
 impl Unmounted {
     fn mounted(self, view: &BoxedView) -> Frames {
-        let Self { tree, owner } = self;
+        let Self {
+            tree,
+            owner,
+            registry,
+        } = self;
         let root = tree
             .borrow_mut()
             .mount_root(view, &mut owner.borrow_mut().element_owner_mut());
-        let frames = Frames { tree, owner, root };
+        let frames = Frames {
+            tree,
+            owner,
+            root,
+            _registry: registry,
+        };
         frames.build(RebuildReason::InitialMount);
         frames
     }
@@ -448,8 +459,12 @@ impl Frames {
     fn empty() -> Unmounted {
         let tree = Rc::new(RefCell::new(ElementTree::new()));
         let owner = Rc::new(RefCell::new(BuildOwner::new()));
-        flui_view::test_only_set_global_key_registry(&tree, &owner);
-        Unmounted { tree, owner }
+        let registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
+        Unmounted {
+            tree,
+            owner,
+            registry,
+        }
     }
 
     /// Build what is scheduled, without scheduling the root.
@@ -516,7 +531,6 @@ pub(crate) fn provided_value_change_notifies_like_inherited_element() {
     }
 }
 
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn provided_value_follows_a_moved_subtree() {
     for kind in &KINDS {
         let probe = Seen::default();
@@ -850,7 +864,6 @@ pub(crate) fn a_provider_any_number_of_providers_up_is_found_and_the_nearest_sha
     }
 }
 
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn a_subtree_moved_to_another_depth_reads_its_new_ancestry() {
     // Two branches of different depths under one root; a keyed chain of its
     // own providers moves from the end of the shallow one to the end of the

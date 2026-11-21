@@ -26,6 +26,7 @@ use crate::context::build_context::{BuildContext, LifecycleContext};
 use crate::{
     context::acquire_capability,
     element::Notification,
+    key::registry::{GlobalKeyRegistryHandle, RegistryActivation, activate_registry},
     owner::BuildOwner,
     reactive::{ElementReads, ReadScope, ReaderSink, ScopeRef},
     tree::ElementTree,
@@ -653,5 +654,48 @@ impl LifecycleContext for ElementBuildContext {
     fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
         let tree = self.tree.borrow();
         tree.get(self.element_id)?.element().pipeline_owner()
+    }
+}
+
+/// Scope that makes `tree` and `owner` the registry `GlobalKey::current_*`
+/// lookups read on this thread, for a test that drives an element tree
+/// without a `UiRuntime`.
+///
+/// Production activates the registry its `WidgetsBinding` owns inside
+/// `UiRuntime::enter`. The registry is popped when the returned guard drops;
+/// guards pop last-in first-out, so declare one before anything else that
+/// activates a registry in the same test.
+#[must_use = "the registry is deactivated as soon as the guard drops"]
+pub fn activate_global_key_registry(
+    tree: &Rc<RefCell<ElementTree>>,
+    owner: &Rc<RefCell<BuildOwner>>,
+) -> GlobalKeyRegistryActivation {
+    let owner_for_lookup = Rc::clone(owner);
+    let tree_for_visit = Rc::clone(tree);
+    let handle = GlobalKeyRegistryHandle::new(
+        move |key| Ok(owner_for_lookup.borrow().element_for_global_key(key)),
+        move |id, f| {
+            let tree = tree_for_visit.borrow();
+            if let Some(node) = tree.get(id) {
+                f(node.element());
+            }
+            Ok(())
+        },
+    );
+    GlobalKeyRegistryActivation {
+        _activation: activate_registry(handle),
+    }
+}
+
+/// Guard returned by [`activate_global_key_registry`]; deactivates the
+/// registry on drop. Owner-thread only (`!Send`).
+#[must_use = "the registry is deactivated as soon as the guard drops"]
+pub struct GlobalKeyRegistryActivation {
+    _activation: RegistryActivation,
+}
+
+impl std::fmt::Debug for GlobalKeyRegistryActivation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GlobalKeyRegistryActivation")
     }
 }

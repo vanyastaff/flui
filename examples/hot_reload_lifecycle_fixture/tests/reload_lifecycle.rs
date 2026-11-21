@@ -54,7 +54,7 @@
 //! 3), not 1.
 //!
 //! The remaining source was `flui-view`'s `key::registry` module:
-//! `REGISTRY_STACK` and `TEST_REGISTRY` held `Arc`-containing handles directly
+//! `REGISTRY_STACK` held `Arc`-containing handles directly
 //! in droppable thread-locals. They are now drop-glue-free containers with
 //! explicit quiescent teardown, guarded by compile-time `needs_drop`
 //! assertions. [`dlclose_then_reload_same_path_serves_a_fresh_image`] is the
