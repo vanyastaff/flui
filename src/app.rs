@@ -1,16 +1,16 @@
-//! What an application sets up and hands to the runtime: its entry, its configuration, the work
-//! it runs off the frame, how its windows close, and what it does when a frame fails.
+//! What an application sets up and hands to the runtime: its configuration, the work it runs off
+//! the frame, how its windows close, and what it does when a frame fails.
 //!
-//! An application starts from [`run_app`] or an [`Application`] built and run from a
+//! An application starts from [`crate::run_app`] or an [`crate::Application`] built and run from a
 //! `#[flui::main]` function. The bindings, the root render view and the
 //! embedder are the runtime's composition roots and are not part of this module: a widget
 //! reaches the presentation through [`crate::view::BuildContext`] and its lifecycle hooks.
 
 pub use flui_app::DevReload;
 pub use flui_app::{
-    AppConfig, AppId, AppIdError, AppIdentity, Application, BackendFailure, DiagnosticsProfile,
-    EXIT_CODE_HUNG, FontRegistrationError, FrameLatency, GpuBackend, LaunchError, MotionOverride,
-    PointerResampling, UnsupportedSystem, main, register_font, run_app,
+    AppConfig, AppId, AppIdError, AppIdentity, BackendFailure, DiagnosticsProfile, EXIT_CODE_HUNG,
+    FontRegistrationError, FrameLatency, GpuBackend, PointerResampling, UnsupportedSystem,
+    register_font,
 };
 
 /// The entry macro's seam: `#[flui::main]` expands to calls into it.

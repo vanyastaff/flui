@@ -8,12 +8,9 @@
 //! render tree they own and the GPU compositor are the runtime's, not authoring contracts.
 
 pub use flui_foundation::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
-pub use flui_interaction::{
-    events::CursorIcon,
-    pointer::{
-        HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
-        ScrollTarget, SmartZoomTarget,
-    },
+pub use flui_interaction::pointer::{
+    HitMetadata, HitTestBehavior, MouseTrackerAnnotation, PanZoomTarget, PointerTarget,
+    ScrollTarget, SmartZoomTarget,
 };
 pub use flui_rendering::constraints::{
     BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry,
@@ -61,7 +58,6 @@ pub use flui_rendering::{
     forward_single_child_box_hit_test, forward_single_child_box_layout,
     forward_single_child_box_queries, forward_single_child_intrinsics,
 };
-pub use flui_semantics::{NumericRange, NumericRangeError, SemanticsConfiguration, SemanticsRole};
 
 /// The concrete render objects behind the built-in widgets, such as [`objects::RenderAlign`],
 /// [`objects::RenderFlex`] and [`objects::RenderSliverList`], with the configuration types they

@@ -6,7 +6,7 @@
 //! ```rust,ignore
 //! use flui_hot_reload::WorkerReloadHook;
 //!
-//! let config = flui::AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
+//! let config = flui::app::AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 //! ```
 //!
 //! - [`WorkerReloadHook`] — the host/worker split `flui create --hot-reload`

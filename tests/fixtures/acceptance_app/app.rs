@@ -287,7 +287,7 @@ pub const DATA_DIR: &str = "dev.flui.acceptance-app";
 pub fn launch() -> flui::Application {
     let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
         .expect("BUG: the acceptance application's data directory name is valid");
-    flui::Application::new().config(flui::AppConfig::new().storage_dir(dir))
+    flui::Application::new().config(flui::app::AppConfig::new().storage_dir(dir))
 }
 
 /// The acceptance application's root view.
