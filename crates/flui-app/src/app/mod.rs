@@ -52,9 +52,9 @@ pub use flui_runtime::frame_failure::{
     FrameFailureHandlerFactory, FrameFailureKind, FrameFailureReport, PanicText, SamplingFailure,
     SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
+pub use flui_runtime::owner_turn::CloseRequestHandler;
 #[cfg(not(target_os = "ios"))]
 pub use flui_runtime::owner_turn::{CloseRequest, CloseRequestError, CloseResponse};
-pub use flui_runtime::owner_turn::CloseRequestHandler;
 #[cfg(not(target_os = "ios"))]
 pub use flui_view::CloseReason;
 pub use hot_reload::DevReload;
