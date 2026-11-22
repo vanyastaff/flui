@@ -90,6 +90,10 @@ mod cases {
             a_closed_window_frees_its_view,
         ),
         (
+            "the_pointer_entering_and_leaving_reaches_the_view",
+            the_pointer_entering_and_leaving_reaches_the_view,
+        ),
+        (
             "each_display_is_named_as_appkit_names_its_screen",
             each_display_is_named_as_appkit_names_its_screen,
         ),
@@ -697,6 +701,69 @@ mod cases {
             view.load().is_none(),
             "the closed window's FLUI view outlived it"
         );
+    }
+
+    /// The tracking area's `mouseEntered:` and `mouseExited:` reach the view
+    /// as the pointer entering and leaving it. Their events are no press:
+    /// AppKit raises for `clickCount` on them, and an exception that crosses
+    /// into Rust aborts the process, so the view reads them as what they are.
+    #[expect(unsafe_code, reason = "the view behind the window's raw handle")]
+    fn the_pointer_entering_and_leaving_reaches_the_view() {
+        use flui_platform::PlatformInput;
+        use flui_platform::input::pointer::PointerEvent;
+        use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+        use objc2_foundation::NSPoint;
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+        let fixture = open("the pointer enters and leaves");
+        let target = fixture.window.surface_target();
+        let handle = target.window_handle().expect("an open window's handle");
+        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+            panic!("an AppKit window hands out an AppKit handle");
+        };
+        // SAFETY: the handle names the window's FLUI view, which the open
+        // window holds for as long as the fixture lives, on the main thread
+        // the cases run on.
+        let view = unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
+            .expect("the handle names a view");
+        let before = fixture.handler.calls().len();
+        for kind in [NSEventType::MouseEntered, NSEventType::MouseExited] {
+            // SAFETY: an enter or exit event with no context and no user
+            // data, the event a tracking area sends.
+            let event = unsafe {
+                NSEvent::enterExitEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_trackingNumber_userData(
+                    kind,
+                    NSPoint::new(10.0, 10.0),
+                    NSEventModifierFlags::empty(),
+                    0.0,
+                    fixture.ns_window.windowNumber(),
+                    None,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            }
+            .expect("AppKit makes an enter or exit event");
+            if kind == NSEventType::MouseEntered {
+                view.mouseEntered(&event);
+            } else {
+                view.mouseExited(&event);
+            }
+        }
+        let crossings: Vec<bool> = fixture.handler.calls()[before..]
+            .iter()
+            .filter_map(|call| match call {
+                HandlerCall::Input(PlatformInput::Pointer(PointerEvent::Enter(_))) => Some(true),
+                HandlerCall::Input(PlatformInput::Pointer(PointerEvent::Leave(_))) => Some(false),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            crossings,
+            [true, false],
+            "the pointer entered the view, then left it"
+        );
+        drop(target);
     }
 
     /// A window told to go back to normal from another mode and then to stop
