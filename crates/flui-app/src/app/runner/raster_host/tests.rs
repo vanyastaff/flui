@@ -15,8 +15,8 @@ use flui_layer::{DamageMode, DamageRegion, ScenePublication};
 use flui_runtime::sink::{FrameSettlement, SubmitVerdict};
 
 use super::{
-    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, ThreadSettled,
-    damage_mode_from,
+    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, damage_mode_from,
+    raster_slot::ThreadSettled,
 };
 
 const SIZE: (u32, u32) = (640, 480);

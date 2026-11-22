@@ -234,7 +234,7 @@ impl RasterSlot {
     }
 
     /// The deadline this window's own frame serves, for its wake's dirty
-    /// gate: [`RasterHost::window_deadline`], which the loop also wakes for
+    /// gate: [`RasterHost::window_deadline`](super::RasterHost::window_deadline), which the loop also wakes for
     /// while the window's frames run.
     #[cfg_attr(
         target_arch = "wasm32",
@@ -281,7 +281,7 @@ impl RasterSlot {
 
     /// Show the window and draw `scene`, lent for this call alone, into it
     /// at the size the platform last announced
-    /// ([`RasterHost::render_lent`]): the development reload plugin's scene.
+    /// ([`RasterHost::render_lent`](super::RasterHost::render_lent)): the development reload plugin's scene.
     /// Answers whether it was shown; `false` while the host is turning.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn render_lent(&self, scene: &flui_layer::Scene, reset_fonts: bool) -> bool {
@@ -314,7 +314,7 @@ impl RasterSlot {
     /// Before the frame: a probe for a device to replace a given-up one,
     /// when the application asked for it (a probe that answers none tells
     /// the application the device is given up again), a surface the window is owed whose pace is due
-    /// ([`RasterHost::restore_due`]), the colour of the display the window is
+    /// ([`RasterHost::restore_due`](super::RasterHost::restore_due)), the colour of the display the window is
     /// on (`display`; a changed profile sets the surface up again, ADR-0256
     /// §6), and a turn of the executor, which asks for a lost device that is
     /// due, or installs one whose request answered, even when the frame has
@@ -323,7 +323,7 @@ impl RasterSlot {
     /// full. After it: the frame's GPU
     /// panic goes to the application's frame-failure handler, and a device
     /// the frame lost is reported with the frames it drops; its next turn is
-    /// due at the executor's deadline, which [`RasterHost::window_deadline`] reads.
+    /// due at the executor's deadline, which [`RasterHost::window_deadline`](super::RasterHost::window_deadline) reads.
     pub(crate) fn pump(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,

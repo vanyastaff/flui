@@ -16,7 +16,7 @@ impl RasterHost {
     /// sequence, to `address`'s slot, measured on `surface`, turn
     /// the executor and answer what became of the frame. A panic of the
     /// frame is held for the window to report to its UI runtime after the
-    /// frame ([`RasterSlot::report_frame_panic`]); the frame is refused
+    /// frame ([`RasterSlot::report_frame_panic`](super::RasterSlot::report_frame_panic)); the frame is refused
     /// (`SubmitVerdict::Refused`), and the window's next change draws in full.
     /// A size past the device's limit refuses the frame too, until the
     /// platform announces another size.
@@ -422,7 +422,7 @@ impl RasterHost {
     }
 
     /// How many frames of `address`'s window its sink may hold unsettled
-    /// ([`in_flight_limit`]); one for a window with no slot, whose frames
+    /// ([`in_flight_limit`](super::in_flight_limit)); one for a window with no slot, whose frames
     /// are refused.
     pub(super) fn in_flight_limit(&self, address: PresentationAddress) -> NonZeroUsize {
         self.placed

@@ -8,7 +8,7 @@
 //! once, so the frame's verdict is in hand before the UI runtime's frame
 //! transaction returns. A frame dispatched while the host is already turning
 //! (a platform callback re-entering from inside the GPU work) is answered
-//! [`SubmitVerdict::Retry`] and keeps its work for the next wake. Threaded,
+//! [`SubmitVerdict::Retry`](flui_runtime::sink::SubmitVerdict::Retry) and keeps its work for the next wake. Threaded,
 //! the frame is answered queued and settles later: the thread's wake asks
 //! every window for a frame, and each window's wake drains its own slot's
 //! settlements into its UI runtime ([`RasterSlot::settle`]).

@@ -356,6 +356,7 @@ pub fn window_handle(
 /// its window system closes no window, and
 /// [`CloseRequestError::Failed`](crate::CloseRequestError::Failed) when the
 /// window took the close and failed it.
+#[cfg(not(target_os = "ios"))]
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
 ) -> Result<(), PresentationCloseError> {
@@ -376,6 +377,7 @@ pub fn request_presentation_close(
     Ok(router.request_close(address)?)
 }
 
+#[cfg(not(target_os = "ios"))]
 /// Why [`request_presentation_close`] closed no window.
 #[derive(Debug, thiserror::Error, PartialEq)]
 #[non_exhaustive]
