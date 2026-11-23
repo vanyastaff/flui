@@ -96,6 +96,20 @@ fn extrapolation_preserves_a_representable_sum_after_product_overflow() {
     }
 }
 
+fn shared_values_share_their_endpoints() {
+    use std::rc::Rc;
+    let (begin, end) = (
+        Rc::new(Offset::new(0.0, 10.0)),
+        Rc::new(Offset::new(8.0, 30.0)),
+    );
+    assert!(Rc::ptr_eq(&begin.lerp_to(&end, 0.0), &begin));
+    assert!(Rc::ptr_eq(&begin.lerp_to(&end, 1.0), &end));
+    let middle = begin.lerp_to(&end, 0.25);
+    assert!(!Rc::ptr_eq(&middle, &begin) && !Rc::ptr_eq(&middle, &end));
+    assert_eq!(*middle, Offset::new(2.0, 15.0));
+    assert_eq!(*begin.lerp_to(&end, 1.5), Offset::new(12.0, 40.0));
+}
+
 #[test]
 fn scalar_and_composite_lerp_preserve_representable_values() {
     crate::run_table(&[
@@ -116,5 +130,6 @@ fn scalar_and_composite_lerp_preserve_representable_values() {
             "extrapolation product overflow",
             extrapolation_preserves_a_representable_sum_after_product_overflow,
         ),
+        ("shared endpoints", shared_values_share_their_endpoints),
     ]);
 }

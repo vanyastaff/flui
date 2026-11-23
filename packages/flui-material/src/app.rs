@@ -140,12 +140,12 @@ fn error_text_style() -> TextStyle {
 /// within that family. Missing contrast variants retain ordinary selection.
 fn resolve_theme(
     mode: ThemeMode,
-    theme: Option<&ThemeData>,
-    dark_theme: Option<&ThemeData>,
-    high_contrast_theme: Option<&ThemeData>,
-    high_contrast_dark_theme: Option<&ThemeData>,
+    theme: Option<&Rc<ThemeData>>,
+    dark_theme: Option<&Rc<ThemeData>>,
+    high_contrast_theme: Option<&Rc<ThemeData>>,
+    high_contrast_dark_theme: Option<&Rc<ThemeData>>,
     ctx: &dyn BuildContext,
-) -> ThemeData {
+) -> Rc<ThemeData> {
     let use_dark = mode.is_dark()
         || (mode.is_system()
             && MediaQuery::platform_brightness_of(ctx).unwrap_or(Brightness::Light)
@@ -158,12 +158,12 @@ fn resolve_theme(
     if let Some(contrast) = contrast
         && MediaQuery::high_contrast_of(ctx).unwrap_or(false)
     {
-        return contrast.clone();
+        return Rc::clone(contrast);
     }
     if use_dark && let Some(dark) = dark_theme {
-        return dark.clone();
+        return Rc::clone(dark);
     }
-    theme.cloned().unwrap_or_default()
+    theme.map_or_else(|| Rc::new(ThemeData::default()), Rc::clone)
 }
 
 /// A Material application shell: [`WidgetsApp`] plus [`ThemeMode`]
@@ -190,10 +190,10 @@ fn resolve_theme(
 pub struct MaterialApp {
     routing: Routing,
     user_builder: Option<AppBuilder>,
-    theme: Option<ThemeData>,
-    dark_theme: Option<ThemeData>,
-    high_contrast_theme: Option<ThemeData>,
-    high_contrast_dark_theme: Option<ThemeData>,
+    theme: Option<Rc<ThemeData>>,
+    dark_theme: Option<Rc<ThemeData>>,
+    high_contrast_theme: Option<Rc<ThemeData>>,
+    high_contrast_dark_theme: Option<Rc<ThemeData>>,
     theme_mode: ThemeMode,
     locale: Option<Locale>,
     supported_locales: Vec<Locale>,
@@ -287,8 +287,8 @@ impl MaterialApp {
     /// The light (or only) theme. Defaults to
     /// [`ThemeData::default`] (the M3 light baseline) when absent.
     #[must_use]
-    pub fn theme(mut self, theme: ThemeData) -> Self {
-        self.theme = Some(theme);
+    pub fn theme(mut self, theme: impl Into<Rc<ThemeData>>) -> Self {
+        self.theme = Some(theme.into());
         self
     }
 
@@ -296,16 +296,16 @@ impl MaterialApp {
     /// Without one, dark selection falls back to [`theme`](Self::theme)
     /// (never an automatic dark derivation).
     #[must_use]
-    pub fn dark_theme(mut self, theme: ThemeData) -> Self {
-        self.dark_theme = Some(theme);
+    pub fn dark_theme(mut self, theme: impl Into<Rc<ThemeData>>) -> Self {
+        self.dark_theme = Some(theme.into());
         self
     }
 
     /// Light palette used when high contrast is requested. Without it, light
     /// selection uses [`theme`](Self::theme), then the default theme.
     #[must_use]
-    pub fn high_contrast_theme(mut self, theme: ThemeData) -> Self {
-        self.high_contrast_theme = Some(theme);
+    pub fn high_contrast_theme(mut self, theme: impl Into<Rc<ThemeData>>) -> Self {
+        self.high_contrast_theme = Some(theme.into());
         self
     }
 
@@ -313,8 +313,8 @@ impl MaterialApp {
     /// selection uses [`dark_theme`](Self::dark_theme), then [`theme`](Self::theme),
     /// then the default theme. The light high-contrast slot is not a dark fallback.
     #[must_use]
-    pub fn high_contrast_dark_theme(mut self, theme: ThemeData) -> Self {
-        self.high_contrast_dark_theme = Some(theme);
+    pub fn high_contrast_dark_theme(mut self, theme: impl Into<Rc<ThemeData>>) -> Self {
+        self.high_contrast_dark_theme = Some(theme.into());
         self
     }
 

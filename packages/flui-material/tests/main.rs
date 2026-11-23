@@ -910,8 +910,12 @@ fn theme_and_app_contracts() {
             material_app::theme_mode_switch_animates_through_a_blended_theme,
         ),
         (
-            "material_app::theme mode switch animates through a blended theme",
-            material_app::theme_mode_switch_animates_through_a_blended_theme,
+            "material_app::the selected theme reaches descendants without a copy",
+            material_app::the_selected_theme_reaches_descendants_without_a_copy,
+        ),
+        (
+            "material_app::a material app holds its themes by reference",
+            material_app::a_material_app_holds_its_themes_by_reference,
         ),
         (
             "material_app::two presentations resolve different themes simultaneously",

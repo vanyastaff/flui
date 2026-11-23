@@ -121,6 +121,44 @@ pub fn two_presentations_resolve_different_themes_simultaneously() {
 // Composition bands
 // ============================================================================
 
+/// Captures the shared [`Theme::of`] answer itself, so a test can tell the
+/// theme the app was given from a copy of it.
+#[derive(Clone, Debug, StatelessView)]
+struct SharedThemeCapture {
+    captured: Rc<RefCell<Option<Rc<ThemeData>>>>,
+}
+
+impl StatelessView for SharedThemeCapture {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        *self.captured.borrow_mut() = Some(Theme::of(ctx));
+        SizedBox::shrink()
+    }
+}
+
+/// The selected theme reaches descendants as the `Rc` the app was given,
+/// for each slot the selection can pick, not as a copy made per build.
+pub fn the_selected_theme_reaches_descendants_without_a_copy() {
+    let light = Rc::new(light_sentinel());
+    let dark = Rc::new(dark_sentinel());
+    for (brightness, expected) in [(Brightness::Light, &light), (Brightness::Dark, &dark)] {
+        let captured = Rc::new(RefCell::new(None));
+        let app = MaterialApp::new(SharedThemeCapture {
+            captured: Rc::clone(&captured),
+        })
+        .theme(Rc::clone(&light))
+        .dark_theme(Rc::clone(&dark));
+        let _tree = lay_out(MediaQuery::new(media(brightness), app), loose(800.0));
+        let shown = captured
+            .borrow()
+            .clone()
+            .expect("the probe below MaterialApp must have built");
+        assert!(
+            Rc::ptr_eq(&shown, expected),
+            "{brightness:?}: the theme below MaterialApp must be the one it was given"
+        );
+    }
+}
+
 pub fn theme_mode_switch_on_a_live_app_updates_descendants() {
     // The issue's acceptance criterion: MaterialApp switches between light
     // and dark when `theme_mode` changes on a rebuild.
@@ -257,4 +295,15 @@ pub fn theme_mode_switch_animates_through_a_blended_theme() {
     );
     settle_theme(&mut tree);
     assert_eq!(captured_theme(&captured), dark_sentinel());
+}
+
+/// A `MaterialApp` is moved by value through each builder call and into its
+/// element: its four theme slots hold an `Rc` each, so a move copies a few
+/// hundred bytes, not four themes of several kilobytes.
+pub fn a_material_app_holds_its_themes_by_reference() {
+    let size = std::mem::size_of::<MaterialApp>();
+    assert!(
+        size <= 512,
+        "MaterialApp is {size} bytes; a theme slot held by value makes it ~53 KB"
+    );
 }
