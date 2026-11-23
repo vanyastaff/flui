@@ -2,128 +2,22 @@
 //! bar: a persistent row of equal-width destinations with a pill-shaped
 //! selection indicator.
 //!
-//! # V1 scope: a controlled, static-geometry component
-//!
-//! `NavigationBar` is a plain [`StatelessView`] — `selected_index` is a
-//! fully caller-controlled prop (the widget itself holds no
-//! selection state, `onDestinationSelected` is expected to drive a rebuild
-//! with a new `selectedIndex`), so no `WidgetStatesController` needs to be
-//! threaded down to carry `Selected` the way [`crate::Switch`]/[`crate::Checkbox`]/
-//! [`crate::Radio`] share one with their own [`crate::InkWell`] — this
-//! component computes `selected`/`enabled` as plain booleans at build time
-//! and resolves every color/style from them directly. Each destination's own
-//! `Hovered`/`Focused`/`Pressed`/`Disabled` still lives inside its private
-//! `InkWell` element (unshared, persists across `NavigationBar` rebuilds the
-//! same way any other stateful child element does), but never needs to
-//! react outward: the M3 `iconTheme`/`labelTextStyle` defaults
-//! only branch on `disabled`/`selected` — never `hovered`/`focused`/`pressed`
-//! — so icon/label color has nothing to recompute when those transient
-//! states change.
-//!
-//! # Label behavior: `alwaysShow` only, the enum itself deferred
-//!
-//! The oracle's `NavigationDestinationLabelBehavior` has three variants
-//! (`alwaysShow`/`alwaysHide`/`onlyShowSelected`); this V1 always behaves as
-//! `alwaysShow` and does not expose the enum at all (neither on the widget
-//! nor `NavigationBarThemeData`) — a half-wired enum that silently no-ops on
-//! two of its three variants is worse than not shipping the choice yet.
-//! `alwaysHide` needs no new geometry (an unconditionally-collapsed label
-//! column), but `onlyShowSelected` needs the padding-driven position/fade
-//! animation `_NavigationDestinationLayoutDelegate` drives from the
-//! selection animation (`:1096-1131`), which this bar does not build yet
-//! (only the indicator animates, see "Indicator" below). Both are deferred
-//! together, named, rather than partially wired.
-//!
 //! # Layout: `Column(MainAxisAlignment::Center)` replaces the animated delegate
 //!
-//! The oracle positions each destination's icon/label pair with
+//! Flutter positions each destination's icon/label pair with
 //! `_NavigationDestinationLayoutDelegate`, a `MultiChildLayoutDelegate` that
 //! interpolates the icon's vertical offset by the selection animation
-//! (`:1103-1109`). Because `alwaysShow` always evaluates that delegate at
+//! (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/navigation_bar.dart:1103-1109`). Because `alwaysShow` always evaluates that delegate at
 //! `kAlwaysCompleteAnimation` (animation == 1.0, `_DestinationLayoutAnimationBuilder`'s
-//! `alwaysShow` branch, `:967-968`) regardless of whether the destination is
+//! `alwaysShow` branch, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/navigation_bar.dart:967-968`) regardless of whether the destination is
 //! actually selected, the delegate's own math reduces to: center the
 //! icon+label block (no gap between them) within the full destination
 //! height. A plain `Column` with `MainAxisAlignment::Center` computes
-//! exactly that (no custom delegate needed) — verified against the oracle
+//! exactly that (no custom delegate needed) — verified against Flutter
 //! formula: `yPositionOffset = halfHeight(iconSize) + halfHeight(labelSize)`,
 //! i.e. the pair is centered as one block with zero inter-child gap, which
 //! is `Column`'s own `MainAxisAlignment::Center` behavior for a
 //! two-child, no-`Spacer` list.
-//!
-//! # Indicator: always laid out, animated by paint
-//!
-//! The 64×32 `NAVIGATION_INDICATOR_WIDTH`×`NAVIGATION_INDICATOR_HEIGHT`
-//! box is *always* reserved in the `Stack` that backs every destination's
-//! icon, whether or not the destination is selected (this is what keeps a
-//! selected destination's icon vertically aligned with its unselected
-//! siblings). Each destination's indicator owns one [`AnimatedValue<f64>`]
-//! — `1.0` selected, `0.0` not — bound to the ambient [`VsyncScope`], and
-//! paints a stadium of that fraction of the full width, centred, so a
-//! selection change expands the newly selected indicator from its centre
-//! while the previous one collapses into its own. Both follow the bar's
-//! motion, which defaults to 500 ms along
-//! `curves::EASE_IN_OUT_CUBIC_EMPHASIZED` (the Material 3 navigation bar's
-//! duration and emphasized easing); the [`MotionBuilder`] methods replace
-//! it. The motion is paint-only: layout never changes, and reduced motion
-//! (`MotionOverride::Reduce`) shows the new selection on the first frame.
-//!
-//! # Overlay: one shared `overlay_color`, no default table
-//!
-//! The oracle sets no default `overlayColor` in `_NavigationBarDefaultsM3` —
-//! `_IndicatorInkWell`'s `overlayColor: info.overlayColor ?? navigationBarTheme.overlayColor`
-//! falls through to `InkResponse`'s own `Theme.of(context).hoverColor`-family
-//! defaults when both are `null`. [`crate::InkWell`] has the same fallback:
-//! absent a widget- or theme-level
-//! [`NavigationBar::overlay_color`]/[`crate::NavigationBarThemeData::overlay_color`]
-//! override, a destination's `InkWell` uses the ambient
-//! [`crate::RippleConfiguration`] colour (else the theme's `on_surface`) at
-//! the M3 state-layer alphas.
-//!
-//! **Named simplification, not a shape divergence**: the oracle clips the
-//! overlay to the *icon's* rect specifically (`_IndicatorInkWell.getRectCallback`,
-//! `:637-644`, a `GlobalKey`-located `RenderBox` lookup) rather than the
-//! whole destination cell. [`crate::InkWell`] has no per-position rect
-//! callback (it always shape-clips its own bounds) — this V1 wraps the
-//! *entire* destination's icon+label column in one `InkWell` instead,
-//! painting over the full cell rather than a rect confined to the icon. This
-//! is the same "whole tap target, not a sub-region" approximation
-//! [`crate::Switch`]'s own module docs already establish for its thumb-splash
-//! substitution.
-//!
-//! # Semantics
-//!
-//! The bar is a `SemanticsRole::TabList` and each destination a
-//! `SemanticsRole::Tab` with its selected state: FLUI's
-//! `flui_semantics::SemanticsRole` carries both, under ARIA's names.
-//! Each destination is one node, its `InkWell`'s: the well's description
-//! carries the role and the selected state, the well's own parts the
-//! enabled state and the click, and the description folds the icon and
-//! label beneath it into that node (`Description::merges_descendants`), as
-//! Flutter's `MergeSemantics` around the destination does.
-//!
-//! **Named deferral**: the extra "Tab N of M" accessibility label
-//! needs a `MaterialLocalizations.tabLabel`-equivalent localized string
-//! table this crate does not have yet — not wired.
-//!
-//! # Deferred (named, not silently dropped)
-//!
-//! - **Icon and label colour animation** — the icon swap and the icon/label
-//!   colour change snap; the indicator animates (see the "Indicator" section
-//!   above) and a newly selected icon bounces through the destination's
-//!   `IconThemeData::symbol_effect`, which a deselected icon does not.
-//! - **`NavigationDestinationLabelBehavior`** (`alwaysHide`/`onlyShowSelected`)
-//!   — see the "Label behavior" section above.
-//! - **`shadow_color`/`surface_tint_color`** (widget, theme, and default
-//!   tiers) — [`crate::material::Material`] has no such parameters yet, the
-//!   same gap every other `Material`-backed M3 component in this crate
-//!   already has.
-//! - **`indicator_shape`/`label_padding` overrides** — fixed at the M3
-//!   defaults (`StadiumBorder`, `EdgeInsets.only(top: 4)`).
-//! - **Destination `tooltip`** (long-press `Tooltip`) — no long-press
-//!   gesture wired here.
-//! - **`maintainBottomViewPadding`** — [`flui_sdk::widgets::SafeArea`] is used
-//!   with its own defaults; this substrate exposes no override for it yet.
 
 use std::any::Any;
 use std::rc::Rc;
@@ -247,7 +141,7 @@ impl std::fmt::Debug for NavigationDestination {
 /// A Material 3 bottom navigation bar: a row of equal-width
 /// [`NavigationDestination`]s with a pill-shaped selection indicator.
 ///
-/// See the module docs for the full V1 scope and named deferrals.
+/// See [`NavigationBar`]'s docs for the full scope and named deferrals.
 ///
 /// # Examples
 ///
@@ -266,8 +160,114 @@ impl std::fmt::Debug for NavigationDestination {
 /// });
 /// ```
 ///
-/// A selection change animates the indicator (see the module docs); the
+/// A selection change animates the indicator (see [`NavigationBar`]'s docs); the
 /// [`MotionBuilder`] methods replace its motion.
+///
+/// # Scope: a controlled, static-geometry component
+///
+/// `NavigationBar` is a plain [`StatelessView`] — `selected_index` is a
+/// fully caller-controlled prop (the widget itself holds no
+/// selection state, `onDestinationSelected` is expected to drive a rebuild
+/// with a new `selectedIndex`), so no `WidgetStatesController` needs to be
+/// threaded down to carry `Selected` the way [`crate::Switch`]/[`crate::Checkbox`]/
+/// [`crate::Radio`] share one with their own [`crate::InkWell`] — this
+/// component computes `selected`/`enabled` as plain booleans at build time
+/// and resolves every color/style from them directly. Each destination's own
+/// `Hovered`/`Focused`/`Pressed`/`Disabled` still lives inside its private
+/// `InkWell` element (unshared, persists across `NavigationBar` rebuilds the
+/// same way any other stateful child element does), but never needs to
+/// react outward: the M3 `iconTheme`/`labelTextStyle` defaults
+/// only branch on `disabled`/`selected` — never `hovered`/`focused`/`pressed`
+/// — so icon/label color has nothing to recompute when those transient
+/// states change.
+///
+/// # Label behavior: `alwaysShow` only, the enum itself deferred
+///
+/// Flutter's `NavigationDestinationLabelBehavior` has three variants
+/// (`alwaysShow`/`alwaysHide`/`onlyShowSelected`); this crate always behaves as
+/// `alwaysShow` and does not expose the enum at all (neither on the widget
+/// nor `NavigationBarThemeData`) — a half-wired enum that silently no-ops on
+/// two of its three variants is worse than not shipping the choice yet.
+/// `alwaysHide` needs no new geometry (an unconditionally-collapsed label
+/// column), but `onlyShowSelected` needs the padding-driven position/fade
+/// animation `_NavigationDestinationLayoutDelegate` drives from the
+/// selection animation (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/navigation_bar.dart:1070-1135`), which this bar does not build yet
+/// (only the indicator animates, see "Indicator" below). Both are deferred
+/// together, named, rather than partially wired.
+///
+/// # Indicator: always laid out, animated by paint
+///
+/// The 64×32 `NAVIGATION_INDICATOR_WIDTH`×`NAVIGATION_INDICATOR_HEIGHT`
+/// box is *always* reserved in the `Stack` that backs every destination's
+/// icon, whether or not the destination is selected (this is what keeps a
+/// selected destination's icon vertically aligned with its unselected
+/// siblings). Each destination's indicator owns one [`AnimatedValue<f64>`]
+/// — `1.0` selected, `0.0` not — bound to the ambient [`VsyncScope`], and
+/// paints a stadium of that fraction of the full width, centred, so a
+/// selection change expands the newly selected indicator from its centre
+/// while the previous one collapses into its own. Both follow the bar's
+/// motion, which defaults to 500 ms along
+/// `curves::EASE_IN_OUT_CUBIC_EMPHASIZED` (the Material 3 navigation bar's
+/// duration and emphasized easing); the [`MotionBuilder`] methods replace
+/// it. The motion is paint-only: layout never changes, and reduced motion
+/// (`MotionOverride::Reduce`) shows the new selection on the first frame.
+///
+/// # Overlay: one shared `overlay_color`, no default table
+///
+/// Flutter sets no default `overlayColor` in `_NavigationBarDefaultsM3` —
+/// `_IndicatorInkWell`'s `overlayColor: info.overlayColor ?? navigationBarTheme.overlayColor`
+/// falls through to `InkResponse`'s own `Theme.of(context).hoverColor`-family
+/// defaults when both are `null`. [`crate::InkWell`] has the same fallback:
+/// absent a widget- or theme-level
+/// [`NavigationBar::overlay_color`]/[`crate::NavigationBarThemeData::overlay_color`]
+/// override, a destination's `InkWell` uses the ambient
+/// [`crate::RippleConfiguration`] colour (else the theme's `on_surface`) at
+/// the M3 state-layer alphas.
+///
+/// **Named simplification, not a shape divergence**: Flutter clips the
+/// overlay to the *icon's* rect specifically (`_IndicatorInkWell.getRectCallback`,
+/// `flutter/flutter@3.50.1 packages/flutter/lib/src/material/navigation_bar.dart:638-644`, a `GlobalKey`-located `RenderBox` lookup) rather than the
+/// whole destination cell. [`crate::InkWell`] has no per-position rect
+/// callback (it always shape-clips its own bounds) — this crate wraps the
+/// *entire* destination's icon+label column in one `InkWell` instead,
+/// painting over the full cell rather than a rect confined to the icon. This
+/// is the same "whole tap target, not a sub-region" approximation
+/// [`Switch`](crate::Switch)'s docs already establish for its thumb-splash
+/// substitution.
+///
+/// # Semantics
+///
+/// The bar is a `SemanticsRole::TabList` and each destination a
+/// `SemanticsRole::Tab` with its selected state: FLUI's
+/// `flui_semantics::SemanticsRole` carries both, under ARIA's names.
+/// Each destination is one node, its `InkWell`'s: the well's description
+/// carries the role and the selected state, the well's own parts the
+/// enabled state and the click, and the description folds the icon and
+/// label beneath it into that node (`Description::merges_descendants`), as
+/// Flutter's `MergeSemantics` around the destination does.
+///
+/// **Named deferral**: the extra "Tab N of M" accessibility label
+/// needs a `MaterialLocalizations.tabLabel`-equivalent localized string
+/// table this crate does not have yet — not wired.
+///
+/// # Deferred (named, not silently dropped)
+///
+/// - **Icon and label colour animation** — the icon swap and the icon/label
+///   colour change snap; the indicator animates (see the "Indicator" section
+///   above) and a newly selected icon bounces through the destination's
+///   `IconThemeData::symbol_effect`, which a deselected icon does not.
+/// - **`NavigationDestinationLabelBehavior`** (`alwaysHide`/`onlyShowSelected`)
+///   — see the "Label behavior" section above.
+/// - **`shadow_color`/`surface_tint_color`** (widget, theme, and default
+///   tiers) — [`crate::material::Material`] has no such parameters yet, the
+///   same gap every other `Material`-backed M3 component in this crate
+///   already has.
+/// - **`indicator_shape`/`label_padding` overrides** — fixed at the M3
+///   defaults (`StadiumBorder`, `EdgeInsets.only(top: 4)`).
+/// - **Destination `tooltip`** (long-press `Tooltip`) — no long-press
+///   gesture wired here.
+/// - **`maintainBottomViewPadding`** — [`flui_sdk::widgets::SafeArea`] is used
+///   with its own defaults; this crate exposes no override for it yet.
 #[derive(Clone, StatelessView)]
 pub struct NavigationBar {
     destinations: Vec<NavigationDestination>,
@@ -372,7 +372,7 @@ impl NavigationBar {
 
     /// Overrides every destination's shared state-overlay color. `None` (the
     /// default, at every tier) uses the ambient ripple colour — see the
-    /// module docs' "Overlay" section.
+    /// [`NavigationBar`]'s "Overlay" section.
     #[must_use]
     pub fn overlay_color(mut self, overlay_color: WidgetStateProperty<Option<Color>>) -> Self {
         self.overlay_color = Some(overlay_color);
@@ -421,9 +421,9 @@ fn resolve_bar_geometry(
     (height, elevation, background_color, indicator_color)
 }
 
-/// `_NavigationBarDefaultsM3.iconTheme` (`navigation_bar.dart`, oracle tag
-/// `3.44.0`) — branches on `disabled`/`selected` only, never
-/// `hovered`/`focused`/`pressed` (see the module docs).
+/// `_NavigationBarDefaultsM3.iconTheme` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/navigation_bar.dart:1449`) —
+/// branches on `disabled`/`selected` only, never
+/// `hovered`/`focused`/`pressed` (see [`NavigationBar`]'s docs).
 fn navigation_destination_default_icon_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Disabled) {
         colors.on_surface_variant.with_opacity(0.38)
@@ -445,8 +445,8 @@ fn resolve_navigation_destination_icon_color(
         .unwrap_or_else(|| navigation_destination_default_icon_color(colors, states))
 }
 
-/// `_NavigationBarDefaultsM3.labelTextStyle` (`navigation_bar.dart`, oracle
-/// tag `3.44.0`): `TextTheme.labelMedium` recolored per state — same
+/// `_NavigationBarDefaultsM3.labelTextStyle` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/navigation_bar.dart:1469`):
+/// `TextTheme.labelMedium` recolored per state — same
 /// `disabled`/`selected`-only branch as the icon color.
 fn navigation_destination_default_label_style(
     base: &TextStyle,
@@ -502,7 +502,7 @@ fn navigation_destination_states(selected: bool, enabled: bool) -> WidgetStates 
 }
 
 /// Builds one destination's `Expanded(InkWell(...))`
-/// subtree — see the module docs for the layout/overlay/semantics shape.
+/// subtree — see [`NavigationBar`]'s docs for the layout/overlay/semantics shape.
 #[expect(clippy::too_many_arguments, reason = "internal helper, not public API")]
 fn build_destination(
     colors: &ColorScheme,
@@ -544,7 +544,7 @@ fn build_destination(
     };
 
     // Always reserved at full size; how much of it paints follows the
-    // selection — see the module docs' "Indicator" section.
+    // selection — see [`NavigationBar`]'s "Indicator" section.
     let indicator = SizedBox::new(NAVIGATION_INDICATOR_WIDTH, NAVIGATION_INDICATOR_HEIGHT).child(
         SelectionIndicator {
             selected,
@@ -697,7 +697,7 @@ impl ViewState<SelectionBounce> for SelectionBounceState {
 }
 
 /// One destination's selection indicator: a stadium whose painted width
-/// follows an animated selection fraction (see the module docs'
+/// follows an animated selection fraction (see [`NavigationBar`]'s
 /// "Indicator" section).
 #[derive(Clone, StatefulView)]
 struct SelectionIndicator {

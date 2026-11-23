@@ -702,7 +702,7 @@ fn themed_animated(scaffold: Scaffold, vsync: &Vsync) -> impl View {
     VsyncScope::new(vsync.clone(), themed(scaffold))
 }
 
-/// `_kBaseSettleDuration` (`drawer.dart`, oracle tag `3.44.0`) — the
+/// `_kBaseSettleDuration` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/drawer.dart:64`) — the
 /// duration a plain `forward()`/`reverse()` run takes. A `fling()` (what
 /// `open()`/`close()` actually call) drives a spring simulation instead,
 /// whose own settling time is independent of this constant and, for a

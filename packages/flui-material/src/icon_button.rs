@@ -1,123 +1,6 @@
 //! [`IconButton`] — a small M3 button wrapping a single icon child, riding
 //! the same `ButtonStyleButtonCore` machinery the text-label button family
 //! uses.
-//!
-//! # Scope
-//!
-//! Standard variant only. `IconButton` rides the same button-style machinery
-//! as `ElevatedButton`/`FilledButton`/`OutlinedButton`/`TextButton`, unlike
-//! [`crate::floating_action_button::FloatingActionButton`] (which composes
-//! `Material`+`InkWell` directly). This type is therefore a thin
-//! [`StatelessView`] over `ButtonStyleButtonCore`, with the same shape as
-//! `elevated_button.rs`.
-//!
-//! # `default_style`: standard variant
-//!
-//! The M3 standard icon-button defaults, narrowed to the V1
-//! [`ButtonStyle`] slots (see that module's docs for the omitted-slot list
-//! every button in this crate shares):
-//!
-//! - `background_color` — always `Colors.transparent`.
-//! - `foreground_color` — `disabled` → `onSurface@38%`, `selected` →
-//!   `primary`, otherwise `onSurfaceVariant`.
-//! - `overlay_color` — the pressed(10%)/hovered(8%) ramp (focus is the focus
-//!   ring) over `primary` when selected and `onSurfaceVariant` otherwise —
-//!   exactly `crate::elevated_button::pressed_hovered_overlay`'s shape, so
-//!   this reuses that helper rather than duplicating the chain. The oracle's
-//!   unconditional `Colors.transparent`
-//!   fallback (vs. this crate's `None`, which leaves the `InkWell` at rest
-//!   when no interaction state is active) is a paint-equivalent
-//!   substitution: a transparent fill and no fill layer are visually
-//!   identical, and the rest of this button family already makes the same
-//!   substitution.
-//! - `elevation` — always `0.0`.
-//! - `padding` — `EdgeInsets::all(8.0)`.
-//! - `minimum_size` — `Size(40.0, 40.0)`.
-//! - `maximum_size` — `Size::INFINITY`.
-//! - `shape` — [`MaterialShape::Stadium`] (a circle at the 40×40 minimum
-//!   size, since `Stadium`'s radius is `shortest_side / 2.0`).
-//! - `fixed_size`/`side` — unset, matching the oracle's own "// No default
-//!   fixedSize" comment and null `side` getter.
-//!
-//! # Icon color and size: threaded through `IconTheme`, not `ButtonStyle`
-//!
-//! The oracle's M3 path folds `iconSize` into `ButtonStyle.iconSize` (a
-//! slot [`ButtonStyle`] does not carry — a named crate-wide omission, see
-//! that module's docs) and `foregroundColor` into `ButtonStyle.iconColor`
-//! (ditto), then `IconTheme.merge`s `iconColor ?? resolvedForegroundColor`
-//! around the child (`button_style_button.dart`'s `_ButtonStyleState.build`).
-//! Neither slot exists yet, so this type wraps `icon` in an [`IconTheme`]
-//! *before* handing it to `ButtonStyleButtonCore` — the same technique
-//! [`crate::app_bar::AppBar`] already uses to color its own icon/title
-//! content.
-//!
-//! **Not an approximation of the resolved color — a real coalesce.** A
-//! naive port would hardcode `default_style`'s own foreground table here,
-//! silently dropping a caller's `.style(ButtonStyle { foreground_color: ...
-//! })` override (it would still reach `ButtonStyleButtonCore`'s
-//! `DefaultTextStyle`, but an `Icon` child reads `IconTheme`, not
-//! `DefaultTextStyle` — so the override would visibly do nothing to the
-//! icon). Instead, `build` resolves `self.style`'s `foreground_color`
-//! against `default_style`'s own, through the identical widget-then-default
-//! coalesce `crate::button_style_button::resolve_property` performs inside
-//! `ButtonStyleButtonCore` — both tiers are already in hand at `build` time,
-//! so no extra plumbing is needed to get the SAME answer
-//! `ButtonStyleButtonCore` would fold into `DefaultTextStyle`, just also fed
-//! into the icon's `IconTheme`.
-//!
-//! The coalesce is resolved against a states set built from `disabled` and
-//! `selected` only (never a live, hover/press/focus-tracking one): standard
-//! `IconButton`'s `foreground_color` — whether the caller's override or the
-//! default table — depends only on `disabled`/`selected`, both of which come
-//! from the view, so that static snapshot is sufficient here.
-//! A caller whose override varies `foreground_color` by `Pressed`/`Hovered`/
-//! `Focused` would see that live variation reach `ButtonStyleButtonCore`'s
-//! `DefaultTextStyle` (for a `Text` child) but NOT this icon's `IconTheme`,
-//! which only re-resolves on `IconButton`'s own rebuilds — a named
-//! divergence, not silently dropped. `icon_size` is always the M3 default
-//! (`24.0`); no per-call override exists yet (`IconButton::icon_size` is a
-//! natural, additive V1+ follow-up).
-//!
-//! **This divergence extends verbatim to the theme tier
-//! (`icon_button_theme`).** `theme_style`'s `foreground_color` is folded
-//! into the SAME `resolve_property` call as `self.style`'s, against the
-//! SAME static `disabled`-only snapshot — so a
-//! `Theme.icon_button_theme.style.foreground_color` that varies by
-//! `Pressed`/`Hovered`/`Focused` behaves identically to a state-varying
-//! widget-level override: the live variation reaches
-//! `ButtonStyleButtonCore`'s own `DefaultTextStyle`/`InkWell` (which DO hold
-//! a live, hover/press/focus-tracking `WidgetStatesController` — see
-//! `crate::button_style_button`'s docs) but this icon's `IconTheme` only
-//! ever sees the `disabled`/`selected` snapshot, never a live
-//! `Pressed`/`Hovered`/`Focused` re-resolution. Fixing this for real means
-//! sharing `ButtonStyleButtonCoreState`'s own `WidgetStatesController` with
-//! this icon color resolution — that controller is private to
-//! `button_style_button.rs` and created inside `ButtonStyleButtonCore`'s
-//! `create_state`, one layer below where `IconButton::build` runs, so there
-//! is no live states seam to read from at this call site today. A named
-//! divergence, not silently dropped, same as the widget-tier case above.
-//!
-//! # Toggle
-//!
-//! [`IconButton::selected`] makes the button a toggle: `Selected` joins the
-//! states every property resolves against, and the node reports
-//! [`Toggled`](flui_sdk::semantics::Toggled). [`IconButton::selected_icon`]
-//! names the icon shown while selected; the swap runs through the ambient
-//! [`SymbolEffect::replace`], so two glyph `Icon`s cross-fade and only the
-//! new label is heard. Two icons of different view types swap at once, and
-//! an effect the caller put on the icon itself wins over the ambient one.
-//!
-//! # Deferred, and named
-//!
-//! - **`filled`/`filled_tonal`/`outlined` variants** — each is a distinct
-//!   `_TokenDefaultsM3` table (`_FilledIconButtonDefaultsM3` and friends),
-//!   with its own selected and unselected toggle colors; only the standard
-//!   (transparent) variant ships, so its table is the only one with a
-//!   `selected` branch.
-//! - **`icon_size` override**, `visual_density`, `alignment`, `splash_radius`,
-//!   `mouse_cursor`, `focus_node`/`autofocus`, `tooltip`, `on_hover`/
-//!   `on_long_press`, `states_controller` (external) — no override surface
-//!   yet, matching every other V1 button in this crate.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -151,6 +34,123 @@ pub(crate) const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
 ///
 /// let _button = IconButton::new(Icon::new(IconData::new(0xE87D))).on_pressed(|_ctx| {});
 /// ```
+///
+/// # Scope
+///
+/// Standard variant only. `IconButton` rides the same button-style machinery
+/// as `ElevatedButton`/`FilledButton`/`OutlinedButton`/`TextButton`, unlike
+/// [`crate::floating_action_button::FloatingActionButton`] (which composes
+/// `Material`+`InkWell` directly). This type is therefore a thin
+/// [`StatelessView`] over `ButtonStyleButtonCore`, with the same shape as
+/// `elevated_button.rs`.
+///
+/// # `default_style`: standard variant
+///
+/// The M3 standard icon-button defaults, narrowed to the
+/// [`ButtonStyle`] slots (see [`ButtonStyle`]'s docs for the omitted-slot list
+/// every button in this crate shares):
+///
+/// - `background_color` — always `Colors.transparent`.
+/// - `foreground_color` — `disabled` → `onSurface@38%`, `selected` →
+///   `primary`, otherwise `onSurfaceVariant`.
+/// - `overlay_color` — the pressed(10%)/hovered(8%) ramp (focus is the focus
+///   ring) over `primary` when selected and `onSurfaceVariant` otherwise —
+///   exactly `crate::elevated_button::pressed_hovered_overlay`'s shape, so
+///   this reuses that helper rather than duplicating the chain. Flutter's
+///   unconditional `Colors.transparent`
+///   fallback (vs. this crate's `None`, which leaves the `InkWell` at rest
+///   when no interaction state is active) is a paint-equivalent
+///   substitution: a transparent fill and no fill layer are visually
+///   identical, and the rest of this button family already makes the same
+///   substitution.
+/// - `elevation` — always `0.0`.
+/// - `padding` — `EdgeInsets::all(8.0)`.
+/// - `minimum_size` — `Size(40.0, 40.0)`.
+/// - `maximum_size` — `Size::INFINITY`.
+/// - `shape` — [`MaterialShape::Stadium`] (a circle at the 40×40 minimum
+///   size, since `Stadium`'s radius is `shortest_side / 2.0`).
+/// - `fixed_size`/`side` — unset, matching Flutter's own "// No default
+///   fixedSize" comment and null `side` getter.
+///
+/// # Icon color and size: threaded through `IconTheme`, not `ButtonStyle`
+///
+/// Flutter's M3 path folds `iconSize` into `ButtonStyle.iconSize` (a
+/// slot [`ButtonStyle`] does not carry — a named crate-wide omission, see
+/// [`ButtonStyle`]'s docs) and `foregroundColor` into `ButtonStyle.iconColor`
+/// (ditto), then `IconTheme.merge`s `iconColor ?? resolvedForegroundColor`
+/// around the child (`button_style_button.dart`'s `_ButtonStyleState.build`).
+/// Neither slot exists yet, so this type wraps `icon` in an [`IconTheme`]
+/// *before* handing it to `ButtonStyleButtonCore` — the same technique
+/// [`crate::app_bar::AppBar`] already uses to color its own icon/title
+/// content.
+///
+/// **Not an approximation of the resolved color — a real coalesce.** A
+/// naive port would hardcode `default_style`'s own foreground table here,
+/// silently dropping a caller's `.style(ButtonStyle { foreground_color: ...
+/// })` override (it would still reach `ButtonStyleButtonCore`'s
+/// `DefaultTextStyle`, but an `Icon` child reads `IconTheme`, not
+/// `DefaultTextStyle` — so the override would visibly do nothing to the
+/// icon). Instead, `build` resolves `self.style`'s `foreground_color`
+/// against `default_style`'s own, through the identical widget-then-default
+/// coalesce `crate::button_style_button::resolve_property` performs inside
+/// `ButtonStyleButtonCore` — both tiers are already in hand at `build` time,
+/// so no extra plumbing is needed to get the SAME answer
+/// `ButtonStyleButtonCore` would fold into `DefaultTextStyle`, just also fed
+/// into the icon's `IconTheme`.
+///
+/// The coalesce is resolved against a states set built from `disabled` and
+/// `selected` only (never a live, hover/press/focus-tracking one): standard
+/// `IconButton`'s `foreground_color` — whether the caller's override or the
+/// default table — depends only on `disabled`/`selected`, both of which come
+/// from the view, so that static snapshot is sufficient here.
+/// A caller whose override varies `foreground_color` by `Pressed`/`Hovered`/
+/// `Focused` would see that live variation reach `ButtonStyleButtonCore`'s
+/// `DefaultTextStyle` (for a `Text` child) but NOT this icon's `IconTheme`,
+/// which only re-resolves on `IconButton`'s own rebuilds — a named
+/// divergence, not silently dropped. `icon_size` is always the M3 default
+/// (`24.0`); no per-call override exists yet (`IconButton::icon_size` is a
+/// natural, additive follow-up).
+///
+/// **This divergence extends verbatim to the theme tier
+/// (`icon_button_theme`).** `theme_style`'s `foreground_color` is folded
+/// into the SAME `resolve_property` call as `self.style`'s, against the
+/// SAME static `disabled`-only snapshot — so a
+/// `Theme.icon_button_theme.style.foreground_color` that varies by
+/// `Pressed`/`Hovered`/`Focused` behaves identically to a state-varying
+/// widget-level override: the live variation reaches
+/// `ButtonStyleButtonCore`'s own `DefaultTextStyle`/`InkWell` (which DO hold
+/// a live, hover/press/focus-tracking `WidgetStatesController` — see
+/// `crate::button_style_button`'s docs) but this icon's `IconTheme` only
+/// ever sees the `disabled`/`selected` snapshot, never a live
+/// `Pressed`/`Hovered`/`Focused` re-resolution. Fixing this for real means
+/// sharing `ButtonStyleButtonCoreState`'s own `WidgetStatesController` with
+/// this icon color resolution — that controller is private to
+/// `button_style_button.rs` and created inside `ButtonStyleButtonCore`'s
+/// `create_state`, one layer below where `IconButton::build` runs, so there
+/// is no live states seam to read from at this call site today. A named
+/// divergence, not silently dropped, same as the widget-tier case above.
+///
+/// # Toggle
+///
+/// [`IconButton::selected`] makes the button a toggle: `Selected` joins the
+/// states every property resolves against, and the node reports
+/// [`Toggled`](flui_sdk::semantics::Toggled). [`IconButton::selected_icon`]
+/// names the icon shown while selected; the swap runs through the ambient
+/// [`SymbolEffect::replace`], so two glyph `Icon`s cross-fade and only the
+/// new label is heard. Two icons of different view types swap at once, and
+/// an effect the caller put on the icon itself wins over the ambient one.
+///
+/// # Deferred, and named
+///
+/// - **`filled`/`filled_tonal`/`outlined` variants** — each is a distinct
+///   `_TokenDefaultsM3` table (`_FilledIconButtonDefaultsM3` and friends),
+///   with its own selected and unselected toggle colors; only the standard
+///   (transparent) variant ships, so its table is the only one with a
+///   `selected` branch.
+/// - **`icon_size` override**, `visual_density`, `alignment`, `splash_radius`,
+///   `mouse_cursor`, `focus_node`/`autofocus`, `tooltip`, `on_hover`/
+///   `on_long_press`, `states_controller` (external) — no override surface
+///   yet, matching every other button in this crate.
 #[derive(Clone, StatelessView)]
 pub struct IconButton {
     on_pressed: Option<PressCallback>,
@@ -235,7 +235,7 @@ impl IconButton {
     }
 
     /// The icon shown while [`selected`](Self::selected); the swap cross-fades
-    /// through [`SymbolEffect::replace`] — see the module docs.
+    /// through [`SymbolEffect::replace`] — see [`IconButton`]'s docs.
     #[must_use]
     pub fn selected_icon(mut self, icon: impl IntoView) -> Self {
         self.selected_icon = Some(BoxedView::new(icon.into_view()));
@@ -262,7 +262,7 @@ impl StatelessView for IconButton {
             .as_ref()
             .and_then(|t| t.style.clone());
 
-        // A static enabled-or-disabled snapshot — see the module docs'
+        // A static enabled-or-disabled snapshot — see [`IconButton`]'s
         // "Icon color and size" section for why that's sufficient for
         // `foreground_color` specifically, and where it stops being exact.
         let mut states = WidgetStates::NONE;
@@ -324,8 +324,8 @@ impl StatelessView for IconButton {
 }
 
 /// Field-by-field port of `_IconButtonDefaultsM3`, standard variant
-/// (`icon_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots — see
-/// the module docs.
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/icon_button.dart:1055`), narrowed to the slots — see
+/// [`IconButton`]'s docs.
 fn default_style(theme: &ThemeData) -> ButtonStyle {
     let colors = theme.color_scheme;
 

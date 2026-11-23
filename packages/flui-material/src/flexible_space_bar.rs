@@ -1,37 +1,5 @@
 //! [`FlexibleSpaceBar`] — the expanding background-and-title treatment a
 //! collapsing [`SliverAppBar`](crate::SliverAppBar) paints across its box.
-//!
-//! # How it learns the collapse state
-//!
-//! The bar itself is extent-blind: [`FlexibleSpaceBarSettings`] — an
-//! inherited scope the `SliverAppBar` delegate wraps around its child on
-//! every seam rebuild — carries `(min_extent, max_extent, current_extent,
-//! toolbar_opacity)`, and this widget derives everything from those four
-//! numbers. That is what lets the same widget serve any
-//! persistent-header delegate, not only the app bar's.
-//!
-//! # Collapse formulas
-//!
-//! With `t = clamp(1 − (current − min) / (max − min), 0, 1)` (0 = expanded,
-//! 1 = collapsed):
-//!
-//! - **background opacity** = `1 − Interval(fade_start, 1).transform(t)`
-//!   where `fade_start = max(0, 1 − kToolbarHeight / delta)`; equal extents
-//!   cannot collapse, so opacity stays 1.
-//! - **parallax offset** = `−lerp(0, delta / 4, t)` applied as the
-//!   background's `top` (`CollapseMode.parallax`, the default).
-//! - **title scale** = `lerp(expanded_title_scale, 1, t)` about the title's
-//!   own corner.
-//! - **toolbar opacity** fades the title. The title layer is wrapped in an
-//!   `Opacity` rather than rewriting the title style's color alpha, which
-//!   is visually equivalent for the title layer and directly assertable in
-//!   tests.
-//!
-//! # Deferred, deliberately
-//!
-//! `CollapseMode::pin`/`none`, `StretchMode`s (need the stretched box),
-//! `titlePadding` overrides, and the M3 `isScrolledUnder` tint. Each is an
-//! additive knob on this same skeleton.
 
 use flui_sdk::view::BuildContextExt as _;
 use flui_sdk::view::prelude::StatelessView;
@@ -113,6 +81,38 @@ impl_inherited_view!(FlexibleSpaceBarSettings);
 /// the delegate provides the [`FlexibleSpaceBarSettings`] it reads. Without
 /// a settings ancestor the bar renders fully expanded (`t = 0`) — a
 /// stand-alone preview rather than a panic.
+///
+/// # How it learns the collapse state
+///
+/// The bar itself is extent-blind: [`FlexibleSpaceBarSettings`] — an
+/// inherited scope the `SliverAppBar` delegate wraps around its child on
+/// every seam rebuild — carries `(min_extent, max_extent, current_extent,
+/// toolbar_opacity)`, and this widget derives everything from those four
+/// numbers. That is what lets the same widget serve any
+/// persistent-header delegate, not only the app bar's.
+///
+/// # Collapse formulas
+///
+/// With `t = clamp(1 − (current − min) / (max − min), 0, 1)` (0 = expanded,
+/// 1 = collapsed):
+///
+/// - **background opacity** = `1 − Interval(fade_start, 1).transform(t)`
+///   where `fade_start = max(0, 1 − kToolbarHeight / delta)`; equal extents
+///   cannot collapse, so opacity stays 1.
+/// - **parallax offset** = `−lerp(0, delta / 4, t)` applied as the
+///   background's `top` (`CollapseMode.parallax`, the default).
+/// - **title scale** = `lerp(expanded_title_scale, 1, t)` about the title's
+///   own corner.
+/// - **toolbar opacity** fades the title. The title layer is wrapped in an
+///   `Opacity` rather than rewriting the title style's color alpha, which
+///   is visually equivalent for the title layer and directly assertable in
+///   tests.
+///
+/// # Deferred, deliberately
+///
+/// `CollapseMode::pin`/`none`, `StretchMode`s (need the stretched box),
+/// `titlePadding` overrides, and the M3 `isScrolledUnder` tint. Each is an
+/// additive knob on this same skeleton.
 #[derive(Clone, StatelessView)]
 pub struct FlexibleSpaceBar {
     title: Option<BoxedView>,
@@ -257,7 +257,7 @@ impl StatelessView for FlexibleSpaceBar {
                 left: if rtl { 0.0 } else { start_inset },
             };
             // The Material title style, faded by the delegate's toolbar
-            // opacity (see the module doc's named divergence).
+            // opacity (see [`FlexibleSpaceBar`]'s docs's named divergence).
             let styled_title: BoxedView = match crate::Theme::maybe_of(ctx) {
                 Some(theme) => {
                     let style = theme

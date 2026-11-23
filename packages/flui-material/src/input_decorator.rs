@@ -1,58 +1,17 @@
 //! [`InputDecoration`] + [`InputDecorator`] — the M3 filled text field
-//! decoration substrate.
+//! decoration.
 //!
 //! **Scope**: M3 filled text field decoration — underline indicator, hint,
 //! floating label (snap), helper/error line, hover fill blend, and the M3
 //! state table — composed from existing widgets rather than a dedicated
 //! decoration render object, and narrowed to the filled/underline variant.
 //!
-//! # Supporting line
-//!
-//! The decorator is a column of two parts. The **container** — fill, label,
-//! hint and content, wrapped in the hover `MouseRegion` — is the box whose
-//! bottom border is the active indicator. The **supporting line** (the error
-//! text, or the helper text when there is no error) sits below it, outside
-//! the container, as the M3 text-field spec places supporting text: 4dp
-//! below the indicator, inset at the sides by the container's content
-//! padding so it starts where the content starts. The container keeps its
-//! content height; it is not stretched to fill a tight parent.
-//!
-//! The supporting line is not a hit-test target: the field's tap and hover
-//! area is the container alone, so a tap on the error text does not focus
-//! the field (`TextField`'s tap detector defers to this subtree).
-//! Intrinsic sizes add the line's height below the container, and the
-//! baseline is the container's.
-//!
-//! # Named divergences / deferrals
-//!
-//! - **Baseline slot layout** — the oracle's `_RenderDecoration` positions
-//!   the hint, label, and input text at a shared baseline, overlaid at the
-//!   same rect. This substrate composes plain [`flui_sdk::widgets::Column`] rows
-//!   instead: at most one of the label/hint rows renders per build (see
-//!   `should_show_hint`), and the input content is its own row below them
-//!   — not overlaid at the input's rect.
-//! - **Exact float metrics + the 167ms/0.75-scale label animation** — the
-//!   oracle animates the label's position/size over `_kTransitionDuration`
-//!   (167ms) between 1.0 and `_kFinalLabelScale` (0.75,
-//!   `input_decorator.dart:41`). V1 snaps: the floating label is scaled by
-//!   0.75 instantly, no interpolation, no exact pixel position.
-//! - **`isDense`** — no compact content-padding tier.
-//! - **`OutlineInputBorder` + label gap** — a real `input_border.dart` port
-//!   later; never faked here.
-//! - **`prefix`/`suffix`/counter** — no icon or character-count slots.
-//! - **Error shake** — the oracle's `_shakingLabelController`; not ported.
-//! - **`String`-only label/hint/helper/error slots** — the oracle's
-//!   `InputDecoration` additionally accepts a `Widget` for each
-//!   (`label`/`hint`/`helper`/`error`); V1 ships `String` only, additively
-//!   extensible (a `Widget` variant can be added to each field later without
-//!   breaking the `String` construction path).
-//!
 //! # State-table branch order
 //!
-//! Every M3 default table below follows the oracle's exact branch order:
+//! Every M3 default table below follows Flutter's exact branch order:
 //! disabled → error (→ focused → hovered → plain) → focused → hovered →
-//! default. The oracle documents *why* focused precedes hovered for this
-//! widget specifically (`input_decorator.dart:5945-5953`, tag `3.44.0`):
+//! default. Flutter documents *why* focused precedes hovered for this
+//! widget specifically (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:5939-5947`):
 //! unlike most Material widgets, a focused **and** hovered field (common on
 //! desktop, where users often click into a field) must show the focused
 //! treatment, not the hovered one.
@@ -86,7 +45,7 @@ use crate::theme_data::InputDecorationThemeData;
 /// state. Carries no layout knobs: a future render-object decorator
 /// consumes this struct unchanged.
 ///
-/// Narrowed to the V1 field list — see the module docs for the full
+/// Narrowed to the field list — see [`InputDecorator`]'s docs for the full
 /// named-divergence list (no `Widget` slots, no `prefix`/`suffix`, no
 /// `isDense`, no `border` override).
 ///
@@ -107,7 +66,7 @@ pub struct InputDecoration {
     /// [`helper_text`](Self::helper_text) when both are set.
     pub error_text: Option<String>,
     /// Whether the container is filled (the M3 filled variant this
-    /// substrate implements). `false` renders a fully transparent
+    /// crate implements). `false` renders a fully transparent
     /// container with no hover blend (the fill color is
     /// `Colors.transparent` when `filled != true`).
     pub filled: bool,
@@ -135,13 +94,13 @@ impl Default for InputDecoration {
 }
 
 // ============================================================================
-// M3 defaults — `_InputDecoratorDefaultsM3` (input_decorator.dart, tag 3.44.0)
+// M3 defaults — `_InputDecoratorDefaultsM3` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:5930`)
 // ============================================================================
 
 /// M3 default `fillColor` — `_InputDecoratorDefaultsM3.fillColor`
-/// (`input_decorator.dart:5964-5969`). No hovered branch: the container's
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:5958-5963`). No hovered branch: the container's
 /// hover treatment is a separate alpha blend over this color, not a fill
-/// state — see [`hover_blended_fill`] and the module doc on why this
+/// state — see [`hover_blended_fill`] and [`InputDecorator`]'s docs on why this
 /// deliberately does not fold hover into the table.
 fn default_fill_color(colors: &ColorScheme, states: &WidgetStates) -> Color {
     if states.contains_state(WidgetState::Disabled) {
@@ -153,7 +112,7 @@ fn default_fill_color(colors: &ColorScheme, states: &WidgetStates) -> Color {
 
 /// M3 default `activeIndicatorBorder` (the bottom underline) —
 /// `_InputDecoratorDefaultsM3.activeIndicatorBorder`
-/// (`input_decorator.dart:5972-5992`).
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:5966-5986`).
 fn default_active_indicator(colors: &ColorScheme, states: &WidgetStates) -> BorderSide {
     if states.contains_state(WidgetState::Disabled) {
         BorderSide::new(
@@ -179,8 +138,8 @@ fn default_active_indicator(colors: &ColorScheme, states: &WidgetStates) -> Bord
 }
 
 /// M3 default `hintStyle` — `_InputDecoratorDefaultsM3.hintStyle`
-/// (`input_decorator.dart:5956-5961`). Only two branches (disabled/plain):
-/// the oracle's hint style carries no base font — a bare
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:5950-5955`). Only two branches (disabled/plain):
+/// Flutter's hint style carries no base font — a bare
 /// `TextStyle(color: ...)`, unlike [`default_label_style`]/
 /// [`default_helper_style`] which start from a `TextTheme` role.
 fn default_hint_style(colors: &ColorScheme, states: &WidgetStates) -> TextStyle {
@@ -192,8 +151,8 @@ fn default_hint_style(colors: &ColorScheme, states: &WidgetStates) -> TextStyle 
 }
 
 /// M3 default `labelStyle` — `_InputDecoratorDefaultsM3.labelStyle`
-/// (`input_decorator.dart:6043-6064`). `floatingLabelStyle`
-/// (`:6067-6088`) is byte-identical to this table in the oracle, so this
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:6037-6058`). `floatingLabelStyle`
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:6061-6082`) is byte-identical to this table in Flutter, so this
 /// one slot serves both the floating and inline positions — see the
 /// module doc's `String`-only-slots note and [`InputDecorationThemeData::label_style`].
 /// `base` is the ambient `TextTheme.bodyLarge` role.
@@ -211,14 +170,14 @@ fn default_label_style(colors: &ColorScheme, base: TextStyle, states: &WidgetSta
     } else if states.contains_state(WidgetState::Focused) {
         base.with_color(colors.primary)
     } else {
-        // Hovered and the oracle's unconditional fallback both resolve
-        // to `onSurfaceVariant` (`input_decorator.dart:6060-6063`).
+        // Hovered and Flutter's unconditional fallback both resolve
+        // to `onSurfaceVariant` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:6054-6057`).
         base.with_color(colors.on_surface_variant)
     }
 }
 
 /// M3 default `helperStyle` — `_InputDecoratorDefaultsM3.helperStyle`
-/// (`input_decorator.dart:6090-6097`). `base` is the ambient
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:6085-6091`). `base` is the ambient
 /// `TextTheme.bodySmall` role.
 fn default_helper_style(colors: &ColorScheme, base: TextStyle, states: &WidgetStates) -> TextStyle {
     if states.contains_state(WidgetState::Disabled) {
@@ -229,8 +188,8 @@ fn default_helper_style(colors: &ColorScheme, base: TextStyle, states: &WidgetSt
 }
 
 /// M3 default `errorStyle` — `_InputDecoratorDefaultsM3.errorStyle`
-/// (`input_decorator.dart:6099-6103`). Unconditionally `error`-colored — the
-/// oracle applies no other branch (not even `disabled`: an error line only
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:6094-6097`). Unconditionally `error`-colored —
+/// Flutter applies no other branch (not even `disabled`: an error line only
 /// ever appears on an enabled, invalid field). `base` is the ambient
 /// `TextTheme.bodySmall` role.
 fn default_error_style(colors: &ColorScheme, base: TextStyle) -> TextStyle {
@@ -239,7 +198,7 @@ fn default_error_style(colors: &ColorScheme, base: TextStyle) -> TextStyle {
 
 /// M3 default content padding for the filled, non-outline, non-dense case —
 /// `EdgeInsets.fromLTRB(12, 8, 12, 8)` (`InputDecoration.contentPadding`'s
-/// doc comment, `input_decorator.dart:3333-3334`, tag `3.44.0`).
+/// computed default, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:2591-2596`).
 fn default_content_padding() -> EdgeInsets {
     EdgeInsets::new(8.0, 12.0, 8.0, 12.0)
 }
@@ -261,14 +220,14 @@ fn supporting_line_padding(content_padding: EdgeInsets) -> EdgeInsets {
     )
 }
 
-/// `ThemeData.hoverColor`'s default (`theme_data.dart:468`, tag `3.44.0`):
+/// `ThemeData.hoverColor`'s default (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/theme_data.dart:468`):
 /// `isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.04)`
 /// — a fixed brightness-keyed constant, **not** a `ColorScheme` role (the
 /// M3 button family's own hover overlay, `onSurface@8%`, is a different,
 /// unrelated constant — see `crate::elevated_button`'s
 /// `pressed_hovered_overlay`). `_getHoverColor`
-/// (`input_decorator.dart:2142-2147`) falls back to this exact field when
-/// `InputDecoration.hoverColor` isn't set, which V1 has no override slot
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:2137-2142`) falls back to this exact field when
+/// `InputDecoration.hoverColor` isn't set, which this crate has no override slot
 /// for yet.
 fn default_hover_color(brightness: Brightness) -> Color {
     match brightness {
@@ -278,11 +237,11 @@ fn default_hover_color(brightness: Brightness) -> Color {
 }
 
 /// The container fill after the hover blend — `_InputBorderPainter.blendedColor`
-/// (`input_decorator.dart:136`, tag `3.44.0`): `Color.alphaBlend(hoverColor,
-/// fillColor)` while hovering, `fillColor` unchanged otherwise (the oracle
-/// animates between `hoverColor.withAlpha(0)` and `hoverColor`; V1 snaps
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:137`): `Color.alphaBlend(hoverColor,
+/// fillColor)` while hovering, `fillColor` unchanged otherwise (Flutter
+/// animates between `hoverColor.withAlpha(0)` and `hoverColor`; this crate snaps
 /// between the two ends, no interpolation). Guarded exactly like
-/// `_getHoverColor` (`input_decorator.dart:2142-2147`): only `filled &&
+/// `_getHoverColor` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:2137-2142`): only `filled &&
 /// enabled` fields blend at all.
 fn hover_blended_fill(
     fill: Color,
@@ -365,6 +324,47 @@ fn helper_or_error_line(decoration: &InputDecoration) -> Option<(&str, bool)> {
 /// `flui_sdk::widgets::MouseRegion`, not `InkWell`'s press/ripple machinery) —
 /// a future `TextField` wires `focused`/`is_empty` from its own `FocusNode`/
 /// `TextEditingController`; a standalone consumer passes them explicitly.
+///
+/// # Supporting line
+///
+/// The decorator is a column of two parts. The **container** — fill, label,
+/// hint and content, wrapped in the hover `MouseRegion` — is the box whose
+/// bottom border is the active indicator. The **supporting line** (the error
+/// text, or the helper text when there is no error) sits below it, outside
+/// the container, as the M3 text-field spec places supporting text: 4dp
+/// below the indicator, inset at the sides by the container's content
+/// padding so it starts where the content starts. The container keeps its
+/// content height; it is not stretched to fill a tight parent.
+///
+/// The supporting line is not a hit-test target: the field's tap and hover
+/// area is the container alone, so a tap on the error text does not focus
+/// the field (`TextField`'s tap detector defers to this subtree).
+/// Intrinsic sizes add the line's height below the container, and the
+/// baseline is the container's.
+///
+/// # Named divergences / deferrals
+///
+/// - **Baseline slot layout** — Flutter's `_RenderDecoration` positions
+///   the hint, label, and input text at a shared baseline, overlaid at the
+///   same rect. This crate composes plain [`flui_sdk::widgets::Column`] rows
+///   instead: at most one of the label/hint rows renders per build (see
+///   `should_show_hint`), and the input content is its own row below them
+///   — not overlaid at the input's rect.
+/// - **Exact float metrics + the 167ms/0.75-scale label animation** —
+///   Flutter animates the label's position/size over `_kTransitionDuration`
+///   (167ms) between 1.0 and `_kFinalLabelScale` (0.75,
+///   `flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:42`). This crate snaps: the floating label is scaled by
+///   0.75 instantly, no interpolation, no exact pixel position.
+/// - **`isDense`** — no compact content-padding tier.
+/// - **`OutlineInputBorder` + label gap** — a real `input_border.dart` port
+///   later; never faked here.
+/// - **`prefix`/`suffix`/counter** — no icon or character-count slots.
+/// - **Error shake** — Flutter's `_shakingLabelController`; not ported.
+/// - **`String`-only label/hint/helper/error slots** — Flutter's
+///   `InputDecoration` additionally accepts a `Widget` for each
+///   (`label`/`hint`/`helper`/`error`); this crate ships `String` only, additively
+///   extensible (a `Widget` variant can be added to each field later without
+///   breaking the `String` construction path).
 #[derive(Clone, Debug, StatefulView)]
 pub struct InputDecorator {
     decoration: InputDecoration,
@@ -550,9 +550,9 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             );
             let mut label_style = base_label_style.unwrap_or_default();
             if float {
-                // The oracle's `_kFinalLabelScale` (`input_decorator.dart:41`,
-                // tag `3.44.0`) — applied as a snap, not the oracle's
-                // 167ms-animated interpolation. See the module doc.
+                // Flutter's `_kFinalLabelScale` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:42`) —
+                // applied as a snap, not Flutter's
+                // 167ms-animated interpolation. See [`InputDecorator`]'s docs.
                 if let Some(font_size) = label_style.font_size {
                     label_style = label_style.with_font_size(font_size * 0.75);
                 }
@@ -605,8 +605,8 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             .boxed();
 
         // The supporting line sits below the container, outside the box whose
-        // bottom border is the indicator — see "Supporting line" in the
-        // module docs.
+        // bottom border is the indicator — see "Supporting line" in
+        // [`InputDecorator`]'s docs.
         let mut column = vec![container];
         if let Some((line_text, is_error)) = helper_or_error_line(decoration) {
             let base = text_theme.body_small.unwrap_or_default();

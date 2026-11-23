@@ -58,7 +58,7 @@ pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
 pub fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_position() {
     // Mirrors `tests/scaffold.rs`'s own FAB-slot geometry tests, but with a
     // real `FloatingActionButton` (56x56 via its own `ConstrainedBox`, not a
-    // stand-in `SizedBox`) proving this V1's `FAB_SIZE` constant actually
+    // stand-in `SizedBox`) proving this crate's `FAB_SIZE` constant actually
     // reaches the Scaffold's `floating_action_button` slot unmodified.
     let laid = lay_out(
         Theme::new(

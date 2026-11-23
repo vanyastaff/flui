@@ -83,7 +83,7 @@ pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
     // observably inert. It mounts with no `on_tap` at all (there is nothing
     // to fire), which is the only way to construct a disabled `InkWell` —
     // `is_interactive()` is derived from `on_tap.is_some()`, not a separate
-    // flag (see `ink_well.rs`'s module doc).
+    // flag (see the `InkWell` docs).
     let states = WidgetStatesController::default();
     let laid = lay_out(
         InkWell::new()

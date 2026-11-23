@@ -3,7 +3,7 @@
 use flui_foundation::{CreationSite, TextDirection};
 use flui_objects::RenderIcon;
 use flui_painting::styling::Color;
-use flui_painting::typography::{FontVariation, OpenTypeTag, TextStyle};
+use flui_painting::typography::{FontVariation, OpenTypeTag, SharedSlice, TextStyle};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, RenderView, ViewExt, impl_render_view};
@@ -129,7 +129,7 @@ impl Icon {
 
     /// The font-variation axes this icon's [`TextStyle`] carries, built from
     /// the resolved theme's `fill`/`weight`/`grade`/`optical_size`.
-    fn font_variations(theme: &IconThemeData) -> Vec<FontVariation> {
+    fn font_variations(theme: &IconThemeData) -> SharedSlice<FontVariation> {
         [
             theme
                 .fill

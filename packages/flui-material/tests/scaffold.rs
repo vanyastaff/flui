@@ -1,6 +1,6 @@
 //! `Scaffold` widget-level integration coverage — mounts a real scaffold
 //! through the full render pipeline (`tests/common/mod.rs`), proving the
-//! inset contract documented in `scaffold.rs`'s module docs: the app bar's
+//! inset contract documented in the `Scaffold` docs: the app bar's
 //! MEASURED height (not a re-added `padding.top`) sets `content_top`, and the
 //! floating action button is positioned from `content_bottom` (which already
 //! accounts for the keyboard), never from the scaffold's raw height.

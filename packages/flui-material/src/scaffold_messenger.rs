@@ -131,28 +131,6 @@
 //! (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/scaffold.dart:463`). The current
 //! entry is then hidden with [`SnackBarClosedReason::Hide`]: `clearSnackBars`
 //! calls `hideCurrentSnackBar()`, whose reason defaults to `hide`.
-//!
-//! ## Completion reason
-//!
-//! Each queued entry carries a `reason` cell its pop reads (falling back to
-//! [`SnackBarClosedReason::Remove`] for an entry popped with none recorded:
-//! one whose entrance was refused). It is set two ways:
-//!
-//! - `QueuedEntry::set_reason_once` (hide, timeout) is **provisional**: it
-//!   applies only if nothing is recorded yet. A hide completes when the exit
-//!   animation settles, so its reason is a promise about that later
-//!   completion.
-//! - `QueuedEntry::set_reason` (remove) **overwrites**. A remove completes at
-//!   once with its own reason, so a `remove_current_snack_bar()` arriving
-//!   during the exit of an earlier `hide_current_snack_bar()` reports
-//!   `Remove`.
-//!
-//! ## Reachable reasons
-//!
-//! [`SnackBarClosedReason::Timeout`], [`SnackBarClosedReason::Hide`],
-//! [`SnackBarClosedReason::Remove`] and [`SnackBarClosedReason::Action`].
-//! [`SnackBarClosedReason::Dismiss`] and [`SnackBarClosedReason::Swipe`] name
-//! a close icon and swipe-to-dismiss, which this crate does not build.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -175,8 +153,30 @@ const ENTRY_TRANSITION_DURATION: Duration = Duration::from_millis(250);
 
 /// Specifies how a [`SnackBar`] was closed.
 ///
-/// See the module docs' "Reachable reasons" section for which variants this
+/// See [`SnackBarClosedReason`]'s "Reachable reasons" section for which variants this
 /// crate produces.
+///
+/// ## Completion reason
+///
+/// Each queued entry carries a `reason` cell its pop reads (falling back to
+/// [`SnackBarClosedReason::Remove`] for an entry popped with none recorded:
+/// one whose entrance was refused). It is set two ways:
+///
+/// - `QueuedEntry::set_reason_once` (hide, timeout) is **provisional**: it
+///   applies only if nothing is recorded yet. A hide completes when the exit
+///   animation settles, so its reason is a promise about that later
+///   completion.
+/// - `QueuedEntry::set_reason` (remove) **overwrites**. A remove completes at
+///   once with its own reason, so a `remove_current_snack_bar()` arriving
+///   during the exit of an earlier `hide_current_snack_bar()` reports
+///   `Remove`.
+///
+/// ## Reachable reasons
+///
+/// [`SnackBarClosedReason::Timeout`], [`SnackBarClosedReason::Hide`],
+/// [`SnackBarClosedReason::Remove`] and [`SnackBarClosedReason::Action`].
+/// [`SnackBarClosedReason::Dismiss`] and [`SnackBarClosedReason::Swipe`] name
+/// a close icon and swipe-to-dismiss, which this crate does not build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SnackBarClosedReason {
@@ -248,7 +248,7 @@ impl std::fmt::Debug for SnackBarController {
 }
 
 /// One queued (or currently showing) snack bar plus its once-only completion
-/// slot. See the module docs' "Completion reason" section.
+/// slot. See [`SnackBarClosedReason`]'s "Completion reason" section.
 struct QueuedEntry {
     snack_bar: SnackBar,
     hovered_presenters: Cell<usize>,
@@ -303,7 +303,7 @@ impl SnackBarHoverTarget {
 impl QueuedEntry {
     /// Records `reason` only if nothing has been recorded yet — the
     /// provisional guard [`hide_current`](MessengerCore::hide_current)/timeout
-    /// use. See the module docs' "Completion reason" section.
+    /// use. See [`SnackBarClosedReason`]'s "Completion reason" section.
     fn set_reason_once(&self, reason: SnackBarClosedReason) {
         if self.reason.get().is_none() {
             self.reason.set(Some(reason));
@@ -727,7 +727,7 @@ impl MessengerCore {
     }
 
     /// Removes the current entry with no exit animation. Overwrites the
-    /// reason, unlike a hide — see the module docs' "Completion reason"
+    /// reason, unlike a hide — see [`SnackBarClosedReason`]'s "Completion reason"
     /// section. On an entry already `ReverseSettled` it changes no status:
     /// the reconcile that ends the operation completes it (the module docs'
     /// "Queue-wedge invariant").

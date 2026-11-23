@@ -1,71 +1,45 @@
 //! # `flui_cupertino`
 //!
-//! iOS-style (Cupertino) theming foundation and component set for FLUI:
-//! [`CupertinoColors`] and [`CupertinoDynamicColor`] (the
-//! brightness/contrast/elevation-adaptive color system),
-//! [`CupertinoTextThemeData`], [`CupertinoThemeData`], the [`CupertinoTheme`]
-//! inherited widget that publishes it to a subtree, the [`CupertinoApp`]
-//! application shell (ADR-0042 — brightness via Apple's optional-override
-//! model over `flui-widgets`' design-neutral `WidgetsApp`, no `ThemeMode`),
-//! [`CupertinoButton`],
-//! the iOS parallax page slide that [`CupertinoApp`] installs for its routes,
-//! [`CupertinoNavigationBar`], [`CupertinoPageScaffold`],
-//! [`CupertinoPageControl`], and [`CupertinoTabScaffold`]/[`CupertinoTabBar`] (the lazy-build,
-//! state-retaining tabbed root layout).
+//! The iOS-style (Cupertino) widget catalog for FLUI.
 //!
-//! ## Design spec
+//! - Color and theme: [`CupertinoColors`], [`CupertinoColor`] and
+//!   [`CupertinoDynamicColor`] (the brightness- and contrast-adaptive color
+//!   system), [`CupertinoTextThemeData`], [`CupertinoThemeData`] and the
+//!   [`CupertinoTheme`] inherited widget that publishes it to a subtree.
+//! - Application shell: [`CupertinoApp`] (ADR-0042) over `flui-widgets`'
+//!   design-neutral `WidgetsApp`, which also installs the iOS parallax page
+//!   slide for its routes.
+//! - Components: [`CupertinoButton`], [`CupertinoActivityIndicator`],
+//!   [`CupertinoPageControl`], [`CupertinoNavigationBar`] with
+//!   [`CupertinoPageScaffold`], and [`CupertinoTabBar`] with
+//!   [`CupertinoTabScaffold`] and [`CupertinoTabController`] (the lazy-build,
+//!   state-retaining tabbed root layout).
 //!
-//! The theming and single-page/tabbed-app surface follows Apple's Human
-//! Interface Guidelines. Every constant table (`CupertinoColors`' 30-odd
-//! dynamic-color statics, the default text styles, the default theme, the
-//! per-[`CupertinoButtonSize`] geometry maps, the navigation-bar and tab-bar
-//! heights and border colors) carries the iOS system values — see each
-//! module's docs.
+//! Every item is exported at the crate root; the modules are private. The
+//! constant tables (the dynamic-color statics, the default text styles, the
+//! default theme, the per-size button geometry, the bar heights and border
+//! colors) carry the iOS system values. Each type's documentation states what
+//! it leaves out of Flutter's counterpart.
+//!
+//! Other Cupertino components (`CupertinoTextField`, pickers, action sheets,
+//! `CupertinoSliverNavigationBar` and large titles) are not provided. The
+//! interface-elevation axis of [`CupertinoDynamicColor`] is not resolved:
+//! the elevated variants are stored and resolution uses base elevation,
+//! because FLUI has no interface-level ambient. Brightness and contrast
+//! resolve from the ambient theme and media data.
 //!
 //! ## ADR-0088: built on `flui-sdk` alone
 //!
 //! This crate is an official package: its only FLUI dependency is `flui-sdk`
-//! (plus `tracing`), and it names the framework as `flui_sdk::…`, as a
-//! third-party package would. It **never** depends on `flui-material`: the
-//! two design systems are independent (ADR-0028), and the kind rule
-//! (ADR-0081 §3, ADR-0088 §2) refuses that edge in any dependency kind. It
-//! adds no render object of its own either: every component here composes
-//! existing widgets — `FadeTransition`, `GestureDetector`, `DecoratedBox`,
-//! `Stack`/`Positioned`, `Offstage`, `HeroMode`, …, and names no render-layer
-//! value.
-//!
-//! ## Scope (V1 — theming, the page slide, and the two-scaffold family)
-//!
-//! This crate ships the color/typography/theme substrate,
-//! [`CupertinoButton`], [`CupertinoNavigationBar`],
-//! [`CupertinoPageScaffold`], and [`CupertinoTabScaffold`]/[`CupertinoTabBar`].
-//! It deliberately does **not** ship:
-//!
-//! - Every other Cupertino component not listed above (`CupertinoTextField`,
-//!   pickers, action sheets, `CupertinoSliverNavigationBar`/large titles, …)
-//!   — later increments on this same substrate.
-//! - `CupertinoPageRoute`'s `title`/`previousTitle`, `fullscreenDialog` and
-//!   `delegatedTransition`: a page is a Router route value, and the ambient
-//!   page transition carries the slide, the edge swipe back and the barrier
-//!   dim (see [`app`]'s module docs).
-//! - `CupertinoNavigationBar`'s `.large()`/large-title layout, automatic
-//!   leading/middle heuristics, scroll-under background fade, blur, and the
-//!   hero transition between nav bars across a route push — see [`nav_bar`]'s
-//!   module docs.
-//! - `CupertinoTabBar`'s blur on a translucent background, and state
-//!   restoration for `CupertinoTabScaffold` — see [`bottom_tab_bar`]'s and
-//!   [`tab_scaffold`]'s module docs.
-//! - The interface-elevation axis of [`CupertinoDynamicColor`] resolution:
-//!   elevated variants are stored but resolution uses base elevation, as no
-//!   interface-level ambient exists yet. Brightness and contrast resolve from
-//!   the ambient theme and media data; see [`colors`] module docs.
-//! - [`CupertinoButton`]'s focus ring (`RoundedSuperellipseBorder`
-//!   outline — `flui-painting` has the primitive, this crate does not draw
-//!   it yet), `WidgetState`-resolved mouse cursor, and
-//!   `onFocusChange`/`autofocus` wiring. See [`button`] module docs.
-//!
-//! Each deferral is named, not silently dropped — see the owning module's
-//! docs for the tracking rationale.
+//! (plus `tracing`), and it names the framework as `flui_sdk::…`. The button
+//! and the tab bar also import `flui_sdk::widgets::__private::node`, the
+//! interactive-node seam ADR-0322 §1 keeps doc-hidden for the official
+//! catalogs. It never depends on `flui-material`: the two design systems are
+//! independent (ADR-0028), and the kind rule (ADR-0081 §3, ADR-0088 §2)
+//! refuses that edge in any dependency kind. It adds no render object of its
+//! own: components compose existing widgets (`FadeTransition`,
+//! `DecoratedBox`, `Stack`/`Positioned`, `Offstage`, `HeroMode`, …) and name
+//! no render-layer value.
 //!
 //! ## Example
 //!
@@ -78,17 +52,17 @@
 
 #![deny(missing_docs)]
 
-pub mod activity_indicator;
-pub mod app;
-pub mod bottom_tab_bar;
-pub mod button;
-pub mod colors;
-pub mod nav_bar;
-pub mod page_control;
-pub mod page_scaffold;
-pub mod tab_scaffold;
-pub mod text_theme;
-pub mod theme;
+mod activity_indicator;
+mod app;
+mod bottom_tab_bar;
+mod button;
+mod colors;
+mod nav_bar;
+mod page_control;
+mod page_scaffold;
+mod tab_scaffold;
+mod text_theme;
+mod theme;
 
 pub use activity_indicator::{CupertinoActivityIndicator, CupertinoActivityIndicatorState};
 pub use app::CupertinoApp;

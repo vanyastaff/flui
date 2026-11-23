@@ -1,38 +1,6 @@
 //! [`TabController`] — shared selection state and tab position for
 //! [`crate::TabBar`] and [`crate::TabBarView`], plus [`DefaultTabController`],
 //! the inherited-widget shortcut that owns one for a subtree.
-//!
-//! # One owner-local handle
-//!
-//! Every clone of a [`TabController`] shares one `Rc`: the committed
-//! `(index, previous_index)` pair (one `Cell` of a packed pair, so a listener
-//! never observes one field updated without the other), the index listeners,
-//! and the position source. The handle is `!Send`; it lives on the UI runtime
-//! that created it.
-//!
-//! # `index` and `position`: two values, one source of truth
-//!
-//! [`TabController::index`] is the committed selection, the value labels and
-//! semantics read. [`TabController::position`] is the continuous, fractional
-//! position the indicator paints: `1.5` is half way between the second and
-//! third tab. Position is *derived*, never written back:
-//!
-//! - **No [`crate::TabBarView`] attached** — an owned `AnimatedValue<f64>`.
-//!   [`TabController::animate_to`] retargets it with the controller's motion
-//!   (300 ms ease-in-out unless [`TabController::with_motion`] says
-//!   otherwise); [`TabController::set_index`] snaps it. It runs on the
-//!   ambient `VsyncScope` clock that a `TabBar` or `DefaultTabController`
-//!   binds it to, so reduced motion settles it on the next frame and a
-//!   subtree with no clock settles it at once.
-//! - **A `TabBarView` attached** — the view's `PageController::page()`. A tap
-//!   commits `index` and animates the pager; a swipe moves the pager
-//!   directly, and `index` commits only once the pager stops scrolling, to
-//!   the page it rests on. During a drag `index` does not change. Reduced
-//!   motion does not affect a swipe: following the finger is direct
-//!   manipulation, not animation.
-//!
-//! So there is no `offset` to write back and no `index_is_changing` counter:
-//! anything that needs "how far between tabs" reads `position()`.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -561,7 +529,7 @@ impl Listenable for Shared {
 }
 
 /// Coordinates tab selection and position for [`TabBar`](crate::TabBar) and
-/// [`TabBarView`](crate::TabBarView). See the module docs for how `index` and
+/// [`TabBarView`](crate::TabBarView). See [`TabController`]'s docs for how `index` and
 /// [`position`](Self::position) relate.
 ///
 /// `Clone` is cheap and shares identity: every clone observes and mutates the
@@ -577,6 +545,38 @@ impl Listenable for Shared {
 /// assert_eq!(controller.previous_index(), 0);
 /// assert_eq!(controller.position().value(), 2.0);
 /// ```
+///
+/// # One owner-local handle
+///
+/// Every clone of a [`TabController`] shares one `Rc`: the committed
+/// `(index, previous_index)` pair (one `Cell` of a packed pair, so a listener
+/// never observes one field updated without the other), the index listeners,
+/// and the position source. The handle is `!Send`; it lives on the UI runtime
+/// that created it.
+///
+/// # `index` and `position`: two values, one source of truth
+///
+/// [`TabController::index`] is the committed selection, the value labels and
+/// semantics read. [`TabController::position`] is the continuous, fractional
+/// position the indicator paints: `1.5` is half way between the second and
+/// third tab. Position is *derived*, never written back:
+///
+/// - **No [`crate::TabBarView`] attached** — an owned `AnimatedValue<f64>`.
+///   [`TabController::animate_to`] retargets it with the controller's motion
+///   (300 ms ease-in-out unless [`TabController::with_motion`] says
+///   otherwise); [`TabController::set_index`] snaps it. It runs on the
+///   ambient `VsyncScope` clock that a `TabBar` or `DefaultTabController`
+///   binds it to, so reduced motion settles it on the next frame and a
+///   subtree with no clock settles it at once.
+/// - **A `TabBarView` attached** — the view's `PageController::page()`. A tap
+///   commits `index` and animates the pager; a swipe moves the pager
+///   directly, and `index` commits only once the pager stops scrolling, to
+///   the page it rests on. During a drag `index` does not change. Reduced
+///   motion does not affect a swipe: following the finger is direct
+///   manipulation, not animation.
+///
+/// So there is no `offset` to write back and no `index_is_changing` counter:
+/// anything that needs "how far between tabs" reads `position()`.
 #[derive(Clone)]
 pub struct TabController {
     shared: Rc<Shared>,
@@ -717,7 +717,7 @@ impl TabController {
 
     /// The continuous tab position: `index` at rest, fractional while a tab
     /// change animates or a [`TabBarView`](crate::TabBarView) is dragged.
-    /// See the module docs for where it comes from.
+    /// See [`TabController`]'s docs for where it comes from.
     #[must_use]
     pub fn position(&self) -> TabPosition {
         TabPosition {

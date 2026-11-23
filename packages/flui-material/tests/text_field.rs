@@ -261,7 +261,7 @@ pub fn replacing_and_unmounting_the_field_withdraws_its_node_subscription() {
 // ============================================================================
 
 // ============================================================================
-// Parity anchor — "TextField errorText trumps helperText" (text_field_test.dart, tag 3.44.0)
+// Parity anchor — "TextField errorText trumps helperText" (`flutter/flutter@3.50.1 packages/flutter/test/material/text_field_test.dart:5510`)
 // ============================================================================
 
 // ============================================================================

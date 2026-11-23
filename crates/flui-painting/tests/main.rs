@@ -399,8 +399,8 @@ fn value_contract() {
                 values::text_styles_interpolate_magnitudes_and_switch_the_rest,
             ),
             (
-                "a_style_copy_and_merge_share_its_font_names",
-                values::a_style_copy_and_merge_share_its_font_names,
+                "a_style_copy_and_merge_share_its_font_lists",
+                values::a_style_copy_and_merge_share_its_font_lists,
             ),
             (
                 "spoken_text_compares_without_being_built",

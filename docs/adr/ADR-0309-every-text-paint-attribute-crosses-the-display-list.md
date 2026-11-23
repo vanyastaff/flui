@@ -64,7 +64,7 @@ Chosen option: 3, because it paints what applications already write, and every s
 a paragraph op has to classify a shadow before it compiles.
 
 §1. **One paint vocabulary.** A `TextStyle` paints with `color` (the glyphs), `background_color`
-(the span's line boxes) and `shadows: Option<Vec<Shadow>>` (`None` inherits, an empty list
+(the span's line boxes) and `shadows: Option<SharedSlice<Shadow>>` (`None` inherits, an empty list
 clears). `foreground`, `background` and `TextShadow` are removed. The paint fields are read in one
 exhaustive destructure, `SpanPaint::of`, the twin of `TextStyle::layout_affecting_eq`: a new field
 does not compile until both classify it.

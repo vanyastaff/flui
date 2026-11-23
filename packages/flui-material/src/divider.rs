@@ -1,26 +1,13 @@
 //! [`Divider`]/[`VerticalDivider`] — a thin, inset rule painted with the M3
 //! `_DividerDefaultsM3` token defaults.
 //!
-//! # M3 defaults
-//!
-//! | Token | Value | Oracle |
-//! |---|---|---|
-//! | `space` (height/width) | `16.0` | `_DividerDefaultsM3` constructor |
-//! | `thickness` | `1.0` | `_DividerDefaultsM3` constructor |
-//! | `indent` | `0.0` | `_DividerDefaultsM3` constructor |
-//! | `endIndent` | `0.0` | `_DividerDefaultsM3` constructor |
-//! | `color` | `ColorScheme.outlineVariant` | `_DividerDefaultsM3.color` |
-//!
-//! Note the M3 `thickness` default is `1.0`, not M2's `0.0` — a divider with
-//! no theme/widget override still paints a visible 1dp line.
-//!
 //! # Composition: a filled rectangle, not a bottom border
 //!
-//! The oracle paints the line as a `Container(height: thickness)` whose
+//! Flutter paints the line as a `Container(height: thickness)` whose
 //! `BoxDecoration.border` is a single `bottom BorderSide` of width
 //! `thickness` — since the border's width equals the container's own height,
 //! that border covers the container's entire area, which is paint-equivalent
-//! to filling the container with `color` outright. This substrate does
+//! to filling the container with `color` outright. This crate does
 //! exactly that: [`Container::decoration`](flui_sdk::widgets::Container::decoration)
 //! with `BoxDecoration::with_color`, which also lets [`Divider::radius`]/
 //! [`DividerThemeData::radius`](crate::theme_data::DividerThemeData::radius)
@@ -28,15 +15,6 @@
 //! border-inset reduction FLUI's `BoxDecoration` doesn't model (see
 //! [`crate::material::Material`]'s docs on the same class of
 //! simplification).
-//!
-//! # Deferred, and named
-//!
-//! - **`Divider::createBorderSide`** — a `BuildContext`-optional static
-//!   helper for composing a manual divider border; no caller needs it yet.
-//! - **`ListTile::divideTiles`** — the `Iterable<Widget>` inter-tile divider
-//!   helper; a natural, additive follow-up once a caller list-builds
-//!   `ListTile`s.
-//! - **`PopupMenuDivider`** — a distinct oracle type, out of this scope.
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::styling::{BorderRadius, BoxDecoration, Color};
@@ -46,18 +24,18 @@ use flui_sdk::widgets::{Center, Container, SizedBox};
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// `_DividerDefaultsM3`'s height/width (`divider.dart`, oracle tag `3.44.0`).
+/// `_DividerDefaultsM3`'s height/width (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/divider.dart:361`).
 const DEFAULT_SPACE: f64 = 16.0;
-/// `_DividerDefaultsM3`'s thickness (`divider.dart`, oracle tag `3.44.0`).
+/// `_DividerDefaultsM3`'s thickness (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/divider.dart:362`).
 const DEFAULT_THICKNESS: f64 = 1.0;
-/// `_DividerDefaultsM3`'s indent (`divider.dart`, oracle tag `3.44.0`).
+/// `_DividerDefaultsM3`'s indent (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/divider.dart:363`).
 const DEFAULT_INDENT: f64 = 0.0;
-/// `_DividerDefaultsM3`'s end indent (`divider.dart`, oracle tag `3.44.0`).
+/// `_DividerDefaultsM3`'s end indent (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/divider.dart:364`).
 const DEFAULT_END_INDENT: f64 = 0.0;
 
 /// A thin horizontal rule, with padding on either side.
 ///
-/// See the module docs for the M3 default token table and how the line is
+/// See [`Divider`]'s docs for the M3 default token table and how the line is
 /// painted.
 ///
 /// ```rust
@@ -65,6 +43,28 @@ const DEFAULT_END_INDENT: f64 = 0.0;
 ///
 /// let _divider = Divider::new().indent(16.0);
 /// ```
+///
+/// # M3 defaults
+///
+/// | Token | Value | Flutter |
+/// |---|---|---|
+/// | `space` (height/width) | `16.0` | `_DividerDefaultsM3` constructor |
+/// | `thickness` | `1.0` | `_DividerDefaultsM3` constructor |
+/// | `indent` | `0.0` | `_DividerDefaultsM3` constructor |
+/// | `endIndent` | `0.0` | `_DividerDefaultsM3` constructor |
+/// | `color` | `ColorScheme.outlineVariant` | `_DividerDefaultsM3.color` |
+///
+/// Note the M3 `thickness` default is `1.0`, not M2's `0.0` — a divider with
+/// no theme/widget override still paints a visible 1dp line.
+///
+/// # Deferred, and named
+///
+/// - **`Divider::createBorderSide`** — a `BuildContext`-optional static
+///   helper for composing a manual divider border; no caller needs it yet.
+/// - **`ListTile::divideTiles`** — the `Iterable<Widget>` inter-tile divider
+///   helper; a natural, additive follow-up once a caller list-builds
+///   `ListTile`s.
+/// - **`PopupMenuDivider`** — a distinct Flutter type, out of this scope.
 #[derive(Clone, Debug, Default, StatelessView)]
 pub struct Divider {
     height: Option<f64>,
@@ -77,7 +77,7 @@ pub struct Divider {
 
 impl Divider {
     /// A `Divider` with every property falling through to
-    /// `_DividerDefaultsM3` (see the module docs' token table).
+    /// `_DividerDefaultsM3` (see [`Divider`]'s docs' token table).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -159,7 +159,7 @@ impl StatelessView for Divider {
 }
 
 /// A thin vertical rule, with padding on either side. The vertical analog of
-/// [`Divider`] — see the module docs for the shared M3 token table.
+/// [`Divider`] — see [`Divider`]'s docs for the shared M3 token table.
 ///
 /// ```rust
 /// use flui_material::VerticalDivider;
@@ -178,7 +178,7 @@ pub struct VerticalDivider {
 
 impl VerticalDivider {
     /// A `VerticalDivider` with every property falling through to
-    /// `_DividerDefaultsM3` (see the module docs' token table).
+    /// `_DividerDefaultsM3` (see [`Divider`]'s docs' token table).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -310,8 +310,8 @@ fn resolve_style(
 }
 
 /// The line's fill: `color`, optionally rounded to `radius` — see the module
-/// docs' "Composition" section for why a filled rect stands in for the
-/// oracle's full-height bottom border.
+/// docs' "Composition" section for why a filled rect stands in for
+/// Flutter's full-height bottom border.
 fn decoration(color: Color, radius: Option<BorderRadius>) -> BoxDecoration {
     BoxDecoration::with_color(color).set_border_radius(radius)
 }

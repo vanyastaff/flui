@@ -1,76 +1,10 @@
-//! [`CupertinoNavigationBar`] — a static iOS-style navigation bar: a
-//! centered `middle` title with `leading`/`trailing` slots.
+//! The static iOS-style navigation bar.
 //!
-//! This is the **collapsed, static** shape only — no large-title layout, and
-//! no scroll-driven sliver variant. See "Deferred, named" below for exactly
-//! what that excludes.
-//!
-//! ## What it does
-//!
-//! - A persistent height of `44.0` as
-//!   [`preferred_size`](PreferredSizeView::preferred_size)'s height. It is
-//!   *not* itself topped up by `MediaQuery.padding.top` (that addition
-//!   happens once, in `CupertinoPageScaffold`, the same "advertise the bar
-//!   height only" contract `flui-material`'s `AppBar` established in
-//!   this workspace).
-//! - The hairline bottom border (color `0x4D000000`) — see the "hairline"
-//!   note below.
-//! - The opaque background: `background_color` resolved from
-//!   [`crate::CupertinoThemeData::bar_background_color`] when unset.
-//! - Self-padding against the top safe-area inset via [`SafeArea`]
-//!   (like `flui-material`'s `AppBar`, "the bar pads itself").
-//! - `middle` true-centered across the bar's full width (a [`Stack`] +
-//!   full-bleed [`Center`], not `Row`'s remaining-space centering) — see
-//!   "Layout: no `NavigationToolbar`" below.
-//!
-//! ## Deferred, named
-//!
-//! - **Automatic leading/middle** (a back chevron and title implied from the
-//!   previous route's title). No consumer route carries a `title` to imply
-//!   from yet: a Router page carries no `title` (`CupertinoPageRoute.title` is
-//!   not modelled). `leading`/`middle` are always
-//!   exactly what the caller supplies.
-//! - **Large title / `bottom`** — the expanded large-title
-//!   layout and the bottom-accessory slot. This type ships the collapsed
-//!   shape only.
-//! - **Automatic background visibility / scroll-under fade** — no
-//!   scroll-notification observer substrate to drive it from. The
-//!   background is always fully opaque at its resolved color, and the
-//!   scroll-under border lerp never applies.
-//! - **Blur** (`BackdropFilter`). A blur is only wanted when the resolved
-//!   background's alpha is not `0xFF` — moot today since this V1 has no
-//!   translucent-background path to trigger it, and `flui-widgets`'
-//!   `BackdropFilter`/`BackdropGroup` are not on the `flui-sdk` surface yet.
-//! - **Hero transition between nav bars** — the push/pop hand-off where two
-//!   nav bars visually merge. Out of this component's scope; each nav bar is
-//!   independently mounted per route.
-//! - **`brightness`** (system status-bar style override) — no platform
-//!   status-bar styling seam in FLUI.
-//! - **System UI overlay style** — platform-only, no FLUI equivalent.
-//!
-//! ## The hairline border is *not* a literal `width: 0.0`
-//!
-//! iOS draws its bar border as a device-pixel hairline, which some toolkits
-//! spell as a border of width `0.0`. `flui-painting`'s box-border painter
-//! has no such convention: `paint_border` skips any side with
-//! `width.get() <= 0.0` outright (`decoration.rs`). A literal `width: 0.0`
-//! would render **no border at all**, silently failing the "hairline
-//! bottom border" contract. This uses [`HAIRLINE_BORDER_WIDTH`] (one logical
-//! pixel) instead — a real, honestly-approximated stroke, not a true
-//! device-pixel width.
-//!
-//! ## Layout: no `NavigationToolbar`
-//!
-//! A dedicated toolbar render object could center `middle` in the full
-//! toolbar width and *shift* it only if `leading`/`trailing` would
-//! otherwise overlap it. ADR-0028 prefers composition over a new render
-//! object unless one is proven necessary, and ordinary
-//! leading/middle/trailing widths never approach that overlap case in
-//! practice — so the visual outcome (a true-centered title) is produced
-//! with a [`Stack`]: `middle` is [`Center`]-ed across the **entire** bar width
-//! in one layer, `leading`/`trailing` are [`Positioned`] at the edges in
-//! another. Nothing here shifts or clips `middle` if `leading`/`trailing`
-//! grow wide enough to visually collide with it.
+//! Implementation notes: `middle` is centered in one `Stack` layer across the
+//! whole bar width, and `leading`/`trailing` are `Positioned` at the edges in
+//! another. ADR-0028 prefers composition over a toolbar render object, so
+//! nothing shifts or clips `middle` when the side slots grow wide enough to
+//! collide with it.
 
 use flui_sdk::geometry::Size;
 use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
@@ -83,26 +17,23 @@ use flui_sdk::widgets::{
     SizedBox, Stack,
 };
 
-use crate::colors::CupertinoColor;
-use crate::theme::CupertinoTheme;
+use crate::CupertinoColor;
+use crate::CupertinoTheme;
 
-/// The persistent height of the bar (the minimum interactive dimension),
-/// `44.0`.
-pub const NAV_BAR_PERSISTENT_HEIGHT: f64 = 44.0;
+/// The persistent height of the bar (the minimum interactive dimension).
+pub(crate) const NAV_BAR_PERSISTENT_HEIGHT: f64 = 44.0;
 
-/// The horizontal inset `leading`/`trailing` sit at from the bar's edges (the
-/// "automatically-inserted back button needs no padding" case is unreachable
-/// here — see the module docs' deferred automatic leading).
+/// The horizontal inset `leading`/`trailing` sit at from the bar's edges.
 const NAV_BAR_EDGE_PADDING: f64 = 16.0;
 
-/// The default border color.
+/// The default border color (`_kDefaultNavBarBorderColor`).
 const DEFAULT_NAV_BAR_BORDER_COLOR: Color = Color::from_argb(0x4D00_0000);
 
-/// The stroke width the hairline border is painted at — see the module docs'
-/// "hairline" note. One logical pixel, not a true device-pixel width.
-pub const HAIRLINE_BORDER_WIDTH: f64 = 1.0;
+/// The stroke width of the hairline borders of the navigation and tab bars:
+/// one logical pixel, because a width of `0.0` paints nothing.
+pub(crate) const HAIRLINE_BORDER_WIDTH: f64 = 1.0;
 
-/// A bottom-only hairline, approximated per [`HAIRLINE_BORDER_WIDTH`]'s doc.
+/// A bottom-only hairline of [`HAIRLINE_BORDER_WIDTH`].
 fn default_border() -> Border {
     Border::new(
         None,
@@ -116,10 +47,33 @@ fn default_border() -> Border {
     )
 }
 
-/// A static iOS-style navigation bar: `leading` / `middle` / `trailing`
-/// slots on a 44pt-tall bar with a hairline bottom border, self-padded
-/// against the top safe-area inset (collapsed-static shape only) — see
-/// the module docs for exactly what is and is not supported.
+/// A static iOS-style navigation bar: `leading`, `middle` and `trailing`
+/// slots on a 44-point bar with a hairline bottom border.
+///
+/// - [`preferred_size`](PreferredSizeView::preferred_size) is `44.0` tall.
+///   The bar's own height does not include the top safe-area inset;
+///   [`CupertinoPageScaffold`](crate::CupertinoPageScaffold) adds that once,
+///   and the bar pads its content against the inset itself with `SafeArea`.
+/// - The background is opaque. An unset `background_color` resolves from
+///   [`CupertinoThemeData::bar_background_color`](crate::CupertinoThemeData::bar_background_color).
+/// - `middle` is centered across the bar's full width, whatever the widths
+///   of `leading` and `trailing`.
+/// - The default border is a bottom-only line of color `0x4D000000` and
+///   width 1 logical pixel. iOS draws a device-pixel hairline, which some
+///   toolkits spell as width `0.0`; `flui-painting` skips a side of width
+///   `0.0` entirely, so the bar uses one logical pixel instead.
+///
+/// # Not implemented
+///
+/// This is the collapsed shape only. The bar has no large title or `bottom`
+/// slot, no leading or middle implied from the previous route (a Router page
+/// carries no title, so `leading` and `middle` are exactly what the caller
+/// supplies), no scroll-under background fade, no blur (the bar paints no
+/// `BackdropFilter`, so a translucent background shows the page unblurred),
+/// no hero transition between bars, and no status-bar `brightness` or system
+/// UI overlay style.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/nav_bar.dart`.
 ///
 /// ```
 /// use flui_cupertino::CupertinoNavigationBar;
@@ -158,7 +112,7 @@ impl CupertinoNavigationBar {
     }
 
     /// Sets the middle (title) slot, true-centered across the bar's full
-    /// width — see the module docs' layout note.
+    /// width.
     #[must_use]
     pub fn middle(mut self, middle: impl IntoView) -> Self {
         self.middle = Some(middle.into_view().boxed());
@@ -181,7 +135,7 @@ impl CupertinoNavigationBar {
     }
 
     /// Overrides the bottom border, or removes it with `None`. Defaults to
-    /// the hairline border — see the module docs' hairline note.
+    /// the one-pixel hairline border.
     #[must_use]
     pub fn border(mut self, border: Option<Border>) -> Self {
         self.border = border;
@@ -263,8 +217,7 @@ impl StatelessView for CupertinoNavigationBar {
 
 impl PreferredSizeView for CupertinoNavigationBar {
     fn preferred_size(&self) -> Size {
-        // No `bottom`/large-title height contributions (both deferred — see
-        // the module docs).
+        // The bar has no `bottom` or large-title height to add.
         Size::new(f64::INFINITY, NAV_BAR_PERSISTENT_HEIGHT)
     }
 }

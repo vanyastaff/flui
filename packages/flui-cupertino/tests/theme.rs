@@ -312,7 +312,7 @@ pub fn a_forced_brightness_or_a_light_accent_keeps_the_theme_legible() {
 }
 
 /// An explicit `CupertinoThemeData::brightness` takes precedence over a
-/// conflicting ambient `MediaQuery::platform_brightness` — the oracle's
+/// conflicting ambient `MediaQuery::platform_brightness` — Flutter's
 /// `brightness ?? MediaQuery...` chain short-circuits on the theme's own
 /// value, never consulting `MediaQuery` at all when it is set.
 pub fn explicit_theme_brightness_overrides_media_query() {

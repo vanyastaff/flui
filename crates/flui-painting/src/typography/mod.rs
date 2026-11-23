@@ -3,6 +3,7 @@
 
 mod font_family;
 mod font_settings;
+mod shared_slice;
 mod text_alignment;
 mod text_baseline;
 mod text_decoration;
@@ -12,6 +13,7 @@ mod text_style;
 
 pub use font_family::*;
 pub use font_settings::*;
+pub use shared_slice::SharedSlice;
 pub use text_alignment::*;
 pub use text_baseline::*;
 pub use text_decoration::*;

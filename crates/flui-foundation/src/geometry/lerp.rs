@@ -61,6 +61,23 @@ impl<T: Lerp> MaybeLerp for T {
     }
 }
 
+/// A shared value interpolates its contents, and shares an endpoint instead
+/// of copying it: `t == 0.0` hands back `self` and `t == 1.0` hands back
+/// `other`, each by reference count, so an animation that rests on a large
+/// value (a theme) copies it only for the samples between the two.
+impl<T: Lerp> Lerp for std::rc::Rc<T> {
+    #[expect(clippy::float_cmp, reason = "the two endpoints are exactly 0 and 1")]
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
+        if t == 0.0 {
+            Self::clone(self)
+        } else if t == 1.0 {
+            Self::clone(other)
+        } else {
+            Self::new(T::lerp_to(self, other, t))
+        }
+    }
+}
+
 impl Lerp for f64 {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {

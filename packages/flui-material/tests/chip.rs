@@ -8,7 +8,7 @@
 //! [`Chip::on_pressed`]/[`FilterChip::on_selected`], a themed override
 //! actually reaches the mounted render tree (not just a cascade function
 //! evaluated in isolation), and — the one genuinely load-bearing claim
-//! `chip.rs`'s own module docs make without previously proving it — that
+//! the `Chip` docs make without previously proving it — that
 //! the delete icon's small nested `InkWell` and the chip's own outer
 //! `InkWell` route a tap to exactly one of them, never both, depending on
 //! where the pointer lands. That claim rests on the gesture arena's "most
@@ -34,9 +34,9 @@ const CHIP_ICON_SIZE: f64 = 18.0;
 use flui_material::{Chip, Theme, ThemeData};
 use flui_sdk::widgets::Text;
 
-/// `_ChipDefaultsM3`/`_FilterChipDefaultsM3.padding` (`chip.dart`/
-/// `filter_chip.dart`, oracle tag `3.44.0`, `EdgeInsets.all(8.0)`) — a
-/// local re-citation of the oracle constant `chip.rs`'s own `PADDING` is
+/// `_FilterChipDefaultsM3.padding` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/filter_chip.dart:403`,
+/// `EdgeInsets.all(8.0)`) — a local re-citation of the constant
+/// `chip.rs`'s own `PADDING` is
 /// (correctly) private, needed here only to locate the delete icon's
 /// rendered position from the outside.
 const CONTAINER_PADDING: f64 = 8.0;

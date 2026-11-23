@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use flui_painting::typography::{FontFamilyFallback, FontFamilyName};
+use flui_painting::typography::{FontFamilyName, SharedSlice};
 
 /// Describes a glyph in an icon font, ready to be painted by
 /// [`Icon`](crate::Icon).
@@ -33,7 +33,7 @@ pub struct IconData {
 
     /// Additional font families to try, in order, when `font_family` doesn't
     /// cover `code_point`.
-    pub font_family_fallback: FontFamilyFallback,
+    pub font_family_fallback: SharedSlice<FontFamilyName>,
 }
 
 impl IconData {
@@ -47,7 +47,7 @@ impl IconData {
             font_family: None,
             font_package: None,
             match_text_direction: false,
-            font_family_fallback: FontFamilyFallback::new(),
+            font_family_fallback: SharedSlice::new(),
         }
     }
 

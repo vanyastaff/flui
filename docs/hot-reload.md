@@ -9,7 +9,8 @@ FLUI targets **hot reload** (state preserved, `build()` re-run). The operational
 | Capability | FLUI today | FLUI target |
 |------------|------------|-------------|
 | Hot reload (state kept) | Yes — `flui run` worker dylib swap (`perform_reassemble`) | Keep |
-| Hot restart | Partial (types change → process restart; in-process remount not wired) | `HotReloadTier::HotRestart` |
+| Restart (state lost, window kept) | No: an edit to the types crate replaces the host process | The loop retires the application and runs the entry again in the same window, and `flui run` chooses that tier from the shape of the edit ([ADR-0393](adr/ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md)) |
+| Reload of a one-crate project | No: `State` survives only in the three-crate project below | An application image the element tree adopts (proposed, [ADR-0394](adr/ADR-0394-application-code-reloads-as-an-image-the-element-tree-adopts.md)) |
 | Scene plugin reload | Yes | Keep for GPU demos |
 
 **Critical insight:** state must live in the **host binary** (Element tree), not in the reloadable `.so`.
@@ -163,7 +164,7 @@ producing.
 | Layer | Trigger | Action | State preserved |
 |-------|---------|--------|-----------------|
 | 1 | Source file change (`notify`) | Rebuild artifact | N/A (build step) |
-| 2 | Artifact mtime change | `unload` → `dlopen` → `build_scene()` | No (hot restart for widgets) |
+| 2 | Artifact mtime change | `unload` → `dlopen` → `build_scene()` | No (the plugin builds its widget tree from scratch) |
 
 **Rule:** layer 1 never reloads code directly. It only produces a new artifact. Layer 2 never watches `src/` — it only watches the plugin path on disk.
 
@@ -211,7 +212,7 @@ scene_plugin!(my_scene);
 
 ### App plugin (high-level, `app-plugin` feature)
 
-Runs Build → Layout → Paint inside the `.so` via `PluginPipeline`. Hot reload performs a **hot restart** (widget tree rebuilt from scratch).
+Runs Build → Layout → Paint inside the `.so` via `PluginPipeline`. A reload builds the plugin's widget tree from scratch and keeps no `State`.
 
 ## Crate Map
 

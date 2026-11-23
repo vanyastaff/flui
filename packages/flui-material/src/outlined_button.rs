@@ -1,21 +1,4 @@
 //! [`OutlinedButton`] — an M3 button with an outlined border and no fill.
-//!
-//! # Defaults and scope
-//!
-//! `default_style` holds the M3 outlined-button defaults, narrowed to the V1
-//! slots [`ButtonStyle`] carries — see that module's docs. Populated:
-//! `text_style`, `background_color` (constant transparent), `foreground_color`,
-//! `overlay_color`, `elevation` (constant `0.0`), `padding`, `minimum_size`,
-//! `maximum_size`, `side`, `shape`. The M3 defaults set no `fixed_size`, so
-//! that field is left unset here.
-//!
-//! `side` is this button's whole reason to exist, and it resolves correctly
-//! (disabled `onSurface@12%`, focused `primary`, else `outline`, all at the
-//! default `1.0` stroke width) — but see
-//! [`ButtonStyle::side`](crate::ButtonStyle::side)'s doc comment: `Material`
-//! has no border-side painting path yet, so this V1 `OutlinedButton` does
-//! not yet draw a visible outline. A pre-existing deferral (`shape.rs`), not
-//! one introduced here.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,6 +25,23 @@ use crate::theme::Theme;
 ///
 /// let _button = OutlinedButton::new(Text::new("Cancel")).on_pressed(|_ctx| {});
 /// ```
+///
+/// # Defaults and scope
+///
+/// `default_style` holds the M3 outlined-button defaults, narrowed to the
+/// slots [`ButtonStyle`] carries — see [`ButtonStyle`]'s docs. Populated:
+/// `text_style`, `background_color` (constant transparent), `foreground_color`,
+/// `overlay_color`, `elevation` (constant `0.0`), `padding`, `minimum_size`,
+/// `maximum_size`, `side`, `shape`. The M3 defaults set no `fixed_size`, so
+/// that field is left unset here.
+///
+/// `side` is this button's whole reason to exist, and it resolves correctly
+/// (disabled `onSurface@12%`, focused `primary`, else `outline`, all at the
+/// default `1.0` stroke width) — but see
+/// [`ButtonStyle::side`](crate::ButtonStyle::side)'s doc comment: `Material`
+/// has no border-side painting path yet, so this crate `OutlinedButton` does
+/// not yet draw a visible outline. A pre-existing deferral (`shape.rs`), not
+/// one introduced here.
 #[derive(Clone, StatelessView)]
 pub struct OutlinedButton {
     on_pressed: Option<PressCallback>,
@@ -121,8 +121,8 @@ impl StatelessView for OutlinedButton {
 }
 
 /// Verbatim, field-by-field port of `_OutlinedButtonDefaultsM3`
-/// (`outlined_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots —
-/// see the module docs.
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/outlined_button.dart:461`), narrowed to the slots —
+/// see [`OutlinedButton`]'s docs.
 fn default_style(theme: &ThemeData) -> ButtonStyle {
     let colors = theme.color_scheme;
 
@@ -163,7 +163,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
 }
 
 /// `24px` horizontal, `0px` vertical — same 1x-tier padding as
-/// [`crate::elevated_button`]. See that module's docs for the `MediaQuery`
+/// [`crate::elevated_button`]. See [`ElevatedButton`](crate::ElevatedButton)'s docs for the `MediaQuery`
 /// text-scaler deferral this narrows to the 1x tier.
 fn scaled_padding_1x() -> EdgeInsets {
     EdgeInsets::symmetric(0.0, 24.0)

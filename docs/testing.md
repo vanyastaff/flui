@@ -872,6 +872,20 @@ mount pays (loading fonts) is one sample of the twelve. The bench asserts
 nothing and no job runs it: it is where a cost is found and a fix is measured,
 and what a fix changes is held by a test of its own or by a count above.
 
+FLUI installs no global allocator: an application keeps the system's unless it names
+another. Measured on `app_scenarios` (Linux x86_64, glibc 2.39, callgrind over the measured
+steps, 2026-11), mimalloc 0.1.52 costs 2.6% fewer instructions than glibc's malloc in
+`text_edit`, 10.7% fewer in `list_scroll_page` and 1.2% fewer in `startup_text`: the gain
+follows how much a step allocates, which the counts above keep pushing down. An application
+that wants it adds `mimalloc` to its own dependencies and two lines to its binary crate,
+
+```rust,ignore
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+```
+
+and accepts a C build step on every target it ships; mimalloc does not build for wasm32.
+
 `perf/size.toml` holds what an application costs before it does anything, and
 two CI jobs hold it on Linux x86_64. The `deps` job, on every PR, counts the
 packages of the facade's default graph on Linux, Windows, macOS, Android and

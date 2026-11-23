@@ -86,7 +86,7 @@ impl Theme {
     /// Look up the nearest ancestor [`Theme`]'s data, registering a
     /// dependency. Returns `None` if there is no [`Theme`] ancestor.
     ///
-    /// The oracle's `Theme` has no `maybeOf` — its `Theme.of` never returns
+    /// Flutter's `Theme` has no `maybeOf` — its `Theme.of` never returns
     /// `null` (see [`of`](Self::of)'s doc comment on the fallback it uses
     /// instead), so there is no method to port here. `maybe_of` is this
     /// crate's own non-panicking counterpart to [`of`](Self::of)'s panicking
@@ -180,7 +180,7 @@ impl InheritedTheme for Theme {
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct AnimatedTheme {
-    data: ThemeData,
+    data: Rc<ThemeData>,
     motion: flui_sdk::animation::MotionSpec,
     child: BoxedView,
 }
@@ -188,9 +188,12 @@ pub struct AnimatedTheme {
 impl AnimatedTheme {
     /// Publish `data` to `child`, animating later changes with the default
     /// motion.
-    pub fn new(data: ThemeData, child: impl IntoView) -> Self {
+    ///
+    /// `data` is a `ThemeData` or an `Rc<ThemeData>` already shared: the
+    /// theme at rest reaches the [`Theme`] below by reference count.
+    pub fn new(data: impl Into<Rc<ThemeData>>, child: impl IntoView) -> Self {
         Self {
-            data,
+            data: data.into(),
             motion: flui_sdk::animation::MotionSpec::default(),
             child: child.into_view().boxed(),
         }
@@ -215,8 +218,8 @@ impl StatelessView for AnimatedTheme {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         use flui_sdk::widgets::MotionBuilder;
         let child = self.child.clone();
-        flui_sdk::widgets::AnimatedLerp::new(self.data.clone(), move |data: &ThemeData| {
-            Theme::new(data.clone(), child.clone())
+        flui_sdk::widgets::AnimatedLerp::new(Rc::clone(&self.data), move |data: &Rc<ThemeData>| {
+            Theme::new(Rc::clone(data), child.clone())
         })
         .motion(self.motion.clone())
     }

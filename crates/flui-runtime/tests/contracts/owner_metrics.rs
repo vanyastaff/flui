@@ -1219,7 +1219,7 @@ fn bold_text_changes_the_painted_glyphs() {
                 .with_text(TextSpan::styled(
                     "AA",
                     TextStyle {
-                        font_variations: vec![FontVariation::new(OpenTypeTag::WEIGHT, expected)],
+                        font_variations: [FontVariation::new(OpenTypeTag::WEIGHT, expected)].into(),
                         ..style.clone()
                     },
                 ))

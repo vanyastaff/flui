@@ -1,150 +1,6 @@
 //! [`Dialog`] — the M3 dialog surface; [`AlertDialog`] — the title/content/
 //! actions composition built on top of it; [`show_dialog`] — pushes either
 //! one as a modal popup route.
-//!
-//! # Defaults and scope
-//!
-//! The values below follow the Material 3 dialog spec.
-//!
-//! ## `Dialog` — M3 defaults
-//!
-//! | Token | Value | Oracle |
-//! |---|---|---|
-//! | `alignment` | `Alignment.center` | `_DialogDefaultsM3` constructor |
-//! | `backgroundColor` | `ColorScheme.surfaceContainerHigh` | `_DialogDefaultsM3.backgroundColor` |
-//! | `shadowColor` | `Colors.transparent` | `_DialogDefaultsM3.shadowColor` |
-//! | `surfaceTintColor` | `Colors.transparent` | `_DialogDefaultsM3.surfaceTintColor` |
-//! | `elevation` | `6.0` | `_DialogDefaultsM3` constructor |
-//! | `shape` | `RoundedRectangleBorder(borderRadius: 28.0)` | `_DialogDefaultsM3` constructor |
-//! | `clipBehavior` | `Clip.none` | `_DialogDefaultsM3` constructor |
-//! | `insetPadding` | `EdgeInsets.symmetric(horizontal: 40.0, vertical: 24.0)` | `_defaultInsetPadding` |
-//! | `constraints` | `BoxConstraints(minWidth: 280.0)` | `Dialog.build` |
-//!
-//! `shadowColor`/`surfaceTintColor` are the same named [`Material`] gap
-//! [`crate::card`] already documents — no setter exists on [`Material`] to
-//! carry them. Not a new deferral.
-//!
-//! `Dialog.build` also wraps its content in
-//! `MediaQuery.viewInsetsOf(context) + insetPadding` (so the dialog rides up
-//! above a shown keyboard), `AnimatedPadding` (an implicit inset tween),
-//! `MediaQuery.removeViewInsets`, and a `Semantics(role: ...)` node. None of
-//! these are ported: FLUI has no view-inset-publishing `MediaQuery` consumer
-//! wired to this substrate yet, and [`Material`] here applies every prop
-//! immediately (see that module's "no implicit shape/elevation animation"
-//! scope note, which this shares).
-//! `Dialog.fullscreen` (`_fullscreen`, `_DialogFullscreenDefaultsM3`) is not
-//! ported either — no caller yet.
-//!
-//! ## `AlertDialog`
-//!
-//! Ported: `title`, `content`, `actions`, composed into the oracle's
-//! `Column(mainAxisSize: min, crossAxisAlignment: stretch)` wrapped in
-//! `IntrinsicWidth`, with the fixed M3 padding/style defaults
-//! `_DialogDefaultsM3` and `AlertDialog.build` compute when `icon`,
-//! `titlePadding`, `contentPadding`, `actionsPadding`, and every alignment
-//! knob are left at their oracle defaults (which is the only configuration
-//! this V1 offers — see below). The non-scrollable `columnChildren` branch's
-//! `if (contentWidget != null) Flexible(child: contentWidget)` is ported too —
-//! content is wrapped in
-//! [`Flexible`] (the default loose fit, matching the
-//! oracle's own unqualified `Flexible(...)`) so content taller than the
-//! `Dialog`'s available height shrinks instead of overflowing.
-//!
-//! | Slot | Padding (`EdgeInsets`) | Text style |
-//! |---|---|---|
-//! | `title` | `left/top/right: 24, bottom: 0 if content else 20` | `TextTheme.headlineSmall` |
-//! | `content` | `left/right/bottom: 24, top: 16` | `TextTheme.bodyMedium` |
-//! | `actions` | `left/right/bottom: 24, top: 0` | — (each action keeps its own style) |
-//!
-//! `TextTheme.headlineSmall`/`bodyMedium` are read straight off
-//! [`ThemeData::text_theme`](crate::ThemeData::text_theme), which already
-//! carries the M3 uniform-recolor-to-`onSurface` FLUI applies at
-//! [`ThemeData::light`](crate::ThemeData::light)/[`dark`](crate::ThemeData::dark)
-//! construction (see that module's `default_text_theme` doc) — the oracle's
-//! own `Typography.material2021` reduces to the identical `onSurface` color
-//! for every role regardless of brightness, so no extra recolor step is
-//! needed here.
-//!
-//! Actions are laid out in a plain [`Row`] with [`MainAxisAlignment::End`]
-//! and an 8px [`SizedBox`] spacer between each — the
-//! oracle's `OverflowBar(alignment: end, spacing: (buttonPadding?.horizontal
-//! ?? 16) / 2)` with `buttonPadding` always at its `null` default (`8.0`
-//! spacing). `buttonPadding` itself is not exposed: the oracle only ever
-//! consumes it for that spacing calculation, never as a per-button pad, so
-//! there is nothing else to wire.
-//!
-//! ### Deferred, and named
-//!
-//! - **`icon`/`iconPadding`/`iconColor`** — the optional icon slot above the
-//!   title.
-//! - **`scrollable`** — the `SingleChildScrollView`-wrapped title/content
-//!   variant for overflow-prone dialogs.
-//! - **`actionsOverflowAlignment`/`actionsOverflowDirection`/
-//!   `actionsOverflowButtonSpacing`** — `OverflowBar`'s column fallback when
-//!   actions don't fit a single row; this V1's plain `Row` never overflows to
-//!   a column.
-//! - **Per-instance `titlePadding`/`contentPadding`/`actionsPadding`/
-//!   `actionsAlignment`/`buttonPadding` overrides**, and forwarding
-//!   `backgroundColor`/`elevation`/`shape`/`insetPadding`/`alignment`/
-//!   `constraints` through to the underlying [`Dialog`] — construct a
-//!   [`Dialog`] directly when any of those need to vary; `AlertDialog` is a
-//!   fixed M3 composition for now.
-//! - **A name for an untitled dialog** — `semanticLabel` and
-//!   `MaterialLocalizations.alertDialogLabel`. The dialog node is modal and
-//!   announced by role (`Dialog`, `AlertDialog`); an `AlertDialog` is named by
-//!   its title (ADR-0205), a bare `Dialog` by nothing.
-//! - **`AlertDialog.adaptive`** — the Cupertino/Material platform switch.
-//!
-//! ## `show_dialog`
-//!
-//! Pushes `builder`'s content as a [`PopupRoute`] with the Material dialog
-//! defaults (not a generic route's `0x80000000` barrier): `barrierDismissible:
-//! true`, `barrierColor: Colors.black54` (`0x8A000000`).
-//!
-//! **Takes the opening page's [`PageHandle`], not a `BuildContext`.** The
-//! oracle takes `context` and resolves `Navigator.of(context)` inside. A FLUI
-//! event callback runs after `build` with no position in the tree, so the
-//! caller resolves [`PageHandle::of`] in `build` and moves the handle into the
-//! callback that opens the dialog (ADR-0330 §3). The dialog is pushed on the
-//! navigator of that page, and belongs to it.
-//!
-//! **The transition** is the popup builder of the
-//! [`PageTransitions`](flui_sdk::widgets::PageTransitions) hook in scope where
-//! the navigator is mounted: the route sets none of its own, so under a
-//! [`MaterialApp`](crate::MaterialApp) the dialog fades in over 150 ms along
-//! `EASE_OUT` (`crate::page_transitions`). A navigator with no hook above it
-//! cuts, as any `PopupRoute` does.
-//!
-//! Return value: a [`RouteResult<T>`], a future of
-//! `Result<Option<T>, RouteResultError>`: `Ok(Some(value))` for the value the
-//! dialog was popped with, `Ok(None)` when it closed without one, and
-//! `RouteResultError::TypeMismatch` for a value of another type. `T` stays on
-//! the owner thread and needs no `Send`. A call made while the UI runtime
-//! builds, or from a page that has left its navigator, pushes nothing and
-//! answers [`PageError`].
-//!
-//! **Not ported**, and named:
-//!
-//! - `useSafeArea`, `routeSettings`, `traversalEdgeBehavior`, `anchorPoint`,
-//!   `fullscreenDialog`, `requestFocus`, `animationStyle`.
-//! - `useRootNavigator`: the dialog covers the navigator of the page that opens
-//!   it, which under a nested `Router` is that Router's area.
-//! - **No `barrierDismissible`/`barrierColor`/`barrierLabel` knobs.** These
-//!   are `showDialog` *parameters* in the oracle, not internal constants;
-//!   `show_dialog` hardcodes them (see above), so a non-dismissible dialog,
-//!   a custom barrier color, or a custom barrier label is unreachable
-//!   through this function. Construct a [`PopupRoute`] directly (with
-//!   `.barrier_dismissible(false)`/`.barrier_color(...)`, wrapping the same
-//!   [`Dialog`]/[`AlertDialog`] content this function builds) when any of
-//!   those need to vary.
-//! - The oracle's `InheritedTheme` capture/replay (`CapturedThemes`) that
-//!   lets a dialog pushed onto a *different* navigator scope still see the
-//!   calling context's `Theme`. FLUI relies on the pushed route's page
-//!   mounting as a structural descendant of the app's own
-//!   `Theme`/`Navigator`/`Overlay` chain (the common case — a dialog pushed
-//!   onto the same navigator its caller's `Theme` ancestor already covers);
-//!   a dialog pushed onto an unrelated navigator subtree would not see that
-//!   `Theme`, which the oracle's capture step exists specifically to fix.
 
 use flui_sdk::geometry::Radius;
 use flui_sdk::painting::paint::Clip;
@@ -190,6 +46,35 @@ const INSET_PADDING_VERTICAL: f64 = 24.0;
 ///
 /// let _dialog = Dialog::new().child(Text::new("Dialog content"));
 /// ```
+///
+/// ## `Dialog` — M3 defaults
+///
+/// | Token | Value | Flutter |
+/// |---|---|---|
+/// | `alignment` | `Alignment.center` | `_DialogDefaultsM3` constructor |
+/// | `backgroundColor` | `ColorScheme.surfaceContainerHigh` | `_DialogDefaultsM3.backgroundColor` |
+/// | `shadowColor` | `Colors.transparent` | `_DialogDefaultsM3.shadowColor` |
+/// | `surfaceTintColor` | `Colors.transparent` | `_DialogDefaultsM3.surfaceTintColor` |
+/// | `elevation` | `6.0` | `_DialogDefaultsM3` constructor |
+/// | `shape` | `RoundedRectangleBorder(borderRadius: 28.0)` | `_DialogDefaultsM3` constructor |
+/// | `clipBehavior` | `Clip.none` | `_DialogDefaultsM3` constructor |
+/// | `insetPadding` | `EdgeInsets.symmetric(horizontal: 40.0, vertical: 24.0)` | `_defaultInsetPadding` |
+/// | `constraints` | `BoxConstraints(minWidth: 280.0)` | `Dialog.build` |
+///
+/// `shadowColor`/`surfaceTintColor` are the same named [`Material`] gap
+/// [`Card`](crate::Card) already documents — no setter exists on [`Material`] to
+/// carry them. Not a new deferral.
+///
+/// `Dialog.build` also wraps its content in
+/// `MediaQuery.viewInsetsOf(context) + insetPadding` (so the dialog rides up
+/// above a shown keyboard), `AnimatedPadding` (an implicit inset tween),
+/// `MediaQuery.removeViewInsets`, and a `Semantics(role: ...)` node. None of
+/// these are ported: FLUI has no view-inset-publishing `MediaQuery` consumer
+/// wired to this crate yet, and [`Material`] here applies every prop
+/// immediately (see [`Material`]'s "no implicit shape/elevation animation"
+/// scope note, which this shares).
+/// `Dialog.fullscreen` (`_fullscreen`, `_DialogFullscreenDefaultsM3`) is not
+/// ported either — no caller yet.
 #[derive(Clone, StatelessView)]
 pub struct Dialog {
     color: Option<Color>,
@@ -227,7 +112,7 @@ impl Default for Dialog {
 
 impl Dialog {
     /// A `Dialog` with no child, with every visual property falling
-    /// through to `_DialogDefaultsM3` (see the module docs' token table).
+    /// through to `_DialogDefaultsM3` (see [`Dialog`]'s token table).
     /// Flutter's `Dialog.child` is nullable: an empty dialog is its
     /// surface at the minimum width.
     pub fn new() -> Self {
@@ -389,7 +274,7 @@ const ACTION_SPACING: f64 = 8.0;
 /// A Material Design alert dialog: an optional title, an optional content
 /// body, and a row of actions, composed onto a [`Dialog`] surface.
 ///
-/// See the module docs for the exact padding/style table and the named
+/// See [`AlertDialog`]'s docs for the exact padding/style table and the named
 /// deferrals (icon slot, scrollable content, actions overflow, semantics).
 ///
 /// ```rust
@@ -402,6 +287,66 @@ const ACTION_SPACING: f64 = 8.0;
 ///     .content(Text::new("This cannot be undone."))
 ///     .actions(vec![Text::new("Cancel").boxed(), Text::new("Delete").boxed()]);
 /// ```
+///
+/// ## `AlertDialog`
+///
+/// Ported: `title`, `content`, `actions`, composed into Flutter's
+/// `Column(mainAxisSize: min, crossAxisAlignment: stretch)` wrapped in
+/// `IntrinsicWidth`, with the fixed M3 padding/style defaults
+/// `_DialogDefaultsM3` and `AlertDialog.build` compute when `icon`,
+/// `titlePadding`, `contentPadding`, `actionsPadding`, and every alignment
+/// knob are left at their Flutter defaults (which is the only configuration
+/// this crate offers — see below). The non-scrollable `columnChildren` branch's
+/// `if (contentWidget != null) Flexible(child: contentWidget)` is ported too —
+/// content is wrapped in
+/// [`Flexible`] (the default loose fit, matching
+/// Flutter's own unqualified `Flexible(...)`) so content taller than the
+/// `Dialog`'s available height shrinks instead of overflowing.
+///
+/// | Slot | Padding (`EdgeInsets`) | Text style |
+/// |---|---|---|
+/// | `title` | `left/top/right: 24, bottom: 0 if content else 20` | `TextTheme.headlineSmall` |
+/// | `content` | `left/right/bottom: 24, top: 16` | `TextTheme.bodyMedium` |
+/// | `actions` | `left/right/bottom: 24, top: 0` | — (each action keeps its own style) |
+///
+/// `TextTheme.headlineSmall`/`bodyMedium` are read straight off
+/// [`ThemeData::text_theme`](crate::ThemeData::text_theme), which already
+/// carries the M3 uniform-recolor-to-`onSurface` FLUI applies at
+/// [`ThemeData::light`](crate::ThemeData::light)/[`dark`](crate::ThemeData::dark)
+/// construction (see that module's `default_text_theme` doc) — Flutter's
+/// own `Typography.material2021` reduces to the identical `onSurface` color
+/// for every role regardless of brightness, so no extra recolor step is
+/// needed here.
+///
+/// Actions are laid out in a plain [`Row`] with [`MainAxisAlignment::End`]
+/// and an 8px [`SizedBox`] spacer between each —
+/// Flutter's `OverflowBar(alignment: end, spacing: (buttonPadding?.horizontal
+/// ?? 16) / 2)` with `buttonPadding` always at its `null` default (`8.0`
+/// spacing). `buttonPadding` itself is not exposed: Flutter only ever
+/// consumes it for that spacing calculation, never as a per-button pad, so
+/// there is nothing else to wire.
+///
+/// ### Deferred, and named
+///
+/// - **`icon`/`iconPadding`/`iconColor`** — the optional icon slot above the
+///   title.
+/// - **`scrollable`** — the `SingleChildScrollView`-wrapped title/content
+///   variant for overflow-prone dialogs.
+/// - **`actionsOverflowAlignment`/`actionsOverflowDirection`/
+///   `actionsOverflowButtonSpacing`** — `OverflowBar`'s column fallback when
+///   actions don't fit a single row; this crate's plain `Row` never overflows to
+///   a column.
+/// - **Per-instance `titlePadding`/`contentPadding`/`actionsPadding`/
+///   `actionsAlignment`/`buttonPadding` overrides**, and forwarding
+///   `backgroundColor`/`elevation`/`shape`/`insetPadding`/`alignment`/
+///   `constraints` through to the underlying [`Dialog`] — construct a
+///   [`Dialog`] directly when any of those need to vary; `AlertDialog` is a
+///   fixed M3 composition for now.
+/// - **A name for an untitled dialog** — `semanticLabel` and
+///   `MaterialLocalizations.alertDialogLabel`. The dialog node is modal and
+///   announced by role (`Dialog`, `AlertDialog`); an `AlertDialog` is named by
+///   its title (ADR-0205), a bare `Dialog` by nothing.
+/// - **`AlertDialog.adaptive`** — the Cupertino/Material platform switch.
 #[derive(Clone, Default, StatelessView)]
 pub struct AlertDialog {
     title: Option<BoxedView>,
@@ -451,8 +396,8 @@ impl AlertDialog {
 }
 
 /// `AlertDialog`'s title text style, through the theme → default cascade —
-/// no per-instance `AlertDialog::title_style` override exists yet (named V1
-/// deferral, see the module docs), so there is no widget tier here. The
+/// no per-instance `AlertDialog::title_style` override exists yet (named
+/// deferral, see [`AlertDialog`]'s docs), so there is no widget tier here. The
 /// cascade is `titleTextStyle ?? dialogTheme.titleTextStyle ??
 /// defaults.titleTextStyle!`, narrowed to the theme/default tiers this
 /// crate exposes. Factored out as a pure
@@ -553,7 +498,7 @@ const BARRIER_COLOR: Color = Color::from_argb(0x8A00_0000);
 /// `Colors.black54` barrier over the current screen, with the dialog
 /// centered above it.
 ///
-/// See the module docs for the full `showDialog` parity table, including why
+/// See [`show_dialog`]'s docs for the full `showDialog` parity table, including why
 /// this takes the opening page's [`PageHandle`] rather than a `BuildContext`,
 /// and what the returned [`RouteResult<T>`] is.
 ///
@@ -561,6 +506,57 @@ const BARRIER_COLOR: Color = Color::from_argb(0x8A00_0000);
 ///
 /// [`PageError`] when the call is made while the UI runtime builds, or once
 /// `page` has left its navigator; no dialog is pushed.
+///
+/// ## `show_dialog`
+///
+/// Pushes `builder`'s content as a [`PopupRoute`] with the Material dialog
+/// defaults (not a generic route's `0x80000000` barrier): `barrierDismissible:
+/// true`, `barrierColor: Colors.black54` (`0x8A000000`).
+///
+/// **Takes the opening page's [`PageHandle`], not a `BuildContext`.** The
+/// Flutter takes `context` and resolves `Navigator.of(context)` inside. A FLUI
+/// event callback runs after `build` with no position in the tree, so the
+/// caller resolves [`PageHandle::of`] in `build` and moves the handle into the
+/// callback that opens the dialog (ADR-0330 §3). The dialog is pushed on the
+/// navigator of that page, and belongs to it.
+///
+/// **The transition** is the popup builder of the
+/// [`PageTransitions`](flui_sdk::widgets::PageTransitions) hook in scope where
+/// the navigator is mounted: the route sets none of its own, so under a
+/// [`MaterialApp`](crate::MaterialApp) the dialog fades in over 150 ms along
+/// `EASE_OUT` (`crate::page_transitions`). A navigator with no hook above it
+/// cuts, as any `PopupRoute` does.
+///
+/// Return value: a [`RouteResult<T>`], a future of
+/// `Result<Option<T>, RouteResultError>`: `Ok(Some(value))` for the value the
+/// dialog was popped with, `Ok(None)` when it closed without one, and
+/// `RouteResultError::TypeMismatch` for a value of another type. `T` stays on
+/// the owner thread and needs no `Send`. A call made while the UI runtime
+/// builds, or from a page that has left its navigator, pushes nothing and
+/// answers [`PageError`].
+///
+/// **Not ported**, and named:
+///
+/// - `useSafeArea`, `routeSettings`, `traversalEdgeBehavior`, `anchorPoint`,
+///   `fullscreenDialog`, `requestFocus`, `animationStyle`.
+/// - `useRootNavigator`: the dialog covers the navigator of the page that opens
+///   it, which under a nested `Router` is that Router's area.
+/// - **No `barrierDismissible`/`barrierColor`/`barrierLabel` knobs.** These
+///   are `showDialog` *parameters* in Flutter, not internal constants;
+///   `show_dialog` hardcodes them (see above), so a non-dismissible dialog,
+///   a custom barrier color, or a custom barrier label is unreachable
+///   through this function. Construct a [`PopupRoute`] directly (with
+///   `.barrier_dismissible(false)`/`.barrier_color(...)`, wrapping the same
+///   [`Dialog`]/[`AlertDialog`] content this function builds) when any of
+///   those need to vary.
+/// - Flutter's `InheritedTheme` capture/replay (`CapturedThemes`) that
+///   lets a dialog pushed onto a *different* navigator scope still see the
+///   calling context's `Theme`. FLUI relies on the pushed route's page
+///   mounting as a structural descendant of the app's own
+///   `Theme`/`Navigator`/`Overlay` chain (the common case — a dialog pushed
+///   onto the same navigator its caller's `Theme` ancestor already covers);
+///   a dialog pushed onto an unrelated navigator subtree would not see that
+///   `Theme`, which Flutter's capture step exists specifically to fix.
 pub fn show_dialog<T, F, W>(page: &PageHandle, builder: F) -> Result<RouteResult<T>, PageError>
 where
     T: 'static,

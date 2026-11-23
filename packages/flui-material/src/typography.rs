@@ -2,26 +2,6 @@
 //!
 //! Every `font_size`/`font_weight`/`letter_spacing`/`height` value below is
 //! the M3 spec's `englishLike` type scale, verbatim.
-//!
-//! ## Deferred: dense / tall script geometries
-//!
-//! The oracle also ships `Typography.dense2021` (CJK) and `Typography.tall2021`
-//! (Farsi/Hindi/Thai/…) — alternate type-scale geometries selected by
-//! `MaterialLocalizations.scriptCategory`. Both are identical in M3 (the oracle
-//! comment on each says "the Material Design 3 specification does not include
-//! a 'dense'/'tall' text theme, so this is just here to be consistent with the
-//! API" — `typography.dart`, oracle tag `3.44.0`) and script-category
-//! resolution has no consumer yet (no localizations resolve
-//! `ScriptCategory`). Deferred until a localization consumer exists to pin the
-//! API against, tracked alongside the crate's other named deferrals (see the
-//! crate root docs).
-//!
-//! ## Deferred: color
-//!
-//! This module provides geometry only (`color: None` on every style) — same
-//! contract as the oracle's `englishLike2021`. See [`crate::text_theme`] for
-//! the black/white color overlays [`crate::ThemeData`]'s defaults compose
-//! this geometry with.
 
 use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
 use flui_sdk::painting::typography::{FontWeight, TextStyle};
@@ -52,6 +32,26 @@ fn style(
 /// Scaling profiles are FLUI's projection for an explicit sizing policy,
 /// not part of the Material type scale. Profiles retain authored geometry;
 /// equal font sizes can have distinct growth profiles.
+///
+/// ## Deferred: dense / tall script geometries
+///
+/// Flutter also ships `Typography.dense2021` (CJK) and `Typography.tall2021`
+/// (Farsi/Hindi/Thai/…) — alternate type-scale geometries selected by
+/// `MaterialLocalizations.scriptCategory`. Both are identical in M3 (Flutter
+/// comment on each says "the Material Design 3 specification does not include
+/// a 'dense'/'tall' text theme, so this is just here to be consistent with the
+/// API" — `flutter/flutter@3.50.1 packages/flutter/lib/src/material/typography.dart:2077`) and script-category
+/// resolution has no consumer yet (no localizations resolve
+/// `ScriptCategory`). Deferred until a localization consumer exists to pin the
+/// API against, tracked alongside the crate's other named deferrals (see the
+/// crate root docs).
+///
+/// ## Deferred: color
+///
+/// This module provides geometry only (`color: None` on every style) — same
+/// contract as Flutter's `englishLike2021`. See [`TextTheme`] for
+/// the black/white color overlays [`crate::ThemeData`]'s defaults compose
+/// this geometry with.
 #[must_use]
 pub fn english_like_2021() -> TextTheme {
     use TextScaleProfile::{

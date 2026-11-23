@@ -1,46 +1,6 @@
 //! [`Card`] — a [`Material`] surface with the M3 elevated-card token
 //! defaults: a colored, softly-rounded, lightly-elevated panel wrapped in a
 //! fixed margin.
-//!
-//! # M3 elevated card
-//!
-//! This is the M3 **elevated** variant only. Its token defaults:
-//!
-//! | Token | Value |
-//! |---|---|
-//! | `color` | `ColorScheme.surfaceContainerLow` |
-//! | `shadowColor` | `ColorScheme.shadow` |
-//! | `surfaceTintColor` | transparent |
-//! | `elevation` | `1.0` |
-//! | `shape` | rounded rectangle, radius `12.0` |
-//! | `clipBehavior` | `Clip::None` |
-//! | `margin` | `EdgeInsets::all(4.0)` |
-//!
-//! `M3 ColorScheme.shadow` is opaque black in both the light and dark
-//! baselines (`color_scheme.rs`'s `shadow: Color::from_argb(0xFF00_0000)`),
-//! which is exactly [`Material`]'s own built-in shadow color (it has no
-//! `shadow_color` setter — see that module's docs) — so no plumbing gap
-//! exists there. A transparent surface tint is the same named
-//! deferral [`Material`] already carries (no theme-driven surface-tint
-//! overlay substrate yet); nothing new to defer here.
-//!
-//! The M3 card also wraps the child in two `Semantics` nodes (semantic
-//! container / explicit child nodes) and threads a border-on-foreground flag
-//! (painting the shape's border in front of vs. behind the child) — neither
-//! has a home in this substrate yet ([`Material`] paints no border at all,
-//! and FLUI's semantics tree has no container merge knob wired to
-//! a `StatelessView` this shallow). Both are named, not silently dropped.
-//!
-//! # Deferred, and named
-//!
-//! - **`Card::filled` / `Card::outlined`** — the two other M3 variants. Add
-//!   them once a caller needs them; the M3 token tables are already known
-//!   (`surfaceContainerHighest`/`elevation 0.0` for filled,
-//!   `ColorScheme.surface` + an `OutlinedBorder` side in
-//!   `ColorScheme.outlineVariant` for outlined) but nothing is wired.
-//! - **`borderOnForeground`**, **`semanticContainer`** — see above.
-//! - **`shadowColor`/`surfaceTintColor` overrides** — not exposed as builder
-//!   methods, because [`Material`] has nowhere to put them yet.
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::geometry::Radius;
@@ -65,8 +25,7 @@ const DEFAULT_MARGIN: f64 = 4.0;
 /// A Material Design elevated card — a panel with rounded corners and an
 /// elevation shadow, wrapped in a fixed outer margin.
 ///
-/// Elevated only; see the module docs for the filled/outlined variants this
-/// V1 does not yet ship.
+/// Elevated only; the filled and outlined variants are listed under "Deferred" below.
 ///
 /// ```rust
 /// use flui_material::Card;
@@ -74,6 +33,46 @@ const DEFAULT_MARGIN: f64 = 4.0;
 ///
 /// let _card = Card::new().child(Text::new("A related panel of content"));
 /// ```
+///
+/// # M3 elevated card
+///
+/// This is the M3 **elevated** variant only. Its token defaults:
+///
+/// | Token | Value |
+/// |---|---|
+/// | `color` | `ColorScheme.surfaceContainerLow` |
+/// | `shadowColor` | `ColorScheme.shadow` |
+/// | `surfaceTintColor` | transparent |
+/// | `elevation` | `1.0` |
+/// | `shape` | rounded rectangle, radius `12.0` |
+/// | `clipBehavior` | `Clip::None` |
+/// | `margin` | `EdgeInsets::all(4.0)` |
+///
+/// `M3 ColorScheme.shadow` is opaque black in both the light and dark
+/// baselines (`color_scheme.rs`'s `shadow: Color::from_argb(0xFF00_0000)`),
+/// which is exactly [`Material`]'s own built-in shadow color (it has no
+/// `shadow_color` setter — see that module's docs) — so no plumbing gap
+/// exists there. A transparent surface tint is the same named
+/// deferral [`Material`] already carries (no theme-driven surface-tint
+/// overlay support yet); nothing new to defer here.
+///
+/// The M3 card also wraps the child in two `Semantics` nodes (semantic
+/// container / explicit child nodes) and threads a border-on-foreground flag
+/// (painting the shape's border in front of vs. behind the child) — neither
+/// has a home in this crate yet ([`Material`] paints no border at all,
+/// and FLUI's semantics tree has no container merge knob wired to
+/// a `StatelessView` this shallow). Both are named, not silently dropped.
+///
+/// # Deferred, and named
+///
+/// - **`Card::filled` / `Card::outlined`** — the two other M3 variants. Add
+///   them once a caller needs them; the M3 token tables are already known
+///   (`surfaceContainerHighest`/`elevation 0.0` for filled,
+///   `ColorScheme.surface` + an `OutlinedBorder` side in
+///   `ColorScheme.outlineVariant` for outlined) but nothing is wired.
+/// - **`borderOnForeground`**, **`semanticContainer`** — see above.
+/// - **`shadowColor`/`surfaceTintColor` overrides** — not exposed as builder
+///   methods, because [`Material`] has nowhere to put them yet.
 #[derive(Clone, StatelessView)]
 pub struct Card {
     color: Option<Color>,
@@ -104,7 +103,7 @@ impl Default for Card {
 
 impl Card {
     /// A `Card` with no child, with every visual property falling through
-    /// to `_CardDefaultsM3` (see the module docs' token table). Flutter's
+    /// to `_CardDefaultsM3` (see [`Card`]'s docs' token table). Flutter's
     /// `Card.child` is nullable: an empty card is its margin around an
     /// empty surface.
     pub fn new() -> Self {

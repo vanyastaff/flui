@@ -170,7 +170,7 @@ fn pump_ms(laid: &mut common::LaidOut, millis: u64) {
 }
 
 /// A tappable, visibly-sized marker body — `Scaffold`'s body slot is loosely
-/// constrained (see `scaffold.rs`'s module docs), so a bare `ColoredBox`
+/// constrained (see the `Scaffold` docs), so a bare `ColoredBox`
 /// alone would collapse to zero size.
 fn body_marker() -> impl IntoView {
     SizedBox::new(400.0, 500.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))
@@ -345,7 +345,7 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
 // 8. Scope re-home: a FRESH Scaffold element that mounts under a messenger
 //    registers with that messenger, never a stale one from elsewhere in the
 //    tree — the practical shape "re-homing" actually takes in this
-//    substrate.
+//    crate.
 //
 // A same-type messenger configuration update keeps its mounted handle, so it
 // does not exercise an ancestor identity transition. GlobalKey reparenting
@@ -368,9 +368,9 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
 // mount pass — so the first `build()` already reads `current_entry()`
 // fresh regardless of whether `register_scaffold` additionally scheduled a
 // rebuild. The branch is therefore genuinely unobservable via a fresh-mount
-// scenario in this substrate (confirmed by actually running that exact
-// mutation, not merely asserted). It is kept anyway: it mirrors the
-// oracle's own defensive `_register` (which similarly calls
+// scenario in this crate (confirmed by actually running that exact
+// mutation, not merely asserted). It is kept anyway: it mirrors
+// Flutter's own defensive `_register` (which similarly calls
 // `scaffold._updateSnackBar()` unconditionally, not gated on "is this the
 // very first build"), and would matter the moment `ScaffoldState`'s
 // re-home path (`did_change_dependencies`) becomes reachable without an

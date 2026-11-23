@@ -1,60 +1,5 @@
 //! [`TabBarView`] — a [`crate::TabController`]-synced pager, the usual body
 //! for a [`crate::TabBar`].
-//!
-//! # A `PageView` over the controller's pager
-//!
-//! The view composes a [`PageView`] whose [`PageController`] the tab
-//! controller makes when the view attaches: while mounted, the pager *is* the
-//! controller's position source (see [`crate::TabController`]'s module
-//! docs). Dragging moves the pager, and so the indicator, directly; the
-//! selection commits once the pager comes to rest. A tab change animates or
-//! jumps the pager. The view itself never writes the selection, so there is
-//! no second copy of it to keep in sync.
-//!
-//! Pages are `PageView`'s eager children: every page is built up front and
-//! stays mounted, so a page's own state (a counter, a scroll position)
-//! survives switching away and back. Off-screen pages are not laid out or
-//! painted (`PageView`'s zero cache extent), but their tickers keep running.
-//!
-//! ## Controller resolution: explicit, else `DefaultTabController`
-//!
-//! Exactly [`crate::TabBar`]'s own contract: an explicit
-//! [`controller`](TabBarView::controller) wins; otherwise the nearest
-//! [`crate::DefaultTabController`] ancestor's controller is used. Exactly one
-//! must be reachable, or `build` panics. The view re-resolves on every build
-//! and re-attaches on a controller-identity change; `dispose` releases the
-//! attachment, returning the controller's position to its owned source.
-//!
-//! ## One view per controller
-//!
-//! A controller's position has one source, so it drives at most one mounted
-//! `TabBarView`. A second view resolving to a controller that is already
-//! attached is refused: its `build` panics with a message naming the cause,
-//! which the build-error boundary turns into an `ErrorView`, and the first
-//! view keeps driving the controller. Silently letting the newer view take
-//! over would leave the older one scrolling a pager nothing reads.
-//!
-//! ## Length mismatch
-//!
-//! [`TabBarView::new`]'s `children` count must equal the controller's
-//! [`length`](crate::TabController::length). `build` checks it with a release
-//! `assert!`, so a mismatch surfaces as a framework `ErrorView` (via the
-//! build-error boundary) in every profile — same public-widget invariant
-//! class as [`TabController`] index bounds (#1101).
-//!
-//! ## Alternatives to a swipe
-//!
-//! A swipe is a path, so the pager is a behavioural widget (ADR-0216): the
-//! view offers "Previous tab" and "Next tab" to assistive technology and, as
-//! Ctrl+[ and Ctrl+], to the keyboard, each selecting the adjacent tab through
-//! the controller as tapping it does (a step past either end is disabled). The
-//! view draws no control for them: their single-pointer path is the
-//! [`crate::TabBar`] on the same controller, which registers on the
-//! controller's companion link while mounted and publishes the adjacent tab's
-//! node for each command. A view with no [`crate::TabBar`] mounted leaves the
-//! commands without that path, and says so with a `flui.a11y` warning once
-//! the frame it mounted in has run. The labels are English until Material has
-//! a localizations table.
 
 use std::cell::RefCell;
 
@@ -70,7 +15,7 @@ use crate::tab_controller::{
 };
 
 /// A [`TabController`]-synced pager: one page per tab, swiped or switched
-/// by the controller (see the module docs).
+/// by the controller (see [`TabBarView`]'s docs).
 ///
 /// A [`TabController`] is required either explicitly (via
 /// [`controller`](Self::controller)) or via a [`DefaultTabController`]
@@ -84,6 +29,61 @@ use crate::tab_controller::{
 /// let children = vec![Text::new("One").boxed(), SizedBox::shrink().boxed()];
 /// let view = DefaultTabController::new(children.len(), TabBarView::new(children));
 /// ```
+///
+/// # A `PageView` over the controller's pager
+///
+/// The view composes a [`PageView`] whose [`PageController`] the tab
+/// controller makes when the view attaches: while mounted, the pager *is* the
+/// controller's position source (see [`crate::TabController`]'s module
+/// docs). Dragging moves the pager, and so the indicator, directly; the
+/// selection commits once the pager comes to rest. A tab change animates or
+/// jumps the pager. The view itself never writes the selection, so there is
+/// no second copy of it to keep in sync.
+///
+/// Pages are `PageView`'s eager children: every page is built up front and
+/// stays mounted, so a page's own state (a counter, a scroll position)
+/// survives switching away and back. Off-screen pages are not laid out or
+/// painted (`PageView`'s zero cache extent), but their tickers keep running.
+///
+/// ## Controller resolution: explicit, else `DefaultTabController`
+///
+/// Exactly [`crate::TabBar`]'s own contract: an explicit
+/// [`controller`](TabBarView::controller) wins; otherwise the nearest
+/// [`crate::DefaultTabController`] ancestor's controller is used. Exactly one
+/// must be reachable, or `build` panics. The view re-resolves on every build
+/// and re-attaches on a controller-identity change; `dispose` releases the
+/// attachment, returning the controller's position to its owned source.
+///
+/// ## One view per controller
+///
+/// A controller's position has one source, so it drives at most one mounted
+/// `TabBarView`. A second view resolving to a controller that is already
+/// attached is refused: its `build` panics with a message naming the cause,
+/// which the build-error boundary turns into an `ErrorView`, and the first
+/// view keeps driving the controller. Silently letting the newer view take
+/// over would leave the older one scrolling a pager nothing reads.
+///
+/// ## Length mismatch
+///
+/// [`TabBarView::new`]'s `children` count must equal the controller's
+/// [`length`](crate::TabController::length). `build` checks it with a release
+/// `assert!`, so a mismatch surfaces as a framework `ErrorView` (via the
+/// build-error boundary) in every profile — same public-widget invariant
+/// class as [`TabController`] index bounds (#1101).
+///
+/// ## Alternatives to a swipe
+///
+/// A swipe is a path, so the pager is a behavioural widget (ADR-0216): the
+/// view offers "Previous tab" and "Next tab" to assistive technology and, as
+/// Ctrl+[ and Ctrl+], to the keyboard, each selecting the adjacent tab through
+/// the controller as tapping it does (a step past either end is disabled). The
+/// view draws no control for them: their single-pointer path is the
+/// [`crate::TabBar`] on the same controller, which registers on the
+/// controller's companion link while mounted and publishes the adjacent tab's
+/// node for each command. A view with no [`crate::TabBar`] mounted leaves the
+/// commands without that path, and says so with a `flui.a11y` warning once
+/// the frame it mounted in has run. The labels are English until Material has
+/// a localizations table.
 #[derive(Clone, StatefulView)]
 pub struct TabBarView {
     children: Vec<BoxedView>,

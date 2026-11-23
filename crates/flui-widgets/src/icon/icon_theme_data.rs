@@ -3,6 +3,7 @@
 use std::fmt;
 
 use flui_painting::styling::{Color, Shadow};
+use flui_painting::typography::SharedSlice;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
@@ -60,7 +61,7 @@ pub struct IconThemeData {
     pub optical_size: Option<f64>,
 
     /// Shadows painted underneath the icon.
-    pub shadows: Option<Vec<Shadow>>,
+    pub shadows: Option<SharedSlice<Shadow>>,
 
     /// Whether to scale `size` by the ambient `MediaQuery` text-scale
     /// factor.
@@ -146,8 +147,8 @@ impl IconThemeData {
 
     /// Sets the `shadows` field.
     #[must_use]
-    pub fn shadows(mut self, shadows: Vec<Shadow>) -> Self {
-        self.shadows = Some(shadows);
+    pub fn shadows(mut self, shadows: impl Into<SharedSlice<Shadow>>) -> Self {
+        self.shadows = Some(shadows.into());
         self
     }
 

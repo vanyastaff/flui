@@ -5,7 +5,7 @@
 //!
 //! `RenderPhysicalModelBase::hit_test` always tests the resolved clip shape
 //! before testing the child (`crates/flui-objects/src/proxy/physical_model.rs`
-//! — a deliberate FLUI-wide divergence from the oracle, which gates this on
+//! — a deliberate FLUI-wide divergence from Flutter, which gates this on
 //! `_clipper != null`). For the `PathClip` variant `Material` uses,
 //! `compute_clip` calls `flui_interaction::pointer::resolve_path_clip_target`
 //! against the **actually registered** `PathClipTarget` — the same
