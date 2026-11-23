@@ -768,6 +768,13 @@ fn align_allocated_lines(layout: &mut Layout<SpanBrush>, spec: &ParagraphSpec<'_
         TextAlign::Center => Alignment::Center,
         TextAlign::Justify => Alignment::Justify,
     };
+    // A left-aligned line of an LTR paragraph sits at its indent whatever width it is
+    // aligned in (Parley's `alignment::align`), and the breaking that shaped it aligned it
+    // to `Start`, which is `Left` there: breaking again would move nothing. The base
+    // direction is the layout's own, from its first strong character.
+    if alignment == Alignment::Left && !layout.is_rtl() {
+        return;
+    }
     layout.set_alignment(alignment, AlignmentOptions::default());
     let cap = spec.max_width.unwrap_or(f32::MAX);
     let mut breaker = layout.break_lines();
@@ -1252,12 +1259,23 @@ impl TextContext {
 
         // Families are resolved against the collection before the builder
         // borrows it (`resolve_family_name`).
+        // The properties go into the context's scratch, so a shaping allocates
+        // for them only past what an earlier one grew it to.
+        let mut style_scratch = std::mem::take(&mut self.style_scratch);
+        let mut span_scratch = std::mem::take(&mut self.span_scratch);
         let collection = &mut self.font_ctx.collection;
         let default_family = family(collection, None);
         let default_family_name = ShapedFamily::of(collection, None);
-        let default_properties = paragraph.default_style.map_or_default(|style| {
-            properties(collection, style, None, paragraph.font_weight_adjustment)
-        });
+        if let Some(style) = paragraph.default_style {
+            properties(
+                collection,
+                style,
+                None,
+                paragraph.font_weight_adjustment,
+                &mut style_scratch,
+            );
+        }
+        let defaults_end = style_scratch.len();
         let default_info = span_info(
             0,
             default_family_name,
@@ -1267,56 +1285,54 @@ impl TextContext {
         );
         let mut start = 0;
         let mut infos = Vec::with_capacity(spans.len());
-        let mut run_colors: Vec<Option<Color>> = Vec::new();
-        let mut span_properties: Vec<_> = spans
-            .iter()
-            .enumerate()
-            .map(|(index, (span, style))| {
-                let range = start..start + span.len();
-                start = range.end;
-                let mut properties = style.as_ref().map_or_default(|style| {
-                    properties(
-                        collection,
-                        style,
+        // At most one run per span, so boxing the runs reallocates nothing.
+        let mut run_colors: Vec<Option<Color>> = Vec::with_capacity(spans.len());
+        for (index, (span, style)) in spans.iter().enumerate() {
+            let range = start..start + span.len();
+            start = range.end;
+            if let Some(style) = style {
+                properties(
+                    collection,
+                    style,
+                    paragraph.default_style,
+                    paragraph.font_weight_adjustment,
+                    &mut style_scratch,
+                );
+            }
+            let paint_run = (!span.is_empty()).then(|| {
+                let color = span_paint_color(style.as_ref(), paragraph.default_style);
+                if run_colors.last() != Some(&color) {
+                    run_colors.push(color);
+                }
+                run_colors.len() - 1
+            });
+            // Run 0 is the default brush, which every span starts with.
+            if let Some(run) = paint_run.filter(|&run| run > 0) {
+                style_scratch.push(StyleProperty::Brush(SpanBrush(run)));
+            }
+            let info = match style {
+                Some(style) => {
+                    let name = ShapedFamily::of(collection, Some(style));
+                    span_info(
+                        span.len(),
+                        name,
+                        Some(style),
                         paragraph.default_style,
                         paragraph.font_weight_adjustment,
                     )
-                });
-                let paint_run = (!span.is_empty()).then(|| {
-                    let color = span_paint_color(style.as_ref(), paragraph.default_style);
-                    if run_colors.last() != Some(&color) {
-                        run_colors.push(color);
-                    }
-                    run_colors.len() - 1
-                });
-                // Run 0 is the default brush, which every span starts with.
-                if let Some(run) = paint_run.filter(|&run| run > 0) {
-                    properties.push(StyleProperty::Brush(SpanBrush(run)));
                 }
-                let info = match style {
-                    Some(style) => {
-                        let name = ShapedFamily::of(collection, Some(style));
-                        span_info(
-                            span.len(),
-                            name,
-                            Some(style),
-                            paragraph.default_style,
-                            paragraph.font_weight_adjustment,
-                        )
-                    }
-                    None => SpanInfo {
-                        len: span.len(),
-                        ..default_info.clone()
-                    },
-                };
-                infos.push(SpanInfo {
-                    source: sources.source(index),
-                    paint_run,
-                    ..info
-                });
-                (range, properties)
-            })
-            .collect();
+                None => SpanInfo {
+                    len: span.len(),
+                    ..default_info.clone()
+                },
+            };
+            infos.push(SpanInfo {
+                source: sources.source(index),
+                paint_run,
+                ..info
+            });
+            span_scratch.push((range, style_scratch.len()));
+        }
 
         // A dropped layout's buffers, when one was handed back: building into
         // them clears what they held and allocates only past their capacity.
@@ -1338,56 +1354,67 @@ impl TextContext {
         // so no later span inherits the first span's from the root. A paragraph
         // of one span pushes nothing more.
         let first_text = spans.iter().position(|(text, _)| !text.is_empty());
-        let mut strut = first_text.map_or_default(|index| Strut::of(&span_properties[index].1));
-        let tail = first_text.map_or(text.len(), |index| span_properties[index].0.end)..text.len();
-        let mut push_root =
-            |property: StyleProperty<'static, SpanBrush>| match strut.takes(&property) {
-                true if !tail.is_empty() => builder.push(property, tail.clone()),
-                true => {}
-                false => builder.push_default(property),
-            };
-        push_root(default_family);
-        push_root(StyleProperty::FontSize(paragraph.font_size));
-        if let Some(weight) = adjusted_weight(
-            paragraph.default_style,
-            None,
-            paragraph.font_weight_adjustment,
-        ) {
-            push_root(StyleProperty::FontWeight(FontWeight::new(weight)));
-        }
-        // A word wider than the line breaks between its glyphs instead of
-        // overflowing the line. `BreakWord` rather than `Anywhere`: the
-        // min-content width stays the widest word (flui-painting
-        // `ARCHITECTURE.md`, mapping decision 15).
-        push_root(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
-        // No explicit height is 1.2 em of each run's own size, so a larger
-        // span grows its line box; an explicit height is one absolute line
-        // box for the paragraph.
-        push_root(StyleProperty::LineHeight(match paragraph.line_height {
-            Some(height) => LineHeight::Absolute(height),
-            None => LineHeight::FontSizeRelative(1.2),
-        }));
-        for property in default_properties {
-            push_root(property);
+        let span_properties = |index: usize| {
+            let begin = index
+                .checked_sub(1)
+                .map_or(defaults_end, |previous| span_scratch[previous].1);
+            begin..span_scratch[index].1
+        };
+        let mut strut =
+            first_text.map_or_default(|index| Strut::of(&style_scratch[span_properties(index)]));
+        let tail = first_text.map_or(text.len(), |index| span_scratch[index].0.end)..text.len();
+        let mut properties = style_scratch.drain(..);
+        {
+            let mut push_root =
+                |property: StyleProperty<'static, SpanBrush>| match strut.takes(&property) {
+                    true if !tail.is_empty() => builder.push(property, tail.clone()),
+                    true => {}
+                    false => builder.push_default(property),
+                };
+            push_root(default_family);
+            push_root(StyleProperty::FontSize(paragraph.font_size));
+            if let Some(weight) = adjusted_weight(
+                paragraph.default_style,
+                None,
+                paragraph.font_weight_adjustment,
+            ) {
+                push_root(StyleProperty::FontWeight(FontWeight::new(weight)));
+            }
+            // A word wider than the line breaks between its glyphs instead of
+            // overflowing the line. `BreakWord` rather than `Anywhere`: the
+            // min-content width stays the widest word (flui-painting
+            // `ARCHITECTURE.md`, mapping decision 15).
+            push_root(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
+            // No explicit height is 1.2 em of each run's own size, so a larger
+            // span grows its line box; an explicit height is one absolute line
+            // box for the paragraph.
+            push_root(StyleProperty::LineHeight(match paragraph.line_height {
+                Some(height) => LineHeight::Absolute(height),
+                None => LineHeight::FontSizeRelative(1.2),
+            }));
+            for property in properties.by_ref().take(defaults_end) {
+                push_root(property);
+            }
         }
         if !tail.is_empty() {
             for property in strut.unset_by_root() {
                 builder.push(property, tail.clone());
             }
         }
-        if let Some(index) = first_text {
-            for property in span_properties[index]
-                .1
-                .extract_if(.., |property| Strut::shapes_the_box(property))
-            {
-                builder.push_default(property);
+        let mut taken = defaults_end;
+        for (index, (range, end)) in span_scratch.drain(..).enumerate() {
+            for property in properties.by_ref().take(end - taken) {
+                if Some(index) == first_text && Strut::shapes_the_box(&property) {
+                    builder.push_default(property);
+                } else {
+                    builder.push(property, range.clone());
+                }
             }
+            taken = end;
         }
-        for (range, properties) in span_properties {
-            for property in properties {
-                builder.push(property, range.clone());
-            }
-        }
+        drop(properties);
+        self.style_scratch = style_scratch;
+        self.span_scratch = span_scratch;
         builder.build_into(&mut layout, &breaks);
         // Reject overflow before the line breaker consumes derived advances.
         let widths = layout.calculate_content_widths();
@@ -1682,7 +1709,8 @@ impl Strut {
     }
 }
 
-/// The Parley properties `style` sets, with a resolved weight adjustment.
+/// Pushes the Parley properties `style` sets onto `properties`, with a resolved
+/// weight adjustment.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "f64 style values narrow to Parley's f32 layout space"
@@ -1692,8 +1720,8 @@ fn properties(
     style: &TextStyle,
     default: Option<&TextStyle>,
     adjustment: i32,
-) -> Vec<StyleProperty<'static, SpanBrush>> {
-    let mut properties = Vec::new();
+    properties: &mut Vec<StyleProperty<'static, SpanBrush>>,
+) {
     let adjusted = adjusted_weight(Some(style), default, adjustment);
     if style.font_family.is_some() {
         properties.push(family(collection, Some(style)));
@@ -1756,7 +1784,6 @@ fn properties(
             height as f32,
         )));
     }
-    properties
 }
 
 #[cfg(test)]

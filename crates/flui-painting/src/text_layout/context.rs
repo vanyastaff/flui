@@ -791,6 +791,12 @@ pub struct TextContext {
     pub(crate) layout_ctx: parley::LayoutContext<SpanBrush>,
     /// A dropped layout the next shaping builds into, keeping its buffers.
     pub(crate) spare_layout: Option<parley::Layout<SpanBrush>>,
+    /// The style properties of the paragraph being shaped, its root's and then
+    /// each span's in order; empty between shapings, which keep its capacity.
+    pub(crate) style_scratch: Vec<parley::StyleProperty<'static, SpanBrush>>,
+    /// Each span of the paragraph being shaped: its byte range and where its
+    /// properties end in `style_scratch`; empty between shapings.
+    pub(crate) span_scratch: Vec<(std::ops::Range<usize>, usize)>,
 }
 
 impl TextContext {
@@ -808,6 +814,8 @@ impl TextContext {
             },
             layout_ctx: parley::LayoutContext::new(),
             spare_layout: None,
+            style_scratch: Vec::new(),
+            span_scratch: Vec::new(),
         }
     }
 
@@ -829,6 +837,8 @@ impl TextContext {
     pub fn reclaim(&mut self, level: MemoryPressureLevel) {
         self.layout_ctx = parley::LayoutContext::new();
         self.spare_layout = None;
+        self.style_scratch = Vec::new();
+        self.span_scratch = Vec::new();
         match level {
             MemoryPressureLevel::Moderate => self.font_ctx.source_cache.prune(TRIM_MAX_AGE, false),
             _ => self.font_ctx.source_cache.prune(0, true),
