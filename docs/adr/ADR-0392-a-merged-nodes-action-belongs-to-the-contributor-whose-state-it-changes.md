@@ -3,7 +3,7 @@
 - **Status:** Proposed (2026-11-23)
 - **Date:** 2026-11-23
 - **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md) (the merge table this record
-  completes for a forced merge's standard actions, `toggled` and `enabled`),
+  completes for a forced merge's standard actions, `toggled`, `selected` and `enabled`),
   [ADR-0332](ADR-0332-a-control-takes-the-content-roles-beneath-it.md) (role precedence in a
   merge), [ADR-0223](ADR-0223-authored-semantics-regions.md) (handlers pinned before a fold)
 - **Sources:** `flutter/flutter@3.44.0` `packages/flutter/lib/src/semantics/semantics.dart:5040`
@@ -25,7 +25,7 @@ the node can announce one control while running another's handler:
 
 | Composition under `MergeSemantics` | The node announces | Click, Expand or a scroll runs |
 |---|---|---|
-| two buttons A, B | one button | B (Flutter runs A) |
+| two buttons A, B | one button | B |
 | a tile's tap, then a radio | the radio and its state | last wins: the radio; first wins: the tile |
 | a button, then a click-only disclosure header | the header's `expanded` | first wins: the button, so "collapsed" never changes |
 | a tap, then a selectable tab | the tab and `selected` | first wins: the tap, so the tab is never selected |
@@ -36,13 +36,15 @@ announces and the action that changes it come from two merge rules. The question
 contributor's handler a forced merge's standard action runs, and which contributor's `enabled`
 the node announces beside it.
 
-Flutter keeps a merged node's descendants as hidden nodes and resolves an action when it arrives:
-the merged node's own handler, else the first descendant in tree order that can perform it
-(`semantics.dart:5040`). Its configuration fold is last wins (`_actions.addAll`, `:6759`), and
-the merged node's flags are the union of its descendants' (`:3830`). So Flutter announces the
-radio's checked state and runs the tile's tap for the second row. Its material list tiles avoid
-the case by giving the tile and the control one callback; an application composing its own tile
-does not know to.
+Flutter documents the first handler in tree order (`basic.dart:8121`), and resolves an action
+on a merged node by its own handler, else the first descendant node in tree order that can
+perform it (`semantics.dart:5040`). A descendant that forms no node of its own is folded into
+its parent's configuration last wins (`_actions.addAll`, `:6759`), so two plain buttons under
+one `MergeSemantics` run the second, against the documented contract; the merged node's flags
+are the union of its descendants' (`:3830`). Either way the handler is chosen by tree order and
+the state by union, so Flutter can announce a radio's checked state and run the tile's tap. Its
+material list tiles avoid the case by giving the tile and the control one callback; an
+application composing its own tile does not know to.
 
 ## Decision drivers
 
@@ -85,7 +87,7 @@ changes, while `MergeSemantics` keeps producing one node.
 ### §1 Each standard action has a subject
 
 `flui-semantics` maps every `SemanticsAction` to the group of attributes it changes on a node,
-`ActionSubject::of(action, node)`:
+`ActionSubject::classify(action, click, has_range)`, where `click` is the subject the merged node gives `Click` and `has_range` whether it publishes a numeric range:
 
 ```rust
 /// The group of a node's attributes a standard action changes.
@@ -116,15 +118,14 @@ pub(crate) enum ActionSubject {
 
 | Action | Subject on the merged node |
 |---|---|
-| `Click` | the first of `Toggle`, `Selection`, `Disclosure` whose state the node publishes, where `Disclosure` counts only when its owner registers neither `Expand` nor `Collapse` (the click-only disclosure); else `Activation` |
+| `Click` | the first of `Toggle`, `Selection`, `Disclosure` whose state the node publishes and its published role announces (`applicability::applicable`; a node without a role announces every state), where `Disclosure` counts only when its owner registers neither `Expand` nor `Collapse` (the click-only disclosure); else `Activation` |
 | `Expand`, `Collapse` | `Disclosure` |
 | `Increment`, `Decrement`, `SetNumericValue` | `Range` when the node publishes a numeric range, else `Scroll` |
-| `ScrollUp`, `ScrollDown`, `ScrollLeft`, `ScrollRight`, `SetScrollOffset` | `Scroll` |
+| `ScrollUp`, `ScrollDown`, `ScrollLeft`, `ScrollRight`, `SetScrollOffset`, `ScrollIntoView` | `Scroll`: reveal moves the scroll groups of the node and its ancestors (`resolve_action`), so its handler is the scroll group's owner's |
 | `SetValue` | `Value` |
 | `SetTextSelection`, `ReplaceSelectedText` | `Text` |
 | `Focus`, `Blur` | `Focus` |
 | `ShowTooltip`, `HideTooltip` | `Tooltip` |
-| `ScrollIntoView` | `Activation`: it reveals the node through its scrolling ancestors (`resolve_action`), it does not move a scroll group of the node |
 | `ShowContextMenu` | `Activation` |
 | `CustomAction` | none: each custom action keeps its own handler (ADR-0206 decision 4) |
 
@@ -134,21 +135,28 @@ an arm a new action falls into; `every_action_names_its_subject` lists every act
 the one classification of actions: the unused `is_scroll_action`, `is_text_action` and
 `is_focus_action` predicates of `flui-protocol` are removed.
 
-A node whose `Click` belongs to `Toggle` or `Selection` does not route `Expand` or `Collapse`
-through it: `tap_disclosure_transition` offers the click fallback only when `Click`'s subject on
-the node is `Disclosure`, so a switch merged with a click-only header never flips on Expand.
+A forced merge whose `Click` belongs to `Toggle` or `Selection` while a click-only disclosure
+was merged into it drops that `expanded`: the click changes the toggle or the selection, so the
+node does not also announce a disclosure the click would route `Expand` or `Collapse` to
+(`tap_disclosure_transition`, unchanged for every other node). A switch merged with a click-only
+header announces the switch and offers no Expand.
 
 ### §2 A forced merge plans its owners before it takes a handler
 
-When `merge_child_fragments` folds with conflicts suppressed, it first reads the receiver and
-every fragment it will absorb, in fold order, and builds an `ActionPlan` (a fixed array over the
-subjects, on the stack). Its owners are those of the merged result:
+When `merge_child_fragments` folds with conflicts suppressed, it opens the fold with
+`SemanticsConfiguration::forced_merge(parts)`, where `parts` are exactly the configurations the
+fold will absorb, in fold order (a second text keeps its own node, ADR-0214 §2, and one
+predicate decides that for the plan and for the fold). It reads the receiver and every part and
+builds an `ActionPlan` (a fixed array over the subjects, on the stack), then returns a
+`ForcedMerge` that absorbs each part by the plan and settles the result when it is finished or
+dropped. Its owners are those of the merged result:
 
 - the owner of a subject is the configuration whose declaration of that group the node
   publishes: the first in fold order that declares it, except for `Toggle` and `Selection`,
   whose owner is the configuration whose role the node finally publishes when that one declares
-  the state, else the first that declares it. A forced merge publishes the owner's `toggled`, not
-  the most informative one;
+  the state, else the first that declares it. A forced merge publishes the owner's `toggled` and
+  `selected`, not the most informative one, so `Toggled` merges receiver first like every other
+  state and ADR-0206 decision 3's `Mixed > On > Off` is gone;
 - an owner **acts on** its subject when it registers one of the subject's actions (a blocked one
   included), declares `enabled(false)`, or is itself a merge whose owner of that subject acted
   (§3);
@@ -159,17 +167,18 @@ subjects, on the stack). Its owners are those of the merged result:
   the first configuration in fold order that registers it, as `Activation` does;
 - the node's `enabled` is the owner's of `Click`'s subject when that owner declares one, else
   ADR-0206's (the receiver's, else the first contributor's), so a disabled radio in an enabled
-  tile is announced disabled and offers no click.
+  tile is announced disabled and offers no click. A node announced disabled refuses every
+  request at `resolve_action`, so the merged node offers what it announces: a disabled owner of
+  `Click` disables the whole node, as a disabled tile always has.
 
 `absorb` itself keeps ADR-0206's table for an ordinary merge, where the conflict rules already
-leave each group and each action one supplier; the forced fold calls
-`absorb_planned(other, &plan, place)` instead, with the fragment's place in fold order.
+leave each group and each action one supplier; only `ForcedMerge::absorb` reads the plan.
 
 ### §3 A merged configuration keeps what an outer merge needs
 
 A configuration that is the result of a forced merge is one contributor to an outer merge.
 Blocking drops a handler before the fold takes it, so such a configuration records, in a
-`SubjectSet` of one byte, the subjects whose owner acted but whose handlers it offers none of;
+`SubjectSet` of two bytes, the subjects whose owner acted but whose handlers it offers none of;
 the outer plan reads that set as acting. Nothing else is kept per contributor once it is folded,
 and no allocation is added. The handlers the fold drops are pinned before it runs (ADR-0223), as
 the overwritten ones were.
@@ -180,7 +189,7 @@ the overwritten ones were.
   both orders, and a later contributor that changes the role or adds a group changes the owner
   before any handler is taken.
 - Good, because two plain buttons merged run the first one, which is the `MergeSemantics`
-  contract Flutter documents (`basic.dart:8121`).
+  contract Flutter documents (`basic.dart:8121`) and its own fold does not keep.
 - Good, because an ordinary merge is unchanged: `absorb`'s table and the conflict rules are as
   before.
 - Good, because a new `SemanticsAction` fails a test until its subject is chosen.
@@ -192,6 +201,10 @@ the overwritten ones were.
   action on the tile for that other act, or not merging.
 - Bad, because a forced merge of two checkable controls announces the owner's state rather than
   the most informative one.
+- Bad, because a plan covers one fold level: a fragment its descendants already folded brings
+  the owners its own plan chose, and the outer plan reads it as one contributor with its withheld
+  subjects (§3), not as the parts inside it. A control nested two folds deep beside one at the
+  outer level is ordered by the outer level's fold order alone.
 - Bad, because a new state in `States` does not by itself fail anything: whether it needs a
   subject is a review question, which the table's test makes visible beside the action list.
 - Neutral, because the forced fold reads its contributors twice; both passes are over the
@@ -204,7 +217,9 @@ the overwritten ones were.
 - `a_forced_merge_plans_each_action_by_its_owner` in `configuration.rs`: a row per subject in
   both orders, the non-acting wrapper, a disabled and a blocked owner, a later contributor that
   changes the role or adds a range, a nested merge whose blocked owner acted, a switch beside a
-  click-only header (no Expand), and `enabled` from the owner.
+  click-only header (its `expanded` dropped, no Expand), a toggle button over a check box whose
+  role announces the toggle, and `enabled` from the owner; `state_merge_precedence` there keeps
+  the receiver's `toggled`.
 - `a_merged_action_runs_the_control_whose_state_it_announces` in
   `crates/flui-widgets/tests/semantics.rs`, through the platform request path: two buttons, a
   click-only disclosure and a button in both orders, a switch and a tap in both orders, a
@@ -212,10 +227,10 @@ the overwritten ones were.
 - `an_ordinary_merge_keeps_its_actions` in `configuration.rs`: a wrapper that declares a state
   over a detector, and a `value` declarer beside a `SetValue` registrant, publish what they
   published before.
-- `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
-  `packages/flui-material/tests/list_tile.rs`, with an unselected radio whose callback sets the
-  group value and a tile callback that records its own call: Click selects the radio, and the
-  tile's callback does not run.
+- `merge_semantics_over_a_tile_and_radio_clicks_the_radio` in
+  `packages/flui-material/tests/list_tile.rs`, with an unselected radio and a tile tap that
+  records its own call, then one shared callback: Click runs the radio's once, and the tile's
+  own tap does not run.
 
 ## Pros and cons of the options
 
