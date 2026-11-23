@@ -27,7 +27,7 @@ use flui_material::{
 };
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Column, EdgeInsets, Icon, IconData, ListView, Padding, PageHandle, Routable, Router,
+    Column, Icon, IconData, ListView, Padding, PageHandle, Routable, Router, RouterHandle,
     ScrollController, ScrollView, SingleChildScrollView, Text, TextEditingController,
 };
 use flui_testing::heap::{CountingAllocator, HeapCounts};
@@ -232,16 +232,20 @@ impl ViewState<Article> for ArticleState {
                     LOREM.to_owned()
                 };
                 Card::new()
-                    .child(Padding::new(
-                        EdgeInsets::all(16.0),
-                        Column::new((Text::new(format!("Section {index}")), Text::new(body))),
-                    ))
+                    .child(Padding::all(16.0).child(Column::new((
+                        Text::new(format!("Section {index}")),
+                        Text::new(body),
+                    ))))
                     .boxed()
             })
             .collect();
         Scaffold::new()
             .app_bar(AppBar::new().title(Text::new("Article")))
-            .body(SingleChildScrollView::new(Column::new(cards)).controller(view.controller.clone()))
+            .body(
+                SingleChildScrollView::new()
+                    .controller(view.controller.clone())
+                    .child(Column::new(cards)),
+            )
     }
 }
 
@@ -323,7 +327,7 @@ enum Mail {
     Message { id: u32 },
 }
 
-type RouterSlot = Rc<RefCell<Option<Router<Mail>>>>;
+type RouterSlot = Rc<RefCell<Option<RouterHandle<Mail>>>>;
 
 /// The inbox: a list of messages; the test pushes a message through the
 /// Router the inbox hands out.
@@ -362,14 +366,11 @@ impl StatelessView for Message {
         let _page = PageHandle::of(ctx).expect("a message is a page of the Router");
         Scaffold::new()
             .app_bar(AppBar::new().title(Text::new(format!("Message {}", self.id))))
-            .body(Padding::new(
-                EdgeInsets::all(16.0),
-                Column::new((
-                    Text::new(LOREM),
-                    Text::new(LOREM),
-                    ElevatedButton::new(Text::new("Archive")).on_pressed(|_ctx| {}),
-                )),
-            ))
+            .body(Padding::all(16.0).child(Column::new((
+                Text::new(LOREM),
+                Text::new(LOREM),
+                ElevatedButton::new(Text::new("Archive")).on_pressed(|_ctx| {}),
+            ))))
     }
 }
 
@@ -386,7 +387,8 @@ fn navigation() -> Vec<Sample> {
         Mail::Message { id } => Message { id: *id }.boxed(),
     });
     let mut host = host();
-    host.attach(&MaterialApp::router(router)).expect("a fresh host");
+    host.attach(&MaterialApp::router(router))
+        .expect("a fresh host");
     settle(&mut host, 60);
     let router = slot.borrow().clone().expect("the inbox built");
     let mut samples = Vec::new();
@@ -458,10 +460,14 @@ impl ViewState<Form> for FormState {
                     .boxed(),
             );
         }
-        rows.push(ElevatedButton::new(Text::new("Save")).on_pressed(|_ctx| {}).boxed());
+        rows.push(
+            ElevatedButton::new(Text::new("Save"))
+                .on_pressed(|_ctx| {})
+                .boxed(),
+        );
         Scaffold::new()
             .app_bar(AppBar::new().title(Text::new("Settings")))
-            .body(SingleChildScrollView::new(Column::new(rows)))
+            .body(SingleChildScrollView::new().child(Column::new(rows)))
     }
 }
 
@@ -517,7 +523,10 @@ fn percentile(sorted: &[u64], fraction: f64) -> u64 {
 fn report(name: &str, samples: &[Sample]) {
     let mut nanos: Vec<u64> = samples.iter().map(|sample| sample.nanos).collect();
     nanos.sort_unstable();
-    let mut allocations: Vec<u64> = samples.iter().map(|sample| sample.heap.allocations).collect();
+    let mut allocations: Vec<u64> = samples
+        .iter()
+        .map(|sample| sample.heap.allocations)
+        .collect();
     allocations.sort_unstable();
     let mut bytes: Vec<u64> = samples
         .iter()
@@ -562,6 +571,16 @@ fn main() {
             continue;
         }
         let samples = scenario();
+        if std::env::var_os("FLUI_SCENARIO_SAMPLES").is_some() {
+            for (step, sample) in samples.iter().enumerate() {
+                println!(
+                    "{name} step={step} µs={:.1} allocs={} bytes={}",
+                    sample.nanos as f64 / 1e3,
+                    sample.heap.allocations,
+                    sample.heap.allocated_bytes
+                );
+            }
+        }
         report(name, &samples);
     }
 }

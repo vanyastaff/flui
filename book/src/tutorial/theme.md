@@ -18,7 +18,7 @@ impl StatelessView for NotesHeader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let mode = if theme.brightness().is_dark() { "dark" } else { "light" };
-        let style = theme.text_theme.title_large.unwrap_or_default();
+        let style = theme.text_theme.title_large.clone().unwrap_or_default();
         Text::new(format!("Notes ({mode})")).style(style.with_color(theme.color_scheme.primary))
     }
 }

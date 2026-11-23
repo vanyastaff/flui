@@ -5,6 +5,8 @@
 //! capture/re-parent mechanism (see that trait's module docs) can wrap a
 //! `Theme` the same way it wraps any other ambient theme.
 
+use std::rc::Rc;
+
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::{DefaultFocusRingStyle, DefaultSelectionStyle, InheritedTheme};
@@ -27,8 +29,10 @@ use crate::theme_data::ThemeData;
 /// ```
 #[derive(Clone)]
 pub struct Theme {
-    /// The style data this node provides to descendants.
-    data: ThemeData,
+    /// The style data this node provides to descendants, shared: a
+    /// `ThemeData` is over 14 KB, and every [`Theme::of`] hands out this
+    /// allocation instead of a copy.
+    data: Rc<ThemeData>,
     /// The single child subtree this node wraps.
     child: BoxedView,
 }
@@ -38,8 +42,12 @@ impl Theme {
     /// `data.focus_ring` to their focus rings as the inherited
     /// [`DefaultFocusRingStyle`], and `data.selection` to selection areas and
     /// text fields as the inherited [`DefaultSelectionStyle`].
+    ///
+    /// `data` is a `ThemeData` or an `Rc<ThemeData>` already shared, such as
+    /// one [`Theme::of`] returned.
     #[must_use]
-    pub fn new(data: ThemeData, child: impl IntoView) -> Self {
+    pub fn new(data: impl Into<Rc<ThemeData>>, child: impl IntoView) -> Self {
+        let data: Rc<ThemeData> = data.into();
         let (focus_ring, selection) = (data.focus_ring, data.selection);
         Self {
             data,
@@ -55,6 +63,9 @@ impl Theme {
     /// registering a dependency so this element rebuilds when the theme
     /// changes.
     ///
+    /// The data comes back shared, not copied; its fields read through the
+    /// `Rc` (`Theme::of(ctx).color_scheme.primary`).
+    ///
     /// # Panics
     ///
     /// Panics if there is no [`Theme`] ancestor. Use
@@ -65,7 +76,7 @@ impl Theme {
     /// yet), so the missing-ancestor case panics — surfacing the mistake
     /// loudly during development.
     #[must_use]
-    pub fn of(ctx: &dyn BuildContext) -> ThemeData {
+    pub fn of(ctx: &dyn BuildContext) -> Rc<ThemeData> {
         Self::maybe_of(ctx).expect(
             "Theme::of called with no Theme ancestor in the tree — wrap the subtree in a \
              Theme, or use Theme::maybe_of with a caller-chosen default",
@@ -81,8 +92,8 @@ impl Theme {
     /// crate's own non-panicking counterpart to [`of`](Self::of)'s panicking
     /// behavior, not a parity port.
     #[must_use]
-    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<ThemeData> {
-        ctx.depend_on::<Self, _>(|t| t.data.clone())
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Rc<ThemeData>> {
+        ctx.depend_on::<Self, _>(|t| Rc::clone(&t.data))
     }
 
     /// Depend on **one slot group** of the nearest `Theme` (issue #1090):
@@ -131,11 +142,15 @@ impl InheritedView for Theme {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        // Rebuild descendants whenever any style field changes.
-        self.data != old.data
+        // Rebuild descendants whenever any style field changes. The same
+        // shared data handed down again changed nothing.
+        !Rc::ptr_eq(&self.data, &old.data) && *self.data != *old.data
     }
 
     fn changed_fields(&self, old: &Self) -> FieldMask<ThemeData> {
+        if Rc::ptr_eq(&self.data, &old.data) {
+            return FieldMask::NONE;
+        }
         self.data.field_mask_diff(&old.data)
     }
 }
@@ -144,7 +159,7 @@ impl_inherited_view!(Theme);
 
 impl InheritedTheme for Theme {
     fn wrap(&self, _ctx: &dyn BuildContext, child: BoxedView) -> BoxedView {
-        Theme::new(self.data.clone(), child).boxed()
+        Theme::new(Rc::clone(&self.data), child).boxed()
     }
 }
 

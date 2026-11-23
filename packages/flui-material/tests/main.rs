@@ -864,6 +864,10 @@ fn theme_and_app_contracts() {
             theme::theme_of_panicking_accessor_returns_ancestor_theme_data,
         ),
         (
+            "theme::theme of shares the ancestor data instead of copying it",
+            theme::theme_of_shares_the_ancestor_data_instead_of_copying_it,
+        ),
+        (
             "theme::theme installs the focus ring style",
             theme::theme_installs_the_focus_ring_style,
         ),

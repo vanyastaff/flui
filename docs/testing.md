@@ -842,6 +842,21 @@ adds its rounds there, one settled and one dropped in flight. A leak a round
 finds and its change does not fix is held by a `#[should_panic]` test of its
 own, named in [`gaps.md`](gaps.md).
 
+The counts above hold one frame of a fixed tree or one control. What a user
+meets is a whole screen, and `packages/flui-material/benches/app_scenarios.rs`
+times those on the UI thread of a `HeadlessHost`: the start and first frames of
+a list screen over 10 000 tiles, a steady scroll and a screen-a-frame scroll
+through it, a screen of wrapped paragraphs started, scrolled and edited, a page
+pushed and popped through the `Router`, a form started and toggled, and an
+idle frame. `cargo bench -p flui-material --bench app_scenarios` prints, per
+scenario, the median and 90th percentile of one step and what the step asked of
+the heap; `FLUI_SCENARIO=<name>` runs one scenario and
+`FLUI_SCENARIO_SAMPLES=1` prints every step. Under
+`valgrind --tool=callgrind --toggle-collect='*scenario_measured*'` only the
+measured steps are counted, which is how a phase's share of a step is read. The
+bench asserts nothing and no job runs it: it is where a cost is found and a fix
+is measured, and what a fix changes is then held by a count above.
+
 `perf/size.toml` holds what an application costs before it does anything, and
 two CI jobs hold it on Linux x86_64. The `deps` job, on every PR, counts the
 packages of the facade's default graph on Linux, Windows, macOS, Android and
