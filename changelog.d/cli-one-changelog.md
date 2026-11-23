@@ -16,10 +16,9 @@
 ### Changed
 
 - **`flui-cli`**: the `counter`, `basic` and `empty` templates put the application in
-  `src/lib.rs` (`crate-type = ["rlib", "cdylib"]`) with a
-  `#[cfg(target_os = "android")] android_main` beside it, and keep `src/main.rs` as the one-line
-  desktop entry. The root view is `pub`. The scaffolded `AndroidManifest.xml` declares no icon (no
-  `res/` is needed; the platform's default applies).
+  `src/lib.rs` with a `#[cfg(target_os = "android")] android_main` beside it, and keep
+  `src/main.rs` as the one-line desktop entry. The root view is `pub`. The scaffolded
+  `AndroidManifest.xml` declares no icon (no `res/` is needed; the platform's default applies).
 - **`flui-cli`**: `flui build web` builds a generated project: the `fn main` binary is compiled
   for wasm32 and `wasm-bindgen --target web` writes `pkg/app.js` and `pkg/app_bg.wasm` beside
   `index.html` in the output directory. The previous pipeline ran `wasm-pack` in a

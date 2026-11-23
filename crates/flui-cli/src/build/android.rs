@@ -202,6 +202,53 @@ impl AndroidBuilder {
     }
 }
 
+/// The refusal of a project whose own package has no library target.
+fn no_library() -> BuildError {
+    BuildError::invalid_config(
+        "Cargo.toml",
+        "the application has no library, which NativeActivity loads as a \
+         `cdylib`; `flui create` puts the application in `src/lib.rs`",
+    )
+}
+
+/// The `cargo ndk` arguments that build the library of `package` for `abi`
+/// against `api_level` and copy it into `out_dir` as `<abi>/lib<name>.so`.
+///
+/// The library is compiled as a `cdylib`, the form `NativeActivity` loads,
+/// with the `android_main` its `#[flui::main]` function writes. The crate
+/// type is asked for here rather than declared in the manifest: a declared
+/// `cdylib` is linked on every desktop build as well, a second link of the
+/// whole framework per edit that no desktop run loads. A manifest that still
+/// declares it builds the same library.
+fn app_build_args<'a>(
+    package: &'a str,
+    abi: &'a str,
+    api_level: &'a str,
+    out_dir: &'a str,
+    profile_flag: Option<&'a str>,
+    features: &'a [String],
+) -> Vec<&'a str> {
+    let mut args = vec![
+        "-t",
+        abi,
+        "--platform",
+        api_level,
+        "-o",
+        out_dir,
+        "rustc",
+        "-p",
+        package,
+        "--lib",
+        "--crate-type",
+        "cdylib",
+    ];
+    args.extend(profile_flag);
+    for feature in features {
+        args.extend(["--features", feature.as_str()]);
+    }
+    args
+}
+
 /// The `cargo ndk` arguments that build the scene crate `scene_crate` for
 /// `abi` against `api_level` and copy its library into `out_dir`. The crate
 /// is named by its package name, which is how cargo-ndk finds its manifest.
@@ -350,6 +397,9 @@ impl AndroidBuilder {
             });
         };
 
+        // Refused before anything is built or cleaned.
+        let package = self.application_package()?;
+
         let jni_libs_dir = self
             .workspace_root
             .join("platforms")
@@ -386,26 +436,14 @@ impl AndroidBuilder {
         for target in targets {
             crate::ui::debug(format!("Building for Android target: {target}"));
 
-            // The project's own package: its `[lib]` is a `cdylib` with
-            // the `android_main` its `#[flui::main]` function writes, which `cargo ndk`
-            // drops into `jniLibs/<abi>/lib<name>.so`.
-            let mut args = vec![
-                "-t",
-                target.as_str(),
-                "--platform",
-                platform.as_str(),
-                "-o",
+            let args = app_build_args(
+                &package,
+                target,
+                &platform,
                 jni_libs_str,
-                "build",
-                "--lib",
-            ];
-
-            if let Some(profile_flag) = ctx.profile.cargo_flag() {
-                args.push(profile_flag);
-            }
-            for feature in &ctx.features {
-                args.extend(["--features", feature.as_str()]);
-            }
+                ctx.profile.cargo_flag(),
+                &ctx.features,
+            );
 
             process::run(
                 self.cargo_ndk()
@@ -612,19 +650,37 @@ fn gradle_apk(apk_dir: &Path, profile: Profile) -> BuildResult<PathBuf> {
 /// The Gradle-less delivery: `aapt2` + `zipalign` + `apksigner` from the
 /// SDK's build-tools, see `android_package.rs`.
 impl AndroidBuilder {
+    /// The package whose library the Android build compiles: the one whose
+    /// manifest is in the project's directory, refused when it has no
+    /// library. `cargo rustc` compiles exactly one target, so the build names
+    /// it, by name, which is how cargo-ndk looks up the manifest whose
+    /// artifacts it copies (it panics on a package id). A dependency that
+    /// shares the application's name makes that name ambiguous to cargo,
+    /// which then refuses the build and names both.
+    fn application_package(&self) -> BuildResult<String> {
+        let project = super::util::cargo::cargo_project(&self.workspace_root)?;
+        let (Some(package), Some(_)) = (project.package, project.library) else {
+            return Err(no_library());
+        };
+        Ok(package)
+    }
+
     /// What the crates linked for the ABIs built, with the features the build
-    /// turns on, declare (ADR-0307). `cargo ndk build --lib` runs in the
-    /// project's directory and names no package, so the build is cargo's
-    /// default selection there.
+    /// turns on, declare (ADR-0307): the build of the package
+    /// [`Self::application_package`] names, which `cargo ndk rustc -p`
+    /// compiled.
     fn declarations(&self, ctx: &BuilderContext) -> BuildResult<crate::declarations::Declarations> {
         let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Android platform".to_string(),
             });
         };
+        let package = self.application_package()?;
         let triples: Vec<&str> = targets.iter().map(|abi| rust_target(abi)).collect();
         crate::declarations::Declarations::collect(
-            crate::declarations::Build::at(&self.workspace_root).features(&ctx.features),
+            crate::declarations::Build::at(&self.workspace_root)
+                .selecting(crate::declarations::Selection::Package(&package))
+                .features(&ctx.features),
             &triples,
         )
     }
@@ -643,14 +699,8 @@ impl AndroidBuilder {
         by_gradle: bool,
     ) -> BuildResult<()> {
         let lib_name = super::util::cargo::cargo_project(&self.workspace_root)?
-            .cdylib
-            .ok_or_else(|| {
-                BuildError::invalid_config(
-                    "Cargo.toml",
-                    "the application builds no `cdylib`, which NativeActivity loads; \
-                     `flui create` writes `[lib] crate-type = [\"cdylib\", …]`",
-                )
-            })?;
+            .library
+            .ok_or_else(no_library)?;
         super::android_manifest::write(
             &super::android_manifest::path_in(&self.workspace_root),
             &super::android_manifest::ManifestFacts {
@@ -728,7 +778,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    use super::{gradle_apk, scene_build_args, scene_push_commands};
+    use super::{app_build_args, gradle_apk, scene_build_args, scene_push_commands};
     use crate::app_id::AppId;
     use crate::build::error::BuildError;
     use crate::build::platform::Profile;
@@ -775,6 +825,58 @@ mod tests {
                 "cp",
                 "/data/local/tmp/libflui_scene.so",
                 "files/libflui_scene.so"
+            ]
+        );
+    }
+
+    /// The application's library is compiled as the `cdylib` `NativeActivity`
+    /// loads, whatever crate types its manifest declares, and its package is
+    /// named, since `cargo rustc` compiles exactly one target.
+    #[test]
+    fn the_application_library_is_compiled_as_the_cdylib_android_loads() {
+        let features = ["driver".to_owned()];
+        assert_eq!(
+            app_build_args(
+                "my-app",
+                "arm64-v8a",
+                "26",
+                "jniLibs",
+                Some("--release"),
+                &features
+            ),
+            [
+                "-t",
+                "arm64-v8a",
+                "--platform",
+                "26",
+                "-o",
+                "jniLibs",
+                "rustc",
+                "-p",
+                "my-app",
+                "--lib",
+                "--crate-type",
+                "cdylib",
+                "--release",
+                "--features",
+                "driver"
+            ]
+        );
+        assert_eq!(
+            app_build_args("my-app", "x86_64", "26", "jniLibs", None, &[]),
+            [
+                "-t",
+                "x86_64",
+                "--platform",
+                "26",
+                "-o",
+                "jniLibs",
+                "rustc",
+                "-p",
+                "my-app",
+                "--lib",
+                "--crate-type",
+                "cdylib"
             ]
         );
     }
