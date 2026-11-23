@@ -2598,46 +2598,91 @@ pub(crate) fn an_app_dropped_with_a_popup_open_frees_its_builder() {
 // ============================================================================
 // A transition rebuilds the transitions, not the pages
 // ============================================================================
-
-/// A push runs its transition on the frames that follow, and each tick
-/// rebuilds the transitions around the two pages, not the pages: the page
-/// builder of the route going out and of the route coming in runs a fixed
-/// number of times however many frames the transition takes (Flutter's
-/// `_ModalScopeState._page`).
-#[test]
-fn a_transition_tick_rebuilds_neither_page() {
-    let home_builds = Rc::new(Cell::new(0_usize));
-    let note_builds = Rc::new(Cell::new(0_usize));
+/// A push and a pop run their transition on the frames that follow, and each
+/// tick rebuilds the transitions around the two pages, not the pages: the
+/// page builder of the route going out and of the route coming in runs a
+/// fixed number of times however many frames the transition takes (Flutter's
+/// `_ModalScopeState._page`). A new router view still rebuilds every page.
+pub(crate) fn a_transition_tick_rebuilds_neither_page() {
+    // Calls of the home page builder, the note page builder and the
+    // transitions builder.
+    let calls = Rc::new(RefCell::new([0_usize; 3]));
     let home = Probe::default();
-    let (home_count, note_count) = (Rc::clone(&home_builds), Rc::clone(&note_builds));
-    let pages = pages(&home);
-    let mut laid = mount(Router::new(AppRoute::Home, move |route, ctx| {
-        match route {
-            AppRoute::Home => home_count.set(home_count.get() + 1),
-            _ => note_count.set(note_count.get() + 1),
+    let router = {
+        let (calls, home) = (Rc::clone(&calls), home.clone());
+        move || {
+            let (page_calls, transition_calls) = (Rc::clone(&calls), Rc::clone(&calls));
+            let pages = pages(&home);
+            Router::new(
+                AppRoute::Home,
+                move |route: &AppRoute, ctx: &dyn BuildContext| {
+                    page_calls.borrow_mut()[usize::from(*route != AppRoute::Home)] += 1;
+                    pages(route, ctx)
+                },
+            )
+            .transitions(move |_ctx, _primary, _secondary, page| {
+                transition_calls.borrow_mut()[2] += 1;
+                page
+            })
         }
-        pages(route, ctx)
-    }));
+    };
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), router()),
+        tight(400.0, 400.0),
+        vsync.clone(),
+    );
     settle(&mut laid);
-    let home_before = home_builds.get();
+    let pages_built = |calls: &Rc<RefCell<[usize; 3]>>| {
+        let [home, note, _] = *calls.borrow();
+        [home, note]
+    };
+    let transitions_built = |calls: &Rc<RefCell<[usize; 3]>>| calls.borrow()[2];
+    assert_eq!(pages_built(&calls), [1, 0], "the home page is built once");
+
+    // Ticks a sixtieth of a second apart: the 300 ms transition takes
+    // eighteen of them, and each one rebuilds the transitions.
+    let transition = |laid: &mut LaidOut| {
+        let before = transitions_built(&calls);
+        for _ in 0..30 {
+            laid.pump_for(Duration::from_nanos(16_666_667));
+        }
+        transitions_built(&calls) - before
+    };
 
     home.handle()
         .push(AppRoute::Note { id: 1 })
         .expect("the router is mounted");
-    // Ticks a sixtieth of a second apart: the 300 ms transition takes
-    // eighteen of them.
-    let tick = Duration::from_nanos(16_666_667);
-    let ticks = 60;
-    for _ in 0..ticks {
-        laid.pump_for(tick);
-    }
+    let ticks = transition(&mut laid);
     assert!(laid_out_text(&laid, "Note 1"), "the push finished");
-
-    let home_during = home_builds.get() - home_before;
-    let note_during = note_builds.get();
     assert!(
-        home_during <= 2 && note_during <= 2,
-        "{ticks} ticks rebuilt the page going out {home_during} times and the page \
-         coming in {note_during} times; a tick must rebuild neither"
+        ticks >= 18,
+        "the push rebuilt its transitions {ticks} times"
+    );
+    // Each route's state changes once in a push (the one going out is
+    // covered, the one coming in settles), and a state change builds the
+    // page again, as Flutter's `changedInternalState` and
+    // `changedExternalState` do. Thirty ticks build it no more than one would.
+    assert_eq!(
+        pages_built(&calls),
+        [2, 2],
+        "the push built each page once per route state, not once per tick"
+    );
+
+    assert_eq!(home.handle().pop(), Ok(true), "the note pops");
+    let ticks = transition(&mut laid);
+    assert!(!laid_out_text(&laid, "Note 1"), "the pop finished");
+    assert!(ticks >= 18, "the pop rebuilt its transitions {ticks} times");
+    assert_eq!(
+        pages_built(&calls),
+        [3, 2],
+        "the pop built the page uncovered once and the page going out not at all"
+    );
+
+    laid.pump_widget(VsyncScope::new(vsync, router()));
+    assert_eq!(
+        pages_built(&calls),
+        [4, 2],
+        "a new router view builds its page again"
     );
 }

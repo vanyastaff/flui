@@ -444,8 +444,14 @@ impl ModalInner {
 /// scope first builds and again only when the overlay entry hands it a new
 /// `ModalScope` (Flutter's `_ModalScopeState._page`, dropped on
 /// `changedExternalState`). A tick offers the transitions that same view, so
-/// the page's element finds it unchanged and builds nothing below it; a page
-/// that reads an animation's value subscribes to it, as in Flutter.
+/// the page's element finds it unchanged and builds nothing below it. A page
+/// builder that reads an animation's value therefore reads it once: a page that
+/// follows the animation does it with an [`AnimatedView`] of its own, as in
+/// Flutter.
+///
+/// The builder runs in a `RoutePage` element below the route's subtree anchor,
+/// hero, pop-entry and local-history scopes, so its `ctx` finds them, and the
+/// dependencies the page registers rebuild the page alone.
 ///
 /// An [`AnimatedView`] — the framework subscribes to
 /// [`listenable`](AnimatedView::listenable) on mount and unsubscribes on unmount.

@@ -122,8 +122,6 @@ route, so a popup over a page drives no secondary animation on it.
 
 - A finalize raised during a flush applies on a second pass of the same `flush`, not
   mid-walk; the end state and observer stream are identical before `flush` returns.
-- The page builder re-runs on every transition tick (Flutter caches `_page`); reconciliation
-  keeps the page's state, so this is cost, not behavior.
 - A covered `maintain_state` entry keeps ticking (no `tickerEnabled: false`) and is still in
   the semantics tree (no per-child semantics visitor).
 - `canSizeOverlay`/`alwaysSizeToContent` are not ported; under unbounded constraints
