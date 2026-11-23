@@ -18,9 +18,16 @@
 //!   ([`crate::Error::ReleaseFailed`]).
 //! - **Isolation.** An emulator is isolated: nobody holds it. A device is someone's, so it runs
 //!   guarded: `getevent` watched for input from any device but the lane's own ([`guard`]).
-//! - **Reading.** The window's place and the display's rotation from `uiautomator dump`
-//!   ([`uiautomator`]); the window's pixels from `screencap` ([`screencap`]). FLUI's accessibility
-//!   nodes are not read: they carry no identifier on Android (`docs/gaps.md`).
+//! - **Reading.** The window's place, the display's rotation and the app's accessibility nodes,
+//!   the tree TalkBack reads, from `uiautomator dump` ([`uiautomator`]); the nodes carry no
+//!   identifier on Android, so `Lane::read_tree` matches them to the app's own tree by structure,
+//!   role, name, state and bounds ([`tree`], [`roles`]). The dump suspends the accessibility
+//!   services while it runs, so the lane dumps nothing while a screen reader is on
+//!   ([`safety::check_dump`]). The window's pixels come from `screencap` ([`screencap`]).
+//! - **No activation.** `Lane::invoke` is refused: UI Automator's shell performs no action, and
+//!   `ACTION_CLICK` reaches a node only from an accessibility service or an instrumentation on the
+//!   device, neither of which the lane runs; a tap at the node's center would be the touch path
+//!   the input scenarios already take, reported as an activation it is not.
 //! - **Process.** [`AndroidLane::start`] installs the app when asked, starts it afresh with its
 //!   endpoint and token as intent extras, and forwards a loopback port to its abstract socket; the
 //!   lane stops the app and removes the forward when it ends.
@@ -34,8 +41,10 @@ pub mod getevent;
 pub mod guard;
 pub mod held;
 pub mod keys;
+pub mod roles;
 pub mod safety;
 pub mod screencap;
+pub mod tree;
 pub mod uiautomator;
 pub mod uinput;
 
@@ -45,6 +54,7 @@ use std::time::{Duration, Instant};
 use flui_protocol::input::PointerDevice;
 use flui_protocol::launch::{ENDPOINT_EXTRA, EXIT_ON_DISCONNECT_EXTRA, TOKEN_EXTRA};
 use flui_protocol::session::{Isolation, Placement};
+use flui_protocol::tree::Tree;
 
 use self::adb::{
     Adb, AdbCommand, AdbReply, AdbStream, Framing, Printed, command_failed, lane_error,
@@ -56,7 +66,7 @@ use self::safety::{Display, Refusal};
 use self::uiautomator::{Bounds, UiDump};
 use crate::coordinates::{DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
-use crate::lane::{ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
 
@@ -366,8 +376,15 @@ impl AndroidLane {
         }
     }
 
-    /// The active window, dumped and read.
+    /// The active window, dumped and read, once the device shows no screen reader running: the
+    /// dump suspends the accessibility services while it runs.
     fn dump(&mut self) -> Result<UiDump> {
+        let settings = Run {
+            limit: device::MAX_ACCESSIBILITY_SETTINGS,
+            ..DATA
+        };
+        let printed = run_shell(self.adb.as_mut(), device::ACCESSIBILITY_SETTINGS, settings)?;
+        safety::check_dump(&printed.text()).map_err(Refusal::into_error)?;
         let command = AdbCommand::ExecOut(uiautomator::dump_line(&self.dump_path));
         let run = Run {
             printed: Printed::Data,
@@ -382,6 +399,12 @@ impl AndroidLane {
     /// The app's surface `placement` describes, found in the active window.
     fn find(&mut self, placement: &Placement) -> Result<Screen> {
         let dump = self.dump()?;
+        self.surface_in(&dump, placement)
+    }
+
+    /// The app's surface `placement` describes, found in `dump`, which the lane keeps as where the
+    /// app's window is.
+    fn surface_in(&mut self, dump: &UiDump, placement: &Placement) -> Result<Screen> {
         let size = (
             placement.size.width * placement.scale,
             placement.size.height * placement.scale,
@@ -640,6 +663,7 @@ impl Lane for AndroidLane {
             self.facts.isolation,
             PositionFidelity::OrderOnly,
         )
+        .accessibility(AccessibilityApi::UiAutomator)
     }
 
     fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {
@@ -712,6 +736,31 @@ impl Lane for AndroidLane {
         };
         self.held.forget_plans();
         crate::lane::release_outcome([contact, pen, keys])
+    }
+
+    fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
+        let dump = self.dump()?;
+        let screen = self.surface_in(&dump, placement)?;
+        let display = self.display(screen.rotation);
+        let mapping = tree::Mapping {
+            origin: DevicePoint::new(screen.surface.left, screen.surface.top),
+            display: (display.width, display.height),
+        };
+        tree::read(&dump, &self.package, app, mapping).map_err(tree::TreeError::into_error)
+    }
+
+    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
+        let _ = placement;
+        Err(Error::not_supported(
+            "os_invoke",
+            format!(
+                "the {LANE} lane cannot activate {identifier:?} as a screen reader does: \
+                 `uiautomator` reads the tree and performs no action, and `ACTION_CLICK` reaches a \
+                 node only from an accessibility service or an instrumentation on the device, \
+                 neither of which the lane runs; a tap at the node is the touch path, not an \
+                 activation"
+            ),
+        ))
     }
 
     fn capture_window(&mut self, placement: &Placement) -> Result<Image> {

@@ -77,9 +77,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   reports one, and FLUI never sets it.
 - **No live pixels.** `flui-engine` reads back only offscreen (`HeadlessRenderer`). A presented
   window can be captured only through the OS, and only on Windows and macOS.
-- **No Android, iOS or web accessibility tree.** `flui-platform` has AccessKit adapters for
-  Windows, macOS and Unix only, so on those three platforms an OS-side reader sees nothing of
-  FLUI's semantics.
+- **No iOS or web accessibility tree the driver reads.** UIKit serves `accesskit_ios`'s tree only
+  inside the simulator, where no public host API reads it, and the Chrome lane reads none of a
+  page's; on those targets only the agent reads FLUI's semantics.
 
 ## Requirements
 

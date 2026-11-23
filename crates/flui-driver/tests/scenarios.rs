@@ -10,7 +10,7 @@
 //!   through the OS accessibility API;
 //! - [`roles`]: each role of the role table publishes the wire role UI Automation folds it to,
 //!   and through an OS lane reads back as the native role of the accessibility API the lane reads
-//!   through (UI Automation's control type, the `AXRole`, the AT-SPI role);
+//!   through (UI Automation's control type, the `AXRole`, the AT-SPI role, Android's class name);
 //! - [`input`], [`macos_input`], [`android_input`] and [`ios_input`]: the pointers, the wheel and
 //!   keys reach the app, read back from its journal, and a press beside a control leaves it alone;
 //!   on Android a touchpad's pinch too (`android_device` runs it through the Android lane, and
@@ -24,6 +24,8 @@
 //!   back: the conformance row a platform's run reports.
 
 use flui_driver::lane::AccessibilityApi;
+use flui_driver::lane::android::roles as android_roles;
+use flui_driver::lane::android::{self, AndroidLane};
 use flui_driver::lane::atspi::roles as atspi_roles;
 use flui_driver::lane::macos::roles as ax_roles;
 use flui_driver::lane::windows::roles::{ROLES, expected_wire_role};
@@ -43,6 +45,7 @@ use flui_foundation::geometry::EdgeInsets;
 use flui_platform::{TargetPlatform, WindowInsets};
 use flui_view::environment::PlatformConvention;
 
+use crate::android_lane;
 use crate::apps::{Controls, Insets, Notes, Roles, role_label};
 
 /// The window every scenario app opens.
@@ -260,6 +263,16 @@ pub fn roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
             atspi_roles::ROLES
                 .iter()
                 .map(|row| (row.role, row.atspi.native_name()))
+                .collect::<Vec<(SemanticsRole, String)>>(),
+        ),
+        // A role whose label reaches Android nowhere has no name to find its node by
+        // (`android_tree::talkback_reads_no_label_of_these_roles`).
+        AccessibilityApi::UiAutomator => (
+            "UI Automator",
+            android_roles::ROLES
+                .iter()
+                .filter(|row| row.named)
+                .map(|row| (row.role, row.class.to_owned()))
                 .collect::<Vec<(SemanticsRole, String)>>(),
         ),
         other => {
@@ -836,6 +849,101 @@ fn the_android_input_scenario_passes_on_the_headless_target_but_its_touchpad_row
             "{check:?}"
         ),
         other => panic!("one touchpad row: {other:#?}"),
+    }
+}
+
+/// `driver`, a headless app, driven through the Android lane on a scripted emulator whose window
+/// is `app` as `accesskit_android` serves it (`android_tree::served`), its surface 60 pixels below
+/// the top of a 1080 by 2400 display.
+fn through_android(driver: Driver, app: &flui_driver::protocol::tree::Tree) -> Driver {
+    let dump = crate::android_tree::served(app, android_lane::PACKAGE, (0, 60), (1080, 2400));
+    let adb = android_lane::scripted_showing(true, None, &dump).refuse_stream("shell uinput -");
+    let lane =
+        AndroidLane::connect(adb.device(), android_lane::PACKAGE).expect("the lane connects");
+    driver.with_lane(lane).expect("the lane starts")
+}
+
+/// The headless half of the Android roles scenario: each role publishes the AccessKit role the
+/// Android table composes with `accesskit_android`'s class, and the scenario passes through the
+/// Android lane reading the dump the adapter would serve for the app's tree. On a device or an
+/// emulator it reads the dump UI Automator takes
+/// (`android_device::the_android_roles_scenario_runs_through_the_os_lane`).
+#[test]
+fn the_android_roles_scenario_passes_through_the_lane_on_the_headless_app() {
+    let mut driver = headless(|| Roles);
+    let app = driver
+        .main_window()
+        .and_then(|mut window| window.read())
+        .expect("the app's tree");
+    let mut nodes = Vec::new();
+    collect_nodes(&app.roots, &mut nodes);
+    for row in android_roles::ROLES {
+        let label = role_label(row.role);
+        let node = nodes
+            .iter()
+            .find(|node| {
+                node.name.as_deref() == Some(&label) || node.description.as_deref() == Some(&label)
+            })
+            .unwrap_or_else(|| panic!("{label:?} is published"));
+        assert_eq!(node.native_role, row.accesskit, "{label}");
+    }
+    let report = run("android-roles", through_android(driver, &app), roles);
+    passed(&report);
+    assert_eq!(report.lane(), Some(android::LANE));
+    assert!(
+        report
+            .checks()
+            .iter()
+            .any(|check| check.name == "UI Automator reads button as android.widget.Button"),
+        "{:#?}",
+        report.checks()
+    );
+}
+
+/// The headless half of the Android accessibility scenario: through the Android lane, reading the
+/// dump the adapter would serve, the OS tree shows the button with the app's identifier and
+/// projects to what the app published; the activation through the accessibility API is
+/// `cannot_verify`, naming `os_invoke`, since the lane performs no accessibility action.
+#[test]
+fn the_android_accessibility_scenario_passes_through_the_lane_but_its_activation() {
+    // The window as the scenario reads it: after one like through the semantic path.
+    let mut shown = headless(|| Controls);
+    let app = (|| -> Result<flui_driver::protocol::tree::Tree> {
+        let mut window = shown.main_window()?;
+        window
+            .locate(Locator::identifier("like"))
+            .require(InputPath::Semantic)
+            .tap()?;
+        expect(window.locate(Locator::identifier("likes"))).to_have_name("Likes: 1")?;
+        window.read()
+    })()
+    .expect("the app's tree after one like");
+    let report = run(
+        "android-a11y",
+        through_android(headless(|| Controls), &app),
+        accessibility,
+    );
+    let (activation, rest): (Vec<&Check>, Vec<&Check>) = report
+        .checks()
+        .iter()
+        .partition(|check| check.name == "like is invoked through the OS accessibility API");
+    let failed: Vec<&&Check> = rest
+        .iter()
+        .filter(|check| check.outcome != Outcome::Passed)
+        .collect();
+    assert_eq!(failed, Vec::<&&Check>::new());
+    // Five checks and the scenario's own row.
+    assert_eq!(rest.len(), 6, "{rest:#?}");
+    match activation.as_slice() {
+        [check] => assert!(
+            matches!(
+                &check.outcome,
+                Outcome::CannotVerify { capability: Some(capability), .. }
+                    if capability == "os_invoke"
+            ),
+            "{check:?}"
+        ),
+        other => panic!("one activation row: {other:#?}"),
     }
 }
 

@@ -17,7 +17,7 @@ use flui_driver::lane::{self, Lane as _, PositionFidelity};
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::input::{PointerButton, PointerDevice};
 use flui_driver::protocol::session::{Isolation, Placement};
-use flui_driver::protocol::tree::WindowId;
+use flui_driver::protocol::tree::{Tree, WindowId};
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::ScriptedXcrun;
 use flui_driver::testing::simulator_lock_in;
@@ -486,7 +486,9 @@ fn the_lane_is_the_simulator_and_has_no_guard() {
         lane.xcode().map(ToString::to_string).as_deref(),
         Some("Xcode 27.1 (27A9269)")
     );
-    let error = lane.read_tree(&placement()).expect_err("no OS tree");
+    let error = lane
+        .read_tree(&placement(), &Tree::new(Vec::new(), false))
+        .expect_err("no OS tree");
     assert_eq!(
         error.missing_capability().as_deref(),
         Some("os_accessibility_tree")

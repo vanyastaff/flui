@@ -506,7 +506,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
         {
             editable = editable.semantic_hint(line.clone());
         }
-        if let Some(text_style) = theme.text_theme.body_large {
+        if let Some(text_style) = theme.text_theme.body_large.clone() {
             editable = editable.text_style(text_style);
         }
         if let Some(on_submitted) = view.on_submitted.clone() {

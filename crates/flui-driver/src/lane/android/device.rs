@@ -1,6 +1,6 @@
 //! What the lane reads of the device, as pure parsers over what `adb` printed: the devices the adb
 //! server lists and which one a run takes, whether it is an emulator, its display, the commands
-//! its `input` has, and the window that holds the input focus.
+//! its `input` has, the window that holds the input focus, and whether a screen reader runs.
 //!
 //! Everything here is the device's output, so each parser reads it as untrusted: a line it cannot
 //! read is skipped or answers `None`, never a panic, and what it collects is bounded.
@@ -218,6 +218,89 @@ pub fn parse_focus(printed: &str) -> Option<String> {
     let _user = words.next()?;
     let title = words.next()?.trim();
     (!title.is_empty()).then(|| title.to_owned())
+}
+
+/// The line that prints the accessibility services the user turned on and whether touch
+/// exploration is on, one a line (`Settings.Secure`).
+pub const ACCESSIBILITY_SETTINGS: &str = "settings get secure enabled_accessibility_services; settings get secure touch_exploration_enabled";
+
+/// The most bytes of the [`ACCESSIBILITY_SETTINGS`] reply the lane reads, which bounds the list
+/// of services it scans.
+pub const MAX_ACCESSIBILITY_SETTINGS: usize = 16 * 1024;
+
+/// The packages of the screen readers the lane knows by name: Google's TalkBack, and the TalkBack
+/// Samsung ships in its place. Another screen reader is told by touch exploration, which a
+/// spoken-feedback reader turns on; a service that does not (a braille-only reader, Switch
+/// Access, Select to Speak) is not told, and the dump suspends it.
+pub const SCREEN_READERS: &[&str] = &[
+    "com.google.android.marvin.talkback",
+    "com.samsung.android.accessibility.talkback",
+];
+
+/// A screen reader the device runs, as its settings show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScreenReader {
+    /// A service of [`SCREEN_READERS`] is on: its component, `package/class`.
+    Service(String),
+    /// Touch exploration is on, which a screen reader asks for.
+    TouchExploration,
+}
+
+impl ScreenReader {
+    /// What is on, for people.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Service(component) => format!("the screen reader {component}"),
+            Self::TouchExploration => {
+                "touch exploration, which a screen reader turns on,".to_owned()
+            }
+        }
+    }
+}
+
+/// The screen reader the [`ACCESSIBILITY_SETTINGS`] line's `printed` shows on, if any: a service
+/// of a known screen reader in the colon-separated list (`null` when the user turned none on), or
+/// touch exploration turned on (`1`).
+///
+/// `settings get` prints a value for every key, `null` for one never set, so a reply is exactly
+/// two lines: a non-empty service list and `0`, `1` or `null`. The shell reports only the second
+/// command's status, so a first command that failed shows only in the reply's shape.
+///
+/// # Errors
+///
+/// What is wrong with a reply of any other shape: the lane cannot tell whether a screen reader
+/// runs.
+pub fn parse_screen_reader(printed: &str) -> std::result::Result<Option<ScreenReader>, String> {
+    let lines: Vec<&str> = printed.lines().map(str::trim).collect();
+    let [services, touch_exploration] = lines.as_slice() else {
+        return Err(format!(
+            "`settings` printed {} lines where it prints two",
+            lines.len()
+        ));
+    };
+    if services.is_empty() {
+        return Err("`settings` printed no accessibility services, not even `null`".to_owned());
+    }
+    let touch_exploration = match *touch_exploration {
+        "1" => true,
+        "0" | "null" => false,
+        other => {
+            return Err(format!(
+                "`settings` printed {other:?} for touch exploration, where it prints 0, 1 or null"
+            ));
+        }
+    };
+    let service = services.split(':').map(str::trim).find(|component| {
+        component
+            .split_once('/')
+            .is_some_and(|(package, _)| SCREEN_READERS.contains(&package))
+    });
+    Ok(match service {
+        Some(component) => Some(ScreenReader::Service(component.to_owned())),
+        None => touch_exploration.then_some(ScreenReader::TouchExploration),
+    })
 }
 
 /// A name `am`, `pm` and `input` take whole: an application id or an activity class, its
