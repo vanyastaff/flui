@@ -53,6 +53,9 @@ fn observe_runtime<T: 'static>(
 /// A window that, once asked its identity, asks the owner to close a
 /// presentation that is not installed and checks the owner refuses. Assembly reads the
 /// window's state, where `on_scale` runs.
+// iOS has no presentation close (`request_presentation_close`), the re-entry
+// this window and the tests that use it probe.
+#[cfg(not(target_os = "ios"))]
 fn reentrant_identity_window(
     probe: flui_foundation::PresentationAddress,
     queried: Arc<std::sync::atomic::AtomicBool>,
@@ -79,6 +82,7 @@ fn reentrant_identity_window(
     )
 }
 
+#[cfg(not(target_os = "ios"))]
 fn native_identity_is_observed_before_registry_publication() {
     use std::sync::atomic::{AtomicBool, Ordering};
     enum Install {
@@ -299,6 +303,7 @@ fn web_startup_samples_native_changes_after_mount_and_observer_registration() {
     }
 }
 
+#[cfg(not(target_os = "ios"))]
 fn presentation_assembly_reentry_revalidates_its_authorizer() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -3173,10 +3178,12 @@ fn owner_dispatch_matrix() {
                 "font_notification_survives_the_primary_window_closing_before_delivery",
                 font_notification_survives_the_primary_window_closing_before_delivery as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "native_identity_is_observed_before_registry_publication",
                 native_identity_is_observed_before_registry_publication as fn(),
             ),
+            #[cfg(not(target_os = "ios"))]
             (
                 "presentation_assembly_reentry_revalidates_its_authorizer",
                 presentation_assembly_reentry_revalidates_its_authorizer as fn(),
