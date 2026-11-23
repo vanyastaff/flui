@@ -118,7 +118,7 @@ use crate::theme::Theme;
 /// listener to defer to. The helper/error line below the container is
 /// outside that rect and ignores pointers, so a press there focuses nothing.
 ///
-/// # DEFERRED (v1)
+/// # Deferred
 ///
 /// Everything [`EditableText`] itself defers applies here too (multi-line,
 /// input formatters, overflow scrolling) — see its own module docs.
