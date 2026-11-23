@@ -1213,7 +1213,7 @@ mod tests {
         let bundled = FontCollection::new();
         let width = |fonts: &FontCollection, family: Option<&str>, weight: FontWeight| {
             let style = TextStyle {
-                font_family: family.map(str::to_owned),
+                font_family: family.map(Into::into),
                 font_weight: Some(weight),
                 ..TextStyle::default()
             };
@@ -1285,7 +1285,7 @@ mod tests {
         registry: Option<&mut crate::glyphs::FontRegistry>,
     ) -> crate::glyphs::FaceKey {
         let style = TextStyle {
-            font_family: Some("Roboto".to_owned()),
+            font_family: Some("Roboto".into()),
             ..TextStyle::default()
         };
         let spans: Vec<(String, Option<TextStyle>)> = vec![("Hamburg".to_owned(), Some(style))];
@@ -1507,7 +1507,7 @@ mod tests {
         use super::super::{FontCollection, FontCollectionInner, TextContext};
         use super::ROBOTO;
         use crate::parley_text::{ParagraphSpec, holds_exactly};
-        use crate::typography::TextStyle;
+        use crate::typography::{FontFamilyName, TextStyle};
         use flui_foundation::TextDirection;
 
         const MATERIAL_ICONS: &[u8] =
@@ -1530,8 +1530,8 @@ mod tests {
 
         fn chained(family: &str, chain: &[&str]) -> TextStyle {
             TextStyle {
-                font_family: Some(family.to_owned()),
-                font_family_fallback: chain.iter().map(|name| (*name).to_owned()).collect(),
+                font_family: Some(family.into()),
+                font_family_fallback: chain.iter().copied().collect(),
                 ..TextStyle::default()
             }
         }
@@ -1545,17 +1545,21 @@ mod tests {
         /// reaches Roboto.
         fn a_style_resolves_by_the_family_rule() {
             let mut collection = holding(&[ROBOTO, MATERIAL_ICONS]);
+            let (roboto, icons) = (
+                FontFamilyName::from("Roboto"),
+                FontFamilyName::from("Material Icons"),
+            );
             let rows = [
                 (TextStyle::default(), Family::SansSerif),
-                (chained("Roboto", &[]), Family::Name("Roboto")),
+                (chained("Roboto", &[]), Family::Name(&roboto)),
                 (chained("roboto", &[]), Family::SansSerif),
                 (
                     chained("material icons", &["Material Icons"]),
-                    Family::Name("Material Icons"),
+                    Family::Name(&icons),
                 ),
                 (
                     chained("CupertinoSystemText", &["-apple-system", "Material Icons"]),
-                    Family::Name("Material Icons"),
+                    Family::Name(&icons),
                 ),
                 (
                     chained(
@@ -1568,13 +1572,10 @@ mod tests {
                     chained("Nothing Carries This", &["system-ui"]),
                     Family::SansSerif,
                 ),
-                (
-                    chained("Material Icons", &["Roboto"]),
-                    Family::Name("Material Icons"),
-                ),
+                (chained("Material Icons", &["Roboto"]), Family::Name(&icons)),
                 (
                     chained("Nothing Carries This", &["Roboto"]),
-                    Family::Name("Roboto"),
+                    Family::Name(&roboto),
                 ),
             ];
             for (style, expected) in &rows {
@@ -1616,7 +1617,7 @@ mod tests {
             };
             let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
             let style = TextStyle {
-                font_family: Some("CupertinoSystemText".to_owned()),
+                font_family: Some("CupertinoSystemText".into()),
                 ..TextStyle::default()
             };
             let spans: Vec<(String, Option<TextStyle>)> = vec![("Ao Bo".to_owned(), Some(style))];

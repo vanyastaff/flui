@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use super::caret::PlacedLine;
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
-use crate::display_list::{RunData, SpanDescription};
+use crate::display_list::{GenericFamily as Generic, RunData, ShapedFamily, SpanDescription};
 use crate::glyphs::{FaceKey, Synthesis, fake_bold_width};
 use crate::styling::Color;
 use crate::typography::{FontStyle, OpenTypeTag, TextAlign, TextStyle};
@@ -112,7 +112,7 @@ struct SpanInfo {
     len: usize,
     /// The family it was shaped in, held as [`ShapedFamily`]'s two parts so that the
     /// generic sits in the padding beside `italic`.
-    family_name: Option<std::sync::Arc<str>>,
+    family_name: Option<crate::typography::FontFamilyName>,
     generic_family: Generic,
     weight: f32,
     italic: bool,
@@ -135,8 +135,7 @@ impl SpanInfo {
             family: ShapedFamily {
                 name: self.family_name.clone(),
                 generic: self.generic_family,
-            }
-            .described(),
+            },
             weight: self.weight,
             italic: self.italic,
             size: self.size,
@@ -1514,7 +1513,7 @@ fn family(
     style: Option<&TextStyle>,
 ) -> StyleProperty<'static, SpanBrush> {
     let name = match resolve_family_name(style, |name| holds_exactly(collection, name)) {
-        Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
+        Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.as_str().to_owned())),
         Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),
         Family::SansSerif => FontFamilyName::Generic(GenericFamily::SansSerif),
         Family::Cursive => FontFamilyName::Generic(GenericFamily::Cursive),
@@ -1524,33 +1523,12 @@ fn family(
     StyleProperty::FontFamily(FontFamily::Single(name))
 }
 
-/// The family a span was shaped in ([`family`]'s rule), kept for
-/// [`ShapedParagraph::describe_spans`]. A generic family holds nothing on
-/// the heap; the text a snapshot prints is made only when one is described.
-#[derive(Clone, Debug)]
-struct ShapedFamily {
-    /// The family's name when it is one the collection holds; `None` for a generic.
-    name: Option<std::sync::Arc<str>>,
-    /// Which generic, when `name` is `None`.
-    generic: Generic,
-}
-
-/// A CSS generic family, one byte beside [`ShapedFamily::name`].
-#[derive(Clone, Copy, Debug)]
-enum Generic {
-    Serif,
-    SansSerif,
-    Cursive,
-    Fantasy,
-    Monospace,
-}
-
 impl ShapedFamily {
     fn of(collection: &mut Collection, style: Option<&TextStyle>) -> Self {
         let generic = match resolve_family_name(style, |name| holds_exactly(collection, name)) {
             Family::Name(name) => {
                 return Self {
-                    name: Some(name.into()),
+                    name: Some(name.clone()),
                     generic: Generic::SansSerif,
                 };
             }
@@ -1563,14 +1541,6 @@ impl ShapedFamily {
         Self {
             name: None,
             generic,
-        }
-    }
-
-    /// The family as a snapshot prints it: `Family`'s `Debug` form.
-    fn described(&self) -> std::sync::Arc<str> {
-        match (&self.name, self.generic) {
-            (Some(name), _) => format!("{:?}", Family::Name(name)).into(),
-            (None, generic) => format!("{generic:?}").into(),
         }
     }
 }
@@ -1866,7 +1836,7 @@ mod tests {
         let fonts = FontCollection::new();
         let width = |family: &str| {
             let style = TextStyle {
-                font_family: Some(family.to_owned()),
+                font_family: Some(family.into()),
                 ..TextStyle::default()
             };
             let spans: Vec<(String, Option<TextStyle>)> = vec![("Привет".to_owned(), Some(style))];

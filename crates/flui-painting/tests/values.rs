@@ -1391,7 +1391,7 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         font_size: Some(10.0),
         font_weight: Some(FontWeight::W400),
         letter_spacing: Some(0.0),
-        font_family: Some("Start".to_owned()),
+        font_family: Some("Start".into()),
         color: Some(Color::rgb(0, 0, 0)),
         ..TextStyle::default()
     };
@@ -1400,7 +1400,7 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         font_weight: Some(FontWeight::W700),
         letter_spacing: Some(2.0),
         height: Some(1.5),
-        font_family: Some("End".to_owned()),
+        font_family: Some("End".into()),
         color: Some(Color::rgb(0, 0, 0)),
         ..TextStyle::default()
     };
@@ -1711,4 +1711,41 @@ pub(crate) fn lerp_endpoints_keep_a_gradient_fallback_and_an_image_blend() {
         })
         .count();
     assert_eq!(images, 2, "an overshooting endpoint keeps its image blend");
+}
+
+/// A copy of a style, and a merge that takes a side's names, share the names instead of copying
+/// them: the same family and the same fallback list, not equal ones at another address.
+pub(crate) fn a_style_copy_and_merge_share_its_font_names() {
+    use flui_painting::typography::TextStyle;
+    let named = TextStyle {
+        font_family: Some("Roboto".into()),
+        font_family_fallback: ["Noto Sans", "sans-serif"].into(),
+        ..TextStyle::default()
+    };
+    let family = |style: &TextStyle| {
+        std::sync::Arc::as_ptr(style.font_family.as_ref().expect("a family").as_arc())
+    };
+    let fallback = |style: &TextStyle| style.font_family_fallback.as_slice().as_ptr();
+
+    let copy = named.clone();
+    assert_eq!(family(&copy), family(&named), "a copy shares the family");
+    assert_eq!(
+        fallback(&copy),
+        fallback(&named),
+        "a copy shares the fallback list"
+    );
+
+    let inherited = named.merge(&TextStyle::default().with_font_size(12.0));
+    assert_eq!(
+        family(&inherited),
+        family(&named),
+        "a merge inheriting the family shares it"
+    );
+    assert_eq!(fallback(&inherited), fallback(&named));
+    assert_eq!(inherited.font_size, Some(12.0));
+
+    assert!(
+        TextStyle::default().font_family_fallback.is_empty(),
+        "no fallback is the empty list"
+    );
 }

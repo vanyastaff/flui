@@ -46,7 +46,7 @@ fn show_probe_text(
     weight: flui_painting::typography::FontWeight,
 ) {
     let style = flui_painting::typography::TextStyle {
-        font_family: Some(family.to_owned()),
+        font_family: Some(family.into()),
         font_weight: Some(weight),
         font_size: Some(20.0),
         ..flui_painting::typography::TextStyle::default()

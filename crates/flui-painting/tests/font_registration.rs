@@ -25,7 +25,7 @@ const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 fn probe_painter(text: &str) -> TextPainter {
     // The probe ships a single face at weight 100.
     let style = TextStyle {
-        font_family: Some("FLUI Probe Mono".to_string()),
+        font_family: Some("FLUI Probe Mono".into()),
         font_weight: Some(FontWeight::W100),
         ..TextStyle::default()
     };
@@ -131,7 +131,7 @@ const PROBE_MONO_600: &[u8] = include_bytes!("../assets/fonts/probe-mono-600.ttf
 /// The faces `fonts` paints `AAAA` in, styled `FLUI Probe Mono` at `weight`.
 fn probe_faces(fonts: &FontCollection, weight: FontWeight) -> Vec<FaceKey> {
     let style = TextStyle {
-        font_family: Some("FLUI Probe Mono".to_string()),
+        font_family: Some("FLUI Probe Mono".into()),
         font_weight: Some(weight),
         ..TextStyle::default()
     };

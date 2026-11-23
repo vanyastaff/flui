@@ -1854,7 +1854,7 @@ fn font_change_failure_case(
 
     let spec = || {
         let style = TextStyle {
-            font_family: Some("FLUI Probe Mono".to_owned()),
+            font_family: Some("FLUI Probe Mono".into()),
             font_weight: Some(FontWeight::W100),
             font_size: Some(20.0),
             ..TextStyle::default()

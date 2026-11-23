@@ -188,7 +188,7 @@ impl TextTheme {
 /// `labelLarge`, `high` for `titleSmall`/`labelMedium`/`labelSmall`.
 fn mountain_view(low: Color, mid: Color, high: Color) -> TextTheme {
     let roboto = |color: Color| TextStyle {
-        font_family: Some("Roboto".to_owned()),
+        font_family: Some("Roboto".into()),
         color: Some(color),
         ..TextStyle::default()
     };

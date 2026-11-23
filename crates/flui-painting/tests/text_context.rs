@@ -108,7 +108,7 @@ pub(crate) fn aligned_extreme_text_keeps_finite_paint_bounds() {
     let width = f32::MAX * 0.9;
     let mut paragraph = spec(&spans, Some(width));
     let style = TextStyle {
-        font_family: Some("Roboto".to_owned()),
+        font_family: Some("Roboto".into()),
         ..Default::default()
     };
     paragraph.default_style = Some(&style);
@@ -193,7 +193,7 @@ pub(crate) fn a_face_registered_after_the_fork_shapes_in_every_ui_runtime() {
     let mut a = TextContext::new(&fonts);
     let mut b = TextContext::new(&fonts);
     let style = TextStyle {
-        font_family: Some("FLUI Probe Mono".to_owned()),
+        font_family: Some("FLUI Probe Mono".into()),
         font_weight: Some(FontWeight::W100),
         font_size: Some(f64::from(SIZE)),
         ..TextStyle::default()

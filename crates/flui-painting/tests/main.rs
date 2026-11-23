@@ -395,6 +395,10 @@ fn value_contract() {
                 values::text_styles_interpolate_magnitudes_and_switch_the_rest,
             ),
             (
+                "a_style_copy_and_merge_share_its_font_names",
+                values::a_style_copy_and_merge_share_its_font_names,
+            ),
+            (
                 "image_transforms_refuse_what_they_cannot_invert",
                 values::image_transforms_refuse_what_they_cannot_invert,
             ),
