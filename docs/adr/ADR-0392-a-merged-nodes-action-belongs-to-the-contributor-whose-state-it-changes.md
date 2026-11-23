@@ -186,9 +186,12 @@ Under one `MergeSemantics` each level folds its pending fragments into its own c
 which is then one fragment of the level above (a node that merges its own descendants is never
 absorbed, ADR-0206 decision 4, so this is the only way one fold feeds another).
 Blocking drops a handler before the fold takes it, so such a fragment records, in a
-`SubjectSet` of two bytes, the subjects whose owner acted but whose handlers it offers none of;
+`SubjectSet` of two bytes held among the configuration's rare parts, the subjects whose owner acted
+but whose handlers it offers none of;
 the plan above reads that set as acting. Nothing else is kept per contributor once it is folded,
-and no allocation is added. The handlers the fold drops are pinned before it runs (ADR-0223), as
+and a configuration pays for the set only once a fold withholds a subject: a node that merges
+nothing, or withholds nothing, is the size it was. The handlers the fold drops are pinned before
+it runs (ADR-0223), as
 the overwritten ones were.
 
 ### Consequences

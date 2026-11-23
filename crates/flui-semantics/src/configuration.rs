@@ -137,12 +137,6 @@ pub struct SemanticsConfiguration {
     /// handlers out of line instead, one per action.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
 
-    /// The subjects whose owner, in a forced merge this configuration is
-    /// the result of, acted on them but offers none of their handlers (a
-    /// blocked or disabled control): an outer forced merge still reads this
-    /// configuration as acting on them (ADR-0392 §3).
-    withheld_subjects: SubjectSet,
-
     /// Told when the assistive technology's cursor enters or leaves the
     /// subtree of the node this configuration forms or merges into. Merging
     /// keeps every contributor's.
@@ -163,6 +157,13 @@ struct RareParts {
     /// in the order of `attributes.rare().custom_actions`, which holds their labels.
     /// A merge renumbers the published id; the handler still receives this one.
     custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
+
+    /// The subjects whose owner, in the fold this configuration is the
+    /// result of, acted on them but offers none of their handlers (a blocked
+    /// or disabled control): the fold one level up still reads this
+    /// configuration as acting on them (ADR-0392 §3). Rare, so it costs a
+    /// node nothing until a fold withholds a subject.
+    withheld_subjects: SubjectSet,
 }
 
 impl PartialEq for SemanticsConfiguration {
@@ -997,13 +998,18 @@ impl SemanticsConfiguration {
     }
 
     /// See the field: subjects a forced merge's owner acted on but withheld.
-    pub(crate) const fn withheld_subjects(&self) -> SubjectSet {
-        self.withheld_subjects
+    pub(crate) fn withheld_subjects(&self) -> SubjectSet {
+        self.rare
+            .as_deref()
+            .map_or_else(SubjectSet::default, |rare| rare.withheld_subjects)
     }
 
     /// Adds `subjects` to [`withheld_subjects`](Self::withheld_subjects).
     pub(crate) fn withhold_subjects(&mut self, subjects: SubjectSet) {
-        self.withheld_subjects = self.withheld_subjects.union(subjects);
+        if subjects != SubjectSet::default() {
+            let rare = self.rare_mut();
+            rare.withheld_subjects = rare.withheld_subjects.union(subjects);
+        }
     }
 
     /// Forgets the declared expanded state, for a forced merge that cannot
@@ -1817,7 +1823,7 @@ impl SemanticsConfiguration {
                 }
             }
         }
-        self.withheld_subjects = self.withheld_subjects.union(other.withheld_subjects);
+        self.withhold_subjects(other.withheld_subjects());
         // Custom actions append, each with its own handler, so the
         // contributor's ids follow the receiver's. A contributor that blocks
         // user actions contributes none.
