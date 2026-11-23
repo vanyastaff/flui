@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use cursor_icon::CursorIcon;
+use smallvec::SmallVec;
 
 use super::{TextBaseline, TextStyle};
 
@@ -55,7 +56,7 @@ impl InlineSpan {
         match self {
             Self::Text(span) => span.to_plain_text(),
             // The object replacement character stands for the placeholder.
-            Self::Placeholder(_) => "\u{FFFC}".to_owned(),
+            Self::Placeholder(_) => OBJECT_REPLACEMENT.to_owned(),
         }
     }
 
@@ -64,18 +65,28 @@ impl InlineSpan {
     /// This does not change shaping, selection offsets or painted text.
     #[must_use]
     pub fn to_semantics_text(&self) -> String {
-        let Self::Text(root) = self else {
-            return self.to_plain_text();
-        };
-        let mut result = String::new();
-        let mut pending = vec![root.as_ref()];
-        while let Some(span) = pending.pop() {
-            if let Some(text) = span.semantics_label.as_deref().or(span.text.as_deref()) {
-                result.push_str(text);
-            }
-            pending.extend(span.children.iter().rev());
+        SemanticsPieces::of(self).collect()
+    }
+
+    /// Whether [`Self::to_semantics_text`] is empty, without building it.
+    #[must_use]
+    pub fn semantics_text_is_empty(&self) -> bool {
+        SemanticsPieces::of(self).all(str::is_empty)
+    }
+
+    /// Whether `self` and `other` speak the same [`Self::to_semantics_text`], compared
+    /// without building either: a paragraph asks this of its old and new text on every
+    /// update.
+    #[must_use]
+    pub fn semantics_text_eq(&self, other: &Self) -> bool {
+        if let (Self::Text(a), Self::Text(b)) = (self, other)
+            && Arc::ptr_eq(a, b)
+        {
+            return true;
         }
-        result
+        SemanticsPieces::of(self)
+            .flat_map(str::bytes)
+            .eq(SemanticsPieces::of(other).flat_map(str::bytes))
     }
 
     /// Returns true if this span has semantic labels.
@@ -127,6 +138,62 @@ impl InlineSpan {
             collect(root, &mut links);
         }
         links
+    }
+}
+
+/// What a placeholder contributes to a paragraph's plain and spoken text.
+const OBJECT_REPLACEMENT: &str = "\u{FFFC}";
+
+/// The pieces of [`InlineSpan::to_semantics_text`] in order: each span's
+/// authored label, or else its text, before its children's.
+struct SemanticsPieces<'a> {
+    /// The root's piece, not yet yielded.
+    root: Option<&'a str>,
+    /// The children still to visit, innermost span last. Inline up to a
+    /// nesting depth no authored paragraph reaches, so a walk allocates nothing.
+    pending: SmallVec<[std::slice::Iter<'a, TextSpan>; 8]>,
+}
+
+impl<'a> SemanticsPieces<'a> {
+    fn of(span: &'a InlineSpan) -> Self {
+        match span {
+            InlineSpan::Text(root) => Self {
+                root: Self::piece(root),
+                pending: smallvec::smallvec![root.children.iter()],
+            },
+            InlineSpan::Placeholder(_) => Self {
+                root: Some(OBJECT_REPLACEMENT),
+                pending: SmallVec::new(),
+            },
+        }
+    }
+
+    fn piece(span: &TextSpan) -> Option<&str> {
+        span.semantics_label.as_deref().or(span.text.as_deref())
+    }
+}
+
+impl<'a> Iterator for SemanticsPieces<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        if let Some(root) = self.root.take() {
+            return Some(root);
+        }
+        loop {
+            let siblings = self.pending.last_mut()?;
+            match siblings.next() {
+                Some(span) => {
+                    self.pending.push(span.children.iter());
+                    if let Some(piece) = Self::piece(span) {
+                        return Some(piece);
+                    }
+                }
+                None => {
+                    self.pending.pop();
+                }
+            }
+        }
     }
 }
 
