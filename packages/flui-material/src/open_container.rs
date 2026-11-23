@@ -506,8 +506,9 @@ enum MorphPresence {
 /// Whether the route's completion is reported to the flight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResultWatch {
-    /// No completion will be reported (no async driver, or one that refused
-    /// the task): the source comes back as soon as the morph leaves the tree.
+    /// No completion will be reported (no async driver, one that refused the
+    /// task, or a task dropped before the route completed): the source comes
+    /// back as soon as the morph leaves the tree.
     Unwatched,
     /// The task waits for the route's result.
     Awaited,
@@ -528,6 +529,34 @@ impl ResultWatch {
             | (MorphPresence::Expected, Self::Unwatched) => false,
             (MorphPresence::Expected | MorphPresence::Left, Self::Arrived)
             | (MorphPresence::Left, Self::Unwatched) => true,
+        }
+    }
+}
+
+/// The task's watch over its flight's result, for as long as the task's
+/// future lives. A future the driver drops before the route completes (its
+/// runtime retired, or a poll that panicked) reports the watch ended, so the
+/// source comes back once the morph has left the tree instead of staying
+/// frozen with no completion ever to come.
+struct ResultWatcher(Rc<Flight>);
+
+impl ResultWatcher {
+    /// The route has completed: hands the flight on, its result arrived.
+    fn arrived(self) -> Rc<Flight> {
+        let flight = Rc::clone(&self.0);
+        flight.watch_result(ResultWatch::Arrived);
+        flight
+    }
+}
+
+impl Drop for ResultWatcher {
+    fn drop(&mut self) {
+        if let FlightPhase::Underway {
+            result: ResultWatch::Awaited,
+            ..
+        } = self.0.phase.get()
+        {
+            self.0.watch_result(ResultWatch::Unwatched);
         }
     }
 }
@@ -756,9 +785,10 @@ impl<T: 'static> Shared<T> {
         // is back, so `on_closed` never runs under the closing transform.
         let token_slot = Rc::new(RefCell::new(None));
         let task_slot = Rc::clone(&token_slot);
+        let watcher = ResultWatcher(task_flight);
         let token = driver.spawn_local(Box::pin(async move {
             let value = result.await;
-            task_flight.watch_result(ResultWatch::Arrived);
+            let task_flight = watcher.arrived();
             task_flight.landed().await;
             if let Some(on_closed) = on_closed {
                 on_closed(value);
