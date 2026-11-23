@@ -135,6 +135,11 @@ project; there are no placeholders. Generated files are deterministic (no
 timestamps, no random ids), and `flui` is the only framework dependency
 (`use flui::prelude::*;`).
 
+Every project carries a `rust-analyzer.toml` that sends rust-analyzer's
+checks to `target/rust-analyzer`, in whatever editor runs it. The check an
+editor starts on each save then never holds the lock on `target/` that
+`flui run`'s rebuild of the same save needs.
+
 `--local` points the dependency at a FLUI checkout: bare `--local` means the
 current directory, `--local=/path/to/flui` an explicit one. The `=` is
 required so that `flui create --local my_app` still treats `my_app` as the

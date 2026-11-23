@@ -1,5 +1,11 @@
 ### Added
 
+- **`flui-cli`**: `flui create` writes a `rust-analyzer.toml` that gives rust-analyzer its own
+  target directory (`target/rust-analyzer`), in every editor. Its check on each save no longer
+  holds the lock on `target/` that `flui run`'s rebuild of the same save waits on: with the
+  check running beside it, a one-line edit of the counter rebuilt in a median 1.6 s instead of
+  1.9 s (1.6–2.1 s), against 1.5 s with no check at all.
+
 - **`flui-cli`**: `flui run --json` reports `run.watch {paths}` once the sources are watched; a
   save made after it is a change the run sees.
 

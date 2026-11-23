@@ -146,6 +146,17 @@ Cargo.lock
 *.keystore
 ";
 
+/// `rust-analyzer.toml` for a generated project, read by rust-analyzer in
+/// any editor. Its `cargo check` on each save then builds in
+/// `target/rust-analyzer` and no longer holds the build directory lock the
+/// `cargo build` of `flui run` waits on after the same save.
+const RUST_ANALYZER_TEMPLATE: &str = r"# rust-analyzer checks this project in target/rust-analyzer, so the check it
+# runs on each save does not hold the lock on target/ while `flui run`
+# rebuilds the application.
+[cargo]
+targetDir = true
+";
+
 /// Builder for generating FLUI project templates.
 ///
 /// # Builder Methods
@@ -263,7 +274,9 @@ impl TemplateBuilder {
             }
         };
 
-        let plan = plan.file(".gitignore", GITIGNORE_TEMPLATE);
+        let plan = plan
+            .file(".gitignore", GITIGNORE_TEMPLATE)
+            .file("rust-analyzer.toml", RUST_ANALYZER_TEMPLATE);
 
         if !self.hot_reload && self.template.is_library() {
             return plan;
