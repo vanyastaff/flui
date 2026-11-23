@@ -78,6 +78,15 @@ pub enum AccessibilityApi {
     UiAutomator,
 }
 
+impl AccessibilityApi {
+    /// Whether the API's tree names no identifier the app sets, so a lane reading it finds the
+    /// app's nodes by matching it to the app's own tree ([`Lane::read_tree`]'s `app`).
+    #[must_use]
+    pub fn matches_app_tree(self) -> bool {
+        matches!(self, Self::UiAutomator)
+    }
+}
+
 /// What a lane can do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -223,8 +232,9 @@ pub trait Lane: Send {
 
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
     /// nodes (ADR-0095 §4): what a screen reader reads of the app. `app` is the window's tree as
-    /// the app published it: a lane whose OS tree names no identifier (Android's) finds the app's
-    /// nodes in it by matching the two, and the others read without it.
+    /// the app published it when the lane's API [matches the app's tree](AccessibilityApi::matches_app_tree)
+    /// (Android's, whose OS tree names no identifier), and an empty tree for the others, which read
+    /// without it.
     ///
     /// # Errors
     ///

@@ -111,6 +111,12 @@ pub enum Refusal {
         /// What is on.
         reader: ScreenReader,
     },
+    /// The accessibility settings printed no reply the lane reads, so it cannot tell whether a
+    /// screen reader runs.
+    SettingsUnread {
+        /// What is wrong with the reply.
+        why: String,
+    },
 }
 
 /// The capability a refused dump names: a window located, or the tree read, through
@@ -212,6 +218,13 @@ impl Refusal {
                     reader.describe()
                 ),
             ),
+            Self::SettingsUnread { why } => Error::not_supported(
+                WINDOW_DUMP,
+                format!(
+                    "{why}, so the lane cannot tell whether a screen reader runs, and \
+                     `uiautomator dump` would suspend one: no dump is sent"
+                ),
+            ),
         }
     }
 }
@@ -220,11 +233,13 @@ impl Refusal {
 ///
 /// # Errors
 ///
-/// [`Refusal::ScreenReaderOn`] naming the screen reader.
+/// [`Refusal::ScreenReaderOn`] naming the screen reader, [`Refusal::SettingsUnread`] for a reply
+/// that shows neither way.
 pub fn check_dump(settings: &str) -> Result<(), Refusal> {
     match parse_screen_reader(settings) {
-        Some(reader) => Err(Refusal::ScreenReaderOn { reader }),
-        None => Ok(()),
+        Ok(Some(reader)) => Err(Refusal::ScreenReaderOn { reader }),
+        Ok(None) => Ok(()),
+        Err(why) => Err(Refusal::SettingsUnread { why }),
     }
 }
 

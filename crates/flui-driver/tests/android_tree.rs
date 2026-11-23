@@ -607,8 +607,7 @@ fn a_screen_reader_is_told_by_its_service_or_by_touch_exploration() {
     );
     for (printed, reader) in [
         ("null\n0\n", None),
-        ("\n\n", None),
-        ("", None),
+        ("null\nnull\n", None),
         ("com.example.passwords/.Autofill\n0\n", None),
         (
             &format!("{talkback}\n1\n") as &str,
@@ -629,11 +628,36 @@ fn a_screen_reader_is_told_by_its_service_or_by_touch_exploration() {
         // A package that only starts like TalkBack's is another app.
         ("com.google.android.marvin.talkbackx/.S\n0\n", None),
     ] {
-        assert_eq!(device::parse_screen_reader(printed), reader, "{printed:?}");
+        assert_eq!(
+            device::parse_screen_reader(printed),
+            Ok(reader.clone()),
+            "{printed:?}"
+        );
         assert_eq!(
             safety::check_dump(printed).is_err(),
             reader.is_some(),
             "{printed:?}"
+        );
+    }
+    // A reply of another shape cannot say no screen reader runs, so the dump is refused: the first
+    // command failed and printed nothing (the shell reports only the second's status), a line
+    // came before the values, or a value is not one `settings` prints.
+    for printed in [
+        "",
+        "\n\n",
+        "0\n",
+        "\n0\n",
+        "WARNING: linker: unused DT entry\nnull\n1\n",
+        "null\nyes\n",
+    ] {
+        assert!(device::parse_screen_reader(printed).is_err(), "{printed:?}");
+        let refused = safety::check_dump(printed)
+            .expect_err("an unread reply refuses the dump")
+            .into_error();
+        assert_eq!(
+            refused.missing_capability().as_deref(),
+            Some(safety::WINDOW_DUMP),
+            "{printed:?}: {refused:?}"
         );
     }
     let refused = Refusal::ScreenReaderOn {
@@ -725,4 +749,55 @@ fn a_served_dump_reads_as_the_hand_written_one() {
         tree::read(&dump(&generated), PACKAGE, &app, MAPPING).expect("the served dump matches");
     let outline = |tree: &Tree| flui_driver::protocol::tree::normalized_outline(&tree.roots);
     assert_eq!(outline(&read), outline(&written));
+}
+
+/// A dump deeper or wider than the walk budgets of every lane projects cut, marked where it was
+/// cut: the matched window still reads, its button still found.
+#[test]
+fn a_dump_past_the_walk_budgets_projects_cut_and_says_so() {
+    let node = |close: bool| {
+        format!(
+            "<node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" \
+             package=\"{PACKAGE}\" content-desc=\"\" checkable=\"false\" checked=\"false\" \
+             clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" \
+             scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" \
+             bounds=\"[0,600][10,610]\"{}>",
+            if close { " /" } else { "" }
+        )
+    };
+    let after_like = "bounds=\"[0,94][119,173]\" />";
+    let deep = format!(
+        "{}{}",
+        node(false).repeat(flui_driver::lane::walk::MAX_DEPTH + 8),
+        "</node>".repeat(flui_driver::lane::walk::MAX_DEPTH + 8)
+    );
+    let wide = format!(
+        "{}{}</node>",
+        node(false),
+        node(true).repeat(flui_driver::lane::walk::MAX_NODES + 1)
+    );
+    for (shape, inserted) in [("deep", deep), ("wide", wide)] {
+        let xml = CONTROLS.replacen(after_like, &format!("{after_like}{inserted}"), 1);
+        let os = tree::read(&dump(&xml), PACKAGE, &controls(), MAPPING).expect("the dump matches");
+        assert!(os.truncated, "{shape}: the projection says it was cut");
+        assert!(
+            find(&os.roots, "like").is_some(),
+            "{shape}: the window still reads"
+        );
+        let mut nodes = Vec::new();
+        let mut stack: Vec<&Node> = os.roots.iter().collect();
+        while let Some(node) = stack.pop() {
+            nodes.push(node);
+            stack.extend(node.children.iter());
+        }
+        assert!(
+            nodes.iter().any(|node| node.children_unread),
+            "{shape}: the node it was cut at says its children went unread"
+        );
+        assert!(
+            nodes.len() <= flui_driver::lane::walk::MAX_NODES + 1,
+            "{shape}: {} nodes past the budget",
+            nodes.len()
+        );
+    }
 }

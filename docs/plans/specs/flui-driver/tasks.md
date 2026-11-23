@@ -1191,7 +1191,7 @@ graph LR
     `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app` and
     `scenarios::the_android_accessibility_scenario_passes_through_the_lane_but_its_activation`; the
     device runs are `android_device::the_android_roles_scenario_runs_through_the_os_lane` and
-    `android_device::the_android_accessibility_scenario_runs_through_the_os_lane`, owed on A (the
+    `android_device::the_android_accessibility_scenario_runs_through_the_os_lane`, owed on an Android device (the
     `assistive technology conformance` row of `crates/flui-native/platform-parity.toml`).
   - `lane::android::launch` installs, starts and attaches; `Artifact::Apk` through `Driver::launch`
     answers `not_supported` naming `android_launch`, since a path names no package or activity.

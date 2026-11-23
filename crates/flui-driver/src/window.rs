@@ -23,6 +23,7 @@ use flui_protocol::wait::{Condition, WaitOutcome};
 use crate::compose;
 use crate::driver::Driver;
 use crate::error::Result;
+use crate::lane::AccessibilityApi;
 use crate::projection::Projection;
 use crate::scenario::WindowSpec;
 
@@ -89,22 +90,33 @@ impl<'d> Window<'d> {
 
     /// The window as the OS accessibility API shows it, through the session's lane, projected
     /// onto the wire's nodes ([`Lane::read_tree`](crate::Lane::read_tree)), handed the app's own
-    /// tree of the window, read first. Its nodes' ids number them in the order they were read:
-    /// they are no handles the app issued.
+    /// tree of the window, read first, when the lane matches against it. Its nodes' ids number
+    /// them in the order they were read: they are no handles the app issued.
     ///
     /// # Errors
     ///
     /// As [`Self::read`]; [`Error::NotSupported`](crate::Error::NotSupported) naming
     /// `os_accessibility_tree` without a lane that reads one; the lane's failures.
     pub fn os_tree(&mut self) -> Result<Tree> {
-        if self.driver.lane().is_none() {
-            return Err(no_tree_lane());
-        }
-        let app = self.read()?;
+        let app = if self.lane_matches_app_tree()? {
+            self.read()?
+        } else {
+            Tree::new(Vec::new(), false)
+        };
         self.os_tree_against(app)
     }
 
-    /// [`Self::os_tree`], the lane handed `app`, the window's tree as the app published it.
+    /// Whether the session's lane finds the app's nodes by matching the app's own tree, which it
+    /// is then handed ([`AccessibilityApi::matches_app_tree`]).
+    fn lane_matches_app_tree(&mut self) -> Result<bool> {
+        let lane = self.driver.lane().ok_or_else(no_tree_lane)?;
+        Ok(lane
+            .capabilities()
+            .accessibility
+            .is_some_and(AccessibilityApi::matches_app_tree))
+    }
+
+    /// [`Self::os_tree`], the lane handed `app` ([`Lane::read_tree`](crate::Lane::read_tree)).
     fn os_tree_against(&mut self, app: Tree) -> Result<Tree> {
         let placement = self.placement()?;
         let lane = self.driver.lane().ok_or_else(no_tree_lane)?;

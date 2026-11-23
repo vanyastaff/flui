@@ -540,7 +540,7 @@ pub trait Lane: Send {
     fn check(&mut self, events: &[OsEvent]) -> Result<()>; // before the first event; accepts by default
     fn send(&mut self, event: &OsEvent) -> Result<()>; // one event: a single-step move, a press, a pause
     fn release_all(&mut self) -> Result<()>;
-    fn read_tree(&mut self, placement: &Placement) -> Result<Tree>;          // not_supported by default
+    fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree>; // not_supported by default
     fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()>; // not_supported by default
     fn capture_window(&mut self, placement: &Placement) -> Result<pixels::Image>; // not_supported by default
 }
@@ -1090,10 +1090,12 @@ fixture, with an identifier on every interactive widget.
   restore token reduces it). Headless Wayland CI (weston) has no portal, so x11 stays the CI lane.
 - **Presented-frame copy costs a copy per armed frame.** It is one-shot and never runs unrequested.
   The fallback is labelled `rendered`.
-- **Android, iOS and web have no OS accessibility tree for FLUI nodes the driver can read.**
-  Android serves one (`accesskit_android`) without the identifier, so UI Automator cannot find a
-  node by it. R17's cross-check runs on desktop only, and the gaps entries say so. The selector
-  still works there through the agent.
+- **iOS and web have no OS accessibility tree for FLUI nodes the driver can read.**
+  UIKit serves `accesskit_ios`'s tree inside the simulator, where no public host API reads it,
+  and the Chrome lane reads none of a page's. Android serves its tree without the identifier, so
+  the Android lane matches the dump to the app's own tree instead (`lane::android::tree`). R17's
+  cross-check runs on the desktops and Android; the selector still works on iOS and web through
+  the agent.
 - **Tier H publishing.** `flui-driver` is the first published tier-H crate besides the facade. If
   `cargo xtask workspace` refuses an Evolving kind in tier H, the task amends ADR-0081's kind table
   in ADR-0238 rather than bending the crate.
