@@ -1,136 +1,130 @@
 # FLUI application facade
 
 Application packages depend on `flui`. The workspace's implementation crates
-remain independently maintained internally; their package boundaries are not a
-dependency checklist for application authors.
+are maintained as separate packages; their boundaries are not a dependency
+checklist for application authors. `src/lib.rs` lists each module, the crate
+behind it and the feature that gates it, and each feature of the manifest.
 
 ## Mapping decisions
 
-### View authoring excludes the composition-root seam
+### View and animation authoring exclude their runtime seams
 
-The facade's `view` module shadows `flui_view::__runtime` with a private module
-(ADR-0081 §4). Application authors can name `flui::view::View`; composition
-roots reach `BindingRuntime` through the implementation crate. The
-`thread_boundary_ui` compiler test pins E0603 for importing the facade's module
-itself and compiles both intended caller paths. Checking the module directly
-keeps an exposed empty module from hiding a privacy regression behind a missing
-trait import.
+The facade's `view` and `animation` modules are glob re-exports of `flui_view`
+and `flui_animation` that shadow the crate's `__runtime` module with a private
+one (ADR-0081 §4, ADR-0382). `__runtime` is the composition roots' seam in
+`flui-view` and the frame driver's seam in `flui-animation`; an application
+names neither. Composition roots reach it through the implementation crate.
 
-### `TextField` prelude collision — renamed the widgets primitive, not shadowed
+Two tests pin the view half. The trybuild fixture
+`tests/ui/thread_boundary/facade_runtime_seam_is_private.rs`, run by
+`thread_boundary_ui`, expects E0603 for `use flui::view::__runtime`, and
+`tests/ui_pass/facade_runtime_seam.rs` compiles the intended callers. The
+animation half is the `compile_fail,E0603` doctest on `flui::animation`.
+Naming the module directly keeps an exposed empty module from hiding a privacy
+regression behind a missing trait import.
 
-`flui-widgets` and `flui-material` used to ship two distinct types both named
-`TextField` — a design-agnostic text-editing primitive and the M3-styled
-input. Three revisions of how `flui::prelude` handles this, kept in order
-because each corrected a real flaw in the one before it:
+### `TextField` is the Material type; the widgets primitive is `RawTextField`
 
-1. **Omission.** The first revision left the Material type out of the
-   curated glob entirely, reasoning that "a curated glob cannot carry both
-   without one silently shadowing the other," and kept `flui_widgets::TextField`
-   as the ambient default. That reasoning stated the mechanism correctly but
-   reached the wrong conclusion for this prelude's actual audience: an
-   application author writing an ordinary Material screen with
-   `use flui::prelude::*;` who reached for `TextField` got a *compiling*
-   result either way, so the omission never surfaced as an error — it
-   surfaced as an unstyled field silently rendered where a themed one was
-   expected, exactly the "quiet Material-shaped mistake" this facade's
-   curation exists to prevent for every other Material type.
-2. **Explicit shadow.** The second revision had `flui::prelude` explicitly
-   name `flui_material::TextField` in its material re-export list (Rust's
-   explicit-import-over-glob-import rule, the same pattern every other name
-   in that list already follows, e.g. `ElevatedButton`/`IconButton` are also
-   explicit despite not being ambiguous), shadowing the
-   `flui_widgets::prelude::*` glob's copy of the same name whenever the
-   `material` feature was on. This fixed the silent-mistake problem but
-   introduced a different one: `TextField`'s meaning then depended on
-   whether the `material` feature happened to be enabled, which violates
-   Cargo's feature-additivity contract — enabling a feature is supposed to
-   only *add* symbols, never change what an existing name already resolves
-   to for code that hasn't opted into the new feature's own symbols.
-3. **Rename (current).** `flui-widgets`' primitive is now
-   [`flui_widgets::RawTextField`](crates/flui-widgets/src/text/text_field.rs),
-   not `TextField` — a breaking rename, sanctioned pre-1.0. `TextField`
-   belongs to `flui_material` alone, unconditionally; `flui::prelude` lists
-   it in the material re-export block like every other Material type, with
-   no shadowing and no feature-dependent meaning. `RawTextFieldState` was
-   renamed alongside it for the same reason (an orphaned `TextFieldState`
-   with no `TextField` beside it would have been confusing); `SubmitCallback`
-   (the shared `Rc<dyn Fn(&str)>` alias both `on_submitted` methods use) was
-   made `pub` and exported from `flui-widgets` so `flui_material::TextField`
-   reuses the same type instead of declaring its own copy.
+`flui::prelude` names `flui_material::TextField` when the `material` feature is
+on, and `flui-widgets` names its theme-free text-editing primitive
+`RawTextField`. Two same-named types in one glob would have needed one to
+shadow the other. A shadow makes the meaning of `TextField` depend on a
+feature, which breaks feature additivity: enabling a feature may add names but
+not change what an existing name resolves to. Leaving the Material type out
+instead lets `use flui::prelude::*` on a Material screen compile with an
+unstyled field where a themed one was expected. With the rename, `TextField`
+belongs to `flui-material` alone and the prelude lists it like every other
+Material type.
 
-Every real caller of `flui::material::TextField` in the codebase
-already imported it explicitly under all three revisions and needed no
-changes across any of them — every fix here was about what an *unqualified*
-`TextField` resolves to for code that hasn't been written yet, never about
-existing call sites.
+### Authoring modules
 
-### Explicit authoring modules
+`painting`, `rendering`, `interaction`, `semantics` and `app` re-export
+canonical framework types by name. They introduce no wrapper types and no
+second widget model, and they complement `view`, `widgets` and `foundation`.
 
-`painting`, `rendering`, and `interaction` expose canonical framework types through
-explicit reexports. They complement the existing `view`, `widgets`, `types`, and
-`foundation` modules rather than introduce wrapper types or a second widget model.
+The export set follows the extension tasks an application performs:
 
-The export set follows concrete extension tasks: implement `CustomPainter`,
-implement box/sliver rendering behind a `RenderView`, and create gesture
-recognizers. Types needed to name override signatures belong to the same usable
-surface: a painter needs `Canvas` and `SemanticsBuilder`, render objects need
-typed contexts, arity, parent data, invalidation and semantics contracts, and
-gesture callbacks need their detail payloads. Geometry and repaint notifications
-remain available through `geometry` and `foundation::Listenable`.
+- `painting`: implement `CustomPainter` for `widgets::CustomPaint`, with
+  `Canvas`, `DisplayList`, the paint, style and typography modules, and
+  `SemanticsRegion`, `SemanticsRegionId`, `SemanticsRegionKey` and
+  `SemanticsRegions`, which a painter reports to assistive technology.
+- `rendering`: implement `RenderBox` or `RenderSliver` behind a
+  `view::RenderView`, with typed contexts, the arity markers, parent data,
+  constraints, delegates and invalidation. The built-in render objects are
+  `rendering::objects`. `PipelineOwner` and `PipelineCell` are exported because
+  the view layer's signatures name them (a lifecycle hook's pipeline handle, a
+  custom element's owner); the render tree they own and the GPU compositor are
+  not.
+- `interaction`: create gesture recognizers and members of the gesture arena,
+  and name the callback payloads, focus, hit-test and pointer vocabulary that
+  handlers receive.
+- `semantics`: the types a render object's
+  `describe_semantics_configuration` and `widgets::Semantics` take: roles,
+  states, labels, actions, relations, sort keys and text content.
+- `app`: the application's configuration, the work it runs off the frame, how
+  its windows close and what it does when a frame fails.
 
-These modules do not reexport entire implementation crates. Storage arenas,
-pipeline owners, GPU execution, and the concrete render-object catalog are not
-application extension contracts. Exported forwarding macros use `$crate` and a
-hidden public type reexport in their defining crate, so dependency renaming or
-access through the facade does not require extra consumer dependencies.
-
-[Iced's advanced API](https://docs.rs/iced/latest/iced/advanced/index.html)
-demonstrates a deliberate extension surface for custom widgets. FLUI adopts a
-task-oriented grouping, keeping its typed Rust protocols and contexts. No extra `advanced` feature is required: these runtime
-dependencies already participate in ordinary widget applications. Sources were
-consulted on 2026-09-19.
+A type belongs when a signature an application writes names it. The modules do
+not re-export whole implementation crates: storage arenas, the render tree,
+the semantics tree and its platform bridges, and GPU execution stay in their
+crates. The forwarding macros that crates export use `$crate` and a hidden
+public type re-export in their defining crate, so a renamed dependency or
+access through the facade needs no extra consumer dependency. No `advanced`
+feature gates these modules: the crates behind them are already in an ordinary
+widget application's graph.
 
 ### Testing is an opt-in development capability
 
-The `testing` feature exposes the existing deterministic headless driver, widget
-layout/input harness, render-object harness, accessibility queries, and replay
-tools under `flui::testing`. It activates optional `flui-testing` plus the widget
-and rendering harness features. Consumer applications enable it in their
-`dev-dependencies`; no default feature activates the test driver. The workspace
-topology policy records this optional facade edge explicitly.
+The `testing` feature publishes `flui::testing`. It activates the optional
+`flui-testing` dependency, `flui-rendering`'s `testing` feature and
+`flui-platform`'s `scripted` feature. Consumer applications enable it in
+`dev-dependencies`; no default feature activates it.
 
-External consumer tests use only `flui`, including a renamed dependency. They run
-custom painting, render layout and paint, forwarding-macro queries, virtual-time
-gestures, and pointer-driven widget rebuilds. They also exercise a downstream
-recognizer's public extension traits, registering
-competing members and observing arena acceptance and rejection after pointer
-movement. Separate normal dependency graphs
-with no feature and with a catalog must exclude testing and hot reload. Tests
-in the facade's own package alone cannot establish that property because its
+`flui::testing` exposes what `src/testing.rs` re-exports:
+
+- `Tester` mounts an application on a manual clock and acts through the
+  window's input path; `find` builds the `Locator`s it looks up over the
+  window's semantics tree; `Expectation`, `TestWindow`, `TestError` and the
+  `Inspect*` types read the result.
+- `DropLedger`, `MemoryStorage` with its holds and `CommitBarrier`, and
+  `HostClock` for tests of ownership, storage and time.
+- `testing::rendering`: `RenderTester` and its runs, `box_node` and
+  `sliver_node`, for a render object tested without a widget tree, and
+  `collect_commands` with `DrawKind`, which inspects the picture commands
+  reachable from a committed layer tree. That projection walks nested display
+  lists. It does not evaluate clipping or opacity and does not replace GPU
+  readback; its use is telling a page's painted text from retained offstage
+  elements that have no commands in that tree.
+- `platform::capability::scripted`, scripted capability scenarios, under the
+  same feature.
+
+External consumer tests use only `flui`, including a renamed dependency
+(`tests/facade_consumer.rs`, with its fixtures). They run custom painting,
+render layout and paint, forwarding-macro queries, virtual-time gestures,
+pointer-driven rebuilds and a downstream recognizer that competes in the arena.
+`ordinary_facade_graph_excludes_test_support` runs `cargo tree` over
+consumer projects with and without default features and asserts the normal
+graph holds neither catalog, `flui-testing`, `flui-system` nor
+`flui-hot-reload`. The facade's own package cannot establish that, because its
 development dependencies expose implementation crates.
 
-`testing::rendering::collect_commands` and `DrawKind` expose the existing
-rendering test projection for assertions on a committed layer tree. A retained
-offstage element alone cannot satisfy a command assertion. The projection walks
-reachable picture commands, including nested display lists; it does not establish
-pixel visibility through clipping or opacity and does not replace GPU readback.
-This lets facade-only consumers distinguish a current page's painted text from
-retained page elements.
+### Products and registry support
 
-### Products and registry support have different roles
+The facade and the CLI are the two products an application author installs.
+The implementation crates their published manifests require are published as
+registry support, and examples and tools stay `publish = false`. The roles are
+the `tier` and `tier-kind` declarations in each manifest
+([ADR-0081](docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md)); no second
+list of release packages exists.
 
-The facade and CLI are the two products; implementation crates required by their
-published manifests are registry support. Publication roles live in the workspace's
-`tier` and `tier-kind` declarations ([ADR-0081](docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md)),
-while private examples/tools retain `publish = false`.
-No parallel release package list is maintained. Cargo's normalized dependency
-rules define the distribution closure: optional/build/target declarations and
-versioned dev-dependencies count; versionless dev-dependencies do not. This is a
-Rust packaging decision. The
-[Cargo dependency reference](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#development-dependencies)
-and [package command](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
-are the source contracts. Fixture tests inspect actual tiny archives and preserve
-a separate regression for fresh dev-cycle resolution failure. Closure validity
-is not an assertion that every selected version can already be packaged against
-a registry. The [release requirements](docs/plans/specs/release/requirements.md) cover the
+Cargo's normalized dependency rules define the distribution closure: optional,
+build and target-specific declarations and dev-dependencies that carry a
+`version` count, and a dev-dependency with only a `path` is dropped from the
+published manifest
+([Cargo reference](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#development-dependencies)).
+The root manifest keeps such path-only dev edges for the crates that would
+otherwise form a publication cycle, each with its own comment. The facade's
+`include` list decides what its archive carries. A closure that is valid does
+not mean every selected version can already be packaged against a registry;
+the [release requirements](docs/plans/specs/release/requirements.md) cover the
 remaining distribution work.
