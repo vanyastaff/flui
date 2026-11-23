@@ -734,10 +734,13 @@ unused_async_trait_impl = "allow"
 [package]
 publish = ["crates-io"]
 name = "flui"
-# What the published archive carries. Without this list `cargo package`
-# archived the whole checkout root — docs/, tooling, CI, editor and
-# research directories, 666 files — none of which a consumer compiles.
-# Nested packages under examples/ are excluded by Cargo on their own.
+# The integration suites compile as modules of ONE test binary (`tests/main.rs`),
+# declared under `[[test]]` below; `thread_boundary_ui` and `wasm_consumer` are
+# targets of their own.
+autotests = false
+# What the published archive carries: the sources a consumer compiles and the
+# tests and examples that ship with them. Nested packages under examples/ are
+# excluded by Cargo on their own.
 # Patterns are gitignore-style, so each is anchored with a leading `/`: an
 # unanchored `README.md` would also match every README under the ignored
 # `.flutter/` reference mirror, which `include` otherwise overrides.
@@ -825,17 +828,14 @@ flui-interaction = { workspace = true }
 # === Platform (for examples) ===
 flui-native = { workspace = true }
 
-# === Test support (the widget harness `flui_testing::widgets` that
-# tests/agent_workflow.rs drives) ===
+# === Test support (`tests/facade_smoke.rs` lays out trees with the widget harness
+# `flui_testing::widgets`) ===
 flui-testing = { workspace = true }
 # tests/facade_serde.rs round-trips a value from each crate `flui/serde` reaches.
 serde = { workspace = true }
 serde_json = { workspace = true }
 # tests/thread_boundary_ui.rs: the compile-fail suite for UI runtime-bound handles.
 trybuild = { workspace = true }
-
-# NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
-# facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
 # === Engine (for GPU examples and the readback test) ===
 flui-engine = { workspace = true, features = ["dx12"] }
@@ -937,40 +937,16 @@ serde = [
     "flui-view/serde",
 ]
 
-# The facade declares no other features. Earlier revisions carried commented
-# blocks for parallel / profiling / tracy / devtools / memory-profiler /
-# full — all referencing crates or features that do not exist (`flui_core`,
-# `flui-engine/devtools`). A capability that does not exist gets no feature
-# stub here; add the feature in the same change that implements it.
-
 # ═══════════════════════════════════════════════════════════════════════════════
-# Feature-gated targets
+# Test targets
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Tests are otherwise auto-discovered; these entries exist only to attach
-# `required-features`. Without them a `--no-default-features` build would still
-# try to compile the test and fail — the exact false signal the isolated feature
-# builds exist to catch.
-
+# The integration suites compile as modules of ONE binary (`tests/main.rs`); a
+# suite that needs a feature is `#[cfg(feature = …)]` there, so a build without
+# the feature compiles the rest instead of failing on it.
 [[test]]
-name = "facade_serde"
-path = "tests/facade_serde.rs"
-required-features = ["serde"]
-
-# The "Agent workflow" acceptance test: mounts the counter
-# template's tree through `flui::testing`, so it needs both the `testing`
-# feature (for `flui::testing` to exist at all) and `material` (the tree
-# includes an `ElevatedButton`). Without this entry a `--no-default-features
-# --features testing` build would still try to compile it and fail.
-[[test]]
-name = "agent_workflow"
-path = "tests/agent_workflow.rs"
-required-features = ["testing", "material"]
-
-# Feature-gated facade surfaces: the native escape hatch and capability crates.
-[[test]]
-name = "surface"
-path = "tests/surface.rs"
+name = "facade_it"
+path = "tests/main.rs"
 
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary

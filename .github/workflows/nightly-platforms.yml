@@ -156,7 +156,7 @@ jobs:
           cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation \
             --locked --no-fail-fast --test-threads 1
           cargo nextest run -p flui --no-default-features --run-ignored all \
-            --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
+            --test facade_it -E 'test(/^composited_layer_update_readback::/)' --locked --no-fail-fast --test-threads 1
 
       # The scenario's app builds offline from the workspace's lockfile.
       - name: cargo fetch
