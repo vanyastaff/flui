@@ -851,6 +851,22 @@ impl UiRuntime {
         pointer_event: &PointerEvent,
         drain_deferred: bool,
     ) -> Result<Option<InputSequenceId>, Box<dyn std::any::Any + Send>> {
+        // The build banner drawn over the scene takes a press inside it, which dismisses it, and
+        // the rest of that contact, before anything of the application sees them: no input
+        // epoch, focus modality, hit test or gesture. This is the one point every pointer event
+        // of every host reaches the window's widgets through, held input replayed and input an
+        // agent injected included, so an agent's tap dismisses the banner as a user's does. The
+        // input journal recorded the event when the window received it, before this. Every
+        // caller requests a frame after routing; the mark makes the frame that drops the banner
+        // run its segment.
+        match presentation.build_banner.consumes(surface, pointer_event) {
+            crate::build_overlay::Consumption::Passes => {}
+            crate::build_overlay::Consumption::Taken => return Ok(None),
+            crate::build_overlay::Consumption::Dismissed => {
+                presentation.mark_redraw_pending();
+                return Ok(None);
+            }
+        }
         let clock = presentation.clock();
         clock.stamp_input_epoch(clock.now());
         // The pointer's kind reaches hit testing, so an expanded hit area

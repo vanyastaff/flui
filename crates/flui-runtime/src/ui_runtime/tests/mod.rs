@@ -567,6 +567,12 @@ mod text_context;
 mod performance_overlay;
 
 // ========================================================================
+// The build banner a development tool reports is a node of its own after
+// the readout's, and a press on it is never the application's.
+// ========================================================================
+mod build_overlay;
+
+// ========================================================================
 // A face registered on the app's collection re-lays out every ui_runtime's text
 // at its next frame (ADR-0092 §10 step 3b).
 // ========================================================================

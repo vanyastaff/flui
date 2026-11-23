@@ -1,5 +1,6 @@
 //! How the owner answers the protocol's window methods (ADR-0238 §1): one [`Serve`] impl per
-//! method, and one place, [`UiRuntime::serve_window_call`], that runs any of them.
+//! method, or one [`Annotate`] impl per method that only annotates, and one place,
+//! [`UiRuntime::serve_window_call`], that runs any of them.
 //!
 //! Every call reaches the owner as one [`WindowCall`] in one command. What every method needs
 //! around its own work is written once here: the presentation looked up, a panic contained and
@@ -9,6 +10,17 @@
 //! ([`flui_protocol::for_each_window_method!`]), so a window method the table gains does not
 //! compile here until it has an impl: one that answers it, or one in `not_answered!` that
 //! refuses it `not_supported`.
+//!
+//! # Annotations
+//!
+//! A method whose effect is [`MethodEffect::Annotates`] changes only what the development tools
+//! draw over the window, and an observer may call it (ADR-0288 §8), so it must reach nothing
+//! else. Its row is dispatched to [`Annotate`], whose handler is given the presentation's
+//! [`BuildBanner`] and its parameters, never a [`ServeContext`], the runtime or the
+//! presentation; and `run_window_method` does not build for an annotating method (an assertion
+//! evaluated when it is instantiated, so `cargo build` reports it and `cargo check` does not), so
+//! a [`Serve`] impl of one is never run. The answer is sent before the frame the change owes is
+//! requested, under the same containment and stale-presentation rules as every other method.
 
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -16,15 +28,16 @@ use std::rc::Rc;
 
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
-use flui_protocol::method::{self, Method, WindowMethod};
+use flui_protocol::method::{self, Method, MethodEffect, WindowMethod};
 use flui_protocol::{
     act::ActOutcome, act::ActParams, act::ActionRequest, act::ActionabilityParams,
-    events::AnnouncementJournal, events::AnnouncementsParams, geometry::LogicalSize,
-    input::InputParams, input::InputPath, input::Journal, input::JournalParams, input::Released,
-    inspect::InspectParams, inspect::InspectReading, locator::LocateParams, locator::Locator,
-    locator::Matches, locator::Pick, locator::Target, motion::MotionParams, motion::MotionState,
-    session::Placement, session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId,
-    wait::WaitOutcome, wait::WaitParams,
+    build::BuildReportParams, events::AnnouncementJournal, events::AnnouncementsParams,
+    geometry::LogicalSize, input::InputParams, input::InputPath, input::Journal,
+    input::JournalParams, input::Released, inspect::InspectParams, inspect::InspectReading,
+    locator::LocateParams, locator::Locator, locator::Matches, locator::Pick, locator::Target,
+    motion::MotionParams, motion::MotionState, session::Empty, session::Placement,
+    session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId, wait::WaitOutcome,
+    wait::WaitParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
@@ -37,6 +50,7 @@ use super::agent_input;
 use super::agent_inspect::InspectTarget;
 use super::agent_journal;
 use super::commands::DrainReport;
+use crate::build_overlay::{BuildBanner, ReportRefused};
 use crate::presentation::PresentationState;
 
 /// How many matches a strict locator is resolved over: two say it is ambiguous, ten name the
@@ -119,7 +133,111 @@ pub(super) trait Serve: WindowMethod {
     ) -> Answer<Self::Output>;
 }
 
+/// Runs one row of the table's window methods: a row whose effect is `Annotates` through
+/// `run_annotation`, which needs an [`Annotate`] impl, and any other through
+/// `run_window_method`, which needs a [`Serve`] impl.
+macro_rules! run_row {
+    (Annotates, $runtime:expr, $ty:ident, $presentation:ident, $params:ident, $lease:ident, $reply:ident, $report:ident) => {
+        $runtime.run_annotation::<method::$ty>($presentation, $params, $reply, $report)
+    };
+    ($effect:ident, $runtime:expr, $ty:ident, $presentation:ident, $params:ident, $lease:ident, $reply:ident, $report:ident) => {
+        $runtime.run_window_method::<method::$ty>($presentation, $params, $lease, $reply, $report)
+    };
+}
+
+/// Whether this build's windows answer one row of the table's window methods: an annotating
+/// row always, since dispatch does not compile without its [`Annotate`] impl, and any other as
+/// its [`Serve`] impl says.
+macro_rules! answers_row {
+    (Annotates, $ty:ident) => {
+        true
+    };
+    ($effect:ident, $ty:ident) => {
+        <method::$ty as Serve>::ANSWERS
+    };
+}
+
+/// How the owner answers a window method that only annotates the window
+/// ([`MethodEffect::Annotates`]): from the presentation's annotations alone (module docs,
+/// "Annotations").
+pub(super) trait Annotate: WindowMethod {
+    /// Applies `params` to `banner`: the answer, and whether what the window draws changed.
+    fn annotate(
+        banner: &BuildBanner,
+        params: Self::Params,
+    ) -> Result<(Self::Output, bool), AgentError>;
+}
+
+impl Annotate for method::BuildReport {
+    /// Shows the report; `Succeeded` clears what is shown. A report the window refuses changes
+    /// nothing.
+    fn annotate(
+        banner: &BuildBanner,
+        params: BuildReportParams,
+    ) -> Result<(Empty, bool), AgentError> {
+        match banner.report(params.state) {
+            Ok(changed) => Ok((Empty::default(), changed)),
+            Err(ReportRefused::TooManyDiagnostics) => Err(AgentError::InvalidArgument {
+                reason: "a build report carries more diagnostics than a window shows \
+                         (flui_protocol::build::MAX_DIAGNOSTICS)",
+            }),
+            Err(ReportRefused::UnknownState) => Err(AgentError::InvalidArgument {
+                reason: "this app's windows do not know that build state",
+            }),
+        }
+    }
+}
+
 impl UiRuntime {
+    /// Runs the annotating method `M` on `params` in `presentation` and answers `reply`: the
+    /// handler is given the presentation's annotations and nothing else, and the frame a change
+    /// owes is requested once the answer is sent (module docs, "Annotations").
+    fn run_annotation<M: Annotate>(
+        &self,
+        presentation: PresentationId,
+        params: M::Params,
+        reply: Reply<M::Output>,
+        report: &mut DrainReport,
+    ) {
+        const {
+            assert!(
+                matches!(<M as Method>::EFFECT, MethodEffect::Annotates),
+                "only a method that annotates is served from the annotations alone"
+            );
+        };
+        let window = super::agent::window_of(presentation);
+        let Some(state) = self.presentations.get(presentation) else {
+            // Accepted earlier, but the presentation closed first.
+            reply.send(Err(AgentError::PresentationGone.into_error(window)));
+            report.dropped_stale += 1;
+            return;
+        };
+        // An annotation reports no element handle.
+        let reply = ReplySender::new(reply, window, super::agent::issued_of(state), |_, _| {});
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: an annotation runs contained so its caller is answered"
+        )]
+        let annotated = catch_unwind(AssertUnwindSafe(|| {
+            M::annotate(&state.build_banner, params)
+        }));
+        match annotated {
+            Ok(result) => {
+                report.invoked += 1;
+                let changed = matches!(result, Ok((_, true)));
+                send_reply(&reply, None, result.map(|(output, _)| output));
+                if changed {
+                    // The wake reaches the platform, which must not stand between the request
+                    // and its answer.
+                    self.request_redraw_for(state);
+                }
+            }
+            Err(payload) => {
+                self.fail_agent_job(&reply, None, Err(AgentError::Panicked), payload);
+            }
+        }
+    }
+
     /// Runs `M` on `params` in `presentation` and answers `reply`: see the module docs.
     fn run_window_method<M: Serve>(
         &self,
@@ -129,6 +247,14 @@ impl UiRuntime {
         reply: Reply<M::Output>,
         report: &mut DrainReport,
     ) {
+        // An annotating method is served from the annotations alone (`run_annotation`), never
+        // with the context a `Serve` handler gets.
+        const {
+            assert!(
+                !matches!(<M as Method>::EFFECT, MethodEffect::Annotates),
+                "a method that annotates is served by `Annotate`, not `Serve`"
+            );
+        };
         let window = super::agent::window_of(presentation);
         let Some(state) = self.presentations.get(presentation) else {
             // Accepted earlier, but the presentation closed first.
@@ -211,8 +337,8 @@ impl UiRuntime {
                 $(
                     let call = match call.open::<method::$ty>() {
                         Ok((params, reply)) => {
-                            return self.run_window_method::<method::$ty>(
-                                presentation, params, lease, reply, report,
+                            return run_row!(
+                                $effect, self, $ty, presentation, params, lease, reply, report
                             );
                         }
                         Err(call) => call,
@@ -232,7 +358,7 @@ pub fn window_answers(name: &str) -> bool {
     macro_rules! answers {
         ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
             match name {
-                $($name => <method::$ty as Serve>::ANSWERS,)+
+                $($name => answers_row!($effect, $ty),)+
                 _ => false,
             }
         };

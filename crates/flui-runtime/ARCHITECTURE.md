@@ -1056,9 +1056,16 @@ method's type (`serve_window_call`, generated from the same table) and serves it
 method's `Serve` impl in `agent_serve.rs`, which answers now or parks the reply and answers later.
 `run_window_method` does what every method shares: the presentation lookup, panic containment,
 the record of issued handles and the conversion of an `AgentError` to the protocol's
-`ErrorObject` with its handle. A table method this runtime does not serve answers
+`ErrorObject` with its handle. A row whose effect is `Annotates` (`build.report`) takes another
+route: the dispatch sends it to its `Annotate` impl through `run_annotation`, whose handler is
+handed the presentation's `BuildBanner` and its parameters and nothing else (no `ServeContext`,
+runtime or presentation), under the same lookup, containment and error conversion, and the frame
+a change owes is requested once the answer is sent. `run_window_method` asserts at compile time
+that its method does not annotate (a post-monomorphization error, so a build reports it and
+`cargo check` does not). A table method this runtime does not serve answers
 `not_supported`, and `window_answers` lists the ones it does, so a session advertises only what
-it serves; a method added to the table without a `Serve` impl does not compile. A read projects the pipeline's semantics owner
+it serves; a method added to the table without a `Serve` impl, or an annotating one without an
+`Annotate` impl, does not compile. A read projects the pipeline's semantics owner
 as it stands after the last committed frame (`flui_semantics::SemanticsOwner::read_wire`); an
 action is resolved against that same tree and dispatched through
 `PresentationState::dispatch_semantics_action`, the path an assistive technology's action
@@ -1295,8 +1302,11 @@ dispatch over the protocol's table are the session's. Requests run in order, one
 Events are taken between answers, in turn from each stream, while fewer than 64 lines wait; past
 1024 waiting lines the client is not reading and the conversation closes. One conversation holds
 the driver's seat at a time: a hello naming no role, or `driver`, takes it, a second is refused
-`not_driver`, and an observer reads and subscribes beside it and is refused `not_driver` when it
-acts (ADR-0288 §8). The driver's obligation runs once, contained, when the driver's conversation
+`not_driver`, and an observer reads, subscribes and annotates beside it: it may call a method
+whose effect is `read_only` or `annotates`, and is refused `not_driver` for any other
+(`dispatch::may_call`, ADR-0288 §8). A timeout answers an annotating method as it answers a read,
+retry `soon`: the window keeps only the last annotation, so a resend shows what the queued one
+does. The driver's obligation runs once, contained, when the driver's conversation
 is dropped while the service is not stopped. A waker the session registers is woken by the seam
 after the answer or event is in place (`flui_view` §"The development-agent hook lives here too"); the registry wakes
 it when a window opens and when the service stops, after its lock is released.
@@ -1341,6 +1351,35 @@ over the presentation clock's `FrameSnapshot` ring, the window its latency
 percentiles already use: frame time is segment start to submit, on the frame
 clock, and an idle gap longer than `FRAME_RUN_GAP` starts a new run instead of
 counting as one slow frame. There is no second, wall-clock frame window.
+
+### The debug overlays are nodes of their own after the frame node
+
+**Rule.** The scene's root slots the pipeline's frame node, then the performance overlay's node
+while it is on, then the build banner's while a development tool's report shows one
+(`presentation_scene`). Each overlay is one chunk under a clip to its bounds, under the
+device-pixel-ratio scale when there is one, its labels shaped through the UI runtime's
+`TextContext`; content equal to what the version shows, at the same fonts and scale, records
+nothing and damages nothing (`OverlayContent`). The readout changes only with frames that paint;
+a banner that changed is published on a frame whose pipeline paints nothing, as a patch of its
+node and the root, so no boundary of the pipeline repaints for it.
+
+The banner (`build_overlay`) is the presentation's `BuildBanner`, which `build.report` alone
+writes: a chip in the top-right corner while a build runs, a panel along the bottom with the
+error count, one line per diagnostic cut to the panel's width, and "Tap to dismiss" when one
+failed, laid out from the surface's logical size and kept clear of the performance overlay's
+bounds; a surface without room for it shows none. A report with more than `MAX_DIAGNOSTICS`
+diagnostics is refused `invalid_argument` and changes nothing, an equal one asks for no frame, and
+`Succeeded` clears it. A pointer down inside the bounds the last frame drew it at dismisses it,
+and `route_pointer_event_entered`, the one point every host's pointer input reaches the window's
+widgets through (held input replayed and agent-injected input included), takes that down and the
+rest of its contact, to its up or cancel, before the gesture binding: the application sees none
+of it, and the input journal still records it as received. A new down of that pointer before
+its end arrived starts a contact judged afresh.
+
+**Why.** The banner is the development tools', not the application's: an observer may report it
+(ADR-0288 §8), so it lives where nothing of the application reads it, beside the overlay that
+already draws over every frame. Pinned by `build_overlay_matrix`
+(`src/ui_runtime/tests/build_overlay.rs`) and `build_overlay`'s unit tests.
 
 
 ### Deterministic execution preserves concurrent admission during compaction

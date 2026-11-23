@@ -430,7 +430,8 @@ impl Session {
             self.refuse(&Line::answer(id, Err(dispatch::not_supported(method))));
             return;
         }
-        // An observer reads and subscribes; acting is the driver's (ADR-0288 §8).
+        // An observer reads, subscribes and annotates; changing the app is the driver's
+        // (ADR-0288 §8).
         if !self
             .role
             .is_some_and(|role| dispatch::may_call(role, method))
