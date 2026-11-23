@@ -79,7 +79,7 @@ fn feature_probe(features: Vec<FontFeature>) {
     let style = TextStyle {
         font_family: Some("FLUI Probe Arabic".into()),
         font_size: Some(32.0),
-        font_features: features,
+        font_features: features.into(),
         ..TextStyle::default()
     };
     let painter = styled_probe(&fonts, text, style);
@@ -136,7 +136,7 @@ fn weighted_variation_coords(
         TextStyle {
             font_family: Some("FLUI Probe Variable".into()),
             font_weight: weight,
-            font_variations: variations,
+            font_variations: variations.into(),
             ..TextStyle::default()
         },
     );
@@ -399,7 +399,7 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             TextStyle {
                 font_family: Some("FLUI Probe Variable".into()),
                 font_weight: Some(weight),
-                font_variations: axes,
+                font_variations: axes.into(),
                 ..TextStyle::default()
             },
         );

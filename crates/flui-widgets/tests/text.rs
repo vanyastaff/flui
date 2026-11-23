@@ -664,7 +664,7 @@ pub(crate) fn an_icon_theme_shadow_and_opacity_paint() {
         let mut theme = IconThemeData::default();
         theme.color = color;
         theme.opacity = opacity;
-        theme.shadows = Some(vec![shadow]);
+        theme.shadows = Some([shadow].into());
         let view = IconTheme::new(
             theme,
             crate::media_query_fields::StaticChild {

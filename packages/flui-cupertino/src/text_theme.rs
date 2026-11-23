@@ -28,7 +28,7 @@
 
 use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
 use flui_sdk::painting::styling::Color;
-use flui_sdk::painting::typography::{FontFamilyFallback, FontWeight, TextStyle};
+use flui_sdk::painting::typography::{FontFamilyName, FontWeight, SharedSlice, TextStyle};
 use flui_sdk::view::prelude::BuildContext;
 
 use crate::colors::{CupertinoColors, CupertinoDynamicColor};
@@ -144,7 +144,7 @@ fn default_date_time_picker_text_style() -> TextStyle {
 
 /// Named, documented fallback chain for `'CupertinoSystemText'` — see the
 /// module doc's "Font family" section.
-fn system_text_fallback() -> FontFamilyFallback {
+fn system_text_fallback() -> SharedSlice<FontFamilyName> {
     [
         "-apple-system",
         "system-ui",
@@ -159,7 +159,7 @@ fn system_text_fallback() -> FontFamilyFallback {
 /// Same fallback chain as [`system_text_fallback`] — the Text/Display split
 /// exists only because San Francisco ships as two optical sizes; a family
 /// fallback chain has no such split to mirror.
-fn system_display_fallback() -> FontFamilyFallback {
+fn system_display_fallback() -> SharedSlice<FontFamilyName> {
     system_text_fallback()
 }
 
