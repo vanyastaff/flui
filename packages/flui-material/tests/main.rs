@@ -305,6 +305,10 @@ fn action_component_contracts() {
             list_tile::merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button,
         ),
         (
+            "list_tile::merge semantics over a tile and radio clicks the radio",
+            list_tile::merge_semantics_over_a_tile_and_radio_clicks_the_radio,
+        ),
+        (
             "list_tile::whole tile tap fires from a point inside the content padding",
             list_tile::whole_tile_tap_fires_from_a_point_inside_the_content_padding,
         ),
@@ -862,6 +866,10 @@ fn theme_and_app_contracts() {
         (
             "theme::theme of panicking accessor returns ancestor theme data",
             theme::theme_of_panicking_accessor_returns_ancestor_theme_data,
+        ),
+        (
+            "theme::theme of shares the ancestor data instead of copying it",
+            theme::theme_of_shares_the_ancestor_data_instead_of_copying_it,
         ),
         (
             "theme::theme installs the focus ring style",

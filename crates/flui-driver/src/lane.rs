@@ -73,6 +73,18 @@ pub enum AccessibilityApi {
     AtSpi,
     /// The macOS Accessibility API (AX): native roles are `AX` role strings.
     Ax,
+    /// Android's accessibility nodes (`AccessibilityNodeInfo`, the tree TalkBack reads) as
+    /// UI Automator dumps them: native roles are class names.
+    UiAutomator,
+}
+
+impl AccessibilityApi {
+    /// Whether the API's tree names no identifier the app sets, so a lane reading it finds the
+    /// app's nodes by matching it to the app's own tree ([`Lane::read_tree`]'s `app`).
+    #[must_use]
+    pub fn matches_app_tree(self) -> bool {
+        matches!(self, Self::UiAutomator)
+    }
 }
 
 /// What a lane can do.
@@ -219,14 +231,17 @@ pub trait Lane: Send {
     fn send(&mut self, event: &OsEvent) -> Result<()>;
 
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
-    /// nodes (ADR-0095 §4): what a screen reader reads of the app.
+    /// nodes (ADR-0095 §4): what a screen reader reads of the app. `app` is the window's tree as
+    /// the app published it when the lane's API [matches the app's tree](AccessibilityApi::matches_app_tree)
+    /// (Android's, whose OS tree names no identifier), and an empty tree for the others, which read
+    /// without it.
     ///
     /// # Errors
     ///
     /// [`Error::NotSupported`] naming `os_accessibility_tree` for a lane that reads none, which is
     /// the default.
-    fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
-        let _ = placement;
+    fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
+        let _ = (placement, app);
         Err(Error::not_supported(
             "os_accessibility_tree",
             format!("the {} lane reads no OS accessibility tree", self.name()),
@@ -240,7 +255,8 @@ pub trait Lane: Send {
     /// # Errors
     ///
     /// [`Error::NotSupported`] naming `os_invoke` for a lane that acts through no accessibility
-    /// API, which is the default; [`Error::NotFound`] when no element has the identifier.
+    /// API, which is the default, and for one that reads a tree but performs no action through it
+    /// (Android's); [`Error::NotFound`] when no element has the identifier.
     fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
         let _ = (placement, identifier);
         Err(Error::not_supported(

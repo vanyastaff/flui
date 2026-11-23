@@ -39,7 +39,7 @@ Rust-разработчик, который раньше не видел FLUI:
 | Ворота | Где правило и проверка |
 |---|---|
 | Рендер | ворота G1–G7 спеки [`render-scaling`](../render-scaling/requirements.md); пока у ADR-0304, ADR-0305 или ADR-0306 есть пункт в [`docs/gaps.md`](../../../gaps.md#accepted-adr-sections-not-built-yet), ворота не пройдены |
-| Цена контрола | запись [An interactive widget costs eighteen elements](../../../gaps.md#an-interactive-widget-costs-eighteen-elements) закрыта: каталоги Material и Cupertino на узле ADR-0322, сценарий `perf_raw_button_over_text` держит её числа |
+| Цена контрола | каталоги Material и Cupertino на узле ADR-0322, сценарий `perf_raw_button_over_text` держит числа из «Decision drivers» ADR-0322 |
 | Снимок публичного API | R3 |
 | Тестовый API авторов | R19 |
 | Имена крейтов | R21 |
@@ -190,8 +190,8 @@ GPU device lost, исчерпание ID) и неподдерживаемую п
 - Hot reload через патчер кода (ADR-0311 §7) и `flui run --hot` как обещание релиза.
 - Транспорты агента на мобильных и в браузере как обещание релиза; стабильный протокол драйвера.
 - Многооконность сверх одного окна приложения как стабильный API (R24).
-- Полный паритет Material 3 и Cupertino; новые семейства виджетов (правило ворот в
-  `AGENTS.md`); CPU-рендерер.
+- Полный паритет Material 3 и Cupertino; новые семейства виджетов;
+  CPU-рендерер.
 - Стабильность API после 0.x: релиз версии `0.N`, semver по правилам 0.x.
 
 ## Пересмотр решений

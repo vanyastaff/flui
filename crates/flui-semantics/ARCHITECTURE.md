@@ -177,10 +177,13 @@ by `more_specific_role`: an authored structural role (tab, list item, dialog, â€
 interactive kind, then a checkable role, then `Button`, then link, text field, slider or other
 value control, then content (image, heading, a text-level role, or a read-only value such as
 `Meter` or `ProgressBar`); on a tie the receiver keeps its own. States merge by their type's
-rule: `Mixed` over `On` over `Off`, and every other state (a yes/no state, `Invalid`,
+rule: every state (`toggled`, a yes/no state, `Invalid`,
 `Current`, `HasPopup`, `AutoComplete`, an orientation) as the receiver declares it, else as
 the contributor does, so a disabled tile is not enabled by a part that declares itself enabled
-and a field that passed validation is not failed by a part. `Invalid::False` is a declaration:
+and a field that passed validation is not failed by a part; a forced merge then takes `toggled`
+and `selected` from the part that owns the action changing them, and `enabled` from the part
+whose handler its click runs (below).
+`Invalid::False` is a declaration:
 two fields that each validated form two nodes (`a_passed_validation_counts_as_declared`).
 The roles `Generic` and `Presentation` declare a node to mean nothing: it publishes as a
 container, and its label does not make it static text as a node without a role would.
@@ -189,6 +192,25 @@ A scrollable's metrics (position, axis, extents) are one group: either side decl
 conflicts with the other declaring any, and a forced merge keeps the receiver's group whole or
 takes the contributor's whole. A node's place in a set merges per field ([Where a node sits in a
 set, a tree and a table](#where-a-node-sits-in-a-set-a-tree-and-a-table)).
+A standard action changes one group of a node's attributes, its subject (`ActionSubject` in
+`src/action_subject.rs`): `Click` changes `toggled`, else `selected` (each where the published role
+announces it), else a click-only
+`expanded`, else nothing the node publishes; `Expand` and `Collapse` change `expanded`; the step
+actions change the numeric range, else the scroll group; the scroll actions the scroll group;
+`SetValue` the value, the text-selection actions the text, `Focus`/`Blur` the focus states, the
+tooltip actions the tooltip. An ordinary merge never has two suppliers for one group or one
+action, so it takes every action it is offered. A forced merge (`SemanticsConfiguration::forced_merge`)
+first reads every part it will absorb and plans each subject's owner: the part whose declaration
+the node publishes (for `toggled` and `selected`, the part whose role the node publishes when it
+declares the state, else the first that does). An owner that acts on its subject (registers one
+of its actions, a blocked one included, or declares itself disabled) supplies every handler of
+it and nobody else does, so a scrollable at its end offers no further step and a blocked or
+disabled radio no click; any other action keeps the first handler in fold order, the receiver's
+own first. The node's `enabled` is that of the part whose handler its click runs, where that part
+declares one; a click-only disclosure is one that registers `Click`, so a header disabled into
+registering nothing takes no click from a button beside it. A fold records the
+subjects whose owner acted but offered nothing, so the fold one level up reads it the same way
+(ADR-0392).
 A node offers any number of custom actions, each added with its label and
 its own handler, and two sets of them share a node. Their `CustomActionId` is the action's place
 in the node's list: a merge appends the contributor's after the receiver's and so renumbers them,
@@ -225,7 +247,10 @@ reader stop on the tile inside it.
 and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
 `custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
 `custom_actions_run_their_own_handler_until_stale` in `owner.rs`;
-`merged_custom_actions_each_reach_their_own_handler` in `crates/flui-widgets/tests/semantics.rs`;
+`merged_custom_actions_each_reach_their_own_handler` and
+`a_merged_action_runs_the_control_whose_state_it_announces` in `crates/flui-widgets/tests/semantics.rs`;
+`a_forced_merge_plans_each_action_by_its_owner`, `an_ordinary_merge_keeps_its_actions` and
+`every_action_names_its_subject` in `flui-semantics`;
 `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
 `packages/flui-material/tests/list_tile.rs`; `a_mounted_radio_announces_as_a_radio_button` in
 `packages/flui-material/tests/radio.rs`; `compatibility_rules_for_modeled_fields` for the
@@ -357,7 +382,9 @@ sets it) advertises `Expand` while collapsed and `Collapse` while
 expanded, never both. It advertises the transition when it registers the matching discrete
 action; when it registers neither discrete action but has a click handler (the shape
 `Semantics::new().expanded(false).on_click(..)` builds), it advertises the transition too, and
-`SemanticsOwner::resolve_action` routes that request to the click handler as `Click`. The owner
+`SemanticsOwner::resolve_action` routes that request to the click handler as `Click`. A forced merge whose click changes a
+merged `toggled` or `selected` drops a click-only `expanded`, so one click never also reads as a
+disclosure (ADR-0392). The owner
 admits an `Expand` or `Collapse` request, to a discrete handler or the click fallback alike,
 only in the direction the node's current state allows (`disclosure_transition` in
 `src/action.rs`); `tap_disclosure_transition` there is the one fallback predicate both
@@ -628,7 +655,7 @@ known sets above an unknown set, or above a member numbered for another set, are
 Anything past what the adapters convert to an `i32` (a position, a level, a count, a row, a
 column, a span) is not published either.
 
-**Reach.** `accesskit_windows` 0.35.1 reads the position and size, a level and a sort into UI
+**Reach.** `accesskit_windows` 0.35.2 reads the position and size, a level and a sort into UI
 Automation (`PositionInSet`, `SizeOfSet`, `Level`, `AriaProperties`), and not a table's counts,
 a cell's indexes and spans or a selection rule (upstream marks tables TODO). Those are published
 and pinned through `accesskit_consumer`; a UI Automation fixture for them waits for the adapter.

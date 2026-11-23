@@ -418,35 +418,6 @@ impl SemanticsAction {
     pub const fn value(self) -> u64 {
         1 << self as u8
     }
-
-    /// Returns whether this action is a scroll action.
-    #[must_use]
-    pub const fn is_scroll_action(self) -> bool {
-        matches!(
-            self,
-            Self::ScrollLeft
-                | Self::ScrollRight
-                | Self::ScrollUp
-                | Self::ScrollDown
-                | Self::ScrollIntoView
-                | Self::SetScrollOffset
-        )
-    }
-
-    /// Returns whether this action edits or selects text.
-    #[must_use]
-    pub const fn is_text_action(self) -> bool {
-        matches!(
-            self,
-            Self::SetTextSelection | Self::ReplaceSelectedText | Self::SetValue
-        )
-    }
-
-    /// Returns whether this action moves keyboard focus.
-    #[must_use]
-    pub const fn is_focus_action(self) -> bool {
-        matches!(self, Self::Focus | Self::Blur)
-    }
 }
 
 impl std::fmt::Display for SemanticsAction {

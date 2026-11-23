@@ -126,25 +126,13 @@ pub(crate) trait StateMerge: Copy {
     fn merge(receiver: Option<Self>, contributor: Option<Self>) -> Option<Self>;
 }
 
-impl StateMerge for Toggled {
-    /// The more informative state wins: `Mixed`, then `On`, then `Off`.
-    fn merge(receiver: Option<Self>, contributor: Option<Self>) -> Option<Self> {
-        let rank = |state: Self| match state {
-            Self::Off => 0,
-            Self::On => 1,
-            Self::Mixed => 2,
-        };
-        match (receiver, contributor) {
-            (Some(a), Some(b)) => Some(if rank(b) > rank(a) { b } else { a }),
-            (a, b) => a.or(b),
-        }
-    }
-}
-
-/// The states whose forced merge keeps the receiver's declaration, else the
-/// contributor's: the node a forced merge builds is the receiver, so a
-/// disabled tile is not enabled by a part that declares itself enabled, and a
-/// field that passed validation is not marked failed by a part.
+/// The states a forced merge keeps from the receiver, else takes from the
+/// contributor: the node a forced merge builds is the receiver, so a disabled
+/// tile is not enabled by a part that declares itself enabled, and a field
+/// that passed validation is not marked failed by a part. `Toggled` is one
+/// control's: the receiver's, else the first contributor's, unless the
+/// contributor brings the role the node publishes (ADR-0392 §2, applied in
+/// `SemanticsConfiguration::absorb`).
 macro_rules! receiver_first {
     ($($state:ty),+) => {
         $(impl StateMerge for $state {
@@ -155,7 +143,15 @@ macro_rules! receiver_first {
     };
 }
 
-receiver_first!(bool, Invalid, Current, HasPopup, AutoComplete, Axis);
+receiver_first!(
+    bool,
+    Toggled,
+    Invalid,
+    Current,
+    HasPopup,
+    AutoComplete,
+    Axis
+);
 
 /// Every state one node declares.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

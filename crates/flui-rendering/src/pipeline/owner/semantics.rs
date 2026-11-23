@@ -1065,6 +1065,14 @@ fn merge_child_fragments<'f>(
     let conflicts = (!suppress_conflicts).then(|| {
         mark_configuration_conflicts(config, &fragments, names_a_control, fragments.allocator())
     });
+    // A forced merge plans who supplies each action from every part it will
+    // absorb before it absorbs one (ADR-0392 §2); an ordinary one needs no plan.
+    let mut fold = if suppress_conflicts {
+        let receiver_has_text = config.text_content().is_some();
+        Fold::Forced(config.forced_merge(forced_parts(receiver_has_text, &fragments)))
+    } else {
+        Fold::Ordinary(config)
+    };
     let scratch = *fragments.allocator();
     let total = fragments.len();
     // Allocated on the first child that needs a list of its own: an absorbed pending node's
@@ -1075,6 +1083,7 @@ fn merge_child_fragments<'f>(
 
     // The iterator holds the fragments' buffer, below the conflict marks: it is dropped after
     // them, so the arena frees both in the reverse order it handed them out.
+    let mut has_text = fold.receiver().text_content().is_some();
     let mut drained = fragments.into_iter();
     for (index, fragment) in drained.by_ref().enumerate() {
         let rest = total - index - 1;
@@ -1090,14 +1099,13 @@ fn merge_child_fragments<'f>(
                 if conflicts
                     .as_ref()
                     .is_some_and(|places| places[index].forms_node())
-                    || (pending.config.text_content().is_some()
-                        && config.text_content().is_some()) =>
+                    || keeps_its_own_text(&mut has_text, &pending.config) =>
             {
                 make_room(&mut children, 1 + rest);
                 children.push(pending.form());
             }
             SemanticsFragment::Pending(pending) => {
-                config.absorb(&pending.config);
+                fold.absorb(&pending.config);
                 absorbed_inside &= pending.absorbed_inside && inside(&pending.rect, host);
                 if children.capacity() == 0 {
                     // Nothing is listed yet, so `children` holds no memory: take this list over
@@ -1111,6 +1119,7 @@ fn merge_child_fragments<'f>(
             }
         }
     }
+    let config = fold.finish();
     drop(conflicts);
     drop(drained);
 
@@ -1122,6 +1131,70 @@ fn merge_child_fragments<'f>(
         );
     }
     (children, absorbed_inside)
+}
+
+/// How `merge_child_fragments` absorbs its pending fragments.
+enum Fold<'c> {
+    /// Conflicting fragments form nodes, so each action has one supplier.
+    Ordinary(&'c mut SemanticsConfiguration),
+    /// `MergeSemantics`: every fragment is absorbed, by a plan.
+    Forced(flui_semantics::ForcedMerge<'c>),
+}
+
+impl<'c> Fold<'c> {
+    fn receiver(&self) -> &SemanticsConfiguration {
+        match self {
+            Self::Ordinary(config) => config,
+            Self::Forced(merge) => merge.receiver(),
+        }
+    }
+
+    fn absorb(&mut self, part: &SemanticsConfiguration) {
+        match self {
+            Self::Ordinary(config) => config.absorb(part),
+            Self::Forced(merge) => merge.absorb(part),
+        }
+    }
+
+    /// Ends the fold and hands the receiver back.
+    fn finish(self) -> &'c mut SemanticsConfiguration {
+        match self {
+            Self::Ordinary(config) => config,
+            Self::Forced(merge) => merge.finish(),
+        }
+    }
+}
+
+/// The configurations a forced fold absorbs, in fold order: every pending
+/// fragment but one [`keeps_its_own_text`] sends to a node of its own.
+fn forced_parts<'a>(
+    receiver_has_text: bool,
+    fragments: &'a [SemanticsFragment<'_>],
+) -> impl Iterator<Item = &'a SemanticsConfiguration> + Clone {
+    fragments
+        .iter()
+        .scan(receiver_has_text, |has_text, fragment| {
+            Some(match fragment {
+                SemanticsFragment::Formed(_) => None,
+                SemanticsFragment::Pending(pending) => {
+                    (!keeps_its_own_text(has_text, &pending.config)).then_some(&pending.config)
+                }
+            })
+        })
+        .flatten()
+}
+
+/// Whether `part` keeps a node of its own because the fold already holds a
+/// text: runs are the synthetic children of the one node declaring them, so
+/// a merge never drops a second text's runs for the first's (ADR-0214 §2).
+/// Otherwise the fold absorbs it, and `has_text` notes a text it brings.
+fn keeps_its_own_text(has_text: &mut bool, part: &SemanticsConfiguration) -> bool {
+    let text = part.text_content().is_some();
+    if text && *has_text {
+        return true;
+    }
+    *has_text |= text;
+    false
 }
 
 /// Makes room in `list` for `additional` more: exactly that much for its first allocation, which

@@ -65,6 +65,13 @@ path = "tests/main.rs"
 name = "perf"
 path = "tests/perf.rs"
 
+# Whole application scenarios timed on the UI thread; installs a counting
+# global allocator.
+[[bench]]
+name = "app_scenarios"
+path = "benches/app_scenarios.rs"
+harness = false
+
 [package.metadata.flui]
 tier = "pkg"
 tier-kind = "official"

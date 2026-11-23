@@ -357,8 +357,8 @@ The nested tests dominate the suite's wall-clock: tests that run a `cargo` or
 `compile_fail` suites (`flui-engine`, `flui-rendering`, `flui-painting`,
 `flui-view`'s `trybuild_ui`, `flui-widgets`' `routable_ui`), whose compiler
 output does not depend on the host; and `nested-cargo`, the `flui-cli`
-template tests (`cli_create::generated_*`) and every `flui::facade_consumer`
-test, which build a project with its own feature graph on the host. Locally,
+template tests (`cli_create::generated_*`) and every `facade_consumer::` test of `flui::facade_it`,
+which build a project with its own feature graph on the host. Locally,
 with their build caches cold, most take one to five minutes; the rest are
 quick. `.config/nextest.toml` names each group with one filter;
 `cargo nextest show-config test-groups` lists the members. Selecting by group needs nextest 0.9.133 or newer (the
@@ -714,6 +714,10 @@ cargo bench -p flui-engine
 
 Benchmark results are written under `target/criterion/` as HTML reports.
 
+`cargo bench -p flui-material --bench app_scenarios` is not a criterion bench:
+it times whole application scenarios and prints its own table (see
+[Phase counters and the perf baseline](#phase-counters-and-the-perf-baseline)).
+
 `cargo bench -p flui-widgets --bench signals_rebuilds -- --noplot`
 (`crates/flui-widgets/benches/signals_rebuilds.rs`) runs ADR-0074's go/no-go: `setState` against UI runtime-scoped signals on
 the same widget tree, printing a table of elements rebuilt per `RebuildReason` and
@@ -841,6 +845,32 @@ family that keeps state of a new kind (a controller, an overlay, a route)
 adds its rounds there, one settled and one dropped in flight. A leak a round
 finds and its change does not fix is held by a `#[should_panic]` test of its
 own, named in [`gaps.md`](gaps.md).
+
+The counts above hold one frame of a fixed tree or one control. What a user
+meets is a whole screen, and `packages/flui-material/benches/app_scenarios.rs`
+times those on the UI thread of a `HeadlessHost`: the start and first frames of
+a list screen over 10 000 tiles, a steady scroll and a screen-a-frame scroll
+through it, a screen of wrapped paragraphs started, scrolled and edited, a page
+pushed and popped through the `Router`, a form started and toggled, and an
+idle frame. `cargo bench -p flui-material --bench app_scenarios` prints, per
+scenario, the median and 90th percentile of one step and what the step asked of
+the heap; `FLUI_SCENARIO=<name>` runs one scenario (a name it does not know
+fails) and
+`FLUI_SCENARIO_SAMPLES=1` prints every step. Under
+`valgrind --tool=callgrind --toggle-collect='*scenario_measured*'` only the
+measured steps are counted, which is how a phase's share of a step is read.
+With `--features flui-testing/dhat` the bench records the stack of every
+allocation of each scenario through `flui_testing::heap::sites::SiteProfiler`
+and prints, after the scenario's figures, the twenty lines of FLUI code whose
+measured steps allocated most (the first frame below the allocator, the
+standard library and dependencies). The whole profile lands in
+`target/dhat/app_scenarios-<name>.json`, which DHAT's viewer (`dh_view.html`,
+from Valgrind or online) opens for whole stacks and lifetimes. A profiled run is
+many times slower, so its timings mean nothing; its counts equal those of a run
+without the feature. A start scenario mounts twelve times in one process, so what only the first
+mount pays (loading fonts) is one sample of the twelve. The bench asserts
+nothing and no job runs it: it is where a cost is found and a fix is measured,
+and what a fix changes is held by a test of its own or by a count above.
 
 `perf/size.toml` holds what an application costs before it does anything, and
 two CI jobs hold it on Linux x86_64. The `deps` job, on every PR, counts the
@@ -1182,7 +1212,7 @@ whose composition decision a subscriber is, not at the DAG's bottom.
 
 ## Agent workflow
 
-`tests/agent_workflow.rs` is the acceptance test for the agent workflow: evidence that an agent
+`tests/agent_workflow.rs` (a module of the facade's `facade_it` binary) is the acceptance test for the agent workflow: evidence that an agent
 (or a human, working the same way) can discover the public API, build a UI, inspect it two ways,
 drive an interaction through it, and assert the result, using only `flui::…`, the surface a
 consumer of the published crate has. It is `flui`'s own `tests/`, not `flui-testing`'s, for that
@@ -1367,7 +1397,7 @@ needs. One row per job:
 | `checks` | `cargo fmt --all --check`, `typos`, `taplo fmt --check`, the lychee line, the steps "Changelog fragments", "The MSRV everywhere is the toolchain's", "Every tests/*.rs of an autotests = false crate compiles" and "No two ADRs share a number", `actionlint`, `zizmor .` | each step runs even when one before it failed; CI installs every tool, so none is skipped |
 | `plan` | — | CI only: a shell step over the pull request's changed files decides the lane |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings`, then, on main only, `cargo clippy -p flui-native --locked --no-default-features [--features x11\|wayland\|testing] [--all-targets] -- -D warnings` | the last lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`; from a Windows or macOS checkout add `--target x86_64-unknown-linux-gnu` |
-| `test` | after `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`: the workspace nextest run above; `WAYLAND_DISPLAY='' FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) \| test(/^wayland_window::/))'`; the same without `xvfb-run` and with `-E 'test(/^wayland_window::/)'` against a Weston; `-E 'test(/^wayland_window::optional::/)'` with `--test-threads 1` under a headless sway (`FLUI_REQUIRE_COMPOSITOR`); with `FLUI_REQUIRE_GPU=1` and `WGPU_BACKEND=vulkan`, then `gl` (main only), `cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1` and `cargo nextest run -p flui --no-default-features --run-ignored all --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1`; then `cargo build --workspace --exclude flui-native --all-targets --locked --features flui/material,flui/cupertino,flui/native` (main only) | the GPU steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native legs need `xvfb-run`, Weston and sway (Linux) |
+| `test` | after `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`: the workspace nextest run above; `WAYLAND_DISPLAY='' FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) \| test(/^wayland_window::/))'`; the same without `xvfb-run` and with `-E 'test(/^wayland_window::/)'` against a Weston; `-E 'test(/^wayland_window::optional::/)'` with `--test-threads 1` under a headless sway (`FLUI_REQUIRE_COMPOSITOR`); with `FLUI_REQUIRE_GPU=1` and `WGPU_BACKEND=vulkan`, then `gl` (main only), `cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1` and `cargo nextest run -p flui --no-default-features --run-ignored all --test facade_it -E 'test(/^composited_layer_update_readback::/)' --locked --no-fail-fast --test-threads 1`; then `cargo build --workspace --exclude flui-native --all-targets --locked --features flui/material,flui/cupertino,flui/native` (main only) | the GPU steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native legs need `xvfb-run`, Weston and sway (Linux) |
 | `test-nested` | the nested-cargo nextest line above | generated projects and facade consumers, beside `test` and `test-trybuild`; main only |
 | `test-trybuild` | `cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --features flui/material,flui/cupertino,flui/native -E 'group(trybuild)'`, then `cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast` | compile-fail suites in three shards (`facade`, `core`, `view`) on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; a shard adds its `--test` list and its binaries' `binary_id` filter from the job's matrix, so it builds only its own test targets with the whole run's features; locally the command above runs every suite |
 | `test-features` | the job's `cargo nextest run` lines | — |

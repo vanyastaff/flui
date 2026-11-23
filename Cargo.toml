@@ -245,6 +245,10 @@ slab = "0.4.12"
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+# Heap profiles by allocation site for benches and perf tests (flui-testing's `dhat`).
+dhat = "0.3"
+# Symbols of the addresses a DHAT profile records, resolved in the process that recorded them.
+backtrace = "0.3.77"
 # JSON schemas for the agent-protocol vocabulary (flui-protocol's `schemars`
 # feature) and the desktop agent server's tool parameters.
 schemars = "1.0"
@@ -389,7 +393,7 @@ wgpu = { version = "30.0", default-features = false, features = ["wgsl", "naga-i
 # `wayland-protocols` carries `zxdg_output_v1`, `xdg-decoration` and
 # `xdg-foreign` under `unstable`, and
 # `wp_fractional_scale_v1` and `wp_color_management_v1` under `staging`.
-x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+x11rb = { version = "0.14", default-features = false, features = ["randr"] }
 # COMPOUND_TEXT, the encoding X Input Method servers send text in, for the
 # native X11 host's text input where no input method answers on D-Bus. The XIM
 # wire format itself is flui-native's own (`text::linux::x11::xim::wire`).
@@ -438,7 +442,7 @@ glam = { version = "0.34", default-features = false, features = ["std", "f64"] }
 kurbo = "0.13"
 # XML of the Material animated icons' SVG key frames, read by flui-material's
 # `tests/animated_icon_data.rs` when it regenerates their constants.
-roxmltree = "0.20"
+roxmltree = "0.21"
 # Private sRGB/Oklab conversions; FLUI owns admission and interpolation policy.
 color = "0.3.3"
 # bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.
@@ -734,10 +738,13 @@ unused_async_trait_impl = "allow"
 [package]
 publish = ["crates-io"]
 name = "flui"
-# What the published archive carries. Without this list `cargo package`
-# archived the whole checkout root — docs/, tooling, CI, editor and
-# research directories, 666 files — none of which a consumer compiles.
-# Nested packages under examples/ are excluded by Cargo on their own.
+# The integration suites compile as modules of ONE test binary (`tests/main.rs`),
+# declared under `[[test]]` below; `thread_boundary_ui` and `wasm_consumer` are
+# targets of their own.
+autotests = false
+# What the published archive carries: the sources a consumer compiles and the
+# tests and examples that ship with them. Nested packages under examples/ are
+# excluded by Cargo on their own.
 # Patterns are gitignore-style, so each is anchored with a leading `/`: an
 # unanchored `README.md` would also match every README under the ignored
 # `.flutter/` reference mirror, which `include` otherwise overrides.
@@ -825,17 +832,14 @@ flui-interaction = { workspace = true }
 # === Platform (for examples) ===
 flui-native = { workspace = true }
 
-# === Test support (the widget harness `flui_testing::widgets` that
-# tests/agent_workflow.rs drives) ===
+# === Test support (`tests/facade_smoke.rs` lays out trees with the widget harness
+# `flui_testing::widgets`) ===
 flui-testing = { workspace = true }
 # tests/facade_serde.rs round-trips a value from each crate `flui/serde` reaches.
 serde = { workspace = true }
 serde_json = { workspace = true }
 # tests/thread_boundary_ui.rs: the compile-fail suite for UI runtime-bound handles.
 trybuild = { workspace = true }
-
-# NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
-# facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
 # === Engine (for GPU examples and the readback test) ===
 flui-engine = { workspace = true, features = ["dx12"] }
@@ -887,8 +891,8 @@ single-instance = ["flui-app/single-instance"]
 
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
-# (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
-# `PointerKindSet`) and the second haptic tier (`flui::platform::haptics`,
+# (`flui::platform::input_capabilities`: `InputCapabilities` and its builder)
+# and the second haptic tier (`flui::platform::haptics`,
 # `flui::interaction::HapticsHandle`), until every backend passes its
 # conformance rows (ADR-0213 §5, ADR-0210 §9); `flui-sdk` has the matching
 # feature for packages. The platform crates build the types regardless.
@@ -904,8 +908,8 @@ unstable-input = []
 native = ["flui-app/native"]
 
 # === Windows beyond the first ===
-# Additive and unstable. Publishes `flui::open_window`, `flui::open_secondary_window`
-# and `flui::WindowPolicy` (and their `flui::app` paths) until ADR-0091 §3–§5 are
+# Additive and unstable. Publishes `flui::app::open_window`, `flui::app::open_secondary_window`
+# and `flui::app::WindowPolicy` until ADR-0091 §3–§5 are
 # built: a `Shared` window is refused and an open answers only that it was
 # admitted (`docs/gaps.md`). Without it an application has one window.
 unstable-windows = ["flui-app/unstable-windows"]
@@ -937,40 +941,16 @@ serde = [
     "flui-view/serde",
 ]
 
-# The facade declares no other features. Earlier revisions carried commented
-# blocks for parallel / profiling / tracy / devtools / memory-profiler /
-# full — all referencing crates or features that do not exist (`flui_core`,
-# `flui-engine/devtools`). A capability that does not exist gets no feature
-# stub here; add the feature in the same change that implements it.
-
 # ═══════════════════════════════════════════════════════════════════════════════
-# Feature-gated targets
+# Test targets
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Tests are otherwise auto-discovered; these entries exist only to attach
-# `required-features`. Without them a `--no-default-features` build would still
-# try to compile the test and fail — the exact false signal the isolated feature
-# builds exist to catch.
-
+# The integration suites compile as modules of ONE binary (`tests/main.rs`); a
+# suite that needs a feature is `#[cfg(feature = …)]` there, so a build without
+# the feature compiles the rest instead of failing on it.
 [[test]]
-name = "facade_serde"
-path = "tests/facade_serde.rs"
-required-features = ["serde"]
-
-# The "Agent workflow" acceptance test: mounts the counter
-# template's tree through `flui::testing`, so it needs both the `testing`
-# feature (for `flui::testing` to exist at all) and `material` (the tree
-# includes an `ElevatedButton`). Without this entry a `--no-default-features
-# --features testing` build would still try to compile it and fail.
-[[test]]
-name = "agent_workflow"
-path = "tests/agent_workflow.rs"
-required-features = ["testing", "material"]
-
-# Feature-gated facade surfaces: the native escape hatch and capability crates.
-[[test]]
-name = "surface"
-path = "tests/surface.rs"
+name = "facade_it"
+path = "tests/main.rs"
 
 # UI-runtime-bound handles refuse `std::thread::spawn` (compile-fail fixtures under
 # `tests/ui/thread_boundary/`), and the facade hides the unstable input vocabulary

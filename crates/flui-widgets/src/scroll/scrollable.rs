@@ -1873,8 +1873,12 @@ fn scroll_semantics(
         semantics = semantics.label(label);
     }
     // AccessKit only admits native value writes on adjustable control roles.
+    // The slider is a merge boundary: under a `MergeSemantics` it stays the
+    // scroll view's child node, as it is outside one, rather than folding its
+    // numeric range into a `ScrollView`, which ARIA gives no range.
     let adjustment = Semantics::new()
         .container(true)
+        .merge_boundary(true)
         .explicit_child_nodes(true)
         .role(flui_semantics::SemanticsRole::Slider)
         .label(position_label)

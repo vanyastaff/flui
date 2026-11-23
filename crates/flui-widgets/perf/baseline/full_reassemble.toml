@@ -2,8 +2,8 @@
 # counts, not timings. One scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
-allocated_bytes = 212648
-allocations = 845
+allocated_bytes = 212184
+allocations = 842
 builds_run = 278
 damage_full = 0
 damage_rects = 1

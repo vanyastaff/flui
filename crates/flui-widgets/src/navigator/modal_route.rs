@@ -437,13 +437,21 @@ impl ModalInner {
 // ModalScope — the animation-driven half of the entry
 // ============================================================================
 
-/// The modal scope, reduced to the one job FLUI can do today: rebuild the page and
-/// its transitions when either animation ticks.
+/// The modal scope: rebuilds the route's transitions when either animation
+/// ticks, around a page it builds once.
 ///
-/// The page is not cached across ticks, so only the transitions would need to
-/// rebuild per frame; but FLUI's `BoxedView` is not cloneable, so the page builder
-/// re-runs on every tick. Element reconciliation preserves the page's `ViewState`,
-/// so this is a **cost**, not a state difference.
+/// The page and the scopes around it are built into one [`BoxedView`] when the
+/// scope first builds and again only when the overlay entry hands it a new
+/// `ModalScope` (Flutter's `_ModalScopeState._page`, dropped on
+/// `changedExternalState`). A tick offers the transitions that same view, so
+/// the page's element finds it unchanged and builds nothing below it. A page
+/// builder that reads an animation's value therefore reads it once: a page that
+/// follows the animation does it with an [`AnimatedView`] of its own, as in
+/// Flutter.
+///
+/// The builder runs in a `RoutePage` element below the route's subtree anchor,
+/// hero, pop-entry and local-history scopes, so its `ctx` finds them, and the
+/// dependencies the page registers rebuild the page alone.
 ///
 /// An [`AnimatedView`] — the framework subscribes to
 /// [`listenable`](AnimatedView::listenable) on mount and unsubscribes on unmount.
@@ -527,28 +535,33 @@ impl StatefulView for ModalScope {
     type State = ModalScopeState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        ModalScopeState
+        ModalScopeState { page: None }
     }
 }
 
-/// Stateless beyond the subscription `AnimatedView` manages.
-pub(crate) struct ModalScopeState;
+/// The page the scope built for its current `ModalScope`, offered unchanged to
+/// every build a tick asks for.
+pub(crate) struct ModalScopeState {
+    page: Option<BoxedView>,
+}
 
 impl ViewState<ModalScope> for ModalScopeState {
-    /// Builds the transitions around the page.
+    /// Builds the page and its scopes for this `ModalScope`: before the first
+    /// build, and again after the overlay entry hands the scope a new one
+    /// (`apply_view` runs then, and not before a build a tick asked for).
     ///
     /// The [`RouteSubtreeAnchor`] wraps **only** the page, inside the transitions.
     /// Anchoring outside the transitions would give `HeroController` the transition's coordinate
-    /// space (mid-slide, mid-scale) instead of the page's.
-    fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
-        view.transition.drain_pending_statuses();
-
-        let primary: RouteAnimation = Rc::clone(&view.primary) as RouteAnimation;
-        let secondary: RouteAnimation = Rc::clone(&view.secondary) as RouteAnimation;
-        let page = (view.page)(ctx, &primary, &secondary);
-        // The `HeroScope` sits **inside** the subtree anchor, so the anchor stays the
-        // route's coordinate root and every hero is a descendant of it — which is what
-        // `transform_to(hero, route_subtree)` needs.
+    /// space (mid-slide, mid-scale) instead of the page's. The `HeroScope` sits
+    /// **inside** the subtree anchor, so the anchor stays the route's coordinate
+    /// root and every hero is a descendant of it — which is what
+    /// `transform_to(hero, route_subtree)` needs.
+    fn apply_view(&mut self, view: &ModalScope, _ctx: &dyn BuildContext) {
+        let page = RoutePage {
+            page: super::lifecycle::Terminal::new(Rc::clone(&view.page)),
+            primary: super::lifecycle::Terminal::new(Rc::clone(&view.primary)),
+            secondary: super::lifecycle::Terminal::new(Rc::clone(&view.secondary)),
+        };
         let anchored = RouteSubtreeAnchor::new(
             view.subtree.clone(),
             HeroScope::new(
@@ -560,6 +573,21 @@ impl ViewState<ModalScope> for ModalScopeState {
             ),
         )
         .boxed();
+        // The replaced page is dropped after the new one is in place: its
+        // `Drop` may run captures the application owns.
+        drop(self.page.replace(anchored));
+    }
+
+    /// Builds the transitions around the page.
+    fn build(&self, view: &ModalScope, ctx: &dyn BuildContext) -> impl IntoView {
+        view.transition.drain_pending_statuses();
+
+        let primary: RouteAnimation = Rc::clone(&view.primary) as RouteAnimation;
+        let secondary: RouteAnimation = Rc::clone(&view.secondary) as RouteAnimation;
+        let anchored = self
+            .page
+            .clone()
+            .expect("BUG: apply_view builds the page before the first build");
         // The wrapper's presence never depends on anything read here besides
         // `back_gesture_enabled` itself (a construction-time flag) — the page
         // subtree's identity does not flip across builds. `maybe_of`/`binding`/
@@ -591,6 +619,52 @@ impl ViewState<ModalScope> for ModalScopeState {
             anchored
         };
         (view.transitions)(ctx, &primary, &secondary, anchored)
+    }
+}
+
+/// The route's page, built by its page builder with this element's context.
+///
+/// [`ModalScopeState`] builds it once per `ModalScope` and offers the same
+/// view on every tick, so the builder runs when this element first builds,
+/// when the scope rebuilds the page, and when something the page depends on
+/// changes, never because an animation ticked (Flutter's `Builder` inside
+/// `_ModalScopeState._page`).
+struct RoutePage {
+    page: super::lifecycle::Terminal<RoutePageBuilder>,
+    primary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
+    secondary: super::lifecycle::Terminal<Rc<ProxyAnimation<f64>>>,
+}
+
+impl Clone for RoutePage {
+    fn clone(&self) -> Self {
+        Self {
+            page: super::lifecycle::Terminal::new(self.page.clone()),
+            primary: super::lifecycle::Terminal::new(self.primary.clone()),
+            secondary: super::lifecycle::Terminal::new(self.secondary.clone()),
+        }
+    }
+}
+
+impl Drop for RoutePage {
+    fn drop(&mut self) {
+        let page = self.page.withdraw();
+        let primary = self.primary.withdraw();
+        let secondary = self.secondary.withdraw();
+        drop((page, primary, secondary));
+    }
+}
+
+impl View for RoutePage {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for RoutePage {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let primary: RouteAnimation = Rc::clone(&self.primary) as RouteAnimation;
+        let secondary: RouteAnimation = Rc::clone(&self.secondary) as RouteAnimation;
+        (self.page)(ctx, &primary, &secondary)
     }
 }
 

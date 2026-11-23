@@ -387,13 +387,10 @@ the precedence itself is flui-semantics' decision, recorded in
 platform dimension, so this is a deliberate drop of a platform-dependent
 behavior, not an oversight.
 `focus_node` / `autofocus` keep the whole-substrate `InkWell` gap `Checkbox` and
-`Switch` already name. And **no `Radio` gains a semantics *action*** — publishing
-the radio role changes what the control *is* to a screen reader, not what a
-platform request can *do* to it. `InkResponse` does not publish a tap semantics
-action, so a screen reader cannot activate the control through the semantics
-tree. Bridging the widget-layer gesture callback to a semantics action is a
-storage-and-lifetime decision that owes its own design record; until then
-activation reaches the tree only through the pointer path.
+`Switch` already name. A `Radio` takes a screen reader's `Click` through the tap its
+`InkWell` registers, and under `MergeSemantics` with a `ListTile` that click is the
+radio's, not the tile's, because the merged node announces the radio's selection (ADR-0392,
+`merge_semantics_over_a_tile_and_radio_clicks_the_radio` in `tests/list_tile.rs`).
 
 **Replacement coverage:**
 

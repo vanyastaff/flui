@@ -57,9 +57,9 @@ impl ViewState<WindowView> for WindowState {
 /// Open one more window beside this one, and answer why it did not open.
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
 fn open_another() -> String {
-    let opened = flui::open_window(
-        AppConfig::new().title("Another window"),
-        WindowPolicy::Isolated,
+    let opened = flui::app::open_window(
+        flui::app::AppConfig::new().title("Another window"),
+        flui::app::WindowPolicy::Isolated,
         WindowView,
     );
     opened

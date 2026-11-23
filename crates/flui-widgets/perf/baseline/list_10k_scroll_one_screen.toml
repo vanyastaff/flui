@@ -2,7 +2,7 @@
 # counts, not timings. One scenario of crates/flui-widgets/tests/perf.rs.
 
 [list_10k_scroll_one_screen]
-allocated_bytes = 613020
+allocated_bytes = 613028
 allocations = 1770
 builds_run = 126
 damage_full = 0

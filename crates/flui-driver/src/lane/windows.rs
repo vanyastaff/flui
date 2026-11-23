@@ -568,7 +568,7 @@ mod lane {
             )
         }
 
-        fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
+        fn read_tree(&mut self, placement: &Placement, _app: &Tree) -> Result<Tree> {
             let _units = DeviceUnits::enter();
             let (window, _) = self.find(placement)?;
             let mut tree = uia::read(window)?;

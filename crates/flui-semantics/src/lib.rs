@@ -47,6 +47,7 @@
 // moving a type between them changes no consumer.
 mod accesskit_translation;
 mod action;
+mod action_subject;
 mod agent;
 mod announce;
 mod applicability;
@@ -88,7 +89,7 @@ pub use collection::{
     CellPosition, SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin,
     SemanticsIndexOrigin, SetSize, SortDirection, TableShape,
 };
-pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
+pub use configuration::{DeclaredCustomAction, ForcedMerge, SemanticsConfiguration};
 pub use document_selection::{DocumentPosition, DocumentSelection};
 pub use identity::AccessibilityNodeId;
 pub use node::SemanticsNode;

@@ -734,7 +734,7 @@ fn native_operation_retains_owners_after_the_last_external_handle_is_released() 
             &window,
             Some(crate::app::CloseRequestHandler::new(move |_| {
                 let _ = &handler_capture;
-                crate::app::CloseResponse::Close
+                flui_runtime::owner_turn::CloseResponse::Close
             })),
         );
         let owner = Rc::new(RefCell::new(Some(native)));
@@ -1002,7 +1002,7 @@ fn assert_native_retirement_failures(retire: fn(PresentationDispatcher)) {
         };
         installation.close_requests(Some(crate::app::CloseRequestHandler::new(move |_| {
             let _ = &handler_capture;
-            crate::app::CloseResponse::Close
+            flui_runtime::owner_turn::CloseResponse::Close
         })));
         installation
             .submit()
@@ -1782,7 +1782,7 @@ fn unpublished_window_retires_native_resources_independently() {
                 .expect("prepare unpublished driver");
             installation.close_requests(Some(crate::app::CloseRequestHandler::new(move |_| {
                 let _ = &handler;
-                crate::app::CloseResponse::Close
+                flui_runtime::owner_turn::CloseResponse::Close
             })));
             let failure = catch_unwind(AssertUnwindSafe(|| {
                 if deferred {

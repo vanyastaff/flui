@@ -287,7 +287,7 @@ pub const DATA_DIR: &str = "dev.flui.acceptance-app";
 pub fn launch() -> flui::Application {
     let dir = flui::platform::AppDataDir::try_new(DATA_DIR)
         .expect("BUG: the acceptance application's data directory name is valid");
-    flui::Application::new().config(flui::AppConfig::new().storage_dir(dir))
+    flui::Application::new().config(flui::app::AppConfig::new().storage_dir(dir))
 }
 
 /// The acceptance application's root view.
@@ -763,7 +763,7 @@ struct Root {
 }
 
 struct RootState {
-    documents: Option<Documents>,
+    documents: Documents,
     attempt: Signal<u32>,
     /// Set by Start over: the next load starts from the initial notes, which
     /// the data document is storing over the unreadable ones.
@@ -815,7 +815,10 @@ impl StatefulView for Root {
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         RootState {
-            documents: None,
+            documents: Documents {
+                data: Persisted::<Saved>::open(ctx),
+                session: Persisted::<Session>::open(ctx),
+            },
             attempt: ctx.signal(self.first_attempt),
             fresh: Rc::new(Cell::new(false)),
             _kept: plant(self.planter.as_ref(), Kept::State),
@@ -824,18 +827,8 @@ impl StatefulView for Root {
 }
 
 impl ViewState<Root> for RootState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.documents = Some(Documents {
-            data: Persisted::<Saved>::open(ctx),
-            session: Persisted::<Session>::open(ctx),
-        });
-    }
-
     fn build(&self, view: &Root, ctx: &dyn BuildContext) -> impl IntoView {
-        let documents = self
-            .documents
-            .clone()
-            .expect("BUG: init_state precedes build");
+        let documents = self.documents.clone();
         let attempt = self.attempt;
         let current = attempt.get(ctx);
         let loader = Rc::clone(&view.loader);
@@ -961,46 +954,27 @@ struct Loaded {
 }
 
 struct LoadedState {
-    /// What `init_state` starts the shared state from.
-    start: Option<(Read, Documents)>,
-    shared: Option<Shared>,
+    shared: Shared,
     /// The stack the router opens on.
     stack: Vec<Route>,
-    place: Option<Rc<Place>>,
-    faults: Faults,
-    planter: Option<Planter>,
-    edits: Option<EditCounter>,
-    opened: Option<Rc<FirstScreens>>,
+    /// What writes the session; stopped at dispose.
+    place: Rc<Place>,
     _kept: Option<Rc<dyn Any>>,
 }
 
 impl StatefulView for Loaded {
     type State = LoadedState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        LoadedState {
-            start: Some((self.read.clone(), self.documents.clone())),
-            shared: None,
-            stack: Vec::new(),
-            place: None,
-            faults: self.faults,
-            planter: self.planter.clone(),
-            edits: self.edits.clone(),
-            opened: self.opened.clone(),
-            _kept: plant(self.planter.as_ref(), Kept::State),
-        }
-    }
-}
-
-impl ViewState<Loaded> for LoadedState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let (
-            (saved, session),
-            Documents {
-                data,
-                session: stored,
-            },
-        ) = self.start.take().expect("BUG: init_state runs once");
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let Self {
+            read: (saved, session),
+            documents:
+                Documents {
+                    data,
+                    session: stored,
+                },
+            ..
+        } = self;
         // Everything restored is in place before the first layout, so the
         // first loaded frame already shows it.
         let restored = session.restore(&saved.notebook, data.revision());
@@ -1025,24 +999,24 @@ impl ViewState<Loaded> for LoadedState {
         let editing = Rc::new(Cell::new(restored.draft.map(|draft| draft.note)));
         let scroll = ScrollController::with_initial_scroll_offset(restored.offset);
         let place = Rc::new(Place {
-            session: stored,
+            session: stored.clone(),
             data: data.clone(),
             draft: draft.clone(),
             editing: Rc::clone(&editing),
             scroll: scroll.clone(),
             router: RefCell::new(None),
             listening: RefCell::new(None),
-            stored: RefCell::new(Session::clone(&session)),
+            stored: RefCell::new(Session::clone(session)),
         });
         place.listen();
-        self.shared = Some(Shared {
+        let shared = Shared {
             notebook: ctx.signal(saved.notebook.clone()),
             editing,
             compact: ctx.signal(saved.compact),
             status: ctx.signal(String::new()),
             draft,
             scroll,
-            data,
+            data: data.clone(),
             session: place.session.clone(),
             place: Rc::downgrade(&place),
             close: ctx
@@ -1053,13 +1027,19 @@ impl ViewState<Loaded> for LoadedState {
             planter: self.planter.clone(),
             edits: self.edits.clone(),
             opened: self.opened.clone(),
-        });
-        self.stack = restored.stack;
-        self.place = Some(place);
+        };
+        LoadedState {
+            shared,
+            stack: restored.stack,
+            place,
+            _kept: plant(self.planter.as_ref(), Kept::State),
+        }
     }
+}
 
+impl ViewState<Loaded> for LoadedState {
     fn build(&self, _view: &Loaded, _ctx: &dyn BuildContext) -> impl IntoView {
-        let shared = self.shared.clone().expect("BUG: init_state precedes build");
+        let shared = self.shared.clone();
         let router = Router::from_stack(self.stack.clone(), move |route: &Route, _ctx| {
             Screen {
                 route: route.clone(),
@@ -1073,9 +1053,7 @@ impl ViewState<Loaded> for LoadedState {
     }
 
     fn dispose(&mut self) {
-        if let Some(place) = self.place.take() {
-            place.stop();
-        }
+        self.place.stop();
     }
 }
 
@@ -1087,62 +1065,44 @@ struct Screen {
 }
 
 struct ScreenState {
-    router: Option<RouterHandle<Route>>,
     form: FormHandle,
     focus: Rc<FocusNode>,
     panic_on_dispose: bool,
     /// On Home's page, the bottom one: what writes the session, which
     /// follows the router while the page is mounted.
     place: Option<Weak<Place>>,
-    /// Where this screen reports being built, for which route, and the draft
-    /// and list the first loaded frame's seal reads.
-    first: Option<(
-        Rc<FirstScreens>,
-        Route,
-        TextEditingController,
-        ScrollController,
-    )>,
     _kept: Option<Rc<dyn Any>>,
 }
 
 impl StatefulView for Screen {
     type State = ScreenState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        // The router is resolved where a screen navigates (`build`); here the
+        // session's place follows it, and the first loaded frame is told which
+        // screens it builds.
+        let router = Router::<Route>::of(ctx).expect("BUG: a screen is under the Router");
+        if let Some(opened) = &self.shared.opened {
+            opened.record(&self.route, &self.shared.draft, &self.shared.scroll, ctx);
+        }
+        let place = (self.route == Route::Home).then(|| Weak::clone(&self.shared.place));
+        if let Some(place) = place.as_ref().and_then(Weak::upgrade) {
+            place.attach(router);
+        }
         ScreenState {
-            router: None,
             form: FormHandle::new(),
             focus: FocusNode::new(),
             panic_on_dispose: self.shared.faults.contains(Fault::Dispose)
                 && matches!(self.route, Route::Note { .. }),
-            place: (self.route == Route::Home).then(|| Weak::clone(&self.shared.place)),
-            first: self.shared.opened.clone().map(|opened| {
-                (
-                    opened,
-                    self.route.clone(),
-                    self.shared.draft.clone(),
-                    self.shared.scroll.clone(),
-                )
-            }),
+            place,
             _kept: plant(self.shared.planter.as_ref(), Kept::State),
         }
     }
 }
 
 impl ViewState<Screen> for ScreenState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let router = Router::<Route>::of(ctx).expect("BUG: a screen is under the Router");
-        if let Some((opened, route, draft, scroll)) = &self.first {
-            opened.record(route, draft, scroll, ctx);
-        }
-        if let Some(place) = self.place.as_ref().and_then(Weak::upgrade) {
-            place.attach(router.clone());
-        }
-        self.router = Some(router);
-    }
-
     fn build(&self, view: &Screen, ctx: &dyn BuildContext) -> impl IntoView {
-        let router = self.router.clone().expect("BUG: init_state precedes build");
+        let router = Router::<Route>::of(ctx).expect("BUG: a screen is under the Router");
         let shared = &view.shared;
         let content = match view.route {
             Route::Home => home(ctx, shared, &router),

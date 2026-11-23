@@ -3,8 +3,10 @@
 //!
 //! This crate is the **facade** over the FLUI workspace: it re-exports the
 //! layered crates an application author needs, so a downstream consumer can
-//! depend on `flui` alone (by path — FLUI is pre-release and not on
-//! crates.io) instead of naming each layer.
+//! depend on `flui` alone instead of naming each layer. The framework is not
+//! on crates.io: a consumer depends on `flui` by a path to a clone of the
+//! repository, or by the git tag that `flui create` pins in a generated
+//! project.
 //!
 //! # Quick start
 //!
@@ -43,7 +45,7 @@
 //! or the first window fails.
 //!
 //! An application that configures its run builds an [`Application`]: the
-//! [`AppConfig`] (window configuration and application services) and the
+//! [`app::AppConfig`] (window configuration and application services) and the
 //! capability providers it registers (overrides of the built-in providers and
 //! plugins, ADR-0152), ended by [`Application::run`]. `run_app(root)` is
 //! `Application::new().run(root)`.
@@ -75,67 +77,58 @@
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ),
-    doc = "On the desktop, [`Application::on_ready`] gives an [`AppHandle`] for
+    doc = "On the desktop, [`Application::on_ready`] gives an [`app::AppHandle`] for
 cross-thread show and quit requests, and [`Application::run_resident`] starts an
 application without a window, building each main window it later shows from a
 factory. A successful show-command admission is not window completion: await its
 returned request or poll `try_result` to obtain the window result."
 )]
 //!
-//! # Choosing a catalog
+//! # Choosing features
 //!
 //! The base surface — [`widgets`], [`view`], [`animation`], [`run_app`], and
 //! the non-Material half of [`prelude`] — needs no feature at all; that
-//! includes the global widgets localizations in [`widgets`]. The design
-//! systems are feature-selected:
+//! includes the global widgets localizations in [`widgets`]. Nothing is on by
+//! default (ADR-0088 §6): an application names what it uses, for example
+//! `features = ["material"]`. The table lists the manifest's features in its
+//! order:
 //!
 //! | Feature | Default | Enables |
 //! |---|---|---|
+//! | `testing` | off | `flui::testing`, the deterministic headless test driver, with the render-object harness and the scripted capability scenarios of [`platform::capability`]; for a development dependency |
+//! | `animation-diagnostics` | off | structured animation lifecycle events and CPU spans in `flui-animation` |
 //! | `material` | off | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
-//! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux); off, an `HttpCapability` request is refused as not registered |
+//! | `system` | off | `flui::services::system`: the launcher, file-dialog, autostart, global-shortcut, progress and user-folder providers |
+//! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux and the BSDs); off, an `HttpCapability` request is refused as not registered and no HTTP client or TLS stack is linked |
+//! | `images` | off | `flui::assets` and the widgets' `Image::asset` and `Image::network`, with the decoded-image cache each UI runtime keeps; a network image also needs `http`; off, no image decoder is linked |
 //! | `single-instance` | off | one instance per user session on Linux and Windows (`Application::single_instance`): a later launch hands the running instance its links and files; off, each launch is a process of its own, and `flui build` and `flui run` refuse a desktop build of an application that declares URL schemes or file types |
-//! | `system` | off | `flui::services::system`: the launcher and file-dialog providers |
-//! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
+//! | `unstable-input` | off | `flui::platform::input_capabilities` and `flui::platform::haptics`, the unstable input vocabulary (ADR-0213 §5, ADR-0210 §9) |
+//! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving, ADR-0089 §5) |
+//! | `unstable-windows` | off | `app::open_window`, `app::open_secondary_window` and `app::WindowPolicy`: windows beyond the first (unstable) |
+//! | `devtools` | off | `flui::devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
-//! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
-//! | `unstable-windows` | off | `open_window`, `open_secondary_window` and `WindowPolicy`: windows beyond the first (unstable) |
+//! | `serde` | off | `serde` implementations for the framework's value types: geometry, paint and style, locale and brightness, gesture details, layout enums, curves and stored document revisions |
 //!
-//! Nothing is on by default (ADR-0088 §6): an application names the catalog it
-//! uses, e.g. `features = ["material"]`; with no feature the facade still gives
-//! the full widget layer, navigation, focus, and media information. A module whose feature is off is
-//! **absent**, not empty — `flui::cupertino` without the `cupertino` feature is
-//! an unresolved-import error at the use site, which is the diagnostic you
-//! want.
-//! Hot reload is the official package `flui-hot-reload`, which an application
-//! adds as a dependency of its own and installs with
-//! `AppConfig::dev_reload`; the facade re-exports no package for it
-//! (ADR-0311 §6).
+//! A module whose feature is off is **absent**, not empty: `flui::cupertino`
+//! without the `cupertino` feature is an unresolved-import error at the use
+//! site. Native accessibility is not a feature: on Windows, macOS and Linux
+//! every window offers its semantics tree to the operating system's assistive
+//! technology through AccessKit. Hot reload is the official package
+//! `flui-hot-reload`, which an application adds as a dependency of its own and
+//! installs with `app::AppConfig::dev_reload`; the facade re-exports no
+//! package for it (ADR-0311 §6).
 //!
-//! Additional opt-in capabilities are `testing` (the `flui::testing` headless
-//! harness, normally enabled in a development dependency) and `serde`
-//! (serialization for framework value types). Native accessibility is not a
-//! feature: on Windows, macOS and Linux every window offers its semantics tree
-//! to the operating system's assistive technology through AccessKit.
-//!
-//! `native` publishes the escape hatch, `flui::native`: what one operating
-//! system's windows offer beyond the window contract, in `flui::native::windows`
-//! and `flui::native::macos`. It is Evolving rather than Stable (ADR-0089 §5),
-//! so it is off by default and absent without the feature:
+//! `native` and `unstable-windows` are absent without their feature:
 //!
 #![cfg_attr(not(feature = "native"), doc = "```compile_fail,E0432")]
 #![cfg_attr(feature = "native", doc = "```")]
 //! use flui::native::HostWindow;
 //! ```
 //!
-//! `unstable-windows` publishes the windows beyond the first: `open_window`,
-//! `open_secondary_window` and `WindowPolicy`. An application has one window
-//! until ADR-0091 §3–§5 are built (`docs/gaps.md`), so they are absent without
-//! the feature:
-//!
 #![cfg_attr(not(feature = "unstable-windows"), doc = "```compile_fail,E0432")]
 #![cfg_attr(feature = "unstable-windows", doc = "```no_run")]
-//! use flui::WindowPolicy;
+//! use flui::app::WindowPolicy;
 //! ```
 //!
 //! # Using a design system
@@ -173,32 +166,39 @@ fn main() -> Result<(), flui::LaunchError> {
 //!
 //! # Layers
 //!
-//! Each module below re-exports one workspace crate, or a curated part of it; the layering (no upward
-//! edges) is documented in `docs/architecture.md`:
+//! Each module re-exports one workspace crate, or a curated part of it. The
+//! layering (no upward edges) is in `docs/architecture.md`.
 //!
 //! | Module | Crate | Feature | Layer |
 //! |---|---|---|---|
 //! | [`geometry`] | `flui-foundation` | — | geometry values (`f64` logical pixels) |
-//! | [`foundation`] | `flui-foundation` | — | keys, listenables, diagnostics |
-//! | [`painting`] | `flui-painting` | — | custom painting; paint, style and text values |
-//! | [`platform`] | `flui-platform` | — | platform contracts and values (brightness, locale, IME) |
+//! | [`foundation`] | `flui-foundation` | — | keys, listenables, ids, diagnostics |
+//! | [`painting`] | `flui-painting`, `flui-rendering`, `flui-semantics` | — | custom painting: `CustomPainter`, `Canvas`, paint, style and text values |
+//! | [`platform`] | `flui-platform` | — | platform contracts and values (brightness, locale, windows, storage, IME) |
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
 //! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
-//! | `material` | `flui-material` | `material` | Material Design theming + widget catalog |
-//! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming + widget catalog |
-//! | [`app`] | `flui-app` | — | entry, configuration, background work, close requests, frame failures |
-//! | `native` | `flui-native`, through `flui-app` | `native` | one operating system's window extensions |
+//! | [`scheduler`] | `flui-scheduler` | — | the frame scheduler's handles and timing values |
+//! | [`rendering`] | `flui-rendering`, `flui-objects` | — | custom render objects; the built-in ones in `rendering::objects` |
+//! | [`interaction`] | `flui-interaction` | — | gesture recognizers, the gesture arena, hit testing and focus vocabulary |
+//! | [`semantics`] | `flui-semantics` | — | the vocabulary for describing a node to assistive technology |
+//! | [`app`] | `flui-app` | — | configuration, background work, close requests, frame failures |
+//! | `material` | `flui-material` | `material` | Material Design theming and widget catalog |
+//! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming and widget catalog |
+//! | `native` | `flui-app` (`flui-native` behind it) | `native` | one operating system's window extensions |
+//! | `services` | `flui-system` | `system` | OS services from capability crates; `services::system` |
+//! | `assets` | `flui-assets` | `images` | the decoded-image cache |
+//! | `devtools` | `flui-devtools` | `devtools` | profiler, timeline and inspector counters |
+//! | `testing` | `flui-testing`, `flui-rendering` | `testing` | headless application and render-object tests |
 //!
-//! [`app`], [`painting`], [`rendering`], and [`interaction`] expose selected authoring
-//! contracts for applications, custom drawing, render objects, and gestures. The runtime's
-//! owners appear only where a kept signature names them; platform implementations stay outside.
-//! Enable `testing` in a development dependency for deterministic headless tests.
-//! `flui::material` and `flui::cupertino` sit *above* [`widgets`] (ADR-0028's
-//! design-system decoupling contract — `material --> widgets`,
-//! `cupertino --> widgets`, never the reverse), which is why `flui` is on
-//! that ADR's allowlist of crates permitted to depend on both: the facade is
-//! the app-level aggregation point, not a core crate.
+//! [`painting`], [`rendering`], [`interaction`], [`semantics`] and [`app`] are
+//! authoring modules: they name the types an application, a custom painter, a
+//! render object or a gesture recognizer signs. The runtime's owners appear
+//! only where a kept signature names them, and platform implementations stay
+//! outside. `flui::material` and `flui::cupertino` sit above [`widgets`]
+//! (ADR-0028: `material --> widgets`, `cupertino --> widgets`, never the
+//! reverse), which is why `flui` is on that ADR's allowlist of crates that
+//! may depend on both.
 
 // Every public facade item is documented; keep it that way.
 #![deny(missing_docs)]
@@ -256,16 +256,16 @@ pub use flui_devtools as devtools;
 /// geometry in [`geometry`].
 pub mod foundation {
     pub use flui_foundation::{
-        AppId, AppIdError, AsViewKey, BuildPhase, BuildPhaseGuard, ChangeNotifier, CreationSite,
-        DataTransferId, DragSessionId, ElementId, FrameCallbackId, FrameEpoch, FrameStamp, GenId,
-        Id, IdExhausted, Identifier, InputSequenceId, LayerId, Listenable, ListenerCallback,
-        ListenerId, ListenerObserver, ManualClock, Marker, MintedId, MonotonicClock,
-        MutatedDuringBuild, NotificationCallback, Notifier, NotifierCallback, PathEntry,
-        PresentationAddress, PresentationId, PressId, RawId, RebuildReason, RebuildReasons,
-        RecoveryCallback, RenderId, SemanticsId, Subscription, SurfaceGeneration, TextDirection,
-        TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent, TreeContext,
-        TreeError, TreeId, UiRuntimeId, UniqueKey, ValueKey, ValueListenable, ValueNotifier,
-        ViewId, ViewKey, inspect, markers, observe,
+        AsViewKey, BuildPhase, BuildPhaseGuard, ChangeNotifier, CreationSite, DataTransferId,
+        DragSessionId, ElementId, FrameCallbackId, FrameEpoch, FrameStamp, GenId, Id, IdExhausted,
+        Identifier, InputSequenceId, LayerId, Listenable, ListenerCallback, ListenerId,
+        ListenerObserver, ManualClock, Marker, MintedId, MonotonicClock, MutatedDuringBuild,
+        NotificationCallback, Notifier, NotifierCallback, PathEntry, PresentationAddress,
+        PresentationId, PressId, RawId, RebuildReason, RebuildReasons, RecoveryCallback, RenderId,
+        SemanticsId, Subscription, SurfaceGeneration, TextDirection, TextScaleProfile, TextSize,
+        TextSizeError, TextSizeRequest, TextSizingIntent, TreeContext, TreeError, TreeId,
+        UiRuntimeId, UniqueKey, ValueKey, ValueListenable, ValueNotifier, ViewId, ViewKey, inspect,
+        markers, observe,
     };
 
     /// A slot's typed generation, as the ids above carry it.
@@ -284,8 +284,6 @@ pub mod foundation {
     }
 }
 pub use flui_foundation::geometry;
-/// The typed self-description of a node, and its derive, for application-defined types.
-pub use flui_foundation::inspect::Inspect;
 /// The Material Design system (`flui-material`). Requires the `material`
 /// feature.
 #[cfg(feature = "material")]
@@ -338,7 +336,7 @@ pub mod services {
 ///
 /// What a window is created with on one system is a value of that system's
 /// type in [`platform::os_options::OsWindowOptions`], given to
-/// [`AppConfig::os_options`].
+/// [`app::AppConfig::os_options`].
 #[cfg(feature = "native")]
 pub mod native {
     #[cfg(target_os = "macos")]
@@ -376,34 +374,34 @@ pub mod platform {
         Availability, Brightness, BrowserException, CapabilityAbsence, CapabilityParts,
         ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
         ClipboardWrite, ClipboardWritten, ColorGamut, CommandRefusal, Concealment, ControlsOffset,
-        CopiedAside, Cursor, CursorError, CursorGrab, CursorIcon, CursorImage, CursorImageError,
-        DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription, DisplayId, DisplayParts,
-        DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, Distance, DragDropEvent,
-        DurationScale, DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange,
-        EmptyPointerFrame, Environment, ExpiryClearing, FlingSpeeds, FramePacing, FramePresented,
-        FrameRateHint, FrameRequest, GestureGeometry, GestureParts, GesturePreferences,
-        HapticFeedback, Headroom, HostNotice, HourCycle, ImeEvent, InputLatency, InsetCurve,
-        InsetMotion, InvalidAppDataDir, InvalidControlsOffset, InvalidDisplayBounds,
-        InvalidGeometry, InvalidHeadroom, InvalidInsets, InvalidLocale, InvalidPreference,
-        InvalidRefreshPeriod, InvalidRegionalFormat, InvalidWindowOption, KeyboardPlacement,
-        Launch, Locale, MAX_OPENED_URL_LEN, MAX_SURFACE_EXTENT, MeasurementSystem,
-        MotionPreference, NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, OpenTarget,
-        Opened, OpenedFile, OpenedOverflow, OpeningGeometry, OsRelease, PlacementError,
-        PlacementOffset, PlatformFailure, PlatformInput, PlatformSystemChrome, PlatformTextInput,
-        PlatformWindow, PointerFrame, PreferenceParts, PreferenceQueryError, PublicationMint,
-        RedrawRequester, RefreshPeriod, RegionOverride, RegionalFormats, RegionalParts,
-        ResolvedPlacement, ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility,
-        ScrollTrackClick, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
-        SessionEndRequest, SizeConstraints, SoftKeyboard, SrgbColor, Storage, StorageError,
-        StorageFuture, StorageName, Stored, StoredVersion, SubmitError, SurfaceColorSpace,
-        SurfaceTarget, SwapChainStatistics, SystemControls, SystemFailure, SystemNotice,
-        SystemPreferences, SystemUiOverlayStyle, TargetPlatform, TextWeightPreference, Unsupported,
-        UnsupportedReason, Weekday, WheelParts, WheelPreferences, WheelStep, WindowAt,
-        WindowCapabilities, WindowCapability, WindowCommand, WindowDisplay, WindowExecutionState,
-        WindowExtent, WindowFocus, WindowFrame, WindowGeometry, WindowId, WindowInsets,
-        WindowInteraction, WindowLevel, WindowMaterial, WindowMode, WindowOption, WindowOptions,
-        WindowPlacement, WindowPosition, WindowReveal, WindowRevision, WindowRevisionExhausted,
-        WindowState, WindowStateParts, WriteMode,
+        CopiedAside, Cursor, CursorError, CursorGrab, CursorImage, CursorImageError, DesktopOrigin,
+        DisplayBounds, DisplayColor, DisplayDescription, DisplayId, DisplayParts, DisplayRevision,
+        DisplayRevisionExhausted, DisplaySnapshot, Distance, DragDropEvent, DurationScale,
+        DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange, EmptyPointerFrame,
+        Environment, ExpiryClearing, FlingSpeeds, FramePacing, FramePresented, FrameRateHint,
+        FrameRequest, GestureGeometry, GestureParts, GesturePreferences, HapticFeedback, Headroom,
+        HostNotice, HourCycle, ImeEvent, InputLatency, InsetCurve, InsetMotion, InvalidAppDataDir,
+        InvalidControlsOffset, InvalidDisplayBounds, InvalidGeometry, InvalidHeadroom,
+        InvalidInsets, InvalidLocale, InvalidPreference, InvalidRefreshPeriod,
+        InvalidRegionalFormat, InvalidWindowOption, KeyboardPlacement, Launch, Locale,
+        MAX_OPENED_URL_LEN, MAX_SURFACE_EXTENT, MeasurementSystem, MotionPreference,
+        NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, OpenTarget, Opened, OpenedFile,
+        OpenedOverflow, OpeningGeometry, OsRelease, PlacementError, PlacementOffset,
+        PlatformFailure, PlatformInput, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+        PointerFrame, PreferenceParts, PreferenceQueryError, PublicationMint, RedrawRequester,
+        RefreshPeriod, RegionOverride, RegionalFormats, RegionalParts, ResolvedPlacement,
+        ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick,
+        SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndRequest,
+        SizeConstraints, SoftKeyboard, SrgbColor, Storage, StorageError, StorageFuture,
+        StorageName, Stored, StoredVersion, SubmitError, SurfaceColorSpace, SurfaceTarget,
+        SwapChainStatistics, SystemControls, SystemFailure, SystemNotice, SystemPreferences,
+        SystemUiOverlayStyle, TargetPlatform, TextWeightPreference, Unsupported, UnsupportedReason,
+        Weekday, WheelParts, WheelPreferences, WheelStep, WindowAt, WindowCapabilities,
+        WindowCapability, WindowCommand, WindowDisplay, WindowExecutionState, WindowExtent,
+        WindowFocus, WindowFrame, WindowGeometry, WindowId, WindowInsets, WindowInteraction,
+        WindowLevel, WindowMaterial, WindowMode, WindowOption, WindowOptions, WindowPlacement,
+        WindowPosition, WindowReveal, WindowRevision, WindowRevisionExhausted, WindowState,
+        WindowStateParts, WriteMode,
     };
     /// Capabilities: what an application registers, and the contracts a provider and a host meet.
     pub mod capability {
@@ -500,9 +498,7 @@ pub mod platform {
     /// Handle-less input capabilities (ADR-0213); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::input::capabilities::{
-            InputCapabilities, InputCapabilitiesBuilder, PointerKindSet,
-        };
+        pub use flui_platform::input::capabilities::{InputCapabilities, InputCapabilitiesBuilder};
     }
     /// Haptic patterns, requests and outcomes (ADR-0210); unstable.
     #[cfg(feature = "unstable-input")]
@@ -537,93 +533,20 @@ pub mod view {
     mod __runtime {}
 }
 
-/// Application configuration. Re-exported from [`app`] (`flui-app`).
-pub use flui_app::AppConfig;
-/// The errors a window request can fail with — what [`AppHandle`] reports and
-/// what an [`Application`] window-error observer receives (and, under
-/// `unstable-windows`, what `open_window` answers). Re-exported from [`app`]
-/// (`flui-app`); desktop only, like the entry points that produce it.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub use flui_app::AppWindowError;
-/// Whether an additional window joins the caller's UI runtime or gets its own.
-/// Re-exported from [`app`] (`flui-app`); unstable, under `unstable-windows`
-/// (see `open_window`), and absent on iOS, where no secondary-window entry
-/// point exists.
-#[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
-pub use flui_app::WindowPolicy;
 /// The function an application starts from on every platform; on Android it
 /// writes the `android_main` the system calls. Re-exported from `flui-app`.
 pub use flui_app::main;
-/// Open an additional top-level window without widget content.
-///
-/// Unstable, under `unstable-windows` (see [`open_window`]). Desktop only.
-/// Call on the owner thread while its event loop is live. Success can mean
-/// creation was admitted for a later owner turn; this API does not provide a
-/// completion receiver or a renderer. Use [`open_window`] for widget content.
-/// See [`app::open_secondary_window`] for policy, deferred-failure, and
-/// ownership details. Re-exported from [`app`] (`flui-app`).
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32"),
-    feature = "unstable-windows"
-))]
-pub use flui_app::open_secondary_window;
-/// Open an additional top-level window with mounted widget content.
-///
-/// Unstable: an application has one window unless it turns on the additive
-/// `unstable-windows` feature, because ADR-0091 §3–§5 are not built yet
-/// (`docs/gaps.md`). Without the feature this entry point,
-/// [`open_secondary_window`] and [`WindowPolicy`] are absent.
-///
-/// Desktop only. Call on the owner thread while its event loop is live, with
-/// [`WindowPolicy::Isolated`]. `WindowPolicy::Shared` is refused with
-/// [`AppWindowError::UnsupportedPolicy`]. As with [`open_secondary_window`],
-/// success can mean admission for deferred creation rather than completed
-/// installation; see [`app::open_window`] for the error contract.
-/// Re-exported from [`app`] (`flui-app`).
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32"),
-    feature = "unstable-windows"
-))]
-pub use flui_app::open_window;
 /// Run `root` in a main window: `Application::new().run(root)`, as Flutter's
-/// `runApp` takes the root widget. Re-exported from [`app`] (`flui-app`).
+/// `runApp` takes the root widget. Re-exported from `flui-app`.
 ///
 /// The root is any [`view::View`], stateless or stateful. It returns a
 /// [`LaunchError`] when the platform cannot start, the system is below FLUI's
 /// floor or the run fails; on the desktop it returns after shutdown.
 pub use flui_app::run_app;
-/// The handle a desktop [`Application`] gives its `on_ready` observer, which
-/// shows the main window or quits from any thread, and why a request through
-/// it fails. Re-exported from [`app`] (`flui-app`); desktop only.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub use flui_app::{AppControlError, AppHandle};
 /// The builder of a configured run, and why a run fails. Re-exported from
-/// [`app`] (`flui-app`).
-pub use flui_app::{Application, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem};
-/// Registers a font's faces with the app, for measurement, paint and carets.
-/// Re-exported from [`app`] (`flui-app`).
-///
-/// Call on the app's owner thread, before startup or from an app callback.
-/// Registration on a worker thread does not update the running app: send the
-/// bytes to its owner thread first. Successful registration updates each
-/// UI runtime's text layout on its next frame; faces are never removed.
-///
-/// Invalid font bytes, repeated bytes, and reentry while the runtime is borrowed
-/// return [`FontRegistrationError`] without adding a face. See
-/// [`app::register_font`] for the individual error variants.
-pub use flui_app::{FontRegistrationError, register_font};
+/// `flui-app`; the configuration it takes and the rest of the application's
+/// vocabulary are in [`app`].
+pub use flui_app::{Application, LaunchError};
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature
@@ -631,9 +554,10 @@ pub use flui_app::{FontRegistrationError, register_font};
 ///
 /// # Two halves
 ///
-/// The **base half** ([`flui_widgets::prelude`] plus [`run_app`]) is always
-/// present. It is design-system-neutral, so an application that selects no
-/// catalog still writes ordinary screens off `use flui::prelude::*`.
+/// The **base half** is [`flui_widgets::prelude`] plus [`run_app`],
+/// [`Application`] and [`LaunchError`], and is always present. It is
+/// design-system-neutral, so an application that selects no catalog still
+/// writes ordinary screens off `use flui::prelude::*`.
 ///
 /// The **Material half** is `#[cfg(feature = "material")]`. Turning the
 /// feature off removes those names from the glob rather than replacing them
@@ -641,8 +565,8 @@ pub use flui_app::{FontRegistrationError, register_font};
 ///
 /// # Curation rule (Material half)
 ///
-/// This module answers "what does *every* app touch" — not "what does
-/// `flui-material` export." A type belongs here when an app author reaches
+/// This module answers "what does *every* app touch", not "what does
+/// `flui-material` export". A type belongs here when an app author reaches
 /// for it while writing ordinary screens: layout/text/interaction primitives
 /// (via [`flui_widgets::prelude`]), theming (`Theme`, `ThemeData`,
 /// `ColorScheme`, `TextTheme`), the app shell (`Scaffold`, `AppBar`,
@@ -651,42 +575,21 @@ pub use flui_app::{FontRegistrationError, register_font};
 /// (`Card`, `ListTile`, `Dialog`, `SnackBar`, `NavigationBar`, the tab
 /// family, …).
 ///
-/// It does **not** include: `*State` handles an app never constructs
+/// It does **not** include `*State` handles an app never constructs
 /// directly (`InkWellState`, `TabBarState`, …), component-theme override
-/// structs (`AppBarThemeData` and friends — advanced per-widget
-/// customization, reach them at `flui::material`), or `flui-material`
-/// internals like the raw M3 type-scale table (`english_like_2021`).
+/// structs (`AppBarThemeData` and friends: per-widget customization, reached
+/// at `flui::material`), or `flui-material` internals such as the raw M3
+/// type-scale table (`english_like_2021`).
 ///
-/// **`TextField` names the Material type, unambiguously** — `flui-widgets`'
-/// own theme-free stand-in is named [`flui_widgets::RawTextField`], not
-/// `TextField`, specifically so this glob never has to choose between two
-/// same-named types or make `TextField`'s meaning depend on whether the
-/// `material` feature happens to be on. See this module's own
-/// `## Mapping decisions` entry in `ARCHITECTURE.md` for the two earlier
-/// revisions this superseded (first an omission, then an explicit-shadow
-/// that solved the ambiguity but broke feature-additivity). The Cupertino
-/// catalog has no such collision (every type is `Cupertino`-prefixed), but
-/// its surface is app-shell-shaped rather than everyday-widget-shaped
-/// (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so it stays at
-/// `flui::cupertino` rather than joining this glob.
+/// **`TextField` is the Material type.** The theme-free text-editing
+/// primitive of `flui-widgets` is [`flui_widgets::RawTextField`], so the glob
+/// never holds two `TextField`s and what `TextField` means does not depend on
+/// whether the `material` feature is on. The Cupertino catalog has no such
+/// collision (every type is `Cupertino`-prefixed), but its surface is
+/// app-shell-shaped (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so
+/// it stays at `flui::cupertino` rather than joining this glob.
 pub mod prelude {
-    pub use flui_app::AppConfig;
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub use flui_app::AppWindowError;
-    #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
-    pub use flui_app::WindowPolicy;
-    pub use flui_app::{Application, LaunchError, register_font, run_app};
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32"),
-        feature = "unstable-windows"
-    ))]
-    pub use flui_app::{open_secondary_window, open_window};
+    pub use flui_app::{Application, LaunchError, run_app};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

@@ -11,10 +11,7 @@ use flui::rendering::{
 use flui::testing::{Tester, find};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::cell::Cell;
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -205,10 +202,10 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     ));
 }
 
-#[derive(Debug, flui::Inspect)]
+#[derive(Debug, flui::foundation::inspect::Inspect)]
 struct SolidLeaf {
     #[inspect(skip)]
-    paints: Arc<AtomicUsize>,
+    paints: Rc<Cell<usize>>,
 }
 
 impl RenderBox for SolidLeaf {
@@ -230,13 +227,13 @@ impl RenderBox for SolidLeaf {
     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         let size = ctx.size();
         RectanglePainter.paint(ctx.canvas(), size);
-        self.paints.fetch_add(1, Ordering::SeqCst);
+        self.paints.set(self.paints.get() + 1);
     }
 }
 
 #[derive(Clone)]
 struct LeafView {
-    paints: Arc<AtomicUsize>,
+    paints: Rc<Cell<usize>>,
 }
 
 impl RenderView for LeafView {
@@ -262,7 +259,7 @@ flui::view::impl_render_view!(LeafView);
 
 #[test]
 fn custom_render_view_mounts_lays_out_and_paints() {
-    let paints = Arc::new(AtomicUsize::new(0));
+    let paints = Rc::new(Cell::new(0));
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new()
             .container(true)
@@ -272,10 +269,10 @@ fn custom_render_view_mounts_lays_out_and_paints() {
     ));
     let bounds = t.rect(&find::id("leaf"));
     assert_eq!((bounds.width, bounds.height), (24.0, 16.0));
-    assert_eq!(paints.load(Ordering::SeqCst), 1);
+    assert_eq!(paints.get(), 1);
 }
 
-#[derive(Debug, flui::Inspect)]
+#[derive(Debug, flui::foundation::inspect::Inspect)]
 struct TransparentProxy {
     has_child: bool,
 }
@@ -298,7 +295,7 @@ fn proxy_macros_forward_live_and_dry_layout() {
     use flui::testing::rendering::{BoxQueryRun, Probe, RenderTester, box_node};
     let mut run = RenderTester::mount(box_node(TransparentProxy { has_child: false }).child(
         box_node(SolidLeaf {
-            paints: Arc::new(AtomicUsize::new(0)),
+            paints: Rc::new(Cell::new(0)),
         }),
     ))
     .with_constraints(BoxConstraints::loose(Size::new(100.0, 100.0)))
@@ -311,7 +308,7 @@ fn proxy_macros_forward_live_and_dry_layout() {
 
 #[test]
 fn gesture_recognizer_uses_headless_virtual_time() {
-    let fired = Arc::new(AtomicUsize::new(0));
+    let fired = Rc::new(Cell::new(0));
     let callback = fired.clone();
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new()
@@ -321,7 +318,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
             .child(
                 GestureDetector::new()
                     .on_long_press(move |_ctx| {
-                        callback.fetch_add(1, Ordering::SeqCst);
+                        callback.set(callback.get() + 1);
                     })
                     .behavior(HitTestBehavior::Opaque)
                     .child(SizedBox::new(40.0, 30.0)),
@@ -330,56 +327,56 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     // The long-press deadline runs on the test's clock: a press released
     // before 500 ms of it is no long press, one held past it is.
     t.long_press(&find::id("press"), Duration::from_millis(300));
-    assert_eq!(fired.load(Ordering::SeqCst), 0);
+    assert_eq!(fired.get(), 0);
     t.long_press(&find::id("press"), Duration::from_millis(550));
-    assert_eq!(fired.load(Ordering::SeqCst), 1);
+    assert_eq!(fired.get(), 1);
 }
 
 #[test]
 fn pointer_input_schedules_a_widget_rebuild() {
     let changed = Rc::new(flui::foundation::ChangeNotifier::new());
-    let value = Arc::new(AtomicUsize::new(0));
-    let builds = Arc::new(AtomicUsize::new(0));
+    let value = Rc::new(Cell::new(0));
+    let builds = Rc::new(Cell::new(0));
     let read = value.clone();
     let builds_in_callback = builds.clone();
     let notification = changed.clone();
     let count = value.clone();
     let view = AnimatedBuilder::new(changed, move || {
-        builds_in_callback.fetch_add(1, Ordering::SeqCst);
+        builds_in_callback.set(builds_in_callback.get() + 1);
         let notification = notification.clone();
         let count = count.clone();
         GestureDetector::new()
             .on_tap(move |_ctx| {
-                count.fetch_add(1, Ordering::SeqCst);
+                count.set(count.get() + 1);
                 notification.notify_listeners();
             })
             .behavior(HitTestBehavior::Opaque)
             .child(SizedBox::new(
-                40.0 + read.load(Ordering::SeqCst) as f64,
+                40.0 + read.get() as f64,
                 30.0,
             ))
     });
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("target").child(view),
     ));
-    let initial_builds = builds.load(Ordering::SeqCst);
+    let initial_builds = builds.get();
     assert_eq!(t.rect(&find::id("target")).width, 40.0);
     t.tap(&find::id("target"));
-    assert_eq!(value.load(Ordering::SeqCst), 1);
-    assert!(builds.load(Ordering::SeqCst) > initial_builds);
+    assert_eq!(value.get(), 1);
+    assert!(builds.get() > initial_builds);
     assert_eq!(t.rect(&find::id("target")).width, 41.0);
 }
 
 #[test]
 fn typed_drag_down_callback_is_available_from_the_widget_surface() {
-    let downs = Arc::new(AtomicUsize::new(0));
+    let downs = Rc::new(Cell::new(0));
     let observed = downs.clone();
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("drag").child(
             GestureDetector::new()
                 .drag(flui::widgets::DragSlot::horizontal().on_down(
                     move |_ctx, _details: flui::interaction::DragDownDetails| {
-                        observed.fetch_add(1, Ordering::SeqCst);
+                        observed.set(observed.get() + 1);
                     },
                 ))
                 .behavior(HitTestBehavior::Opaque)
@@ -389,25 +386,25 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     // A press that never moves: the callback runs on the pointer's down,
     // with no drag accepted.
     t.tap(&find::id("drag"));
-    assert_eq!(downs.load(Ordering::SeqCst), 1);
+    assert_eq!(downs.get(), 1);
 }
 
 struct DistanceRecognizer {
     contact: flui::interaction::PrimaryContact,
     threshold: f64,
-    accepted: Arc<AtomicUsize>,
-    rejected: Arc<AtomicUsize>,
+    accepted: Rc<Cell<usize>>,
+    rejected: Rc<Cell<usize>>,
 }
 
 impl flui::interaction::GestureArenaMember for DistanceRecognizer {
     fn accept_gesture(&self, contest: flui::interaction::GestureContest) {
         assert!(self.contact.tracks_contest(contest));
-        self.accepted.fetch_add(1, Ordering::SeqCst);
+        self.accepted.set(self.accepted.get() + 1);
     }
 
     fn reject_gesture(&self, contest: flui::interaction::GestureContest) {
         assert!(self.contact.tracks_contest(contest));
-        self.rejected.fetch_add(1, Ordering::SeqCst);
+        self.rejected.set(self.rejected.get() + 1);
     }
 }
 
@@ -463,8 +460,8 @@ impl StatefulView for ArenaProbe {
             Rc::new_cyclic(|this: &std::rc::Weak<DistanceRecognizer>| DistanceRecognizer {
                 contact: PrimaryContact::new(ArenaMembership::new(arena.clone(), this.clone())),
                 threshold,
-                accepted: Arc::new(AtomicUsize::new(0)),
-                rejected: Arc::new(AtomicUsize::new(0)),
+                accepted: Rc::new(Cell::new(0)),
+                rejected: Rc::new(Cell::new(0)),
             })
         };
         // The arena's sweep on the pointer's release awards the first
@@ -501,10 +498,10 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     let [far, near] = &recognizers[..] else {
         panic!("the state built two recognizers");
     };
-    assert_eq!(near.accepted.load(Ordering::SeqCst), 1);
-    assert_eq!(near.rejected.load(Ordering::SeqCst), 0);
-    assert_eq!(far.accepted.load(Ordering::SeqCst), 0);
-    assert_eq!(far.rejected.load(Ordering::SeqCst), 1);
+    assert_eq!(near.accepted.get(), 1);
+    assert_eq!(near.rejected.get(), 0);
+    assert_eq!(far.accepted.get(), 0);
+    assert_eq!(far.rejected.get(), 1);
     for candidate in [far, near] {
         candidate.cancel();
         assert!(candidate.contact.current().is_none());
@@ -529,18 +526,50 @@ struct LifecycleCapabilities {
 #[derive(Clone, StatefulView)]
 struct CapabilityView {
     capabilities: Rc<RefCell<LifecycleCapabilities>>,
-    completed: Arc<AtomicUsize>,
-    pending_polled: Arc<AtomicUsize>,
-    pending_dropped: Arc<AtomicUsize>,
+    completed: Rc<Cell<usize>>,
+    pending_polled: Rc<Cell<usize>>,
+    pending_dropped: Rc<Cell<usize>>,
     callbacks: Rc<RefCell<Vec<&'static str>>>,
-    shared_callback: Arc<AtomicUsize>,
+    shared_callback: Rc<Cell<usize>>,
 }
 
-struct CapabilityState(CapabilityView);
+/// Born bound: everything it acquires is acquired in `create_state`.
+struct CapabilityState;
 impl StatefulView for CapabilityView {
     type State = CapabilityState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        CapabilityState(self.clone())
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let driver: AsyncDriver = ctx.async_driver().expect("bound async driver");
+        let post_frame: PostFrameHandle = ctx.post_frame_handle().expect("post-frame handle");
+        let done = self.completed.clone();
+        let task: BoxedTask = Box::pin(async move {
+            done.set(done.get() + 1);
+        });
+        let token = driver.spawn_local(task);
+        let pending = driver.spawn_local(Box::pin(PendingCapabilityTask {
+            polled: self.pending_polled.clone(),
+            dropped: self.pending_dropped.clone(),
+        }));
+        let shared = self.shared_callback.clone();
+        post_frame
+            .schedule(move |timing: &FrameTiming| {
+                inspect_timing(timing);
+                shared.set(shared.get() + 1);
+            })
+            .expect("live owner");
+        let callbacks = self.callbacks.clone();
+        let scheduled: Result<(), PostFrameScheduleError> =
+            post_frame.schedule(move |timing: &FrameTiming| {
+                inspect_timing(timing);
+                callbacks.borrow_mut().push("local");
+            });
+        scheduled.expect("live local lane");
+        *self.capabilities.borrow_mut() = LifecycleCapabilities {
+            driver: Some(driver),
+            task: Some(token),
+            pending: Some(pending),
+            post_frame: Some(post_frame),
+        };
+        CapabilityState
     }
 }
 
@@ -550,55 +579,22 @@ fn inspect_timing(timing: &FrameTiming) {
 }
 
 struct PendingCapabilityTask {
-    polled: Arc<AtomicUsize>,
-    dropped: Arc<AtomicUsize>,
+    polled: Rc<Cell<usize>>,
+    dropped: Rc<Cell<usize>>,
 }
 impl std::future::Future for PendingCapabilityTask {
     type Output = ();
     fn poll(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {
-        self.polled.fetch_add(1, Ordering::SeqCst);
+        self.polled.set(self.polled.get() + 1);
         std::task::Poll::Pending
     }
 }
 impl Drop for PendingCapabilityTask {
     fn drop(&mut self) {
-        self.dropped.fetch_add(1, Ordering::SeqCst);
+        self.dropped.set(self.dropped.get() + 1);
     }
 }
 impl ViewState<CapabilityView> for CapabilityState {
-    fn init_state(&mut self, context: &dyn LifecycleContext) {
-        let driver: AsyncDriver = context.async_driver().expect("bound async driver");
-        let post_frame: PostFrameHandle = context.post_frame_handle().expect("post-frame handle");
-        let done = self.0.completed.clone();
-        let task: BoxedTask = Box::pin(async move {
-            done.fetch_add(1, Ordering::SeqCst);
-        });
-        let token = driver.spawn_local(task);
-        let pending = driver.spawn_local(Box::pin(PendingCapabilityTask {
-            polled: self.0.pending_polled.clone(),
-            dropped: self.0.pending_dropped.clone(),
-        }));
-        let shared = self.0.shared_callback.clone();
-        post_frame
-            .schedule(move |timing: &FrameTiming| {
-                inspect_timing(timing);
-                shared.fetch_add(1, Ordering::SeqCst);
-            })
-            .expect("live owner");
-        let callbacks = self.0.callbacks.clone();
-        let scheduled: Result<(), PostFrameScheduleError> =
-            post_frame.schedule(move |timing: &FrameTiming| {
-                inspect_timing(timing);
-                callbacks.borrow_mut().push("local");
-            });
-        scheduled.expect("live local lane");
-        *self.0.capabilities.borrow_mut() = LifecycleCapabilities {
-            driver: Some(driver),
-            task: Some(token),
-            pending: Some(pending),
-            post_frame: Some(post_frame),
-        };
-    }
     fn build(&self, _: &CapabilityView, _: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(20.0, 20.0)
     }
@@ -608,17 +604,17 @@ impl ViewState<CapabilityView> for CapabilityState {
 fn lifecycle_capabilities_are_named_and_run_through_the_facade() {
     let view = CapabilityView {
         capabilities: Rc::default(),
-        completed: Arc::default(),
-        pending_polled: Arc::default(),
-        pending_dropped: Arc::default(),
+        completed: Rc::default(),
+        pending_polled: Rc::default(),
+        pending_dropped: Rc::default(),
         callbacks: Rc::default(),
-        shared_callback: Arc::default(),
+        shared_callback: Rc::default(),
     };
     let mut t = Tester::mount(Center::new().child(view.clone()));
     t.pump();
-    assert_eq!(view.completed.load(Ordering::SeqCst), 1);
-    assert_eq!(view.pending_polled.load(Ordering::SeqCst), 1);
-    assert_eq!(view.shared_callback.load(Ordering::SeqCst), 1);
+    assert_eq!(view.completed.get(), 1);
+    assert_eq!(view.pending_polled.get(), 1);
+    assert_eq!(view.shared_callback.get(), 1);
     assert_eq!(&*view.callbacks.borrow(), &["local"]);
     let capabilities = view.capabilities.borrow();
     assert!(capabilities.task.is_some());
@@ -626,7 +622,7 @@ fn lifecycle_capabilities_are_named_and_run_through_the_facade() {
     let pending = capabilities.pending.as_ref().expect("retained token");
     pending.cancel();
     assert!(pending.is_cancelled());
-    assert_eq!(view.pending_dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(view.pending_dropped.get(), 1);
     assert_eq!(
         capabilities
             .driver
@@ -637,7 +633,7 @@ fn lifecycle_capabilities_are_named_and_run_through_the_facade() {
     );
     drop(capabilities);
     t.pump();
-    assert_eq!(view.pending_polled.load(Ordering::SeqCst), 1);
+    assert_eq!(view.pending_polled.get(), 1);
 }
 
 use flui::interaction::{
@@ -697,25 +693,24 @@ struct InteractionCapabilities {
     hit_test: Option<HitTestHandle>,
     text_input: Option<TextInputHandle>,
 }
-struct FocusCapabilityState(FocusCapabilityView);
+/// Born bound: the capabilities are acquired in `create_state`.
+struct FocusCapabilityState;
 impl StatefulView for FocusCapabilityView {
     type State = FocusCapabilityState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        FocusCapabilityState(self.clone())
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        *self.handles.borrow_mut() = Some(InteractionCapabilities {
+            focus: ctx.focus_manager(),
+            hit_test: ctx.hit_test_handle(),
+            text_input: ctx.text_input_handle(),
+        });
+        FocusCapabilityState
     }
 }
 impl ViewState<FocusCapabilityView> for FocusCapabilityState {
-    fn init_state(&mut self, context: &dyn LifecycleContext) {
-        *self.0.handles.borrow_mut() = Some(InteractionCapabilities {
-            focus: context.focus_manager(),
-            hit_test: context.hit_test_handle(),
-            text_input: context.text_input_handle(),
-        });
-    }
-    fn build(&self, _: &FocusCapabilityView, _: &dyn BuildContext) -> impl IntoView {
-        let changes = self.0.changes.clone();
+    fn build(&self, view: &FocusCapabilityView, _: &dyn BuildContext) -> impl IntoView {
+        let changes = view.changes.clone();
         flui::widgets::Focus::new(SizedBox::new(30.0, 30.0))
-            .focus_node(self.0.node.clone())
+            .focus_node(view.node.clone())
             .on_focus_change(move |_ctx, focused| changes.borrow_mut().push(focused))
     }
 }
@@ -734,7 +729,7 @@ fn retained_focus_node_uses_context_capabilities_through_the_facade() {
     assert!(view.node.has_primary_focus());
     assert!(view.changes.borrow().contains(&true));
     let handles = view.handles.borrow();
-    let handles = handles.as_ref().expect("init_state capabilities");
+    let handles = handles.as_ref().expect("create_state capabilities");
     assert!(handles.focus.primary_focus().is_some());
     assert!(handles.hit_test.is_some());
     // The ui_runtime installs its presentation's text-input capability, as on

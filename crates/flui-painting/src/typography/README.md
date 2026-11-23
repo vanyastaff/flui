@@ -59,14 +59,14 @@ would refuse never reaches it.
 
 ## Registering fonts
 
-An app registers a font as bytes through `flui::register_font`, which loads the face into the
+An app registers a font as bytes through `flui::app::register_font`, which loads the face into the
 app's `FontCollection`. Measurement, paint and carets all read the layout shaped on that
 collection, so the face is visible to all three from the next shape onward, and every UI runtime lays
 its text out again on its next frame:
 
 ```rust
 let bytes = std::fs::read("assets/fonts/MyFont.ttf")?;
-flui::register_font(bytes)?; // FontRegistrationError if no face parses
+flui::app::register_font(bytes)?; // FontRegistrationError if no face parses
 ```
 
 Below the app, `FontCollection::register_font` is the same door for a collection a caller built
