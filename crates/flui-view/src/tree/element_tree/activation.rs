@@ -19,7 +19,7 @@ impl ElementTree {
                 continue;
             };
             let depth = node.depth();
-            let children = self.owned_children(id, owner.child_manager_registry);
+            self.stack_owned_children(id, owner.child_manager_registry, &mut stack);
 
             if let Some(node) = self.get_mut(id) {
                 node.element_mut().activate(owner);
@@ -28,8 +28,6 @@ impl ElementTree {
                 owner.note_dependency_change(id);
                 owner.schedule_build_for(id, depth, crate::RebuildReason::DependencyChange);
             }
-
-            stack.extend(children.into_iter().rev());
         }
     }
 
@@ -44,12 +42,11 @@ impl ElementTree {
     ) {
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
-            let children = self.owned_children(id, owner.child_manager_registry);
+            self.stack_owned_children(id, owner.child_manager_registry, &mut stack);
             self.deactivate_inherited_dependencies(id, owner);
             if let Some(node) = self.get_mut(id) {
                 node.element_mut().deactivate(owner);
             }
-            stack.extend(children.into_iter().rev());
         }
     }
 

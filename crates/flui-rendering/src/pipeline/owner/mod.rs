@@ -316,6 +316,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// report of that pass for a boundary it painted, append to the list the
     /// pass read.
     orphaned_nodes: Vec<flui_layer::SceneNodeId>,
+    /// The buffers a subtree removal walks and empties, kept between removals
+    /// so a scrolled-off item allocates no id lists once they have grown.
+    subtree_buffers: crate::storage::SubtreeBuffers,
+    /// The nodes a removal took out of the tree, empty between removals:
+    /// kept for its capacity, and drained when their destructors run.
+    removed_nodes: Vec<crate::storage::RenderNode>,
 
     /// The device pixel ratio the recorded output above was recorded under.
     /// A paint pass under another ratio drops it first, without waking anyone:
@@ -468,6 +474,8 @@ where
         staged_scene: from.staged_scene,
         paint_scratch: from.paint_scratch,
         orphaned_nodes: from.orphaned_nodes,
+        subtree_buffers: from.subtree_buffers,
+        removed_nodes: from.removed_nodes,
         abandoned_nodes: from.abandoned_nodes,
         retained_pixel_ratio: from.retained_pixel_ratio,
         unrecorded_paint: from.unrecorded_paint,

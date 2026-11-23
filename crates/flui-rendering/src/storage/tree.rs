@@ -533,14 +533,23 @@ impl RenderTree {
         self.nodes.remove(id)
     }
 
-    /// Takes the nodes of `subtree` out of the tree, children before their parent, and returns
-    /// them for the caller to drop after its own bookkeeping. Every id of the subtree is stale when
-    /// this returns, and no render object's destructor has run.
+    /// Takes the nodes of `subtree` out of the tree, children before their parent, and appends
+    /// them to `nodes` for the caller to drop after its own bookkeeping. Every id of the subtree
+    /// is stale when this returns, and no render object's destructor has run. Returns the
+    /// subtree's buffers, emptied, for the next [`Self::collect_subtree`].
     ///
     /// Only [`Self::collect_subtree`] makes a [`SubtreeIds`], so the order this relies on is the
     /// walk's, never a caller's; taking it by value spends it, so a stale list cannot be reused.
-    pub(crate) fn take_subtree(&mut self, subtree: SubtreeIds) -> Vec<RenderNode> {
-        let subtree = subtree.order;
+    pub(crate) fn take_subtree(
+        &mut self,
+        subtree: SubtreeIds,
+        nodes: &mut Vec<RenderNode>,
+    ) -> SubtreeBuffers {
+        let SubtreeIds {
+            mut order,
+            mut members,
+            stack,
+        } = subtree;
         // Iterative: the subtree comes collected up front (explicit-stack
         // pre-order with cycle protection), and is removed in REVERSE
         // collection order — in reversed pre-order every child comes
@@ -548,11 +557,17 @@ impl RenderTree {
         // child-first removal. Plain recursion here overflowed the
         // 1 MiB Windows main-thread stack on deep chains (the same
         // crash class the pipeline walks hit at ~1000 levels).
-        let mut nodes = Vec::with_capacity(subtree.len());
-        for &node_id in subtree.iter().rev() {
+        nodes.reserve(order.len());
+        for &node_id in order.iter().rev() {
             nodes.extend(self.remove_shallow(node_id));
         }
-        nodes
+        order.clear();
+        members.clear();
+        SubtreeBuffers {
+            order,
+            members,
+            stack,
+        }
     }
 
     /// Removes a node and all its descendants.
@@ -563,7 +578,11 @@ impl RenderTree {
     /// during the unwind, as std drops a `Vec`.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn remove_recursive(&mut self, id: RenderId) -> usize {
-        let nodes = self.take_subtree(self.collect_subtree(id));
+        let mut nodes = Vec::new();
+        self.take_subtree(
+            self.collect_subtree(id, SubtreeBuffers::default()),
+            &mut nodes,
+        );
         let count = nodes.len();
         drop(nodes);
         count
@@ -660,48 +679,51 @@ impl RenderTree {
     /// node's `children()` slice is borrowed once. `visited` is an
     /// `FxHashSet<RenderId>` — O(1) amortised lookup + insert per id.
     pub fn collect_subtree_ids(&self, root_id: RenderId) -> Vec<RenderId> {
-        self.collect_subtree(root_id).order
+        self.collect_subtree(root_id, SubtreeBuffers::default())
+            .order
     }
 
     /// [`Self::collect_subtree_ids`], with the same ids as a set for a caller that also asks
     /// membership of them, from one walk.
-    pub(crate) fn collect_subtree(&self, root_id: RenderId) -> SubtreeIds {
-        let mut out = Vec::new();
-        // If the root doesn't exist, return empty to mirror other
-        // tree-walk methods (e.g., `depth()` returns None) — callers
-        // should check before doing further work with the result.
-        if self.get(root_id).is_none() {
-            return SubtreeIds::default();
+    ///
+    /// The walk fills `buffers`, which a caller that removes subtrees often keeps between
+    /// removals (the [`SubtreeBuffers`] that [`Self::take_subtree`] hands back), so a removal
+    /// allocates nothing once they have grown to its subtree.
+    pub(crate) fn collect_subtree(&self, root_id: RenderId, buffers: SubtreeBuffers) -> SubtreeIds {
+        let SubtreeBuffers {
+            mut order,
+            mut members,
+            mut stack,
+        } = buffers;
+        order.clear();
+        members.clear();
+        stack.clear();
+        // A missing root collects nothing, as the other walks answer `None` for it (`depth()`);
+        // the caller checks before doing further work with the result.
+        if self.get(root_id).is_some() {
+            stack.push(root_id);
         }
-        let mut stack: Vec<RenderId> = vec![root_id];
-        // The visited-set short-circuits on repeated ids so a cyclic
-        // tree terminates instead of hanging / OOMing. Pre-sized to a
-        // conservative guess (small trees are the common case; HashSet
-        // grows by power-of-two doubling otherwise).
-        let mut visited: rustc_hash::FxHashSet<RenderId> =
-            rustc_hash::FxHashSet::with_capacity_and_hasher(16, rustc_hash::FxBuildHasher);
         while let Some(id) = stack.pop() {
             // A stale id pushes no children, so it cannot loop and stays out
-            // of the set, which then holds exactly the ids of `out`.
+            // of the set, which then holds exactly the ids of `order`.
             let Some(node) = self.get(id) else {
                 continue;
             };
-            // Skip ids already visited — preserves uniqueness in `out`
+            // Skip ids already visited — preserves uniqueness in `order`
             // and breaks cycles. Without this, a parent/child cycle
             // (A → B → A) re-pushes A onto stack forever.
-            if !visited.insert(id) {
+            if !members.insert(id) {
                 continue;
             }
-            out.push(id);
+            order.push(id);
             // Reverse-push so the leftmost child pops first,
             // preserving pre-order with children-in-stored-order.
-            for &child_id in node.children().iter().rev() {
-                stack.push(child_id);
-            }
+            stack.extend(node.children().iter().rev().copied());
         }
         SubtreeIds {
-            order: out,
-            members: visited,
+            order,
+            members,
+            stack,
         }
     }
 
@@ -809,12 +831,23 @@ impl RenderTree {
 //
 // See `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
 
+/// The emptied buffers of a [`SubtreeIds`], which [`RenderTree::take_subtree`] hands back so
+/// the next [`RenderTree::collect_subtree`] reuses their capacity.
+#[derive(Debug, Default)]
+pub(crate) struct SubtreeBuffers {
+    order: Vec<RenderId>,
+    members: rustc_hash::FxHashSet<RenderId>,
+    stack: Vec<RenderId>,
+}
+
 /// The live ids of one subtree, as one walk of [`RenderTree::collect_subtree`] found them: in
 /// pre-order, each once, and the same ids as a set.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct SubtreeIds {
     order: Vec<RenderId>,
     members: rustc_hash::FxHashSet<RenderId>,
+    /// The walk's work stack, empty once it ends, kept for the next walk.
+    stack: Vec<RenderId>,
 }
 
 impl SubtreeIds {
@@ -1057,7 +1090,7 @@ mod tests {
                 }
             }
 
-            let subtree = tree.collect_subtree(root);
+            let subtree = tree.collect_subtree(root, SubtreeBuffers::default());
             assert_eq!(subtree.ids(), [root, a, a1, b], "{shape:?}");
             assert_eq!(
                 *subtree.members(),
