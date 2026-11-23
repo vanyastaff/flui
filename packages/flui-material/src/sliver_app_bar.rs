@@ -10,17 +10,6 @@
 //! [`SliverPersistentHeader`] over the four persistent-header render
 //! objects. What this widget owns is the extent arithmetic joining the two,
 //! and the layering of `flexible_space` behind the toolbar.
-//!
-//! # Deferred, deliberately
-//!
-//! - **Stretch and `FlexibleSpaceBar`** — over-scroll stretch is reachable
-//!   through a custom [`SliverPersistentHeaderDelegate`]'s
-//!   `stretch_configuration`; surfacing it here without a
-//!   `FlexibleSpaceBar` to consume the stretched box would stretch a blank
-//!   region.
-//! - **Title fade / collapse interpolation** — the collapse fraction is
-//!   available to a delegate as `shrink_offset`; the `FlexibleSpaceBar`
-//!   treatment of it is its own widget.
 
 use flui_sdk::painting::styling::Color;
 use flui_sdk::view::element::SliverPersistentHeaderDelegate;
@@ -53,6 +42,17 @@ use crate::AppBar;
 ///     .expanded_height(200.0)
 ///     .pinned(true);
 /// ```
+///
+/// # Deferred, deliberately
+///
+/// - **Stretch and `FlexibleSpaceBar`** — over-scroll stretch is reachable
+///   through a custom [`SliverPersistentHeaderDelegate`]'s
+///   `stretch_configuration`; surfacing it here without a
+///   `FlexibleSpaceBar` to consume the stretched box would stretch a blank
+///   region.
+/// - **Title fade / collapse interpolation** — the collapse fraction is
+///   available to a delegate as `shrink_offset`; the `FlexibleSpaceBar`
+///   treatment of it is its own widget.
 #[derive(Clone, StatelessView)]
 pub struct SliverAppBar {
     app_bar: AppBar,
@@ -234,7 +234,7 @@ impl std::fmt::Debug for SliverAppBar {
 /// plus bottomHeight plus topPadding — except pinned + floating + a bottom,
 /// where the toolbar contribution drops to `collapsedHeight ?? 0.0` (the
 /// toolbar floats away and only the bottom stays pinned).
-/// `app_bar.dart:1339-1345`: min = collapsed; max = max(topPadding +
+/// `flutter/flutter@3.50.1 packages/flutter/lib/src/material/app_bar.dart:1337-1344`: min = collapsed; max = max(topPadding +
 /// (expandedHeight ?? toolbar + bottom), min).
 struct ExtentInputs {
     toolbar_height: f64,
@@ -262,8 +262,8 @@ fn extents(inputs: &ExtentInputs) -> (f64, f64) {
     (collapsed, expanded.max(collapsed))
 }
 
-/// The toolbar's visible-fraction opacity — `app_bar.dart:1360-1374`
-/// verbatim: pinned bars keep the toolbar opaque, except the
+/// The toolbar's visible-fraction opacity — `flutter/flutter@3.50.1 packages/flutter/lib/src/material/app_bar.dart:1360-1373`
+/// without its `accessibleNavigation` condition (not ported): pinned bars keep the toolbar opaque, except the
 /// pinned+floating+bottom shape (whose collapsed extent omits the toolbar,
 /// so it fades out as it scrolls away); everything else fades by the
 /// toolbar's visible fraction.
@@ -363,9 +363,11 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
     fn snap_configuration(
         &self,
     ) -> Option<flui_sdk::rendering::objects::FloatingHeaderSnapConfiguration> {
-        // The oracle's own defaults (`FloatingHeaderSnapConfiguration`,
-        // `rendering/sliver_persistent_header.dart:488-491`): curves.ease
-        // over 300ms.
+        // `FloatingHeaderSnapConfiguration`'s own defaults: `Curves.ease` over 300ms
+        // (`flutter/flutter@3.50.1 packages/flutter/lib/src/rendering/sliver_persistent_header.dart:488-491`).
+        // Flutter's `SliverAppBar` passes `Curves.easeOut` over 200ms instead
+        // (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/app_bar.dart:2043-2046`);
+        // this crate uses the defaults.
         self.snap.then(|| {
             flui_sdk::rendering::objects::FloatingHeaderSnapConfiguration::new(
                 flui_sdk::animation::SharedCurve::new(flui_sdk::animation::curves::EASE),

@@ -1,17 +1,5 @@
 //! [`ElevatedButton`] — a filled M3 button whose `Material` elevates when
 //! pressed.
-//!
-//! # Defaults and scope
-//!
-//! `default_style` holds the M3 elevated-button defaults, narrowed to the V1
-//! slots [`ButtonStyle`] carries — see that module's docs for the full
-//! omitted-slot list. Populated fields: `text_style`, `background_color`, `foreground_color`,
-//! `overlay_color`, `elevation`, `padding`, `minimum_size`, `maximum_size`,
-//! `shape`. Deferred alongside every other V1 button:
-//! `icon_color`/`icon_size`, `mouse_cursor`,
-//! `visual_density`/`tap_target_size`, `animation_duration`/`enable_feedback`/
-//! `splash_factory`. The M3 elevated button sets no default `side` or
-//! `fixed_size` either, so neither field is populated here.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -38,6 +26,18 @@ use crate::theme::Theme;
 ///
 /// let _button = ElevatedButton::new(Text::new("Save")).on_pressed(|_ctx| {});
 /// ```
+///
+/// # Defaults and scope
+///
+/// `default_style` holds the M3 elevated-button defaults, narrowed to the
+/// slots [`ButtonStyle`] carries — see [`ButtonStyle`]'s docs for the full
+/// omitted-slot list. Populated fields: `text_style`, `background_color`, `foreground_color`,
+/// `overlay_color`, `elevation`, `padding`, `minimum_size`, `maximum_size`,
+/// `shape`. Deferred alongside every other button:
+/// `icon_color`/`icon_size`, `mouse_cursor`,
+/// `visual_density`/`tap_target_size`, `animation_duration`/`enable_feedback`/
+/// `splash_factory`. The M3 elevated button sets no default `side` or
+/// `fixed_size` either, so neither field is populated here.
 #[derive(Clone, StatelessView)]
 pub struct ElevatedButton {
     on_pressed: Option<PressCallback>,
@@ -101,7 +101,7 @@ impl StatelessView for ElevatedButton {
         let theme = Theme::of(ctx);
         let mut core = ButtonStyleButtonCore::new(default_style(&theme), self.child.clone())
             .style(self.style.clone());
-        // Middle cascade tier: FLUI V1 has no per-button `InheritedTheme`
+        // Middle cascade tier: FLUI has no per-button `InheritedTheme`
         // wrapper yet, so this reads the button style off the ambient
         // `ThemeData`'s `elevated_button_theme` slot instead (see
         // `crate::button_style_button`'s module docs for this reduction,
@@ -121,8 +121,8 @@ impl StatelessView for ElevatedButton {
 }
 
 /// Verbatim, field-by-field port of `_ElevatedButtonDefaultsM3`
-/// (`elevated_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots —
-/// see the module docs.
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/elevated_button.dart:514`), narrowed to the slots —
+/// see [`ElevatedButton`]'s docs.
 fn default_style(theme: &ThemeData) -> ButtonStyle {
     let colors = theme.color_scheme;
 
@@ -155,7 +155,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             } else if states.contains_state(WidgetState::Hovered) {
                 3.0
             } else {
-                // Focused, and the oracle's unconditional fallback, both
+                // Focused, and Flutter's unconditional fallback, both
                 // resolve to 1.0.
                 1.0
             })
@@ -170,18 +170,18 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
 }
 
 /// `24px` horizontal, `0px` vertical — the `effectiveTextScale <= 1` tier of
-/// `ButtonStyleButton.scaledPadding` (oracle: `elevated_button.dart`'s
-/// private `_scaledPadding`, tag `3.44.0`, `useMaterial3` branch). FLUI has
+/// `ButtonStyleButton.scaledPadding` (Flutter: `_scaledPadding`,
+/// `flutter/flutter@3.50.1 packages/flutter/lib/src/material/elevated_button.dart:457`, `useMaterial3` branch). FLUI has
 /// no `MediaQuery` text-scaler consumer yet (named deferral, shared with
-/// every V1 button below), so only the 1x tier is ported; the 2x/3x lerp
+/// every button below), so only the 1x tier is ported; the 2x/3x lerp
 /// tiers arrive alongside that consumer.
 pub(crate) fn scaled_padding_1x() -> EdgeInsets {
     EdgeInsets::symmetric(0.0, 24.0)
 }
 
-/// The pressed(10%)/hovered(8%) overlay ramp every V1 button's
+/// The pressed(10%)/hovered(8%) overlay ramp every button's
 /// `_TokenDefaultsM3.overlayColor` shares, differing only in `base_color`.
-/// Oracle order matters: pressed is checked FIRST, so a state set containing
+/// Flutter's order matters: pressed is checked FIRST, so a state set containing
 /// both `Pressed` and `Hovered` resolves the pressed opacity, not hover's.
 /// No focused tier: a focused button shows the focus ring alone, which a
 /// pressed overlay could not be mistaken for (ADR-0079).

@@ -86,7 +86,7 @@ impl Theme {
     /// Look up the nearest ancestor [`Theme`]'s data, registering a
     /// dependency. Returns `None` if there is no [`Theme`] ancestor.
     ///
-    /// The oracle's `Theme` has no `maybeOf` — its `Theme.of` never returns
+    /// Flutter's `Theme` has no `maybeOf` — its `Theme.of` never returns
     /// `null` (see [`of`](Self::of)'s doc comment on the fallback it uses
     /// instead), so there is no method to port here. `maybe_of` is this
     /// crate's own non-panicking counterpart to [`of`](Self::of)'s panicking

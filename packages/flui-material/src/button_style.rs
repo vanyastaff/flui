@@ -4,69 +4,6 @@
 //! default; a button's visible style comes from resolving each slot through
 //! `crate::button_style_button`'s widget → theme → default cascade — see
 //! that module's docs for how the cascade consumes this shape.
-//!
-//! # Slot shape: `Option<WidgetStateProperty<Option<V>>>`
-//!
-//! The double `Option` encodes two independent "unset" signals:
-//!
-//! - **Outer `Option`** — this property was never configured at all (the
-//!   whole slot falls through to the next tier: widget → theme → default).
-//! - **Inner `Option<V>` inside the [`WidgetStateProperty`]** — the property
-//!   IS configured, but has nothing to say for the *current* states (that one
-//!   resolution falls through, per [`WidgetStateProperty`]'s own
-//!   `Option`-fallthrough contract — see the `widget_state` module docs of `flui-widgets`,
-//!   the substrate this button family was built against).
-//!
-//! Both signals fall through identically in
-//! `crate::button_style_button`'s resolver: an unset *property* and a property
-//! that *resolves* to `None` behave the same way.
-//!
-//! # Shape: an all-optional patch, not `#[non_exhaustive]`
-//!
-//! Every field here is already `Option`-wrapped: `ButtonStyle` is a patch
-//! callers build with a struct literal and `..Default::default()`
-//! (`ButtonStyle { background_color: Some(…), ..Default::default() }`), not
-//! a value with meaningful non-`None` defaults of its own. A patch struct
-//! built exclusively through `..Default::default()` deliberately stays OFF
-//! `#[non_exhaustive]`: `#[non_exhaustive]` blocks external-crate
-//! struct-literal construction even with a functional update, which would
-//! break the only construction path this type has. A later slot is still
-//! additive for any caller already writing `..Default::default()`.
-//!
-//! # V1 slots
-//!
-//! `text_style`, `background_color`, `foreground_color`,
-//! `overlay_color`, `elevation`, `padding`, `minimum_size`, `fixed_size`,
-//! `maximum_size`, `side`, `shape` — the eleven slots every M3 default table
-//! in the button family populates.
-//!
-//! Named omissions, not silently dropped:
-//!
-//! - **`mouse_cursor`** — FLUI has no `MouseCursor` type yet.
-//! - **`icon_color` / `icon_size`** — arrive with a future `.icon()`
-//!   constructor on each button type; nothing consumes them yet.
-//! - **`animation_duration` / `enable_feedback` / `splash_factory`** — no
-//!   implicit shape/elevation animation (`material.rs`'s own named
-//!   deferral), no acoustic/haptic feedback substrate, and one ripple
-//!   (`InkWell`'s own, configured through `RippleScope`) rather than a
-//!   splash factory to select.
-//! - **`visual_density` / `tap_target_size`** — FLUI has no `VisualDensity`
-//!   type; every button below skips the tap-target padding and
-//!   density-adjustment step.
-//! - **`alignment`** — an `Align`-wrapped child slot; the V1
-//!   composition in `crate::button_style_button` omits the `Align` layer
-//!   entirely (see that module's docs).
-//! - **`shadow_color` / `surface_tint_color`** — `Material`'s own
-//!   `surfaceTintColor` is itself a named deferral (`material.rs`), and
-//!   `Material` has no `shadow_color` field yet for a resolved
-//!   `shadow_color` to feed.
-//! - **`icon_alignment` / `background_builder` / `foreground_builder`** —
-//!   all three presuppose the icon constructor and/or an extension point
-//!   (`crate::button_style_button`'s composition is currently fixed, not
-//!   builder-customizable).
-//! - **`ButtonStyle::lerp`** — `AnimatedTheme` switches component themes,
-//!   button styles included, half way; a button style interpolates once a
-//!   component needs its colours to blend during a theme change.
 
 use flui_sdk::painting::styling::BorderSide;
 use flui_sdk::painting::typography::TextStyle;
@@ -94,8 +31,70 @@ use crate::shape::MaterialShape;
 /// assert!(style.foreground_color.is_none());
 /// ```
 ///
-/// See the module docs for the double-`Option` slot shape, why this type is
-/// deliberately not `#[non_exhaustive]`, and the V1 slot list.
+/// See [`ButtonStyle`]'s docs for the double-`Option` slot shape, why this type is
+/// deliberately not `#[non_exhaustive]`, and the slot list.
+///
+/// # Slot shape: `Option<WidgetStateProperty<Option<V>>>`
+///
+/// The double `Option` encodes two independent "unset" signals:
+///
+/// - **Outer `Option`** — this property was never configured at all (the
+///   whole slot falls through to the next tier: widget → theme → default).
+/// - **Inner `Option<V>` inside the [`WidgetStateProperty`]** — the property
+///   IS configured, but has nothing to say for the *current* states (that one
+///   resolution falls through, per [`WidgetStateProperty`]'s own
+///   `Option`-fallthrough contract — see the `widget_state` module docs of `flui-widgets`).
+///
+/// Both signals fall through identically in
+/// `crate::button_style_button`'s resolver: an unset *property* and a property
+/// that *resolves* to `None` behave the same way.
+///
+/// # Shape: an all-optional patch, not `#[non_exhaustive]`
+///
+/// Every field here is already `Option`-wrapped: `ButtonStyle` is a patch
+/// callers build with a struct literal and `..Default::default()`
+/// (`ButtonStyle { background_color: Some(…), ..Default::default() }`), not
+/// a value with meaningful non-`None` defaults of its own. A patch struct
+/// built exclusively through `..Default::default()` deliberately stays OFF
+/// `#[non_exhaustive]`: `#[non_exhaustive]` blocks external-crate
+/// struct-literal construction even with a functional update, which would
+/// break the only construction path this type has. A later slot is still
+/// additive for any caller already writing `..Default::default()`.
+///
+/// # Slots
+///
+/// `text_style`, `background_color`, `foreground_color`,
+/// `overlay_color`, `elevation`, `padding`, `minimum_size`, `fixed_size`,
+/// `maximum_size`, `side`, `shape` — the eleven slots every M3 default table
+/// in the button family populates.
+///
+/// Named omissions, not silently dropped:
+///
+/// - **`mouse_cursor`** — FLUI has no `MouseCursor` type yet.
+/// - **`icon_color` / `icon_size`** — arrive with a future `.icon()`
+///   constructor on each button type; nothing consumes them yet.
+/// - **`animation_duration` / `enable_feedback` / `splash_factory`** — no
+///   implicit shape/elevation animation (`material.rs`'s own named
+///   deferral), no acoustic/haptic feedback support, and one ripple
+///   (`InkWell`'s own, configured through `RippleScope`) rather than a
+///   splash factory to select.
+/// - **`visual_density` / `tap_target_size`** — FLUI has no `VisualDensity`
+///   type; every button below skips the tap-target padding and
+///   density-adjustment step.
+/// - **`alignment`** — an `Align`-wrapped child slot; the
+///   composition in `crate::button_style_button` omits the `Align` layer
+///   entirely (see that module's docs).
+/// - **`shadow_color` / `surface_tint_color`** — `Material`'s own
+///   `surfaceTintColor` is itself a named deferral (`material.rs`), and
+///   `Material` has no `shadow_color` field yet for a resolved
+///   `shadow_color` to feed.
+/// - **`icon_alignment` / `background_builder` / `foreground_builder`** —
+///   all three presuppose the icon constructor and/or an extension point
+///   (`crate::button_style_button`'s composition is currently fixed, not
+///   builder-customizable).
+/// - **`ButtonStyle::lerp`** — `AnimatedTheme` switches component themes,
+///   button styles included, half way; a button style interpolates once a
+///   component needs its colours to blend during a theme change.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ButtonStyle {
     /// The style for the button's text descendants.
@@ -137,7 +136,7 @@ pub struct ButtonStyle {
     /// resolved-style tests), but [`MaterialShape`] is fill-and-clip-only —
     /// `Material.shape`'s border painting is a pre-existing named deferral
     /// (see `shape.rs`'s "Named deferral: `OutlinedBorder` sides"). An
-    /// `OutlinedButton` in V1 resolves an outline color/width but does not
+    /// `OutlinedButton` in this crate resolves an outline color/width but does not
     /// yet draw a stroke.
     pub side: Option<WidgetStateProperty<Option<BorderSide>>>,
 

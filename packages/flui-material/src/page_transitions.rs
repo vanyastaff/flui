@@ -1,32 +1,5 @@
 //! [`PageTransition`] and [`PageTransitionsTheme`] — which transition a Material
 //! app's routes run, per platform (ADR-0221 D3).
-//!
-//! `flui-widgets` owns the mechanism: a route given no `.transitions(…)` adopts
-//! the nearest [`PageTransitions`](flui_sdk::widgets::PageTransitions) builder
-//! of its kind when its navigator installs it. This module owns the policy:
-//! [`MaterialApp`](crate::MaterialApp) installs the page builder
-//! [`ThemeData::page_transitions_theme`](crate::ThemeData::page_transitions_theme)
-//! names for the tree's [`PlatformConvention`](flui_sdk::view::environment::PlatformConvention), and the
-//! Material dialog fade as the popup builder, which is how
-//! [`show_dialog`](crate::show_dialog) fades.
-//!
-//! | Transition | Duration | Motion |
-//! |---|---|---|
-//! | [`FadeForwards`](PageTransition::FadeForwards) | 450 ms | slides in a quarter width and fades, `EASE_IN_OUT_CUBIC_EMPHASIZED`; the covered page moves a quarter width the other way and fades out |
-//! | [`Zoom`](PageTransition::Zoom) | 300 ms | scales 0.85 → 1 along `EASE_IN_OUT_CUBIC_EMPHASIZED` (two cubic phases), fading in over 12.5–25 %; the covered page scales 1 → 1.05 |
-//! | [`Cupertino`](PageTransition::Cupertino) | 500 ms | `flui-widgets`' shared iOS parallax slide |
-//! | [`SharedAxis`](PageTransition::SharedAxis) | 300 ms | fades in over 30–100 % while moving 30 px (or scaling 0.8 → 1) along `FAST_OUT_SLOW_IN`; the covered page fades out over 0–30 % while moving 30 px on (or scaling 1 → 1.1) |
-//! | [`FadeThrough`](PageTransition::FadeThrough) | 300 ms | the covered page fades out over the first 6/20 along `Cubic(0.4, 0, 1, 1)`; the new page fades in and scales 0.92 → 1 over the remaining 14/20 along `Cubic(0, 0, 0.2, 1)` |
-//! | [`None`](PageTransition::None) | 0 ms | an instant cut |
-//! | dialog (popup slot) | 150 ms | fades in along `EASE_OUT` |
-//!
-//! Every builder's settled frame (primary at 1, secondary at 0) is the plain
-//! page, so a route settled on its first reduced-motion frame shows no trace
-//! of the transition.
-//!
-//! Not modelled: right-to-left mirroring of the horizontal shared axis and of
-//! fade-forwards' slide direction (the slides move toward the leading edge
-//! in left-to-right terms), and the predictive-back variants.
 
 use std::fmt;
 use std::rc::Rc;
@@ -77,6 +50,34 @@ pub enum SharedAxis {
 ///
 /// [`Custom`](Self::Custom) compares by identity (`Rc::ptr_eq`): two custom
 /// transitions are equal only when they are the same builder.
+///
+///
+/// `flui-widgets` owns the mechanism: a route given no `.transitions(…)` adopts
+/// the nearest [`PageTransitions`](flui_sdk::widgets::PageTransitions) builder
+/// of its kind when its navigator installs it. This module owns the policy:
+/// [`MaterialApp`](crate::MaterialApp) installs the page builder
+/// [`ThemeData::page_transitions_theme`](crate::ThemeData::page_transitions_theme)
+/// names for the tree's [`PlatformConvention`](flui_sdk::view::environment::PlatformConvention), and the
+/// Material dialog fade as the popup builder, which is how
+/// [`show_dialog`](crate::show_dialog) fades.
+///
+/// | Transition | Duration | Motion |
+/// |---|---|---|
+/// | [`FadeForwards`](PageTransition::FadeForwards) | 450 ms | slides in a quarter width and fades, `EASE_IN_OUT_CUBIC_EMPHASIZED`; the covered page moves a quarter width the other way and fades out |
+/// | [`Zoom`](PageTransition::Zoom) | 300 ms | scales 0.85 → 1 along `EASE_IN_OUT_CUBIC_EMPHASIZED` (two cubic phases), fading in over 12.5–25 %; the covered page scales 1 → 1.05 |
+/// | [`Cupertino`](PageTransition::Cupertino) | 500 ms | `flui-widgets`' shared iOS parallax slide |
+/// | [`SharedAxis`](PageTransition::SharedAxis) | 300 ms | fades in over 30–100 % while moving 30 px (or scaling 0.8 → 1) along `FAST_OUT_SLOW_IN`; the covered page fades out over 0–30 % while moving 30 px on (or scaling 1 → 1.1) |
+/// | [`FadeThrough`](PageTransition::FadeThrough) | 300 ms | the covered page fades out over the first 6/20 along `Cubic(0.4, 0, 1, 1)`; the new page fades in and scales 0.92 → 1 over the remaining 14/20 along `Cubic(0, 0, 0.2, 1)` |
+/// | [`None`](PageTransition::None) | 0 ms | an instant cut |
+/// | dialog (popup slot) | 150 ms | fades in along `EASE_OUT` |
+///
+/// Every builder's settled frame (primary at 1, secondary at 0) is the plain
+/// page, so a route settled on its first reduced-motion frame shows no trace
+/// of the transition.
+///
+/// Not modelled: right-to-left mirroring of the horizontal shared axis and of
+/// fade-forwards' slide direction (the slides move toward the leading edge
+/// in left-to-right terms), and the predictive-back variants.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum PageTransition {

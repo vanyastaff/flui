@@ -30,7 +30,7 @@ use flui_material::{Checkbox, Theme, ThemeData};
 use flui_testing::a11y::Toggled;
 
 /// The checkbox's full tap target — the minimum interactive dimension
-/// (`48.0`), the branch `Checkbox` always takes in this V1 (no
+/// (`48.0`), the branch `Checkbox` always takes in this crate (no
 /// `materialTapTargetSize` override yet).
 const TAP_TARGET: f64 = 48.0;
 

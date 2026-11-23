@@ -1,94 +1,5 @@
-//! [`Tab`] and [`TabBar`] — the secondary M3 tab bar. See the module docs
-//! below for exactly which contract this V1 ships.
-//!
-//! # `TabBar` ships the SECONDARY contract only
-//!
-//! Material 3 defines two tab bars: the primary (a 3dp,
-//! label-width indicator meant for an `AppBar.bottom`) and the secondary (a
-//! 2dp, full-tab-width indicator meant to separate content within a page
-//! body). This crate ships **only** the
-//! secondary style, as [`TabBar::secondary`] — there is no plain
-//! `TabBar::new` that could read as "the primary bar, just less finished".
-//! Shipping a primary bar honestly needs `TabBarIndicatorSize::Label`, which
-//! needs the *width of each tab's own label content* after layout
-//! (a `GlobalKey`-mediated post-layout measurement this crate has no
-//! established pattern for yet). Rather than ship a primary bar that
-//! silently degrades to `TabBarIndicatorSize::Tab` sizing, primary is
-//! deferred wholesale until that measurement exists.
-//!
-//! # Fixed equal-share layout only (no `isScrollable`)
-//!
-//! A non-scrollable bar gives every tab an equal share via `Expanded` —
-//! that is the only layout this crate implements.
-//! `isScrollable`, `TabAlignment::{Start, StartOffset, Center}`, and
-//! `scrollController` are named deferrals: the scrollable path additionally
-//! needs post-layout tab-offset bookkeeping and a
-//! horizontal `SingleChildScrollView`, neither of which any test in this
-//! unit's acceptance list exercises.
-//!
-//! # Indicator: one rect painted from the controller's position
-//!
-//! Each tab cell reserves an `indicator_weight` band at its bottom edge, and
-//! one `CustomPaint` over the whole bar paints the indicator into that band
-//! from [`crate::TabController::position`]. The painter repaints on the
-//! position's notifications without rebuilding the bar. Between whole tabs
-//! the rect follows [`TabIndicatorAnimation`]: `Linear` interpolates both
-//! edges, `Elastic` lets the leading edge lead and the trailing edge follow,
-//! so the indicator stretches mid-way. Both are functions of the position
-//! alone, so a swipe, a tap animation and a reversal all paint the same rect
-//! for the same position. Under a right-to-left `Directionality` the tab row
-//! runs from the right and the indicator mirrors with it.
-//!
-//! The divider (`showDivider: true` for a non-scrollable M3 bar) is a
-//! `Positioned` full-width strip at the bar's bottom edge, stacked first, so
-//! the tab row and then the indicator paint over it.
-//!
-//! # Named deferrals (not silently dropped)
-//!
-//! - **The primary bar** and its label-width indicator, whose M3 default is
-//!   the elastic animation — see the "SECONDARY contract" section above. The
-//!   secondary bar defaults to `Linear` and takes `Elastic` on request.
-//! - **Label color interpolation** — label colors follow the committed
-//!   `index`, not the fractional position.
-//! - **`TabBarIndicatorSize::Label`**, custom `indicator: Decoration`,
-//!   `indicatorPadding`, rounded-corner indicators — primary-bar-only or
-//!   `Label`-sizing-only features; see the "SECONDARY contract"
-//!   section above.
-//! - **`WidgetStateColor` for `labelColor`** — a full tab bar lets
-//!   `labelColor` itself be state-varying, ignoring `unselectedLabelColor`
-//!   when it is. This crate resolves `labelColor`/`unselectedLabelColor` as
-//!   two plain colors (exactly the shape of the M3 secondary default
-//!   table, whose label colors are plain `Color`s).
-//!   `overlayColor` — the hover/press/focus ramp — IS state-resolved (a
-//!   genuine `WidgetStateProperty`), since the M3 default table needs it.
-//! - **Icon recoloring** — a full tab bar wraps tab content in
-//!   `IconTheme.merge` so a bare `Icon` child inherits the resolved
-//!   label/icon color. This crate wraps only in
-//!   [`flui_sdk::widgets::DefaultTextStyle`] (text recoloring); a caller-supplied
-//!   icon keeps whatever color it was given. No test in this unit's
-//!   acceptance list exercises icon color.
-//! - **`labelPadding`/`TabBarThemeData` overrides for it** — fixed at
-//!   [`kTabLabelPadding`](Self) (`16.0` horizontal), no widget or theme
-//!   override surface yet.
-//! - **`onHover`/`onFocusChange`/`mouseCursor`/`splashFactory`/
-//!   `splashBorderRadius`/`dragStartBehavior`/`physics`/`textScaler`** — no
-//!   consumer yet; `InkWell`'s own defaults apply.
-//! - **The "Tab N of M" label** — a full tab bar adds it to each tab's
-//!   semantics. Each tab here is one `SemanticsRole::Tab` node carrying its
-//!   selected state and its content's text, inside a `SemanticsRole::TabList`
-//!   node for the bar, as [`crate::NavigationBar`]'s destinations are; the
-//!   position label needs a localizations table this crate does not have yet.
-//! - **`enableFeedback`** — `InkWell.enableFeedback` (haptic/
-//!   acoustic click feedback on tap, defaulting to `true`) has no analog
-//!   here; [`crate::InkWell`] itself has no `enableFeedback` parameter yet
-//!   (see that module's own docs), so `TabBar` has nothing to plumb it to.
-//! - **`automaticIndicatorColorAdjustment`** — a full tab bar snaps
-//!   `indicatorColor` to white when it would otherwise match the ambient
-//!   `Material`'s own fill color (avoiding an invisible indicator). This
-//!   crate's indicator band is a plain `Container` fill with no ambient-color
-//!   lookup at all — an indicator configured (via `TabBarThemeData` or a
-//!   theme with an unusual `ColorScheme.primary`) to match the bar's actual
-//!   background paints invisibly, with no automatic correction.
+//! [`Tab`] and [`TabBar`] — the secondary M3 tab bar. See [`TabBar`]'s docs
+//! below for exactly which contract this crate ships.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -128,7 +39,7 @@ pub(crate) const TAB_HEIGHT: f64 = 46.0;
 pub(crate) const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
 
 /// The horizontal padding every tab label gets, both sides
-/// (`EdgeInsets.symmetric(horizontal: 16.0)`) — see the module docs for why this crate has no override surface
+/// (`EdgeInsets.symmetric(horizontal: 16.0)`) — see [`TabBar`]'s docs for why this crate has no override surface
 /// for it yet.
 pub(crate) const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
 
@@ -283,7 +194,7 @@ impl PreferredSizeView for Tab {
     }
 }
 
-/// The M3 secondary tab bar — see the module docs for exactly what this
+/// The M3 secondary tab bar — see [`TabBar`]'s docs for exactly what this
 /// ships (secondary only, fixed equal-share layout, an indicator that
 /// follows [`TabController::position`]).
 ///
@@ -298,6 +209,95 @@ impl PreferredSizeView for Tab {
 /// let tabs = vec![Tab::text("One"), Tab::text("Two")];
 /// let bar = DefaultTabController::new(tabs.len(), TabBar::secondary(tabs));
 /// ```
+///
+/// # `TabBar` ships the SECONDARY contract only
+///
+/// Material 3 defines two tab bars: the primary (a 3dp,
+/// label-width indicator meant for an `AppBar.bottom`) and the secondary (a
+/// 2dp, full-tab-width indicator meant to separate content within a page
+/// body). This crate ships **only** the
+/// secondary style, as [`TabBar::secondary`] — there is no plain
+/// `TabBar::new` that could read as "the primary bar, just less finished".
+/// Shipping a primary bar honestly needs `TabBarIndicatorSize::Label`, which
+/// needs the *width of each tab's own label content* after layout
+/// (a `GlobalKey`-mediated post-layout measurement this crate has no
+/// established pattern for yet). Rather than ship a primary bar that
+/// silently degrades to `TabBarIndicatorSize::Tab` sizing, primary is
+/// deferred wholesale until that measurement exists.
+///
+/// # Fixed equal-share layout only (no `isScrollable`)
+///
+/// A non-scrollable bar gives every tab an equal share via `Expanded` —
+/// that is the only layout this crate implements.
+/// `isScrollable`, `TabAlignment::{Start, StartOffset, Center}`, and
+/// `scrollController` are named deferrals: the scrollable path additionally
+/// needs post-layout tab-offset bookkeeping and a
+/// horizontal `SingleChildScrollView`, neither of which any test in this
+/// unit's acceptance list exercises.
+///
+/// # Indicator: one rect painted from the controller's position
+///
+/// Each tab cell reserves an `indicator_weight` band at its bottom edge, and
+/// one `CustomPaint` over the whole bar paints the indicator into that band
+/// from [`crate::TabController::position`]. The painter repaints on the
+/// position's notifications without rebuilding the bar. Between whole tabs
+/// the rect follows [`TabIndicatorAnimation`]: `Linear` interpolates both
+/// edges, `Elastic` lets the leading edge lead and the trailing edge follow,
+/// so the indicator stretches mid-way. Both are functions of the position
+/// alone, so a swipe, a tap animation and a reversal all paint the same rect
+/// for the same position. Under a right-to-left `Directionality` the tab row
+/// runs from the right and the indicator mirrors with it.
+///
+/// The divider (`showDivider: true` for a non-scrollable M3 bar) is a
+/// `Positioned` full-width strip at the bar's bottom edge, stacked first, so
+/// the tab row and then the indicator paint over it.
+///
+/// # Named deferrals (not silently dropped)
+///
+/// - **The primary bar** and its label-width indicator, whose M3 default is
+///   the elastic animation — see the "SECONDARY contract" section above. The
+///   secondary bar defaults to `Linear` and takes `Elastic` on request.
+/// - **Label color interpolation** — label colors follow the committed
+///   `index`, not the fractional position.
+/// - **`TabBarIndicatorSize::Label`**, custom `indicator: Decoration`,
+///   `indicatorPadding`, rounded-corner indicators — primary-bar-only or
+///   `Label`-sizing-only features; see the "SECONDARY contract"
+///   section above.
+/// - **`WidgetStateColor` for `labelColor`** — a full tab bar lets
+///   `labelColor` itself be state-varying, ignoring `unselectedLabelColor`
+///   when it is. This crate resolves `labelColor`/`unselectedLabelColor` as
+///   two plain colors (exactly the shape of the M3 secondary default
+///   table, whose label colors are plain `Color`s).
+///   `overlayColor` — the hover/press/focus ramp — IS state-resolved (a
+///   genuine `WidgetStateProperty`), since the M3 default table needs it.
+/// - **Icon recoloring** — a full tab bar wraps tab content in
+///   `IconTheme.merge` so a bare `Icon` child inherits the resolved
+///   label/icon color. This crate wraps only in
+///   [`flui_sdk::widgets::DefaultTextStyle`] (text recoloring); a caller-supplied
+///   icon keeps whatever color it was given. No test in this unit's
+///   acceptance list exercises icon color.
+/// - **`labelPadding`/`TabBarThemeData` overrides for it** — fixed at
+///   [`kTabLabelPadding`](Self) (`16.0` horizontal), no widget or theme
+///   override surface yet.
+/// - **`onHover`/`onFocusChange`/`mouseCursor`/`splashFactory`/
+///   `splashBorderRadius`/`dragStartBehavior`/`physics`/`textScaler`** — no
+///   consumer yet; `InkWell`'s own defaults apply.
+/// - **The "Tab N of M" label** — a full tab bar adds it to each tab's
+///   semantics. Each tab here is one `SemanticsRole::Tab` node carrying its
+///   selected state and its content's text, inside a `SemanticsRole::TabList`
+///   node for the bar, as [`crate::NavigationBar`]'s destinations are; the
+///   position label needs a localizations table this crate does not have yet.
+/// - **`enableFeedback`** — `InkWell.enableFeedback` (haptic/
+///   acoustic click feedback on tap, defaulting to `true`) has no analog
+///   here; [`crate::InkWell`] itself has no `enableFeedback` parameter yet
+///   (see [`InkWell`]'s docs), so `TabBar` has nothing to plumb it to.
+/// - **`automaticIndicatorColorAdjustment`** — a full tab bar snaps
+///   `indicatorColor` to white when it would otherwise match the ambient
+///   `Material`'s own fill color (avoiding an invisible indicator). This
+///   crate's indicator band is a plain `Container` fill with no ambient-color
+///   lookup at all — an indicator configured (via `TabBarThemeData` or a
+///   theme with an unusual `ColorScheme.primary`) to match the bar's actual
+///   background paints invisibly, with no automatic correction.
 #[derive(Clone, StatefulView)]
 pub struct TabBar {
     tabs: Vec<Tab>,
@@ -386,7 +386,7 @@ fn tab_has_text_and_icon(tabs: &[Tab]) -> bool {
 }
 
 /// [`TabBar`]'s theme-resolved colors/styles — see [`resolve_style`]'s doc
-/// comment for the widget → theme → default cascade (this V1 has no
+/// comment for the widget → theme → default cascade (this crate has no
 /// per-widget override for these, only theme → default; see the module
 /// docs).
 struct ResolvedTabBarStyle {

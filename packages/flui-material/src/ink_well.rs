@@ -1,87 +1,5 @@
 //! [`InkWell`] — an M3 interactive surface: a state layer that tracks
 //! hover/focus/drag and a ripple for each press, painted under the child.
-//!
-//! # One type for `InkWell` and `InkResponse`
-//!
-//! A contained, rectangular-highlight `InkWell` and a free-form
-//! `InkResponse` only differ in ink clipping. FLUI ships one bounded type:
-//! its ink is clipped to [`InkWell::shape`].
-//!
-//! # Feedback owned by the well
-//!
-//! The well owns its feedback, the way Compose's `Indication` does: there is
-//! no ink-feature registry on an ancestor `Material`, so a ripple can never
-//! paint outside the well that started it. [`crate::ripple`] holds the state
-//! layer, the waves and their timing. Colours resolve in this order:
-//!
-//! - [`InkWell::overlay_color`] for the current
-//!   [`WidgetStates`](flui_sdk::widgets::WidgetStates), alpha included —
-//!   the component styles (buttons, checkbox, …) set it;
-//! - otherwise the ambient [`RippleConfiguration`](crate::RippleConfiguration)
-//!   colour, else the [`Theme`]'s `on_surface`, at the
-//!   [`StateLayerAlpha`](crate::StateLayerAlpha) of the active state.
-//!
-//! A [`RippleScope`] with no configuration turns both the
-//! ripple and the state layer off. Under reduced motion the well paints the
-//! state layer only, `Pressed` included, and no expanding wave.
-//!
-//! # One node for its behaviours
-//!
-//! The well mounts the catalogs' private interactive node (ADR-0322): one
-//! element and one render object carry its tap, its focus node and ring, its
-//! activation bindings and the interaction states, where a well used to nest
-//! a `GestureDetector`, a `MouseRegion`, `Actions`, `Focus` and `FocusRing`.
-//! The node runs the same recognizers, focus node and semantics those
-//! wrappers do, so nothing a user or a tool observes changes. Flutter's
-//! `InkWell` composes `Actions`, `Focus`, `MouseRegion` and
-//! `GestureDetector` the same way; the collapse is FLUI's, inside the
-//! catalog.
-//!
-//! # `enabled` derivation (`isInteractive`)
-//!
-//! The oracle's `enabled` is `true` when ANY of six tap-family callbacks is
-//! set (`isWidgetEnabled`, `ink_well.dart` `:1292-1303`). This well takes
-//! [`InkWell::on_tap`] only, so its switch is `on_tap.is_some()`, unless the
-//! control around it sets one: a `ListTile` is enabled or not whatever its
-//! handler. The switch is the node's (ADR-0322 §2, §3): while it is off
-//! [`WidgetState::Disabled`] is set, and a well that describes a control
-//! says in its semantics that it is disabled. The
-//! well responds only while it is on and has a handler; otherwise no
-//! recognizer joins an arena, hover stops updating [`WidgetState::Hovered`]
-//! (oracle: `handleMouseEnter` gates `handleHoverChange` on `enabled`), the
-//! well cannot take focus, and the activation intents stay declared and
-//! switched off, so an Enter reaching it stops there rather than activating
-//! an enclosing control. An enabled well with no handler is not disabled.
-//! A well is still hit where it is, as its opaque mouse region made it.
-//!
-//! # Press-state timing
-//!
-//! [`WidgetState::Pressed`] is the node's from a contact's down to its up or
-//! cancel, as the oracle's `handleTapDown`/`handleTap` set and clear it. An
-//! activation (a tap, a key, an assistive request) then holds it for
-//! `_activationDuration` (100 ms, `ink_well.dart` `:864`, `:897`): the oracle
-//! does so for a synthetic activation with no down/up pair, and this well
-//! does so for every activation, so a quick tap under reduced motion, where
-//! no wave shows it, still shows a pressed state. The well takes a hold on
-//! `Pressed` from its controller (`WidgetStatesController::hold_pressed`,
-//! which counts it beside the node's contact), runs `on_tap`, then starts the
-//! timer that drops the hold: a one-shot
-//! [`flui_sdk::animation::AnimationController`] on the ambient
-//! [`flui_sdk::view::environment::VsyncScope`]. A controller handed over
-//! under the hold gets a hold of its own. Standalone (no
-//! `VsyncScope` above this `InkWell`) there is no clock to time it against,
-//! so the hold ends at once.
-//!
-//! The ripple itself follows the pointer contact rather than this timer: a
-//! wave starts on the tap recognizer's down and fades out on the contact's
-//! up or cancel, or at once when the recognizer gives the contact up (past
-//! the slop, or lost the arena).
-//!
-//! # `WidgetStatesController` integration
-//!
-//! [`InkWell::states_controller`] accepts an external controller (shared
-//! with a caller that also wants to read/drive the same state set); absent
-//! one, the state owns a private [`WidgetStatesController`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -125,13 +43,95 @@ pub(crate) enum FocusIndicator {
     Halo,
 }
 
-/// How long the pressed state lingers after a tap — see the module doc's
-/// "Press-state timing" section for why this substrate applies it
+/// How long the pressed state lingers after a tap — see [`InkWell`]'s docs's
+/// "Press-state timing" section for why this crate applies it
 /// uniformly rather than only on synthetic activation.
 const PRESS_DEACTIVATION_DELAY: Duration = Duration::from_millis(100);
 
 /// An M3 interactive surface over a child: a state layer and press ripples,
-/// clipped to its shape — see the module docs.
+/// clipped to its shape — see [`InkWell`]'s docs.
+///
+/// # One type for `InkWell` and `InkResponse`
+///
+/// A contained, rectangular-highlight `InkWell` and a free-form
+/// `InkResponse` only differ in ink clipping. FLUI ships one bounded type:
+/// its ink is clipped to [`InkWell::shape`].
+///
+/// # Feedback owned by the well
+///
+/// The well owns its feedback, the way Compose's `Indication` does: there is
+/// no ink-feature registry on an ancestor `Material`, so a ripple can never
+/// paint outside the well that started it. The ripple module holds the state
+/// layer, the waves and their timing. Colours resolve in this order:
+///
+/// - [`InkWell::overlay_color`] for the current
+///   [`WidgetStates`](flui_sdk::widgets::WidgetStates), alpha included —
+///   the component styles (buttons, checkbox, …) set it;
+/// - otherwise the ambient [`RippleConfiguration`](crate::RippleConfiguration)
+///   colour, else the [`Theme`]'s `on_surface`, at the
+///   [`StateLayerAlpha`](crate::StateLayerAlpha) of the active state.
+///
+/// A [`RippleScope`] with no configuration turns both the
+/// ripple and the state layer off. Under reduced motion the well paints the
+/// state layer only, `Pressed` included, and no expanding wave.
+///
+/// # One node for its behaviours
+///
+/// The well mounts the catalogs' private interactive node (ADR-0322): one
+/// element and one render object carry its tap, its focus node and ring, its
+/// activation bindings and the interaction states, where a well used to nest
+/// a `GestureDetector`, a `MouseRegion`, `Actions`, `Focus` and `FocusRing`.
+/// The node runs the same recognizers, focus node and semantics those
+/// wrappers do, so nothing a user or a tool observes changes. Flutter's
+/// `InkWell` composes `Actions`, `Focus`, `MouseRegion` and
+/// `GestureDetector` the same way; the collapse is FLUI's, inside the
+/// catalog.
+///
+/// # `enabled` derivation (`isInteractive`)
+///
+/// Flutter's `enabled` is `true` when ANY of six tap-family callbacks is
+/// set (`isWidgetEnabled`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:1291-1303`). This well takes
+/// [`InkWell::on_tap`] only, so its switch is `on_tap.is_some()`, unless the
+/// control around it sets one: a `ListTile` is enabled or not whatever its
+/// handler. The switch is the node's (ADR-0322 §2, §3): while it is off
+/// [`WidgetState::Disabled`] is set, and a well that describes a control
+/// says in its semantics that it is disabled. The
+/// well responds only while it is on and has a handler; otherwise no
+/// recognizer joins an arena, hover stops updating [`WidgetState::Hovered`]
+/// (Flutter: `handleMouseEnter` gates `handleHoverChange` on `enabled`), the
+/// well cannot take focus, and the activation intents stay declared and
+/// switched off, so an Enter reaching it stops there rather than activating
+/// an enclosing control. An enabled well with no handler is not disabled.
+/// A well is still hit where it is, as its opaque mouse region made it.
+///
+/// # Press-state timing
+///
+/// [`WidgetState::Pressed`] is the node's from a contact's down to its up or
+/// cancel, as Flutter's `handleTapDown`/`handleTap` set and clear it. An
+/// activation (a tap, a key, an assistive request) then holds it for
+/// `_activationDuration` (100 ms, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:863`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:896`): Flutter
+/// does so for a synthetic activation with no down/up pair, and this well
+/// does so for every activation, so a quick tap under reduced motion, where
+/// no wave shows it, still shows a pressed state. The well takes a hold on
+/// `Pressed` from its controller (`WidgetStatesController::hold_pressed`,
+/// which counts it beside the node's contact), runs `on_tap`, then starts the
+/// timer that drops the hold: a one-shot
+/// [`flui_sdk::animation::AnimationController`] on the ambient
+/// [`flui_sdk::view::environment::VsyncScope`]. A controller handed over
+/// under the hold gets a hold of its own. Standalone (no
+/// `VsyncScope` above this `InkWell`) there is no clock to time it against,
+/// so the hold ends at once.
+///
+/// The ripple itself follows the pointer contact rather than this timer: a
+/// wave starts on the tap recognizer's down and fades out on the contact's
+/// up or cancel, or at once when the recognizer gives the contact up (past
+/// the slop, or lost the arena).
+///
+/// # `WidgetStatesController` integration
+///
+/// [`InkWell::states_controller`] accepts an external controller (shared
+/// with a caller that also wants to read/drive the same state set); absent
+/// one, the state owns a private [`WidgetStatesController`].
 #[derive(Clone, StatefulView)]
 pub struct InkWell {
     child: Option<BoxedView>,
@@ -185,7 +185,7 @@ impl InkWell {
     }
 
     /// Sets the tap handler. Presence of a handler is what makes this
-    /// `InkWell` interactive — see the module doc's `enabled`
+    /// `InkWell` interactive — see [`InkWell`]'s docs's `enabled`
     /// section.
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
@@ -198,7 +198,7 @@ impl InkWell {
 
     /// Sets the state-resolved feedback color, alpha included. Where it
     /// resolves to `None`, the ambient ripple configuration's color applies
-    /// — see the module doc.
+    /// — see [`InkWell`]'s docs.
     #[must_use]
     pub fn overlay_color(mut self, overlay_color: WidgetStateProperty<Option<Color>>) -> Self {
         self.overlay_color = overlay_color;
@@ -330,8 +330,8 @@ impl Core {
         drop(taken);
     }
 
-    /// One activation for a tap and for the keyboard: the oracle's
-    /// `activateOnIntent` (`ink_well.dart` `:883-900`) is both what its
+    /// One activation for a tap and for the keyboard: Flutter's
+    /// `activateOnIntent` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:882-899`) is both what its
     /// `ActivateIntent`/`ButtonActivateIntent` actions run and what the tap
     /// runs. A well that is off or has no handler cannot be operated, and its
     /// node delivers neither; the check keeps an activation that arrives
@@ -341,7 +341,7 @@ impl Core {
         let Some(handler) = self.on_tap.borrow().clone() else {
             return ActionOutcome::NotPerformed;
         };
-        // Oracle order (`ink_well.dart` `activateOnIntent`, `:864-900`):
+        // Flutter order (`activateOnIntent`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:882-899`):
         // `WidgetState.pressed` is set FIRST, THEN `widget.onTap?.call()`
         // fires, and only after that does the hold start. A handler that
         // reads the states set (e.g. to resolve its own overlay) observes
@@ -358,7 +358,7 @@ impl Core {
     }
 
     /// Starts the [`PRESS_DEACTIVATION_DELAY`] timer that ends the
-    /// activation's hold on [`WidgetState::Pressed`] — see the module doc's
+    /// activation's hold on [`WidgetState::Pressed`] — see [`InkWell`]'s docs's
     /// "Press-state timing" section.
     ///
     /// The activation's timer must already be empty (the caller cancels any
@@ -367,7 +367,7 @@ impl Core {
         let Some(vsync) = self.indication.vsync() else {
             // No ambient VsyncScope: no clock to time the delay against. The
             // simplest available degrade is immediate deactivation —
-            // documented in the module doc, the same shape `GestureDetector`
+            // documented in [`InkWell`]'s docs, the same shape `GestureDetector`
             // already uses for its own deadline-driven gestures without a
             // binding.
             self.release_press_hold();
@@ -601,9 +601,9 @@ impl ViewState<InkWell> for InkWellState {
                 drop(outgoing);
             }
 
-            // Seeded before the listener, as in `create_state` (oracle:
+            // Seeded before the listener, as in `create_state` (Flutter:
             // `initStatesController` runs again on a controller swap,
-            // `ink_well.dart` `:943`): the node writes the same value to the
+            // `flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:943`): the node writes the same value to the
             // controller it is handed during this build.
             self.states
                 .update(WidgetState::Disabled, !new_view.is_enabled());
@@ -648,8 +648,8 @@ impl ViewState<InkWell> for InkWellState {
             content = content.child(child.clone());
         }
 
-        // `_actionMap` around the focus node (`ink_well.dart` `:852-855`,
-        // `:1386-1389`): Enter, Space and Select on the focused well reach
+        // `_actionMap` around the focus node (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:851-854`,
+        // `flutter/flutter@3.50.1 packages/flutter/lib/src/material/ink_well.dart:1388`): Enter, Space and Select on the focused well reach
         // these through the root shortcuts (ADR-0079). The actions run inside
         // the key event's dispatch and hand its `ctx` to the activation, the
         // same one a tap's recognizer opens.

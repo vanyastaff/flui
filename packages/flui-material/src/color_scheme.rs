@@ -2,25 +2,6 @@
 //!
 //! The field list and the `light`/`dark` default hex values are the two M3
 //! baseline schemes.
-//!
-//! ## Deferred: seed-color derivation
-//!
-//! Deriving a full palette from one seed color needs the HCT/tonal-palette
-//! algorithm from Material's color utilities. That needs its own crate (or an
-//! equivalent dependency) validated against a literal expected-output table —
-//! out of scope for this theming-foundation unit, which ships the two fixed M3
-//! baseline schemes ([`ColorScheme::light`], [`ColorScheme::dark`]) only.
-//! Tracked as a named follow-up gated on a standalone spike.
-//!
-//! ## No deprecated roles
-//!
-//! Flutter still carries `surfaceVariant`, `background` and `onBackground`
-//! as `@Deprecated` roles (`flutter/flutter@3.50.1
-//! packages/flutter/lib/src/material/color_scheme.dart:1027,1142,1155`).
-//! This scheme has none of them: read
-//! [`surface_container_highest`](ColorScheme::surface_container_highest),
-//! [`surface`](ColorScheme::surface) and
-//! [`on_surface`](ColorScheme::on_surface) in their place.
 
 use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
@@ -46,6 +27,25 @@ use flui_sdk::platform::Brightness;
 /// named constructor rather than a struct literal.
 ///
 /// 47 fields: 46 color roles plus `brightness`.
+///
+/// ## Deferred: seed-color derivation
+///
+/// Deriving a full palette from one seed color needs the HCT/tonal-palette
+/// algorithm from Material's color utilities. That needs its own crate (or an
+/// equivalent dependency) validated against a literal expected-output table —
+/// out of scope for this theming-foundation unit, which ships the two fixed M3
+/// baseline schemes ([`ColorScheme::light`], [`ColorScheme::dark`]) only.
+/// Tracked as a named follow-up gated on a standalone spike.
+///
+/// ## No deprecated roles
+///
+/// Flutter still carries `surfaceVariant`, `background` and `onBackground`
+/// as `@Deprecated` roles
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/color_scheme.dart:1027,1142,1155`).
+/// This scheme has none of them: read
+/// [`surface_container_highest`](ColorScheme::surface_container_highest),
+/// [`surface`](ColorScheme::surface) and
+/// [`on_surface`](ColorScheme::on_surface) in their place.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorScheme {

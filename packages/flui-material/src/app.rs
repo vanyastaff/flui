@@ -8,54 +8,6 @@
 //! resolved [`ThemeData`] through the inherited [`Theme`](crate::Theme)), per presentation
 //! — two windows resolving different brightness get different themes with
 //! no process-global anything (ADR-0027, ADR-0042 §1).
-//!
-//! ## Composition
-//!
-//! `MaterialApp` hands `WidgetsApp` a builder that wraps the routing subtree
-//! in, outermost first:
-//!
-//! 1. [`Theme`](crate::Theme) — publishing the [`ThemeData`] resolved by
-//!    [`ThemeMode`] × ambient platform brightness and contrast preference.
-//! 2. [`PageTransitions`] — the page transition
-//!    [`ThemeData::page_transitions_theme`] names for the tree's [`PlatformConvention`],
-//!    and the dialog fade for popups, which routes given no transitions of
-//!    their own adopt when the navigator installs them (ADR-0221). Material
-//!    page pushes therefore animate.
-//! 3. [`RefreshIndicatorStyle`] — so every `RefreshIndicator` below shows a
-//!    [`CircularProgressIndicator`], or a [`LoadingIndicator`] under a
-//!    [`MaterialStyle::Expressive`] theme: determinate with the pull's progress while
-//!    pulling, indeterminate while refreshing (ADR-0235).
-//! 4. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
-//!    snack-bar rail.
-//! 5. The caller's [`builder`](MaterialApp::builder) hook, run from its own
-//!    child element so its context resolves the `Theme` published in step 1
-//!    (a builder nested inside a `Builder`).
-//!
-//! ## Deferred (named gaps, not silent ones)
-//!
-//! - **`DefaultSelectionStyle`** — the app does not install one yet.
-//! - **`MaterialScrollBehavior`** — the app installs no `ScrollConfiguration`,
-//!   so its scroll views follow `DefaultScrollBehavior` until the Material
-//!   behavior lands with its scrollbar and overscroll indicator.
-//! - **Material hero motion** — Material spec heroes fly along an arc; FLUI
-//!   has no arc tween yet, and the `Navigator`'s auto-installed default
-//!   controller already provides (linear) flights, so no hero-controller scope
-//!   is inserted here.
-//! - **`MaterialLocalizations`** — FLUI ships no Material resource set yet;
-//!   when one lands its delegate is appended here. Caller delegates pass
-//!   through to `WidgetsApp` unchanged.
-//! - **`Title`/`color`, restoration, debug overlays**
-//!   — deferred at the `WidgetsApp` layer; see its module docs.
-//!
-//! ## Documented behavior
-//!
-//! - With **no `MediaQuery` ancestor**, [`ThemeMode::System`] resolves against
-//!   `MediaQueryData::default()`'s brightness (light) rather than failing.
-//!   Under `run_app` the UI runtime always installs the live
-//!   root `MediaQuery`, so this path is reachable only from embedders and
-//!   harnesses that bypass it — and a panic inside `build` would surface as
-//!   a silently-childless subtree (the framework's build-error boundary),
-//!   which hides more than the fallback does.
 
 use std::fmt;
 use std::rc::Rc;
@@ -171,7 +123,7 @@ fn resolve_theme(
 /// the resolved [`ThemeData`] through [`Theme`](crate::Theme), with a
 /// [`ScaffoldMessenger`] installed above the routing subtree.
 ///
-/// See the module docs for composition order, named deferrals, and
+/// See [`MaterialApp`]'s docs for composition order, named deferrals, and
 /// documented behavior.
 ///
 /// # Example
@@ -186,6 +138,54 @@ fn resolve_theme(
 ///         .theme_mode(ThemeMode::System),
 /// )?;
 /// ```
+///
+/// ## Deferred (named gaps, not silent ones)
+///
+/// - **`DefaultSelectionStyle`** — the app does not install one yet.
+/// - **`MaterialScrollBehavior`** — the app installs no `ScrollConfiguration`,
+///   so its scroll views follow `DefaultScrollBehavior` until the Material
+///   behavior lands with its scrollbar and overscroll indicator.
+/// - **Material hero motion** — Material spec heroes fly along an arc; FLUI
+///   has no arc tween yet, and the `Navigator`'s auto-installed default
+///   controller already provides (linear) flights, so no hero-controller scope
+///   is inserted here.
+/// - **`MaterialLocalizations`** — FLUI ships no Material resource set yet;
+///   when one lands its delegate is appended here. Caller delegates pass
+///   through to `WidgetsApp` unchanged.
+/// - **`Title`/`color`, restoration, debug overlays**
+///   — deferred at the `WidgetsApp` layer; see its module docs.
+///
+/// ## Documented behavior
+///
+/// - With **no `MediaQuery` ancestor**, [`ThemeMode::System`] resolves against
+///   `MediaQueryData::default()`'s brightness (light) rather than failing.
+///   Under `run_app` the UI runtime always installs the live
+///   root `MediaQuery`, so this path is reachable only from embedders and
+///   harnesses that bypass it — and a panic inside `build` would surface as
+///   a silently-childless subtree (the framework's build-error boundary),
+///   which hides more than the fallback does.
+///
+/// ## Composition
+///
+/// `MaterialApp` hands `WidgetsApp` a builder that wraps the routing subtree
+/// in, outermost first:
+///
+/// 1. [`Theme`](crate::Theme) — publishing the [`ThemeData`] resolved by
+///    [`ThemeMode`] × ambient platform brightness and contrast preference.
+/// 2. [`PageTransitions`] — the page transition
+///    [`ThemeData::page_transitions_theme`] names for the tree's [`PlatformConvention`],
+///    and the dialog fade for popups, which routes given no transitions of
+///    their own adopt when the navigator installs them (ADR-0221). Material
+///    page pushes therefore animate.
+/// 3. [`RefreshIndicatorStyle`] — so every `RefreshIndicator` below shows a
+///    [`CircularProgressIndicator`], or a [`LoadingIndicator`] under a
+///    [`MaterialStyle::Expressive`] theme: determinate with the pull's progress while
+///    pulling, indeterminate while refreshing (ADR-0235).
+/// 4. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
+///    snack-bar rail.
+/// 5. The caller's [`builder`](MaterialApp::builder) hook, run from its own
+///    child element so its context resolves the `Theme` published in step 1
+///    (a builder nested inside a `Builder`).
 #[derive(Clone, StatelessView)]
 pub struct MaterialApp {
     routing: Routing,
@@ -359,7 +359,7 @@ impl MaterialApp {
         debug_assert!(
             !locales.is_empty(),
             "BUG: supported_locales requires at least one locale \
-             (the oracle asserts supportedLocales.isNotEmpty)"
+             (Flutter asserts supportedLocales.isNotEmpty)"
         );
         self.supported_locales = locales;
         self

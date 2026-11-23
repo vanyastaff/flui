@@ -1,75 +1,5 @@
 //! [`FloatingActionButton`] — a circular-in-spirit, M3 rounded-square button
 //! that hovers over content to promote a primary action.
-//!
-//! # Scope
-//!
-//! The regular (non-mini, non-large, non-extended) variant —
-//! `small`/`large`/`extended` are named V1 deferrals; see below. The M3 FAB
-//! has an elevation *state chain* — a five-way
-//! `disabled`/`pressed`/`hovered`/`focused`/default cascade — which a plain
-//! `ButtonStyle::elevation` slot can't express any more precisely than
-//! `crate::button_style_button::ButtonStyleButtonCore`'s existing per-button
-//! tables already do. So this type composes [`Material`] + [`InkWell`]
-//! directly (`ConstrainedBox` → `Material(elevation, shape, color)` →
-//! `InkWell`) rather than routing through `ButtonStyleButtonCore`.
-//!
-//! # M3 shape: a rounded rectangle, not a circle
-//!
-//! The regular variant's shape is
-//! `RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0))` —
-//! **not** a circle (that was the M2 shape). This substrate's `fab_shape`
-//! function carries this exactly.
-//!
-//! # The elevation chain
-//!
-//! Elevation resolves in strict precedence order — **disabled, then pressed
-//! (`highlightElevation`), then hovered, then focused, then the enabled
-//! default** (`elevation`) — and `resolve_elevation` preserves that exact
-//! if-chain. For the regular M3 FAB every tier but hover happens to share the
-//! same `6.0` value (`elevation: 6.0, focusElevation: 6.0, hoverElevation:
-//! 8.0, highlightElevation: 6.0`, and the M3 defaults never override
-//! `disabledElevation`, so the
-//! `disabledElevation ?? floatingActionButtonTheme.disabledElevation ??
-//! defaults.disabledElevation ?? elevation` fallback resolves it to `6.0`
-//! too, rather than a flat `0.0`) — so
-//! *values* rarely distinguish the branches, but the *order* still does: a
-//! combined pressed+hovered state must resolve through the pressed branch
-//! (still `6.0`), not fall through past it to hover's `8.0`. Disabling a
-//! floating action button is discouraged as it gives the user no visual
-//! indication — `disabledElevation` really does equal the
-//! enabled default here, unlike every `ButtonStyleButtonCore` button (whose
-//! M3 default elevation zeroes out when disabled).
-//!
-//! # Colors: static, not state-resolved
-//!
-//! Unlike `elevation`, the M3 FAB `foregroundColor`/`backgroundColor`
-//! carry no per-state branch at all — `onPrimaryContainer`/`primaryContainer`
-//! regardless of `disabled`/`pressed`/`hovered`/`focused`. Only the overlay
-//! (splash/hover/focus tint) and the elevation vary with state; both
-//! constants are applied directly, no `WidgetStateProperty` needed for them.
-//!
-//! # Overlay ramp
-//!
-//! `splashColor`/`focusColor` both resolve to `onPrimaryContainer` at 10%
-//! opacity and `hoverColor` to 8%. The pressed(10%)/hovered(8%) shape
-//! `crate::elevated_button::pressed_hovered_overlay` implements is
-//! reused here rather than duplicated; the focus colour is drawn as the focus
-//! ring instead of a layer (ADR-0079). See that function's own doc for the
-//! pressed-before-hovered order it preserves.
-//!
-//! # Deferred, and named
-//!
-//! - **`small`/`large`/`extended` variants** — distinct size constraints,
-//!   corner radii, icon sizes, and (for `extended`) an icon+label row
-//!   composition. Only the regular 56×56 variant ships.
-//! - **`disabled_elevation`/`focus_elevation`/`hover_elevation`/
-//!   `highlight_elevation` overrides**, `heroTag`/`Hero` wrapping, `tooltip`/
-//!   `Tooltip` wrapping, `mouseCursor`, `clipBehavior`, focus node/autofocus,
-//!   `materialTapTargetSize`, `enableFeedback` — no override surface yet;
-//!   every FAB uses the M3 default token table verbatim.
-//! - **Own `foreground_color`/`background_color` overrides** — the oracle's
-//!   constructor-level `Color?` fields; this V1 always resolves the M3
-//!   defaults.
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::Radius;
@@ -101,14 +31,14 @@ pub(crate) const FAB_SIZE: f64 = 56.0;
 pub(crate) const FAB_ICON_SIZE: f64 = 24.0;
 
 /// The enabled default AND disabled elevation (they coincide — see the
-/// module docs). The M3 default is `elevation: 6.0`. The
+/// [`FloatingActionButton`]'s docs). The M3 default is `elevation: 6.0`. The
 /// `enabled` value this constant provides is itself theme-overridable (see
 /// [`crate::theme_data::FabThemeData::elevation`]) — [`resolve_elevation`]
 /// takes the (possibly overridden) effective value as a parameter rather
 /// than closing over this constant directly, so a theme override reaches
 /// both the `disabled` tier and the enabled-default fallback tier, following
 /// the `disabledElevation ?? … ?? elevation` fallback chain (not a flat
-/// `0.0` — see the module docs' "The elevation chain" section) — the M3
+/// `0.0` — see [`FloatingActionButton`]'s "The elevation chain" section) — the M3
 /// defaults never override `disabledElevation`, so it resolves to the same
 /// (possibly theme-resolved) enabled value.
 const ELEVATION_DEFAULT: f64 = 6.0;
@@ -125,7 +55,7 @@ const ELEVATION_HOVERED: f64 = 8.0;
 const ELEVATION_PRESSED: f64 = 6.0;
 
 /// The regular M3 FAB's shape: a rectangle with a 16dp corner radius —
-/// **not** a circle. See the module docs' "M3 shape" section.
+/// **not** a circle. See [`FloatingActionButton`]'s "M3 shape" section.
 fn fab_shape() -> MaterialShape {
     MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(16.0)))
 }
@@ -134,7 +64,7 @@ fn fab_shape() -> MaterialShape {
 /// promote a primary action, typically mounted via
 /// [`Scaffold::floating_action_button`](crate::scaffold::Scaffold::floating_action_button).
 ///
-/// See the module docs for the M3 default token table this V1 resolves
+/// See [`FloatingActionButton`]'s docs for the M3 default token table this crate resolves
 /// verbatim, the elevation state chain, and the deferred variant list.
 ///
 /// # Examples
@@ -146,6 +76,76 @@ fn fab_shape() -> MaterialShape {
 /// let _fab = FloatingActionButton::new().child(Text::new("+")).on_pressed(|_ctx| {});
 /// let _disabled = FloatingActionButton::new().child(Text::new("+"));
 /// ```
+///
+/// # Scope
+///
+/// The regular (non-mini, non-large, non-extended) variant —
+/// `small`/`large`/`extended` are named deferrals; see below. The M3 FAB
+/// has an elevation *state chain* — a five-way
+/// `disabled`/`pressed`/`hovered`/`focused`/default cascade — which a plain
+/// `ButtonStyle::elevation` slot can't express any more precisely than
+/// `crate::button_style_button::ButtonStyleButtonCore`'s existing per-button
+/// tables already do. So this type composes [`Material`] + [`InkWell`]
+/// directly (`ConstrainedBox` → `Material(elevation, shape, color)` →
+/// `InkWell`) rather than routing through `ButtonStyleButtonCore`.
+///
+/// # M3 shape: a rounded rectangle, not a circle
+///
+/// The regular variant's shape is
+/// `RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0))` —
+/// **not** a circle (that was the M2 shape). This crate's `fab_shape`
+/// function carries this exactly.
+///
+/// # The elevation chain
+///
+/// Elevation resolves in strict precedence order — **disabled, then pressed
+/// (`highlightElevation`), then hovered, then focused, then the enabled
+/// default** (`elevation`) — and `resolve_elevation` preserves that exact
+/// if-chain. For the regular M3 FAB every tier but hover happens to share the
+/// same `6.0` value (`elevation: 6.0, focusElevation: 6.0, hoverElevation:
+/// 8.0, highlightElevation: 6.0`, and the M3 defaults never override
+/// `disabledElevation`, so the
+/// `disabledElevation ?? floatingActionButtonTheme.disabledElevation ??
+/// defaults.disabledElevation ?? elevation` fallback resolves it to `6.0`
+/// too, rather than a flat `0.0`) — so
+/// *values* rarely distinguish the branches, but the *order* still does: a
+/// combined pressed+hovered state must resolve through the pressed branch
+/// (still `6.0`), not fall through past it to hover's `8.0`. Disabling a
+/// floating action button is discouraged as it gives the user no visual
+/// indication — `disabledElevation` really does equal the
+/// enabled default here, unlike every `ButtonStyleButtonCore` button (whose
+/// M3 default elevation zeroes out when disabled).
+///
+/// # Colors: static, not state-resolved
+///
+/// Unlike `elevation`, the M3 FAB `foregroundColor`/`backgroundColor`
+/// carry no per-state branch at all — `onPrimaryContainer`/`primaryContainer`
+/// regardless of `disabled`/`pressed`/`hovered`/`focused`. Only the overlay
+/// (splash/hover/focus tint) and the elevation vary with state; both
+/// constants are applied directly, no `WidgetStateProperty` needed for them.
+///
+/// # Overlay ramp
+///
+/// `splashColor`/`focusColor` both resolve to `onPrimaryContainer` at 10%
+/// opacity and `hoverColor` to 8%. The pressed(10%)/hovered(8%) shape
+/// `crate::elevated_button::pressed_hovered_overlay` implements is
+/// reused here rather than duplicated; the focus colour is drawn as the focus
+/// ring instead of a layer (ADR-0079). See that function's own doc for the
+/// pressed-before-hovered order it preserves.
+///
+/// # Deferred, and named
+///
+/// - **`small`/`large`/`extended` variants** — distinct size constraints,
+///   corner radii, icon sizes, and (for `extended`) an icon+label row
+///   composition. Only the regular 56×56 variant ships.
+/// - **`disabled_elevation`/`focus_elevation`/`hover_elevation`/
+///   `highlight_elevation` overrides**, `heroTag`/`Hero` wrapping, `tooltip`/
+///   `Tooltip` wrapping, `mouseCursor`, `clipBehavior`, focus node/autofocus,
+///   `materialTapTargetSize`, `enableFeedback` — no override surface yet;
+///   every FAB uses the M3 default token table verbatim.
+/// - **Own `foreground_color`/`background_color` overrides** — Flutter's
+///   constructor-level `Color?` fields; this crate always resolves the M3
+///   defaults.
 #[derive(Clone, StatefulView)]
 pub struct FloatingActionButton {
     on_pressed: Option<PressCallback>,
@@ -160,7 +160,7 @@ impl Default for FloatingActionButton {
 
 impl FloatingActionButton {
     /// A regular floating action button with no child. Without
-    /// [`Self::on_pressed`] the button is disabled (see the module docs'
+    /// [`Self::on_pressed`] the button is disabled (see [`FloatingActionButton`]'s
     /// elevation-chain section for why that carries no visual indication
     /// here either). Flutter's `FloatingActionButton.child` is nullable: an
     /// empty button is its 56×56 surface.
@@ -205,11 +205,11 @@ impl std::fmt::Debug for FloatingActionButton {
 }
 
 /// Resolves `_RawMaterialButtonState._effectiveElevation`'s exact
-/// disabled→pressed→hovered→focused→default if-chain — see the module docs.
+/// disabled→pressed→hovered→focused→default if-chain — see [`FloatingActionButton`]'s docs.
 /// `enabled_elevation` is the already-resolved widget/theme/default cascade
 /// for the enabled tier (see [`resolve_colors`]'s sibling resolution and
 /// [`FloatingActionButtonState::build`]'s call site); both the `disabled`
-/// branch and the unconditional fallback return it, matching the oracle's
+/// branch and the unconditional fallback return it, matching Flutter's
 /// own `disabledElevation ?? … ?? elevation` chain (see [`ELEVATION_DEFAULT`]'s
 /// doc comment). Kept as a free function (not inlined into `build`) so the
 /// chain order is independently unit-testable against hand-built
@@ -234,8 +234,8 @@ fn resolve_elevation(states: &WidgetStates, enabled_elevation: f64) -> f64 {
 /// .foregroundColor ?? floatingActionButtonTheme.foregroundColor ??
 /// defaults.foregroundColor!` (and the `backgroundColor`/`elevation`
 /// equivalents), narrowed to FLUI's `FabThemeData` slots. No per-instance widget-level
-/// override exists yet for any of the three (a named V1 deferral — see the
-/// module docs), so this cascade is theme → default only.
+/// override exists yet for any of the three (a named deferral — see the
+/// [`FloatingActionButton`]'s docs), so this cascade is theme → default only.
 struct ResolvedFabStyle {
     background_color: Color,
     foreground_color: Color,
@@ -307,9 +307,9 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
     /// `InkWell`'s tap gating derives from `view.on_pressed` directly (read
     /// fresh every `build`), not from this shared bit, and `resolve_elevation`'s
     /// `disabled` branch resolves the SAME value as the enabled default (see
-    /// the module docs' "The elevation chain" section) — so nothing
+    /// [`FloatingActionButton`]'s "The elevation chain" section) — so nothing
     /// currently distinguishes this resync having run from it never running.
-    /// Kept for structural parity with the oracle's own `didUpdateWidget`
+    /// Kept for structural parity with Flutter's own `didUpdateWidget`
     /// and in case a future consumer of this states controller needs it.
     fn did_update_view(
         &mut self,
@@ -335,7 +335,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
         let shape = fab_shape();
 
         // The overlay ramp's base color is `_FABDefaultsM3`'s own
-        // `splashColor`/`focusColor`/`hoverColor` — independent oracle
+        // `splashColor`/`focusColor`/`hoverColor` — independent Flutter
         // fields (see `pressed_hovered_overlay`'s call site here),
         // NOT derived from the resolved `foreground_color` above. FLUI
         // exposes no theme slot for them (named deferral, see

@@ -16,18 +16,18 @@
 //!
 //! - **Focus**: the state owns its effective [`FocusNode`] (or retains the
 //!   caller-provided node), passes that exact node to [`EditableText`], and
-//!   listens to the node directly. This matches the oracle's
+//!   listens to the node directly. This matches Flutter's
 //!   `_effectiveFocusNode.addListener(_handleFocusChanged)`
-//!   (`text_field.dart:1273`) without ambient manager lookup, controller
+//!   (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1282`) without ambient manager lookup, controller
 //!   metadata, or an ID registry. The listener schedules a rebuild through a
 //!   [`RebuildHandle`] made in `create_state`,
 //!   never from inside `build` (ADR-0018).
-//! - **Hover**: the oracle owns `_isHovering` at the `TextField` level via
+//! - **Hover**: Flutter owns `_isHovering` at the `TextField` level via
 //!   its own outer `MouseRegion` and threads it into
-//!   `InputDecorator.isHovering` (`text_field.dart:1463-1470,1773,1797-1800`).
-//!   This substrate does **not** duplicate that — `InputDecorator` already
+//!   `InputDecorator.isHovering` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1462-1470`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1772`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1797-1800`).
+//!   This crate does **not** duplicate that — `InputDecorator` already
 //!   self-tracks hover through its own internal `MouseRegion` wrapping the
-//!   entire decorated area (see `input_decorator.rs`'s module docs), and
+//!   entire decorated area (see [`InputDecorator`]'s docs), and
 //!   that `MouseRegion` sits *inside* the tree this `TextField` composes.
 //!   Adding a second, outer `MouseRegion` here would double-track the same
 //!   pointer with two independent state machines for no behavioral gain —
@@ -36,20 +36,20 @@
 //! - **Error**: [`InputDecoration::error_text`] presence — already the
 //!   decorator's own state input — drives both the error row/underline (in
 //!   `InputDecorator`) and this widget's caret color (see below). There is
-//!   no separate "has error" flag on `TextField` itself, matching the
-//!   oracle's `_hasError` being derived from the decoration, not a widget
-//!   field of its own (`text_field.dart:1196-1201`, narrowed here: the
-//!   oracle's `maxLength`-driven intrinsic error has no FLUI counterpart —
+//!   no separate "has error" flag on `TextField` itself, matching
+//!   Flutter's `_hasError` being derived from the decoration, not a widget
+//!   field of its own (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1193-1196`, narrowed here:
+//!   Flutter's `maxLength`-driven intrinsic error has no FLUI counterpart —
 //!   `maxLength` is not ported).
-//! - **Enabled**: resolved exactly like the oracle's `_isEnabled`
+//! - **Enabled**: resolved exactly like Flutter's `_isEnabled`
 //!   (`widget.enabled ?? widget.decoration?.enabled ?? true`,
-//!   `text_field.dart:1183`), narrowed to two links —
+//!   `flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1182`), narrowed to two links —
 //!   [`TextField::enabled`] is `Option<bool>`; `Some` wins outright,
 //!   `None` falls through to [`InputDecoration::enabled`] (which already
-//!   defaults `true`, covering the oracle's trailing `?? true`). The
+//!   defaults `true`, covering Flutter's trailing `?? true`). The
 //!   resolved value is written into the effective decoration before it
 //!   reaches [`InputDecorator`] (mirroring `_getEffectiveDecoration()`'s
-//!   `.copyWith(enabled: _isEnabled)`, `text_field.dart:1206-1213`) and
+//!   `.copyWith(enabled: _isEnabled)`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1207-1212`) and
 //!   passed straight to [`EditableText::enabled`] — both sinks always agree
 //!   because both are computed from the one resolved value, never read
 //!   from two different fields independently.
@@ -68,48 +68,8 @@
 //! both. The interior retargets everything that reaches a controller by
 //! writing one shared cell (`EditableTextState::controller`); this layer only
 //! tracks `is_empty` for the decoration's floating label, so its half is the
-//! listener plus its own clone. Mirrors the oracle's `didUpdateWidget`
-//! (`text_field.dart:1303-1311`).
-//!
-//! # Caret color and text style
-//!
-//! Caret color: `colors.error` when [`InputDecoration::error_text`] is set,
-//! `colors.primary` otherwise (an error always wins over any caret color
-//! override). No `cursorColor`/`cursorErrorColor` override slot yet — named
-//! deferral.
-//!
-//! Text style: `theme.text_theme.body_large`, unconditionally — the M3 input
-//! style. The per-state resolution table and the `TextField.style` override
-//! are both named deferrals — this substrate always renders `bodyLarge` verbatim.
-//!
-//! # Press-to-focus over the whole decorated area
-//!
-//! A [`Listener`] wraps the composed [`InputDecorator`] (not just the
-//! inner [`EditableText`]), so a press anywhere in the
-//! *entire* decorated box (fill, underline, label/hint rows) focuses the
-//! field, not just one on the text-content rect. It focuses on the press, as
-//! the text does, never on a tap: the field's double-tap holds a tap for the
-//! double-tap time, and focus requested then would take the focus back from
-//! wherever the keyboard moved it meanwhile. `Listener`'s default
-//! [`flui_sdk::rendering::HitTestBehavior::DeferToChild`] is sufficient here
-//! because `InputDecorator`'s own inner `MouseRegion` defaults to
-//! [`flui_sdk::rendering::HitTestBehavior::Opaque`] and spans the full decorated
-//! rect, so every point within it already resolves a hit for the outer
-//! listener to defer to. The helper/error line below the container is
-//! outside that rect and ignores pointers, so a press there focuses nothing.
-//!
-//! # DEFERRED (v1)
-//!
-//! Everything [`EditableText`] itself defers applies here too (multi-line,
-//! input formatters, overflow scrolling) — see its own module docs.
-//! Additionally, narrowed at this layer:
-//! - **Per-field selection colors** — every field highlights with the
-//!   `Theme`'s `selection`, which reaches it as the inherited
-//!   `DefaultSelectionStyle`; `TextField` exposes no override of its own.
-//! - **`cursorColor`/style overrides** — see the caret-color/text-style
-//!   sections above.
-//! - **Label/hint/helper/error as `Widget`** — `InputDecoration` is
-//!   `String`-only V1 (see `input_decorator.rs`'s module docs).
+//! listener plus its own clone. Mirrors Flutter's `didUpdateWidget`
+//! (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1302-1310`).
 
 use std::rc::Rc;
 
@@ -130,6 +90,46 @@ use crate::theme::Theme;
 /// The Material single-line text field — [`EditableText`] decorated by
 /// [`InputDecorator`], with live focus/enabled/error plumbing. See the
 /// module docs for exactly what's wired and what's deferred.
+///
+/// # Caret color and text style
+///
+/// Caret color: `colors.error` when [`InputDecoration::error_text`] is set,
+/// `colors.primary` otherwise (an error always wins over any caret color
+/// override). No `cursorColor`/`cursorErrorColor` override slot yet — named
+/// deferral.
+///
+/// Text style: `theme.text_theme.body_large`, unconditionally — the M3 input
+/// style. The per-state resolution table and the `TextField.style` override
+/// are both named deferrals — this crate always renders `bodyLarge` verbatim.
+///
+/// # Press-to-focus over the whole decorated area
+///
+/// A [`Listener`] wraps the composed [`InputDecorator`] (not just the
+/// inner [`EditableText`]), so a press anywhere in the
+/// *entire* decorated box (fill, underline, label/hint rows) focuses the
+/// field, not just one on the text-content rect. It focuses on the press, as
+/// the text does, never on a tap: the field's double-tap holds a tap for the
+/// double-tap time, and focus requested then would take the focus back from
+/// wherever the keyboard moved it meanwhile. `Listener`'s default
+/// [`flui_sdk::rendering::HitTestBehavior::DeferToChild`] is sufficient here
+/// because `InputDecorator`'s own inner `MouseRegion` defaults to
+/// [`flui_sdk::rendering::HitTestBehavior::Opaque`] and spans the full decorated
+/// rect, so every point within it already resolves a hit for the outer
+/// listener to defer to. The helper/error line below the container is
+/// outside that rect and ignores pointers, so a press there focuses nothing.
+///
+/// # Deferred
+///
+/// Everything [`EditableText`] itself defers applies here too (multi-line,
+/// input formatters, overflow scrolling) — see its own module docs.
+/// Additionally, narrowed at this layer:
+/// - **Per-field selection colors** — every field highlights with the
+///   `Theme`'s `selection`, which reaches it as the inherited
+///   `DefaultSelectionStyle`; `TextField` exposes no override of its own.
+/// - **`cursorColor`/style overrides** — see the caret-color/text-style
+///   sections above.
+/// - **Label/hint/helper/error as `Widget`** — `InputDecoration` is
+///   `String`-only (see [`InputDecorator`]'s docs).
 #[derive(Clone)]
 pub struct TextField {
     controller: TextEditingController,
@@ -265,7 +265,7 @@ impl TextField {
 
     /// Set the field's decoration — label, hint, helper/error text, and
     /// fill. `decoration.enabled` is respected as-is unless [`Self::enabled`]
-    /// is *also* called — see the module docs' "Enabled" section for the
+    /// is *also* called — see [`TextField`]'s "Enabled" section for the
     /// resolution order.
     #[must_use]
     pub fn decoration(mut self, decoration: InputDecoration) -> Self {
@@ -332,7 +332,7 @@ impl View for TextField {
 }
 
 /// Persistent state behind [`TextField`] — owns the effective focus node and
-/// the live controller/focus listeners described in the module docs.
+/// the live controller/focus listeners described in [`TextField`]'s docs.
 pub struct MaterialTextFieldState {
     // The subscriptions are declared first so that they detach before the
     // controller and the node they listen to drop with the state.
@@ -458,12 +458,12 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // correct too, now that both halves retarget — but it would take the
         // listener registration out of step with the value this reads, and
         // one place deciding "which controller is mine" is what keeps the
-        // two halves from disagreeing (see the module docs).
+        // two halves from disagreeing (see [`TextField`]'s docs).
         let is_empty = self.controller.text().is_empty();
         let focused = self.focus_node.has_focus();
 
-        // The oracle's null-coalescing chain (`widget.enabled ??
-        // decoration?.enabled ?? true`, `text_field.dart:1183`), narrowed to
+        // Flutter's null-coalescing chain (`widget.enabled ??
+        // decoration?.enabled ?? true`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1182`), narrowed to
         // two links since `InputDecoration::enabled` already defaults
         // `true`: an explicit `TextField::enabled` call wins outright;
         // absent that, the decoration's own `enabled` (set directly by the

@@ -2,97 +2,14 @@
 //! trailing content, the data-display building block for lists, drawers, and
 //! menus.
 //!
-//! # M3 defaults
-//!
-//! M3-only — this crate has no M2 mode:
-//!
-//! | Token | Value |
-//! |---|---|
-//! | `contentPadding` | `EdgeInsetsDirectional.only(start: 16.0, end: 24.0)` |
-//! | `minLeadingWidth` | `24.0` |
-//! | `minVerticalPadding` | `8.0` |
-//! | `shape` | `RoundedRectangleBorder()` (square corners) |
-//! | `tileColor` | `Colors.transparent` |
-//! | `titleTextStyle` | `TextTheme.bodyLarge` colored `onSurface` |
-//! | `subtitleTextStyle` | `TextTheme.bodyMedium` colored `onSurfaceVariant` |
-//! | `leadingAndTrailingTextStyle` | `TextTheme.labelSmall` colored `onSurfaceVariant` |
-//! | `selectedColor` | `ColorScheme.primary` |
-//! | `iconColor` | `ColorScheme.onSurfaceVariant` |
-//!
-//! `minLeadingWidth` is `24.0`, not the M2 value of `40.0`; the M3 table
-//! halves it.
-//!
-//! The one/two/three-line minimum tile heights are a **flat literal
-//! table**, not part of the M3 token defaults: `56.0`/`72.0`/`88.0` (one/two/three lines), reduced
-//! to `48.0`/`64.0`/`76.0` when [`ListTile::dense`] is set. Note the
-//! three-line dense height is `76.0`, not `88.0 - 12.0`— it's its own table
-//! entry, not derived arithmetically.
-//!
-//! `horizontalTitleGap` defaults to `16.0` — a bare literal
-//! (`horizontalTitleGap ?? tileTheme.horizontalTitleGap ?? 16`), not an M3
-//! token default.
-//!
-//! # Scope: M3 composition, not a baseline-aware render object
-//!
-//! A full list tile lays out leading/title/subtitle/trailing with a custom
-//! baseline-aware render object, computing exact baseline offsets per
-//! `ListTileTitleAlignment` variant and a
-//! `titleStart`/`adjustedTrailingWidth` intrinsic-width negotiation. This
-//! substrate composes the SAME visible shape from `Row`/`Column`/`Padding`/
-//! `ConstrainedBox`/`Expanded` instead — the honest claim is **M3 list-tile
-//! composition (colors, typography, min-heights, tap)**. Concretely:
-//!
-//! - **`leading`** is wrapped in `ConstrainedBox(min_width:
-//!   min_leading_width)` — `titleStart = max(minLeadingWidth,
-//!   leadingSize.width) + horizontalTitleGap`: the leading slot never
-//!   shrinks below `min_leading_width`, but this substrate does not
-//!   separately track and error on a leading widget that consumes the
-//!   entire tile width.
-//! - **`title`/`subtitle`** sit in an `Expanded(Column(...))`, wrapped in a
-//!   single `Padding(vertical: min_vertical_padding)` around the whole
-//!   two-line block — "the minimum padding on the top and
-//!   bottom of the title and subtitle widgets" ([`ListTile::min_vertical_padding`]'s
-//!   doc), but NOT per-`ListTileTitleAlignment` baseline math
-//!   (`top`/`center`/`bottom`/`threeLine`/`titleHeight` each compute a
-//!   different y-offset). `ListTileTitleAlignment`
-//!   itself is not exposed; every tile lays out as the `threeLine`
-//!   variant's **`≤2`-line (centered) arm, always** — title above subtitle,
-//!   both left-aligned, `leading`/`trailing` vertically centered via
-//!   `Row`'s `CrossAxisAlignment::Center`. The `threeLine` variant
-//!   only centers `leading`/`trailing` when `isThreeLine` is `false`; when
-//!   `true`, it TOP-aligns them instead (`listTile.minVerticalPadding` from
-//!   the tile's top edge) so a
-//!   three-line tile's icon sits flush with the title, not centered against
-//!   the full three-line block. This substrate always centers regardless of
-//!   `is_three_line` — a named divergence from the `threeLine` variant.
-//! - **`trailing`**'s reserved-width floor (`max(trailingSize.width +
-//!   horizontalTitleGap, 32.0)`) is not
-//!   replicated — `Row`'s own intrinsic sizing handles it instead.
-//! - **`isThreeLine`** is an explicit `bool` flag
-//!   (`ListTile.isThreeLine`, never a subtitle-line-count
-//!   heuristic) — see [`ListTile::is_three_line`].
-//! - **`dense`** switches between the two literal height tables above AND
-//!   clamps `title`'s resolved font size to `13.0`/subtitle's to `12.0`
-//!   (`titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 : null)` and the
-//!   subtitle equivalent) — both
-//!   ported. `VisualDensity`'s finer `baseSizeAdjustment` nudge
-//!   is a named deferral (no `VisualDensity`
-//!   consumer wired to this substrate's `ListTile` yet).
-//! - **Baseline alignment** — every text run in this composition sits by
-//!   `Column`/`Row` box-model layout, not by shared text baseline. A full
-//!   list-tile layout positions `title`/`subtitle` by
-//!   their own top-of-box offsets too (not a true cross-widget baseline
-//!   grid), so this is a smaller divergence than it may sound — but it is
-//!   named here for the record.
-//!
 //! # State-color cascade: a flat resolve, not `WidgetStateColor`
 //!
 //! `iconColor`/`textColor` follow a
 //! `disabled > selected > enabled` precedence, which a full implementation
 //! expresses as a `WidgetStateProperty<Color?>` plus a `WidgetStateColor`
 //! escape hatch this crate's plain `Color` fields have no counterpart for
-//! (matching every other widget in this crate — see `crate::icon_button`'s
-//! module docs). `resolve_content_color` carries the exact same
+//! (matching every other widget in this crate — see [`IconButton`](crate::IconButton)'s
+//! docs). `resolve_content_color` carries the exact same
 //! precedence, collapsed to a direct `if`/`else if`/`else` since there is no
 //! live [`flui_sdk::widgets::WidgetStatesController`] backing a stateless
 //! `ListTile` the way [`crate::ink_well::InkWell`] backs an interactive
@@ -104,33 +21,6 @@
 //! `on_surface@38%`, the same M3 "disabled content" convention
 //! `crate::icon_button`'s own `default_style` already applies for the
 //! identical reason (see that module's `default_style`).
-//!
-//! # Deferred, and named
-//!
-//! - **`onLongPress`**, **`onFocusChange`**, **`mouseCursor`**,
-//!   **`focusColor`/`hoverColor`/`splashColor`**, **`focusNode`/`autofocus`**,
-//!   **`enableFeedback`**, **`statesController`** — no override surface yet,
-//!   matching every other V1 interactive widget in this crate.
-//! - **`style`** (`ListTileStyle.list`/`drawer`, an M2-only fork) —
-//!   irrelevant to this M3-only crate.
-//! - **`visualDensity`**, **`titleAlignment`** — see the "Scope" section.
-//! - **`internalAddSemanticForOnTap`** — always behaves as if `true`: the emitted `Semantics.button` flag is just
-//!   `on_tap.is_some()`.
-//! - **`ListTile.divideTiles`** — the `Iterable<Widget>` inter-tile divider
-//!   helper; a natural, additive follow-up once a caller list-builds
-//!   `ListTile`s (see [`crate::divider`]'s module docs).
-//! - **The `SafeArea`/`IconTheme.merge` wrapper layers ARE
-//!   ported**: `SafeArea::new(..).top(false).bottom(false).minimum(...)`, and
-//!   `IconTheme::new(IconTheme::of(ctx).color(..), ..)`
-//!   — a genuine merge over the ambient `IconTheme::of(ctx)` snapshot (only
-//!   `color` is overridden; `size`/`opacity`/etc. pass through from whatever
-//!   `IconTheme` already wraps this tile), matching `IconTheme.merge`'s own
-//!   contract, not a blanket replacement. Only `IconButtonTheme` has no
-//!   port: FLUI has no `IconButtonTheme` ambient/`InheritedWidget` at all yet
-//!   (`IconButton` reads `ThemeData.icon_button_theme` directly — see
-//!   `crate::icon_button`'s module docs), so a nested `IconButton` in
-//!   `leading`/`trailing` will not automatically pick up this tile's
-//!   resolved icon color.
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::styling::Color;
@@ -162,7 +52,7 @@ const MIN_VERTICAL_PADDING: f64 = 8.0;
 /// The bare horizontal-title-gap literal — not part of the M3 token defaults.
 const HORIZONTAL_TITLE_GAP: f64 = 16.0;
 
-/// The M3 "disabled content" opacity this substrate uses in place of
+/// The M3 "disabled content" opacity this crate uses in place of
 /// `ThemeData.disabledColor` (no such field exists yet) — see the module
 /// docs' "State-color cascade" section.
 const DISABLED_CONTENT_OPACITY: f64 = 0.38;
@@ -183,7 +73,7 @@ fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) 
 
 /// A single-row Material Design list entry: leading/title/subtitle/trailing
 /// slots, an optional whole-tile tap target, and `enabled`/`selected` states.
-/// See the module docs for the M3 default token table and this substrate's
+/// See [`ListTile`]'s docs for the M3 default token table and this crate's
 /// composition-vs-`_RenderListTile` scope.
 ///
 /// ```rust
@@ -196,6 +86,116 @@ fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) 
 ///     .subtitle(Text::new("12 unread messages"))
 ///     .on_tap(|_ctx| {});
 /// ```
+///
+/// # M3 defaults
+///
+/// M3-only — this crate has no M2 mode:
+///
+/// | Token | Value |
+/// |---|---|
+/// | `contentPadding` | `EdgeInsetsDirectional.only(start: 16.0, end: 24.0)` |
+/// | `minLeadingWidth` | `24.0` |
+/// | `minVerticalPadding` | `8.0` |
+/// | `shape` | `RoundedRectangleBorder()` (square corners) |
+/// | `tileColor` | `Colors.transparent` |
+/// | `titleTextStyle` | `TextTheme.bodyLarge` colored `onSurface` |
+/// | `subtitleTextStyle` | `TextTheme.bodyMedium` colored `onSurfaceVariant` |
+/// | `leadingAndTrailingTextStyle` | `TextTheme.labelSmall` colored `onSurfaceVariant` |
+/// | `selectedColor` | `ColorScheme.primary` |
+/// | `iconColor` | `ColorScheme.onSurfaceVariant` |
+///
+/// `minLeadingWidth` is `24.0`, not the M2 value of `40.0`; the M3 table
+/// halves it.
+///
+/// The one/two/three-line minimum tile heights are a **flat literal
+/// table**, not part of the M3 token defaults: `56.0`/`72.0`/`88.0` (one/two/three lines), reduced
+/// to `48.0`/`64.0`/`76.0` when [`ListTile::dense`] is set. Note the
+/// three-line dense height is `76.0`, not `88.0 - 12.0`— it's its own table
+/// entry, not derived arithmetically.
+///
+/// `horizontalTitleGap` defaults to `16.0` — a bare literal
+/// (`horizontalTitleGap ?? tileTheme.horizontalTitleGap ?? 16`), not an M3
+/// token default.
+///
+/// # Scope: M3 composition, not a baseline-aware render object
+///
+/// A full list tile lays out leading/title/subtitle/trailing with a custom
+/// baseline-aware render object, computing exact baseline offsets per
+/// `ListTileTitleAlignment` variant and a
+/// `titleStart`/`adjustedTrailingWidth` intrinsic-width negotiation. This
+/// crate composes the SAME visible shape from `Row`/`Column`/`Padding`/
+/// `ConstrainedBox`/`Expanded` instead — the honest claim is **M3 list-tile
+/// composition (colors, typography, min-heights, tap)**. Concretely:
+///
+/// - **`leading`** is wrapped in `ConstrainedBox(min_width:
+///   min_leading_width)` — `titleStart = max(minLeadingWidth,
+///   leadingSize.width) + horizontalTitleGap`: the leading slot never
+///   shrinks below `min_leading_width`, but this crate does not
+///   separately track and error on a leading widget that consumes the
+///   entire tile width.
+/// - **`title`/`subtitle`** sit in an `Expanded(Column(...))`, wrapped in a
+///   single `Padding(vertical: min_vertical_padding)` around the whole
+///   two-line block — "the minimum padding on the top and
+///   bottom of the title and subtitle widgets" ([`ListTile::min_vertical_padding`]'s
+///   doc), but NOT per-`ListTileTitleAlignment` baseline math
+///   (`top`/`center`/`bottom`/`threeLine`/`titleHeight` each compute a
+///   different y-offset). `ListTileTitleAlignment`
+///   itself is not exposed; every tile lays out as the `threeLine`
+///   variant's **`≤2`-line (centered) arm, always** — title above subtitle,
+///   both left-aligned, `leading`/`trailing` vertically centered via
+///   `Row`'s `CrossAxisAlignment::Center`. The `threeLine` variant
+///   only centers `leading`/`trailing` when `isThreeLine` is `false`; when
+///   `true`, it TOP-aligns them instead (`listTile.minVerticalPadding` from
+///   the tile's top edge) so a
+///   three-line tile's icon sits flush with the title, not centered against
+///   the full three-line block. This crate always centers regardless of
+///   `is_three_line` — a named divergence from the `threeLine` variant.
+/// - **`trailing`**'s reserved-width floor (`max(trailingSize.width +
+///   horizontalTitleGap, 32.0)`) is not
+///   replicated — `Row`'s own intrinsic sizing handles it instead.
+/// - **`isThreeLine`** is an explicit `bool` flag
+///   (`ListTile.isThreeLine`, never a subtitle-line-count
+///   heuristic) — see [`ListTile::is_three_line`].
+/// - **`dense`** switches between the two literal height tables above AND
+///   clamps `title`'s resolved font size to `13.0`/subtitle's to `12.0`
+///   (`titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 : null)` and the
+///   subtitle equivalent) — both
+///   ported. `VisualDensity`'s finer `baseSizeAdjustment` nudge
+///   is a named deferral (no `VisualDensity`
+///   consumer wired to this crate's `ListTile` yet).
+/// - **Baseline alignment** — every text run in this composition sits by
+///   `Column`/`Row` box-model layout, not by shared text baseline. A full
+///   list-tile layout positions `title`/`subtitle` by
+///   their own top-of-box offsets too (not a true cross-widget baseline
+///   grid), so this is a smaller divergence than it may sound — but it is
+///   named here for the record.
+///
+/// # Deferred, and named
+///
+/// - **`onLongPress`**, **`onFocusChange`**, **`mouseCursor`**,
+///   **`focusColor`/`hoverColor`/`splashColor`**, **`focusNode`/`autofocus`**,
+///   **`enableFeedback`**, **`statesController`** — no override surface yet,
+///   matching every other interactive widget in this crate.
+/// - **`style`** (`ListTileStyle.list`/`drawer`, an M2-only fork) —
+///   irrelevant to this M3-only crate.
+/// - **`visualDensity`**, **`titleAlignment`** — see the "Scope" section.
+/// - **`internalAddSemanticForOnTap`** — always behaves as if `true`: the emitted `Semantics.button` flag is just
+///   `on_tap.is_some()`.
+/// - **`ListTile.divideTiles`** — the `Iterable<Widget>` inter-tile divider
+///   helper; a natural, additive follow-up once a caller list-builds
+///   `ListTile`s (see [`Divider`](crate::Divider)).
+/// - **The `SafeArea`/`IconTheme.merge` wrapper layers ARE
+///   ported**: `SafeArea::new(..).top(false).bottom(false).minimum(...)`, and
+///   `IconTheme::new(IconTheme::of(ctx).color(..), ..)`
+///   — a genuine merge over the ambient `IconTheme::of(ctx)` snapshot (only
+///   `color` is overridden; `size`/`opacity`/etc. pass through from whatever
+///   `IconTheme` already wraps this tile), matching `IconTheme.merge`'s own
+///   contract, not a blanket replacement. Only `IconButtonTheme` has no
+///   port: FLUI has no `IconButtonTheme` ambient/`InheritedWidget` at all yet
+///   (`IconButton` reads `ThemeData.icon_button_theme` directly — see
+///   [`IconButton`](crate::IconButton)'s docs), so a nested `IconButton` in
+///   `leading`/`trailing` will not automatically pick up this tile's
+///   resolved icon color.
 #[derive(Clone, StatelessView)]
 pub struct ListTile {
     leading: Option<BoxedView>,
@@ -552,7 +552,7 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
     // Unlike `icon_color`, the enabled/not-selected branch stays `None` when
     // no override is set: each text style below already carries its own
     // baked-in M3 color (`onSurface`/`onSurfaceVariant`), and `None` means
-    // "don't touch it" — see the module docs.
+    // "don't touch it" — see [`ListTile`]'s docs.
     let text_color = resolve_content_color(
         view.enabled,
         view.selected,
@@ -697,7 +697,7 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
     }
 }
 
-/// Composes the `leading`/title-column/`trailing` row — see the module docs'
+/// Composes the `leading`/title-column/`trailing` row — see [`ListTile`]'s
 /// "Scope" section for how this stands in for `_RenderListTile`.
 fn build_content_row(view: &ListTile, resolved: &ResolvedListTileStyle) -> Row<Vec<BoxedView>> {
     let mut children: Vec<BoxedView> = Vec::new();

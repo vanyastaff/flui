@@ -1,14 +1,5 @@
 //! [`FilledButton`] — a filled M3 button that does not elevate on press, plus
 //! its `tonal` variant.
-//!
-//! # Defaults and scope
-//!
-//! `default_style` holds the M3 filled and filled-tonal defaults, narrowed to
-//! the V1 slots [`ButtonStyle`] carries — see that module's docs. Populated:
-//! `text_style`, `background_color`, `foreground_color`, `overlay_color`,
-//! `elevation`, `padding`, `minimum_size`, `maximum_size`, `shape`. Neither
-//! variant sets a default `side` or `fixed_size`, so neither field is
-//! populated here.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -47,6 +38,15 @@ enum FilledButtonVariant {
 /// let _filled = FilledButton::new(Text::new("Confirm")).on_pressed(|_ctx| {});
 /// let _tonal = FilledButton::tonal(Text::new("Confirm")).on_pressed(|_ctx| {});
 /// ```
+///
+/// # Defaults and scope
+///
+/// `default_style` holds the M3 filled and filled-tonal defaults, narrowed to
+/// the slots [`ButtonStyle`] carries — see [`ButtonStyle`]'s docs. Populated:
+/// `text_style`, `background_color`, `foreground_color`, `overlay_color`,
+/// `elevation`, `padding`, `minimum_size`, `maximum_size`, `shape`. Neither
+/// variant sets a default `side` or `fixed_size`, so neither field is
+/// populated here.
 #[derive(Clone, StatelessView)]
 pub struct FilledButton {
     on_pressed: Option<PressCallback>,
@@ -125,7 +125,7 @@ impl StatelessView for FilledButton {
         // Middle cascade tier — see `crate::elevated_button`'s identical
         // "simplified from `ElevatedButtonTheme.of`" note; the `tonal`
         // variant shares the same `filled_button_theme` slot as the plain
-        // variant, matching the oracle (one `FilledButtonThemeData` for
+        // variant, matching Flutter (one `FilledButtonThemeData` for
         // both `FilledButton` constructors).
         if let Some(theme_style) = theme
             .filled_button_theme
@@ -143,8 +143,8 @@ impl StatelessView for FilledButton {
 
 /// Verbatim, field-by-field port of `_FilledButtonDefaultsM3`
 /// (`variant: Filled`) / `_FilledTonalButtonDefaultsM3` (`variant: Tonal`)
-/// (`filled_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots —
-/// see the module docs.
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/filled_button.dart:532` and `:673`), narrowed to the slots —
+/// see [`FilledButton`]'s docs.
 fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle {
     let colors = theme.color_scheme;
     let (background, foreground) = match variant {
@@ -173,15 +173,15 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
             pressed_hovered_overlay(states, foreground)
         })),
-        // Oracle order matters: `disabled` and `pressed` are checked BEFORE
+        // Flutter's order matters: `disabled` and `pressed` are checked BEFORE
         // `hovered`, so a state set containing both `Pressed` and `Hovered`
         // (an ordinary mouse press on an already-hovered button) resolves
         // the pressed value (0.0), never the hover value (1.0). Early
         // returns (not an `if`/`else if` chain — clippy rightly flags
-        // adjacent identical `0.0` bodies there) still preserve the
-        // oracle's exact branch order: `disabled` → `pressed` → `hovered` →
-        // `focused` → the unconditional fallback (`_FilledButtonDefaultsM3
-        // .elevation`'s chain, `filled_button.dart`, tag `3.44.0`; same
+        // adjacent identical `0.0` bodies there) still preserve
+        // Flutter's exact branch order: `disabled` → `pressed` → `hovered` →
+        // `focused` → the unconditional fallback (`_FilledButtonDefaultsM3.elevation`'s chain,
+        // `flutter/flutter@3.50.1 packages/flutter/lib/src/material/filled_button.dart:589`; same
         // table shape as `_FilledTonalButtonDefaultsM3.elevation`). A
         // collapsed `!disabled && hovered` condition already dropped this
         // exact check once.
@@ -195,7 +195,7 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
             if states.contains_state(WidgetState::Hovered) {
                 return Some(1.0);
             }
-            // Focused, and the oracle's unconditional fallback, both
+            // Focused, and Flutter's unconditional fallback, both
             // resolve to 0.0.
             Some(0.0)
         })),
@@ -209,8 +209,8 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
 }
 
 /// `24px` horizontal, `0px` vertical — same 1x-tier padding as
-/// [`crate::elevated_button`] (both oracle tables call the identical
-/// `_scaledPadding` shape with `padding1x = 24.0`). See that module's docs
+/// [`crate::elevated_button`] (both Flutter tables call the identical
+/// `_scaledPadding` shape with `padding1x = 24.0`). See [`ElevatedButton`](crate::ElevatedButton)'s docs
 /// for the `MediaQuery` text-scaler deferral this narrows to the 1x tier.
 fn scaled_padding_1x() -> EdgeInsets {
     EdgeInsets::symmetric(0.0, 24.0)
@@ -230,7 +230,7 @@ mod tests {
     }
 
     /// A disabled-but-hovered state must not resolve the hover elevation —
-    /// `disabled` is checked first in the oracle's own conditional chain.
+    /// `disabled` is checked first in Flutter's own conditional chain.
     #[test]
     fn filled_elevation_disabled_wins_over_hovered() {
         let theme = ThemeData::light();

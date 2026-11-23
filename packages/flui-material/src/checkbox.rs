@@ -1,21 +1,5 @@
 //! [`Checkbox`] — a tristate-capable M3 selection control.
 //!
-//! # V1 scope: static states, no toggle/reaction animation
-//!
-//! A full toggleable control drives several animation controllers (one for
-//! the box/check morph, one for the radial ink splash, plus hover/focus fade
-//! controllers) so a value change or an interaction visibly interpolates. This
-//! V1 **snaps**: `CheckboxPainter` always paints the box/check at their
-//! fully-settled shape, and there is no radial-splash painting — the
-//! hover/focus/press overlay comes from [`InkWell`] instead (a single
-//! resolved-color fill, not an expanding circle), matching how
-//! [`crate::floating_action_button`] already substitutes `InkWell` for an
-//! ink-feature registry. Named deferral, not a silent drop: a future animated
-//! Checkbox reintroduces animation-controller-driven interpolation without
-//! changing this type's public surface (`value` via [`Checkbox::new`] /
-//! [`Checkbox::tristate`], plus `on_changed`, are already the steady-state
-//! contract).
-//!
 //! # Composition: `InkWell` owns interaction, `Checkbox` owns `Selected`
 //!
 //! [`InkWell`] already provides the hover/focus/press wiring and `Disabled`
@@ -38,39 +22,6 @@
 //! (which had no path-drawing seam and fell back to a `MaterialIcons` glyph
 //! identity), `flui-painting`'s [`Canvas`] already exposes the primitives, so
 //! this is a direct, honest rendering of the static (non-animated) shape.
-//!
-//! # Overlay shape: the whole tap target, not a fixed-radius circle
-//!
-//! The M3 splash radius (`20.0`) sizes a FREE (unclipped) radial-reaction
-//! circle. `InkWell`'s ink (see the "V1 scope" section above) is bounded:
-//! its state layer and ripple are clipped to its own shape. This port
-//! shapes that ink as [`MaterialShape::Stadium`] over the FULL
-//! `CHECKBOX_TAP_TARGET_SIZE` square (inscribing a `24.0`-radius circle, not
-//! exactly `20.0`) — the same named, position-independent approximation
-//! [`crate::switch`]'s module docs describe for `Switch`'s own overlay.
-//!
-//! # Deferred (named, not silently dropped)
-//!
-//! - **Toggle/reaction/hover/focus-fade animation** — see above.
-//! - **An adaptive (Cupertino) checkbox** — no platform substrate to switch
-//!   on yet.
-//! - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
-//!   `visual_density` overrides** — V1 always uses the M3 defaults
-//!   (48dp tap target, standard visual density = no adjustment, splash
-//!   radius `20.0` — see the "Overlay shape"
-//!   section above for why the InkWell substitution doesn't hit that value
-//!   exactly). [`crate::CheckboxThemeData`] and the widget both omit these
-//!   fields; see that type's own doc comment.
-//! - **Widget-level `fill_color`/`overlay_color`/`side`/`shape` overrides**
-//!   (state-property-shaped parameters) —
-//!   only [`Checkbox::active_color`] and [`Checkbox::check_color`] (plain
-//!   `Color` overrides) ship at the widget tier; the theme
-//!   tier ([`crate::CheckboxThemeData`]) and the M3 default tier are both
-//!   fully state-resolved. A future widget-level `WidgetStateProperty` override
-//!   slot is additive.
-//! - **`focus_node`/`autofocus`** — [`InkWell`] itself has no `autofocus`
-//!   hook yet (a whole-substrate gap, not specific to this type); only
-//!   `focus_node` sharing is wired through.
 
 use std::any::Any;
 use std::rc::Rc;
@@ -105,8 +56,8 @@ pub(crate) const CHECKBOX_EDGE_SIZE: f64 = 18.0;
 const STROKE_WIDTH: f64 = 2.0;
 
 /// The M3 tap-target side length (`48.0`, the minimum interactive dimension),
-/// always used in V1 (no `material_tap_target_size` override yet — see the
-/// module docs).
+/// always used in this crate (no `material_tap_target_size` override yet — see the
+/// [`Checkbox`]'s docs).
 pub(crate) const CHECKBOX_TAP_TARGET_SIZE: f64 = 48.0;
 
 /// The box's corner radius, `2.0`.
@@ -140,6 +91,55 @@ type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, O
 /// let _tristate = Checkbox::tristate(None);
 /// let _disabled = Checkbox::new(true);
 /// ```
+///
+/// # Scope: static states, no toggle/reaction animation
+///
+/// A full toggleable control drives several animation controllers (one for
+/// the box/check morph, one for the radial ink splash, plus hover/focus fade
+/// controllers) so a value change or an interaction visibly interpolates. This
+/// This crate **snaps**: `CheckboxPainter` always paints the box/check at their
+/// fully-settled shape, and there is no radial-splash painting — the
+/// hover/focus/press overlay comes from [`InkWell`] instead (a single
+/// resolved-color fill, not an expanding circle), matching how
+/// [`FloatingActionButton`](crate::FloatingActionButton) already substitutes `InkWell` for an
+/// ink-feature registry. Named deferral, not a silent drop: a future animated
+/// Checkbox reintroduces animation-controller-driven interpolation without
+/// changing this type's public surface (`value` via [`Checkbox::new`] /
+/// [`Checkbox::tristate`], plus `on_changed`, are already the steady-state
+/// contract).
+///
+/// # Overlay shape: the whole tap target, not a fixed-radius circle
+///
+/// The M3 splash radius (`20.0`) sizes a FREE (unclipped) radial-reaction
+/// circle. `InkWell`'s ink (see the "Scope" section above) is bounded:
+/// its state layer and ripple are clipped to its own shape. This port
+/// shapes that ink as [`MaterialShape::Stadium`] over the FULL
+/// `CHECKBOX_TAP_TARGET_SIZE` square (inscribing a `24.0`-radius circle, not
+/// exactly `20.0`) — the same named, position-independent approximation
+/// [`Switch`](crate::Switch) documents for `Switch`'s own overlay.
+///
+/// # Deferred (named, not silently dropped)
+///
+/// - **Toggle/reaction/hover/focus-fade animation** — see above.
+/// - **An adaptive (Cupertino) checkbox** — no platform support to switch
+///   on yet.
+/// - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
+///   `visual_density` overrides** — this crate always uses the M3 defaults
+///   (48dp tap target, standard visual density = no adjustment, splash
+///   radius `20.0` — see the "Overlay shape"
+///   section above for why the InkWell substitution doesn't hit that value
+///   exactly). [`crate::CheckboxThemeData`] and the widget both omit these
+///   fields; see that type's own doc comment.
+/// - **Widget-level `fill_color`/`overlay_color`/`side`/`shape` overrides**
+///   (state-property-shaped parameters) —
+///   only [`Checkbox::active_color`] and [`Checkbox::check_color`] (plain
+///   `Color` overrides) ship at the widget tier; the theme
+///   tier ([`crate::CheckboxThemeData`]) and the M3 default tier are both
+///   fully state-resolved. A future widget-level `WidgetStateProperty` override
+///   slot is additive.
+/// - **`focus_node`/`autofocus`** — [`InkWell`] itself has no `autofocus`
+///   hook yet (a crate-wide gap, not specific to this type); only
+///   `focus_node` sharing is wired through.
 #[derive(Clone, StatefulView)]
 pub struct Checkbox {
     mode: CheckboxMode,
@@ -301,7 +301,7 @@ impl Checkbox {
 }
 
 /// Persistent state behind [`Checkbox`] — owns the [`WidgetStatesController`]
-/// shared with the [`InkWell`] this view builds. See the module docs'
+/// shared with the [`InkWell`] this view builds. See [`Checkbox`]'s
 /// "Composition" section for why `Selected` lives here while
 /// `Hovered`/`Focused`/`Pressed`/`Disabled` are `InkWell`'s to manage.
 pub struct CheckboxState {
@@ -361,7 +361,7 @@ impl ViewState<Checkbox> for CheckboxState {
             self.states
                 .update(WidgetState::Disabled, !new_view.is_interactive());
         }
-        // On a value change, V1 has no animation to drive, so this resyncs
+        // On a value change, this crate has no animation to drive, so this resyncs
         // `Selected` directly. Never called from `build` —
         // same care `InkWellState::did_update_view` takes.
         if old_view.mode.value() != new_view.mode.value() {
@@ -474,8 +474,8 @@ impl ViewState<Checkbox> for CheckboxState {
 /// without mounting a widget tree. `active_color` only substitutes when
 /// [`WidgetState::Selected`] AND NOT [`WidgetState::Disabled`] (otherwise it
 /// falls through to the theme tier, then the M3 default); a widget-level
-/// state-property fill tier above it is a named V1 deferral (see the
-/// module docs).
+/// state-property fill tier above it is a named deferral (see the
+/// [`Checkbox`]'s docs).
 fn resolve_checkbox_fill_color(
     active_color: Option<Color>,
     theme_fill_color: Option<&WidgetStateProperty<Option<Color>>>,
@@ -595,7 +595,7 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
 
 /// Paints the checkbox's box (fill + border) and, for a settled `Some(true)`/
 /// `None` value, the checkmark/dash — always at the fully-settled shape (see
-/// the module docs' V1-scope section), with no interpolation and no
+/// [`Checkbox`]'s docs' scope section), with no interpolation and no
 /// radial-reaction painting (the overlay comes from [`InkWell`] instead — see
 /// the module docs' "Composition" section).
 #[derive(Debug, Clone, PartialEq)]

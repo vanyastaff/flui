@@ -1,47 +1,5 @@
-//! Material 3 press feedback: the state layer and the ripple an [`InkWell`]
+//! Material 3 press feedback: the state layer and the ripple an [`InkWell`](crate::InkWell)
 //! paints under its child.
-//!
-//! An `InkWell` owns its feedback (an *indication*, in Compose's terms):
-//! nothing is registered on an ancestor `Material`, so a ripple can never
-//! paint outside the well that started it. The indication has two parts:
-//!
-//! - **State layer.** One fill of the well's shape whose alpha follows the
-//!   interaction states through [`StateLayerAlpha`]: hover 0.08, focus 0.10,
-//!   pressed 0.10, dragged 0.16. Entering hover takes 15 ms, entering focus or
-//!   a drag 45 ms, and leaving any state 150 ms, all linear. Its animation
-//!   exists only while the layer shows or moves: it starts at the first
-//!   visible target and goes once the well is back at rest (Flutter's
-//!   `InkWell` makes its `InkHighlight` on the first state that shows one),
-//!   so a resting well holds no controller and no frame registration.
-//! - **Ripple.** A short queue of waves. Each wave starts at the pointer-down
-//!   position with radius `0.3 × max(width, height)` and grows over 225 ms
-//!   (fast-out-slow-in) to the distance from its origin to the farthest corner
-//!   plus 10 dp. It fades in over 75 ms; once released it fades out over
-//!   150 ms, but a release before the fade-in completes waits for it, so a
-//!   quick tap still shows the full press alpha. A cancelled contact fades out
-//!   at once from where its fade-in had got to, and so does a contact that
-//!   stops being a tap (past the touch slop, or the arena lost to a scrolling
-//!   ancestor or a long press); other contacts keep pressing. A primary
-//!   button released while another is held ends its press too. A keyboard
-//!   activation grows a released wave from the centre. A box too large for a
-//!   wave's extent to be finite grows no wave.
-//!
-//! While a wave runs it carries the pressed alpha, so the state layer leaves
-//! `Pressed` out; a press with no wave (a shared states controller, an
-//! assistive activation) shows on the state layer. Under reduced motion, or
-//! without a frame clock (no `VsyncScope` registry) to grow a wave, there is
-//! no expanding circle: the state layer shows `Pressed` from the contact's
-//! down to its up, and through the tap's pressed window after.
-//!
-//! An idle well attaches no painter and records nothing. A state change or a
-//! press that makes it visible rebuilds it with one; while the painter is
-//! attached, state changes repaint through it with no build, and the last run
-//! coming to rest rebuilds the well without it.
-//!
-//! [`RippleScope`] provides the ambient [`RippleConfiguration`]; a scope with
-//! no configuration turns the whole indication off.
-//!
-//! [`InkWell`]: crate::InkWell
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -121,6 +79,49 @@ impl Default for StateLayerAlpha {
 /// [`overlay_color`](crate::InkWell::overlay_color) wins over it; without
 /// either, the well uses its [`Theme`](crate::Theme)'s `on_surface`, and
 /// without a theme it paints no feedback.
+///
+///
+/// An `InkWell` owns its feedback (an *indication*, in Compose's terms):
+/// nothing is registered on an ancestor `Material`, so a ripple can never
+/// paint outside the well that started it. The indication has two parts:
+///
+/// - **State layer.** One fill of the well's shape whose alpha follows the
+///   interaction states through [`StateLayerAlpha`]: hover 0.08, focus 0.10,
+///   pressed 0.10, dragged 0.16. Entering hover takes 15 ms, entering focus or
+///   a drag 45 ms, and leaving any state 150 ms, all linear. Its animation
+///   exists only while the layer shows or moves: it starts at the first
+///   visible target and goes once the well is back at rest (Flutter's
+///   `InkWell` makes its `InkHighlight` on the first state that shows one),
+///   so a resting well holds no controller and no frame registration.
+/// - **Ripple.** A short queue of waves. Each wave starts at the pointer-down
+///   position with radius `0.3 × max(width, height)` and grows over 225 ms
+///   (fast-out-slow-in) to the distance from its origin to the farthest corner
+///   plus 10 dp. It fades in over 75 ms; once released it fades out over
+///   150 ms, but a release before the fade-in completes waits for it, so a
+///   quick tap still shows the full press alpha. A cancelled contact fades out
+///   at once from where its fade-in had got to, and so does a contact that
+///   stops being a tap (past the touch slop, or the arena lost to a scrolling
+///   ancestor or a long press); other contacts keep pressing. A primary
+///   button released while another is held ends its press too. A keyboard
+///   activation grows a released wave from the centre. A box too large for a
+///   wave's extent to be finite grows no wave.
+///
+/// While a wave runs it carries the pressed alpha, so the state layer leaves
+/// `Pressed` out; a press with no wave (a shared states controller, an
+/// assistive activation) shows on the state layer. Under reduced motion, or
+/// without a frame clock (no `VsyncScope` registry) to grow a wave, there is
+/// no expanding circle: the state layer shows `Pressed` from the contact's
+/// down to its up, and through the tap's pressed window after.
+///
+/// An idle well attaches no painter and records nothing. A state change or a
+/// press that makes it visible rebuilds it with one; while the painter is
+/// attached, state changes repaint through it with no build, and the last run
+/// coming to rest rebuilds the well without it.
+///
+/// [`RippleScope`] provides the ambient [`RippleConfiguration`]; a scope with
+/// no configuration turns the whole indication off.
+///
+/// [`InkWell`]: crate::InkWell
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RippleConfiguration {
     /// The feedback colour, or `None` for the well's own default.

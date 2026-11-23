@@ -58,8 +58,8 @@ fn selection(scheme: &ColorScheme) -> SelectionStyle {
 /// This is baked once, at [`ThemeData::light`]/[`ThemeData::dark`]
 /// construction time, rather than recomputed lazily on every `Theme::of`
 /// read keyed on the ambient locale's script category (English vs.
-/// dense/tall scripts — see [`crate::typography`] module docs on why
-/// dense/tall are deferred): FLUI V1 has no script-category-resolving
+/// dense/tall scripts — see [`english_like_2021`](crate::english_like_2021)'s docs on why
+/// dense/tall are deferred): FLUI has no script-category-resolving
 /// localization consumer yet, so only the `englishLike` default exists.
 fn default_text_theme(brightness: Brightness, on_surface: Color) -> TextTheme {
     let geometry = typography::english_like_2021();
@@ -78,7 +78,7 @@ fn default_text_theme(brightness: Brightness, on_surface: Color) -> TextTheme {
 ///
 /// **Named reduction**: a subtree could override the style with a
 /// standalone `ElevatedButtonTheme` `InheritedTheme` widget, without
-/// touching the whole [`ThemeData`]; FLUI V1 has no per-widget
+/// touching the whole [`ThemeData`]; FLUI has no per-widget
 /// `InheritedTheme` wrappers yet, so `ElevatedButton` reads only this
 /// [`ThemeData`] slot via [`Theme::of`](crate::Theme::of).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -209,8 +209,8 @@ pub struct CarouselViewThemeData {
 /// title), [`content_text_style`](Self::content_text_style) (`AlertDialog`'s
 /// content). Named deferrals (no consumer yet): `shadow_color`,
 /// `surface_tint_color`, `alignment`, `icon_color`, `actions_padding`,
-/// `barrier_color`, `inset_padding`, `clip_behavior`, `constraints` (the
-/// oracle's own `Dialog.build` reads `constraints ?? dialogTheme.constraints
+/// `barrier_color`, `inset_padding`, `clip_behavior`, `constraints` (
+/// Flutter's own `Dialog.build` reads `constraints ?? dialogTheme.constraints
 /// ?? const BoxConstraints(minWidth: 280.0)` — FLUI's `Dialog` has a widget
 /// tier for this via [`Dialog::constraints`](crate::Dialog::constraints) but
 /// no theme tier yet).
@@ -256,8 +256,8 @@ pub struct FabThemeData {
     /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s
     /// enabled-tier elevation (`6.0`) — the same value the `disabled` tier
     /// falls back to (see `resolve_elevation`'s doc comment); the
-    /// `pressed`/`hovered`/`focused` tiers are unaffected, matching the
-    /// oracle's own independent `highlightElevation`/`hoverElevation`/
+    /// `pressed`/`hovered`/`focused` tiers are unaffected, matching
+    /// Flutter's own independent `highlightElevation`/`hoverElevation`/
     /// `focusElevation` fields (this crate exposes no override for those).
     pub elevation: Option<f64>,
 }
@@ -273,13 +273,13 @@ pub struct FabThemeData {
 /// [`label_style`](Self::label_style), [`helper_style`](Self::helper_style),
 /// [`error_style`](Self::error_style), [`content_padding`](Self::content_padding).
 /// Named deferrals (no consumer in FLUI's `InputDecorator` yet — see that
-/// module's docs for the full named-divergence list): `outlineBorder` (no
-/// `OutlineInputBorder` variant in V1), `iconColor`/`prefixIconColor`/
-/// `suffixIconColor` (no icon slots), `floatingLabelStyle` (V1's snap float
-/// reuses [`label_style`](Self::label_style) for both positions — the oracle
+/// [`InputDecorator`](crate::InputDecorator)'s docs for the full named-divergence list): `outlineBorder` (no
+/// `OutlineInputBorder` variant in this crate), `iconColor`/`prefixIconColor`/
+/// `suffixIconColor` (no icon slots), `floatingLabelStyle` (this crate's snap float
+/// reuses [`label_style`](Self::label_style) for both positions — Flutter
 /// itself resolves both through an identical state table), `isDense`,
 /// `isCollapsed`, `border`, `focusColor`/`hoverColor` (the container's hover
-/// blend is a fixed `ThemeData.hoverColor`-shaped constant in V1, not yet a
+/// blend is a fixed `ThemeData.hoverColor`-shaped constant in this crate, not yet a
 /// themeable slot), and every constraint/alignment/behavior field.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InputDecorationThemeData {
@@ -307,7 +307,7 @@ pub struct InputDecorationThemeData {
     pub error_style: Option<WidgetStateProperty<Option<TextStyle>>>,
     /// Overrides the container's content padding. `None` falls through to
     /// the M3 filled-non-outline default (`EdgeInsets.fromLTRB(12, 8, 12,
-    /// 8)`, `input_decorator.dart`'s `contentPadding` doc, tag `3.44.0`).
+    /// 8)`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/input_decorator.dart:2591-2596`).
     pub content_padding: Option<EdgeInsets>,
 }
 
@@ -326,8 +326,8 @@ pub struct InputDecorationThemeData {
 /// `style` (`ListTileStyle` is an M2-only fork this M3-only crate has no use
 /// for), `enable_feedback`, `mouse_cursor`, `visual_density`,
 /// `title_alignment` (baseline-precise top/center/bottom placement — this
-/// substrate's `ListTile` is a `Row`/`Column` composition, not a baseline-aware
-/// `_RenderListTile` port, see that module's docs), `control_affinity` (no
+/// crate's `ListTile` is a `Row`/`Column` composition, not a baseline-aware
+/// `_RenderListTile` port, see [`ListTile`](crate::ListTile)'s docs), `control_affinity` (no
 /// checkbox/switch/radio list-tile variants yet).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListTileThemeData {
@@ -417,7 +417,7 @@ pub struct DividerThemeData {
 ///
 /// Narrowed to the fields FLUI's `Checkbox` actually consumes: [`fill_color`](Self::fill_color), [`check_color`](Self::check_color),
 /// [`overlay_color`](Self::overlay_color), [`side`](Self::side). Named
-/// deferrals (no consumer in FLUI's `Checkbox` yet — see that module's docs
+/// deferrals (no consumer in FLUI's `Checkbox` yet — see [`Checkbox`](crate::Checkbox)'s docs
 /// for the full named-divergence list): `mouse_cursor`, `splash_radius`
 /// (fixed at the M3 default), `material_tap_target_size`, `visual_density`,
 /// `shape` (fixed at the M3 2dp-rounded default).
@@ -451,23 +451,23 @@ pub struct CheckboxThemeData {
 /// [`shape`](Self::shape), [`padding`](Self::padding),
 /// [`label_padding`](Self::label_padding). Every field is a **plain**
 /// override rather than a `StateColor`/`WidgetStateProperty` — see
-/// `chip.rs`'s module docs ("`ChipThemeData`: plain overrides") for why this
+/// [`Chip`](crate::Chip)'s docs ("`ChipThemeData`: plain overrides") for why this
 /// diverges from [`CheckboxThemeData`]/[`SwitchThemeData`]/
 /// [`RadioThemeData`]/[`NavigationBarThemeData`]'s per-state color slots:
 /// `chip_theme.dart` genuinely types these fields as plain values too (only
-/// `color`, the container fill, is a `WidgetStateProperty` in the oracle,
-/// and that field is a named V1 deferral here — see the same module docs).
+/// `color`, the container fill, is a `WidgetStateProperty` in Flutter,
+/// and that field is a named deferral here — see [`ChipThemeData`]'s docs).
 /// Named deferrals (no consumer in FLUI's `Chip`/`FilterChip` yet): `color`/
 /// `background_color`/`disabled_color`/`selected_color`/
 /// `secondary_selected_color` (the container fill — see `chip.rs`'s module
 /// docs), `shadow_color`/`surface_tint_color`/`selected_shadow_color`
 /// (`Material` has no such parameters yet, the same gap every other
 /// `Material`-backed M3 component in this crate already has),
-/// `show_checkmark` (V1 always shows one when selected), `brightness`,
-/// `elevation`/`press_elevation` (V1 is flat-only, elevation fixed `0.0`),
+/// `show_checkmark` (this crate always shows one when selected), `brightness`,
+/// `elevation`/`press_elevation` (this crate is flat-only, elevation fixed `0.0`),
 /// `avatar_box_constraints`/`delete_icon_box_constraints`. `labelStyle`
 /// (`TextStyle?`) and `secondaryLabelStyle` (`FilterChip`'s selected-state
-/// label style in the oracle) are BOTH narrowed down to
+/// label style in Flutter) are BOTH narrowed down to
 /// [`label_color`](Self::label_color) alone: every meaningful per-state
 /// difference in `_ChipDefaultsM3.labelStyle`/`_FilterChipDefaultsM3.labelStyle`
 /// is color-only (`_textTheme.labelLarge?.copyWith(color: ...)`, both files)
@@ -490,7 +490,7 @@ pub struct CheckboxThemeData {
 /// 18dp glyph out to a `kMinInteractiveDimension`-or-`-8.0` accessible hit
 /// area) has no analogue here either — `chip.rs`'s delete `InkWell` hit-tests
 /// only its own visible icon bounds, a named accessibility-surface gap
-/// alongside the module docs' other deferred delete-affordance items
+/// alongside [`Chip`](crate::Chip)'s other deferred delete-affordance items
 /// (tooltip, custom icon override).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChipThemeData {
@@ -533,7 +533,7 @@ pub struct ChipThemeData {
 /// [`thumb_color`](Self::thumb_color), [`track_color`](Self::track_color),
 /// [`track_outline_color`](Self::track_outline_color),
 /// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
-/// FLUI's `Switch` yet — see that module's docs for the full
+/// FLUI's `Switch` yet — see [`Switch`](crate::Switch)'s docs for the full
 /// named-divergence list): `mouse_cursor`, `splash_radius`,
 /// `material_tap_target_size`, `thumb_icon`, `padding`,
 /// `track_outline_width` (all fixed at their M3 defaults).
@@ -562,15 +562,15 @@ pub struct SwitchThemeData {
 /// [`elevation`](Self::elevation), [`indicator_color`](Self::indicator_color),
 /// [`icon_color`](Self::icon_color), [`label_text_style`](Self::label_text_style),
 /// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
-/// FLUI's `NavigationBar` yet — see that module's docs for the full
+/// FLUI's `NavigationBar` yet — see [`NavigationBar`](crate::NavigationBar)'s docs for the full
 /// named-divergence list): `shadow_color`/`surface_tint_color` (`Material` has
 /// no such parameters yet — the same gap every other `Material`-backed M3
 /// component in this crate already has), `indicator_shape` (fixed at the M3
 /// `StadiumBorder` default), `label_padding` (fixed at the M3 `EdgeInsets.only(top:
-/// 4)` default), `label_behavior` (V1 always behaves as `alwaysShow` — see the
-/// module docs' "Label behavior" section for why the other two variants are
+/// 4)` default), `label_behavior` (this crate always behaves as `alwaysShow` — see the
+/// [`NavigationBar`](crate::NavigationBar)'s "Label behavior" section for why the other two variants are
 /// deferred wholesale rather than as a half-wired enum). [`icon_color`](Self::icon_color)
-/// is itself a further narrowing: the oracle's `iconTheme` is a full
+/// is itself a further narrowing: Flutter's `iconTheme` is a full
 /// `WidgetStateProperty<IconThemeData?>` (size, color, opacity, the `fill`/
 /// `weight`/`grade`/`optical_size` font-variation axes, shadows); this slot
 /// carries only the color, since `NavigationDestination`'s icon size is
@@ -601,7 +601,7 @@ pub struct NavigationBarThemeData {
     /// Overrides each destination's state-overlay color (the `InkWell`-shaped
     /// hover/focus/press ramp). `None` (the default, at every tier) uses the
     /// ambient [`crate::RippleConfiguration`] colour at the M3 state-layer
-    /// alphas (the oracle sets no default `overlayColor` in
+    /// alphas (Flutter sets no default `overlayColor` in
     /// `_NavigationBarDefaultsM3` either).
     pub overlay_color: Option<StateColor>,
 }
@@ -618,9 +618,9 @@ pub struct NavigationBarThemeData {
 /// [`unselected_label_style`](Self::unselected_label_style),
 /// [`divider_color`](Self::divider_color), [`divider_height`](Self::divider_height),
 /// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
-/// FLUI's `TabBar` yet — see that module's docs for the full
+/// FLUI's `TabBar` yet — see [`TabBar`](crate::TabBar)'s docs for the full
 /// named-divergence list): `indicator` (custom `Decoration`), `indicator_size`
-/// (fixed at `TabBarIndicatorSize::Tab`, the only size the secondary-only V1
+/// (fixed at `TabBarIndicatorSize::Tab`, the only size the secondary-only tab bar
 /// supports), `label_padding` (fixed at `kTabLabelPadding`), `splash_factory`,
 /// `mouse_cursor`, `tab_alignment` (fixed at the fill/equal-share layout),
 /// `text_scaler`, `indicator_animation` (no `AnimationController` on
@@ -659,7 +659,7 @@ pub struct TabBarThemeData {
 ///
 /// Narrowed to the fields FLUI's `Radio` actually consumes:
 /// [`fill_color`](Self::fill_color), [`overlay_color`](Self::overlay_color).
-/// Named deferrals (no consumer in FLUI's `Radio` yet — see that module's
+/// Named deferrals (no consumer in FLUI's `Radio` yet — see [`Radio`](crate::Radio)'s
 /// docs for the full named-divergence list): `mouse_cursor`,
 /// `splash_radius`, `material_tap_target_size`, `visual_density`, `side`
 /// (defaults to the ring's own resolved `fill_color`, width `2.0`),
@@ -680,7 +680,7 @@ pub struct RadioThemeData {
 /// not blank the whole slot.
 ///
 /// Narrowed to the fields FLUI's `DataTable` actually consumes. Named deferrals (no consumer in FLUI's `DataTable` yet — see
-/// that module's docs for the full named-divergence list): `headingCellCursor`,
+/// [`DataTable`](crate::DataTable)'s docs for the full named-divergence list): `headingCellCursor`,
 /// `dataRowCursor` (no `sortColumnIndex`/mouse-cursor surface yet),
 /// `headingRowAlignment` (no sort-arrow layout to align around yet).
 #[derive(Clone, Debug, Default, PartialEq)]

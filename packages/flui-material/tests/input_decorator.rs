@@ -12,8 +12,8 @@
 //! which only a full `UiRuntime` frame pump runs — the raw
 //! `HitTestResult::dispatch` this headless harness's `dispatch_pointer_move`
 //! calls never reaches it. `InputDecoratorState` uses `on_enter`/`on_exit`
-//! (the oracle's own `TextField._handleHover` wiring, `text_field.dart:1799`,
-//! tag `3.44.0`) for the same real-behavior reason `InkWell` does — the hover
+//! (Flutter's own `TextField._handleHover` wiring,
+//! `flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_field.dart:1798-1799`) for the same real-behavior reason `InkWell` does — the hover
 //! blend math itself is exhaustively pinned by `input_decorator.rs`'s own
 //! unit tests (`hover_blend_*`); this file only proves the `MouseRegion` is
 //! actually composed around the container, structurally.

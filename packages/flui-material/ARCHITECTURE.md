@@ -253,7 +253,7 @@ Release assert matches the AGENTS temporary fallback for caller-violable
 | Construction `new` / `initial_index` | Process panic at the call site |
 
 Callers must keep controller length and `TabBar`/`TabBarView` lists in sync —
-a requirement that is now enforced in release, checked in `build`.
+a requirement that is enforced in release, checked in `build`.
 
 **Unasserted:** no test pins this.
 
@@ -415,7 +415,7 @@ the precedence itself is flui-semantics' decision, recorded in
 `selected` and `hint` fields are not published: FLUI's semantics surface has no
 platform dimension, so this is a deliberate drop of a platform-dependent
 behavior, not an oversight.
-`focus_node` / `autofocus` keep the whole-substrate `InkWell` gap `Checkbox` and
+`focus_node` / `autofocus` keep the crate-wide `InkWell` gap `Checkbox` and
 `Switch` already name. A `Radio` takes a screen reader's `Click` through the tap its
 `InkWell` registers, and under `MergeSemantics` with a `ListTile` that click is the
 radio's, not the tile's, because the merged node announces the radio's selection (ADR-0392,
@@ -512,25 +512,20 @@ check, draws inside its box at 0, ½ and 1, and exactly the four direction icons
 
 ## Thread safety
 
-No locks. Material widgets are built and mutated on the UI UI runtime thread;
+No locks. Material widgets are built and mutated on the UI runtime thread;
 shared interaction state uses `WidgetStatesController` / `Rc` callbacks as
 elsewhere in the widget layer.
 
 ---
 
-## Friction log
-
-| Item | Notes |
-|------|-------|
-| Cupertino tab index still `debug_assert!` | `flui-cupertino` `CupertinoTabScaffold` — audit for the same policy when that surface is retouched. |
-| Bounded `TabIndex` API | Optional follow-up if mutation ergonomics need fallible `try_set_index` without panic. |
+## Behaviour contracts
 
 ### NavigationBar configuration bounds hold in every profile
 
 `NavigationBar` requires at least two destinations and a selected index within
 that immutable list. Construction and the selection setter reject violations
 in release as well as debug; no bar can publish a selection outside its own
-list. These are the existing programmer-error contracts, now enforced where
+list. These programmer-error contracts are enforced where
 the configuration is constructed. There is no mutable controller or externally
 replaceable list on this widget, so adding a public count/index type would add
 a conversion without removing another source of count disagreement.

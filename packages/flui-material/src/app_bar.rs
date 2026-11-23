@@ -1,122 +1,5 @@
 //! [`AppBar`] — a Material app bar: a leading/title/actions toolbar on a
 //! [`Material`] surface.
-//!
-//! # Implemented subset
-//!
-//! `leading`, `title`, `actions`, `toolbar_height`, `bottom`,
-//! `background_color`, `foreground_color`, `elevation`, and the M3 token
-//! defaults: `background_color` falls back to `ColorScheme.surface`,
-//! `foreground_color` to `ColorScheme.on_surface`, `elevation` to `0.0`, and
-//! the title's text style to `TextTheme.title_large` (recolored to the
-//! resolved foreground).
-//!
-//! ## The app bar consumes the top inset itself
-//!
-//! The app bar wraps its toolbar in a top-only `SafeArea` — it pads itself
-//! against `MediaQuery`'s top padding, rather than a parent adding that
-//! padding on its behalf. This is unconditional (no `primary` toggle yet —
-//! every `AppBar` behaves as a primary one), via
-//! [`flui_sdk::widgets::SafeArea`]. A consequence: a standalone `AppBar`
-//! (mounted with no `Scaffold` at all, just a `MediaQuery` ancestor) already
-//! reserves the status-bar inset on its own.
-//!
-//! ## Title alignment: a platform switch, narrowed
-//!
-//! The Material spec centers the title on iOS/macOS with fewer than two
-//! actions and start-aligns it elsewhere. FLUI's desktop targets are Linux and
-//! Win32 — both start-aligned — so this substrate always start-aligns the
-//! title, at the start edge of the ambient `Directionality` (no
-//! `center_title` override, no navigation-toolbar-style toggle yet).
-//! **Named limitation**: the centered macOS behavior waits for a
-//! platform-adaptive seam; today every platform gets the
-//! Android/Linux/Windows answer.
-//!
-//! ## `bottom`: a fixed-height slot below the toolbar
-//!
-//! [`AppBar::bottom`] accepts anything implementing [`PreferredSizeView`]
-//! (typically a [`crate::TabBar`]) and mounts it directly beneath the
-//! toolbar, inside the same [`SafeArea`]. The shape is a `Column` with
-//! `MainAxisAlignment::SpaceBetween` whose first child is the toolbar wrapped
-//! in a flexible `ConstrainedBox` (max height `toolbar_height`) and whose
-//! second is `bottom` itself, unwrapped. The whole `Column` is forced to
-//! `toolbar_height + bottom.preferred_size().height` via an outer
-//! [`SizedBox`] (see [`AppBar::preferred_size`] below), then handed to the
-//! same top-inset-consuming `SafeArea` the toolbar alone already used.
-//!
-//! **Why the toolbar flexes and `bottom` does not**: `Flexible` (not
-//! `Expanded`) with a *loose* fit means the toolbar happily shrinks below
-//! `toolbar_height` when the `Column`'s own available height falls short of
-//! `toolbar_height + bottom_height` (a caller-imposed cap tighter than this
-//! bar's own preferred size, or a `SafeArea` top inset large enough to eat
-//! into it) — `bottom` is the `Column`'s other, non-flexible child, so it
-//! always gets its own natural height first and the toolbar absorbs the
-//! shortfall. This ensures a `TabBar` mounted as `bottom` never gets silently
-//! clipped by a tight parent while the toolbar above it holds its full
-//! height.
-//!
-//! [`Scaffold::app_bar`](crate::Scaffold::app_bar)'s own cap math
-//! (`max_height = view.app_bar_preferred_height + media_query.padding.top`)
-//! is unaffected by `bottom`: `app_bar_preferred_height` already snapshots
-//! [`AppBar::preferred_size`]'s `toolbar_height + bottom_height` sum at
-//! `Scaffold::app_bar`-builder time (see that method's own doc comment for
-//! why the snapshot, not a live re-consult), so the cap this substrate hands
-//! back down already has exactly enough room for both slots plus the top
-//! inset — the `Flexible` shrink path above only fires when a caller
-//! deliberately imposes something tighter than that (or mounts `AppBar`
-//! standalone, with no `Scaffold` reserving room for it at all).
-//!
-//! **Deferred, and named** (this `bottom` slot specifically): `bottomOpacity`
-//! (fading `bottom` as a sliver app bar scrolls toward its collapsed state —
-//! no scrolled-under/sliver-collapse substrate here to drive it) and a
-//! `Scaffold`-side bottom-height re-consult on data change (see
-//! [`PreferredSizeView`]'s own limitation note — this whole substrate
-//! resolves it once, at `.bottom(...)`/`.app_bar(...)` builder time).
-//!
-//! ## Deferred, and named
-//!
-//! - `center_title` / a full navigation-toolbar layout — the title area here
-//!   is a plain `Expanded` + `Align(center_start)`, not an overflow-aware
-//!   middle-widget layout.
-//! - Scrolled-under styling — no scroll-notification substrate to observe yet.
-//! - `flexibleSpace` — stacked behind the toolbar+bottom; no consumer or
-//!   substrate for it here yet.
-//! - **Named limitation: no shadow suppression at a nonzero elevation.**
-//!   The M3 app bar casts no shadow even when an explicit `elevation`
-//!   override raises it above `0`: its shadow and surface-tint colors are
-//!   transparent, and the surface communicates elevation through a tonal
-//!   color shift instead (M3's elevation overlay), not a drop shadow.
-//!   [`crate::Material`] has no `shadow_color` setter yet (see that module's
-//!   docs' `surfaceTintColor` section for the matching gap), so this
-//!   substrate cannot suppress it — an `AppBar::new().elevation(4.0)` here
-//!   casts a real shadow the M3 spec would not. Revisit once `Material` grows
-//!   `shadow_color`.
-//!
-//! ## Implied leading: a `BackButton`, no `DrawerButton`
-//!
-//! When `leading` is unset and `automatically_imply_leading` is set, the
-//! Material spec synthesizes a drawer button if the enclosing `Scaffold` has
-//! a drawer, else a back/close button if the enclosing route can be
-//! dismissed. `resolve_leading` asks the route this `AppBar` is on: a
-//! [`PageHandle`] above it that reports [`PageHandle::can_pop`] (Flutter's
-//! `ModalRoute.impliesAppBarDismissal`) implies a [`crate::BackButton`]. The
-//! answer is per route, so a covered page's own app bar at the bottom of the
-//! stack shows none, and it follows the stack: the route's entry rebuilds
-//! when a route is added or removed below it. **Named limitation:** always a
-//! back button, never a close button (no fullscreen-dialog substrate to pick
-//! that branch) or drawer button (no drawer substrate at all).
-//!
-//! ## The leading slot is a fixed `LEADING_WIDTH`, not the leading widget's own intrinsic size
-//!
-//! Whatever `leading` resolves to (explicit or implied) is wrapped in a
-//! `ConstrainedBox` with a tight `LEADING_WIDTH` around a `Center` before it
-//! reaches the toolbar `Row` (`LEADING_WIDTH` equals the toolbar height, "so
-//! the leading button is square"). The `Center` wrap is unconditional
-//! (harmless for any leading widget that already fills its own bounds).
-//! **Without this wrap**, a bare 40×40 `IconButton` (this crate's M3
-//! minimum size) would collapse the slot to 40px wide in the `Row` instead of
-//! the M3-specified 56px — `LEADING_WIDTH`'s `ConstrainedBox` is what prevents
-//! that. No `leading_width`/`AppBarTheme` override exists yet (named V1
-//! deferral), so `LEADING_WIDTH` is the only width this slot ever takes.
 
 use flui_sdk::geometry::Size;
 use flui_sdk::painting::AlignmentDirectional;
@@ -142,7 +25,7 @@ pub const DEFAULT_TOOLBAR_HEIGHT: f64 = 56.0;
 
 /// The leading slot's fixed width — the toolbar height, "so the leading
 /// button is square". No `leading_width`/`AppBarTheme` override exists yet in
-/// this V1 (see the module docs' deferred list), so this constant is the only
+/// this crate (see [`AppBar`]'s docs' deferred list), so this constant is the only
 /// width the slot ever takes.
 const LEADING_WIDTH: f64 = DEFAULT_TOOLBAR_HEIGHT;
 
@@ -150,7 +33,7 @@ const LEADING_WIDTH: f64 = DEFAULT_TOOLBAR_HEIGHT;
 /// [`Material`] surface, sized to [`toolbar_height`](Self::toolbar_height) and
 /// self-padded against the top safe-area inset.
 ///
-/// See the module docs for the implemented subset, the "consumes the top
+/// See [`AppBar`]'s docs for the implemented subset, the "consumes the top
 /// inset itself" contract, and the deferred list.
 ///
 /// # Examples
@@ -161,6 +44,123 @@ const LEADING_WIDTH: f64 = DEFAULT_TOOLBAR_HEIGHT;
 ///
 /// let _bar = AppBar::new().title(Text::new("FLUI")).toolbar_height(64.0);
 /// ```
+///
+/// # Implemented subset
+///
+/// `leading`, `title`, `actions`, `toolbar_height`, `bottom`,
+/// `background_color`, `foreground_color`, `elevation`, and the M3 token
+/// defaults: `background_color` falls back to `ColorScheme.surface`,
+/// `foreground_color` to `ColorScheme.on_surface`, `elevation` to `0.0`, and
+/// the title's text style to `TextTheme.title_large` (recolored to the
+/// resolved foreground).
+///
+/// ## The app bar consumes the top inset itself
+///
+/// The app bar wraps its toolbar in a top-only `SafeArea` — it pads itself
+/// against `MediaQuery`'s top padding, rather than a parent adding that
+/// padding on its behalf. This is unconditional (no `primary` toggle yet —
+/// every `AppBar` behaves as a primary one), via
+/// [`flui_sdk::widgets::SafeArea`]. A consequence: a standalone `AppBar`
+/// (mounted with no `Scaffold` at all, just a `MediaQuery` ancestor) already
+/// reserves the status-bar inset on its own.
+///
+/// ## Title alignment: a platform switch, narrowed
+///
+/// The Material spec centers the title on iOS/macOS with fewer than two
+/// actions and start-aligns it elsewhere. FLUI's desktop targets are Linux and
+/// Win32 — both start-aligned — so this crate always start-aligns the
+/// title, at the start edge of the ambient `Directionality` (no
+/// `center_title` override, no navigation-toolbar-style toggle yet).
+/// **Named limitation**: the centered macOS behavior waits for a
+/// platform-adaptive seam; today every platform gets the
+/// Android/Linux/Windows answer.
+///
+/// ## `bottom`: a fixed-height slot below the toolbar
+///
+/// [`AppBar::bottom`] accepts anything implementing [`PreferredSizeView`]
+/// (typically a [`crate::TabBar`]) and mounts it directly beneath the
+/// toolbar, inside the same [`SafeArea`]. The shape is a `Column` with
+/// `MainAxisAlignment::SpaceBetween` whose first child is the toolbar wrapped
+/// in a flexible `ConstrainedBox` (max height `toolbar_height`) and whose
+/// second is `bottom` itself, unwrapped. The whole `Column` is forced to
+/// `toolbar_height + bottom.preferred_size().height` via an outer
+/// [`SizedBox`] (see [`AppBar::preferred_size`] below), then handed to the
+/// same top-inset-consuming `SafeArea` the toolbar alone already used.
+///
+/// **Why the toolbar flexes and `bottom` does not**: `Flexible` (not
+/// `Expanded`) with a *loose* fit means the toolbar happily shrinks below
+/// `toolbar_height` when the `Column`'s own available height falls short of
+/// `toolbar_height + bottom_height` (a caller-imposed cap tighter than this
+/// bar's own preferred size, or a `SafeArea` top inset large enough to eat
+/// into it) — `bottom` is the `Column`'s other, non-flexible child, so it
+/// always gets its own natural height first and the toolbar absorbs the
+/// shortfall. This ensures a `TabBar` mounted as `bottom` never gets silently
+/// clipped by a tight parent while the toolbar above it holds its full
+/// height.
+///
+/// [`Scaffold::app_bar`](crate::Scaffold::app_bar)'s own cap math
+/// (`max_height = view.app_bar_preferred_height + media_query.padding.top`)
+/// is unaffected by `bottom`: `app_bar_preferred_height` already snapshots
+/// [`AppBar::preferred_size`]'s `toolbar_height + bottom_height` sum at
+/// `Scaffold::app_bar`-builder time (see that method's own doc comment for
+/// why the snapshot, not a live re-consult), so the cap this crate hands
+/// back down already has exactly enough room for both slots plus the top
+/// inset — the `Flexible` shrink path above only fires when a caller
+/// deliberately imposes something tighter than that (or mounts `AppBar`
+/// standalone, with no `Scaffold` reserving room for it at all).
+///
+/// **Deferred, and named** (this `bottom` slot specifically): `bottomOpacity`
+/// (fading `bottom` as a sliver app bar scrolls toward its collapsed state —
+/// no scrolled-under/sliver-collapse support here to drive it) and a
+/// `Scaffold`-side bottom-height re-consult on data change (see
+/// [`PreferredSizeView`]'s own limitation note — this whole crate
+/// resolves it once, at `.bottom(...)`/`.app_bar(...)` builder time).
+///
+/// ## Deferred, and named
+///
+/// - `center_title` / a full navigation-toolbar layout — the title area here
+///   is a plain `Expanded` + `Align(center_start)`, not an overflow-aware
+///   middle-widget layout.
+/// - Scrolled-under styling — no scroll-notification support to observe yet.
+/// - `flexibleSpace` — stacked behind the toolbar+bottom; no consumer or
+///   support for it here yet.
+/// - **Named limitation: no shadow suppression at a nonzero elevation.**
+///   The M3 app bar casts no shadow even when an explicit `elevation`
+///   override raises it above `0`: its shadow and surface-tint colors are
+///   transparent, and the surface communicates elevation through a tonal
+///   color shift instead (M3's elevation overlay), not a drop shadow.
+///   [`crate::Material`] has no `shadow_color` setter yet (see [`Material`]'s
+///   docs' `surfaceTintColor` section for the matching gap), so this
+///   this crate cannot suppress it — an `AppBar::new().elevation(4.0)` here
+///   casts a real shadow the M3 spec would not. Revisit once `Material` grows
+///   `shadow_color`.
+///
+/// ## Implied leading: a `BackButton`, no `DrawerButton`
+///
+/// When `leading` is unset and `automatically_imply_leading` is set, the
+/// Material spec synthesizes a drawer button if the enclosing `Scaffold` has
+/// a drawer, else a back/close button if the enclosing route can be
+/// dismissed. `resolve_leading` asks the route this `AppBar` is on: a
+/// [`PageHandle`] above it that reports [`PageHandle::can_pop`] (Flutter's
+/// `ModalRoute.impliesAppBarDismissal`) implies a [`crate::BackButton`]. The
+/// answer is per route, so a covered page's own app bar at the bottom of the
+/// stack shows none, and it follows the stack: the route's entry rebuilds
+/// when a route is added or removed below it. **Named limitation:** always a
+/// back button, never a close button (no fullscreen-dialog support to pick
+/// that branch) or drawer button (the bar does not read the `Scaffold`'s drawer).
+///
+/// ## The leading slot is a fixed `LEADING_WIDTH`, not the leading widget's own intrinsic size
+///
+/// Whatever `leading` resolves to (explicit or implied) is wrapped in a
+/// `ConstrainedBox` with a tight `LEADING_WIDTH` around a `Center` before it
+/// reaches the toolbar `Row` (`LEADING_WIDTH` equals the toolbar height, "so
+/// the leading button is square"). The `Center` wrap is unconditional
+/// (harmless for any leading widget that already fills its own bounds).
+/// **Without this wrap**, a bare 40×40 `IconButton` (this crate's M3
+/// minimum size) would collapse the slot to 40px wide in the `Row` instead of
+/// the M3-specified 56px — `LEADING_WIDTH`'s `ConstrainedBox` is what prevents
+/// that. No `leading_width`/`AppBarTheme` override exists yet (named
+/// deferral), so `LEADING_WIDTH` is the only width this slot ever takes.
 #[derive(Clone, StatelessView)]
 pub struct AppBar {
     leading: Option<BoxedView>,
@@ -180,7 +180,7 @@ pub struct AppBar {
     /// `bottom`'s [`preferred_size`](PreferredSizeView::preferred_size)
     /// height, snapshotted at [`Self::bottom`]-builder time — see that
     /// method's doc comment and [`PreferredSizeView`]'s own "Named
-    /// divergence" note on why this substrate resolves it once rather than
+    /// divergence" note on why this crate resolves it once rather than
     /// re-consulting it later.
     bottom_preferred_height: f64,
 }
@@ -217,8 +217,8 @@ impl AppBar {
     /// Whether a [`crate::BackButton`] is synthesized into the leading slot
     /// when [`Self::leading`] is unset and a poppable
     /// route is above it ([`PageHandle::can_pop`]).
-    /// Defaults to `true`. See the module docs' "Implied leading" section
-    /// for the narrowed condition this substrate checks.
+    /// Defaults to `true`. See [`AppBar`]'s "Implied leading" section
+    /// for the narrowed condition this crate checks.
     #[must_use]
     pub fn automatically_imply_leading(mut self, automatically_imply_leading: bool) -> Self {
         self.automatically_imply_leading = automatically_imply_leading;
@@ -226,7 +226,7 @@ impl AppBar {
     }
 
     /// Sets the title widget, start-aligned in the space between `leading`
-    /// and `actions` — see the module docs' `centerTitle` note.
+    /// and `actions` — see [`AppBar`]'s `centerTitle` note.
     #[must_use]
     pub fn title(mut self, title: impl IntoView) -> Self {
         self.title = Some(title.into_view().boxed());
@@ -269,7 +269,7 @@ impl AppBar {
     }
 
     /// Sets a slot rendered directly below the toolbar (typically a
-    /// [`crate::TabBar`]) — see the module docs' `bottom` section for the
+    /// [`crate::TabBar`]) — see [`AppBar`]'s `bottom` section for the
     /// exact Flexible-toolbar/fixed-`bottom` layout this composes and why
     /// the toolbar (not `bottom`) is what shrinks under a height shortfall.
     ///
@@ -430,7 +430,7 @@ fn leading_short_circuit(
 
 /// Resolves the leading slot: `self.leading` verbatim if set, else a
 /// synthesized [`BackButton`] when `automatically_imply_leading` is set and
-/// the route it is on can pop — see the module docs' "Implied
+/// the route it is on can pop — see [`AppBar`]'s "Implied
 /// leading" section.
 fn resolve_leading(
     leading: Option<&BoxedView>,
@@ -481,7 +481,7 @@ impl StatelessView for AppBar {
         }
         if let Some(title) = &self.title {
             // Always start-aligned, against the ambient `Directionality`'s start
-            // edge — see the module docs' title-alignment note.
+            // edge — see [`AppBar`]'s docs' title-alignment note.
             // `title_style` is scoped to JUST this slot via its own
             // `DefaultTextStyle` — it must NOT reach the toolbar-wide wrap
             // below (which carries `toolbar_text_style` instead), or a
@@ -515,7 +515,7 @@ impl StatelessView for AppBar {
         );
 
         // With a `bottom` slot, the toolbar+bottom pair replaces the bare
-        // toolbar as the thing `SafeArea` pads — see the module docs' `bottom`
+        // toolbar as the thing `SafeArea` pads — see [`AppBar`]'s `bottom`
         // section for exactly why the toolbar is `Flexible` (shrinks under a
         // height shortfall) while `bottom` is not.
         let toolbar_and_bottom: BoxedView = if let Some(bottom) = &self.bottom {
@@ -537,7 +537,7 @@ impl StatelessView for AppBar {
         };
 
         // The app bar pads itself against the top safe-area inset — see the
-        // module docs' "consumes the top inset itself" section.
+        // [`AppBar`]'s "consumes the top inset itself" section.
         let safe_toolbar = SafeArea::new(toolbar_and_bottom).bottom(false);
 
         // The flexible space paints ABOVE this bar's own Material and BELOW

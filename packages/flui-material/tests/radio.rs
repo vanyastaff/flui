@@ -12,7 +12,7 @@
 //! Exercised with a concrete `T = &'static str` group of two radios,
 //! proving the generic `Radio<T>` mounts and dispatches through the render
 //! tree for a non-trivial `T` (not just the primitive `u32` the unit tests
-//! use) — see `radio.rs`'s module docs for why no monomorphic fallback was
+//! use) — see the `Radio` docs for why no monomorphic fallback was
 //! needed.
 //!
 //! **Not covered here:** the M3 default token-table branch

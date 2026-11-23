@@ -1,7 +1,7 @@
 //! `FlexibleSpaceBar` integration coverage — mounts a real collapsing
 //! `SliverAppBar` with a flexible space through the full pipeline
 //! (`tests/common/mod.rs`, the `tests/sliver_app_bar.rs` pattern) and pins
-//! the two observables the oracle's formulas produce: the background fades
+//! the two observables Flutter's formulas produce: the background fades
 //! as the bar collapses, and it parallaxes upward at a quarter of the
 //! collapse distance.
 //!

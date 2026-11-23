@@ -1,17 +1,4 @@
 //! [`CarouselView`]: Material's carousel, a [`Carousel`] whose items are M3 cards.
-//!
-//! # M3 tokens
-//!
-//! | Token | Value |
-//! |---|---|
-//! | `backgroundColor` | `ColorScheme.surface` |
-//! | `elevation` | `0.0` |
-//! | `shape` | rounded rectangle, radius `28.0` (extra large) |
-//! | `overlayColor` | `ColorScheme.onSurface` at the pressed, hovered and focused state-layer alphas |
-//! | `padding` | `EdgeInsets::all(4.0)` |
-//! | small item | 40–56 dp ([`CarouselLayout::default`]) |
-//!
-//! Each field falls back from the widget to [`ThemeData::carousel_view_theme`] to the token.
 
 use std::fmt;
 use std::rc::Rc;
@@ -68,6 +55,19 @@ enum SnapChoice {
 /// CarouselView::builder(photos.len(), move |_ctx, _scope, index| Image::new(photos[index].clone()))
 ///     .on_tap(move |ctx, index| open.update(ctx, |open| *open = Some(index)))
 /// ```
+///
+/// # M3 tokens
+///
+/// | Token | Value |
+/// |---|---|
+/// | `backgroundColor` | `ColorScheme.surface` |
+/// | `elevation` | `0.0` |
+/// | `shape` | rounded rectangle, radius `28.0` (extra large) |
+/// | `overlayColor` | `ColorScheme.onSurface` at the pressed, hovered and focused state-layer alphas |
+/// | `padding` | `EdgeInsets::all(4.0)` |
+/// | small item | 40–56 dp ([`CarouselLayout::default`]) |
+///
+/// Each field falls back from the widget to [`ThemeData::carousel_view_theme`] to the token.
 #[derive(Clone, StatelessView)]
 pub struct CarouselView {
     count: usize,
