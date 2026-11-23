@@ -40,3 +40,6 @@
 - **`flui-cli`**: an application that exits while `flui run` rebuilds beside it is reported as
   that exit (`run.app.exit` with its code, and its last output), before the build that replaces
   it starts.
+- **`flui-cli`**: on Linux a build no longer starts the next one. `flui run` took the read of
+  `Cargo.toml` that every build makes, which Linux reports as an open, for an edit, so after each
+  build it rebuilt and restarted the application again.
