@@ -196,8 +196,9 @@ into a stretch that ends at the line's last visible glyph (trailing spaces and
 the break are not decorated, the ellipsis takes its span's). A stretch takes
 the decoration metrics of its largest run, `DecorationMetrics::of`, which
 trusts a font's offsets within an em of the baseline and a thickness up to a
-quarter em, and otherwise falls back to an eighteenth of an em, since Parley
-substitutes font units for a font without the metrics. Underlines and overlines
+quarter em, and otherwise falls back to an eighteenth of an em: Parley fills
+in HarfBuzz's pixel defaults for a font without the metrics, so the guard
+holds only against a font that reports values out of that range. Underlines and overlines
 record before the paragraph, line-throughs after, as rectangles or paths of the
 existing vocabulary (`text_painter/decoration.rs`); a pattern of more than 4096
 steps, or finer than its coordinates can place, draws solid.

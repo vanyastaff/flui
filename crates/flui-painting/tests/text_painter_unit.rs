@@ -823,7 +823,8 @@ pub(crate) mod parley_measurement {
             through_b.width
         );
 
-        let spans = vec![("AAAA".to_owned(), Some(probe_style()))];
+        let style = probe_style();
+        let spans = vec![("AAAA".to_owned(), Some(style.clone()))];
         #[expect(
             clippy::cast_possible_truncation,
             reason = "the probe size is exact in f32"
@@ -832,7 +833,9 @@ pub(crate) mod parley_measurement {
             .shape(&ParagraphSpec {
                 font_weight_adjustment: 0,
                 spans: &spans,
-                default_style: None,
+                // The painter shapes its root span's style as the paragraph's, which sizes
+                // every line box (Parley's CSS line-box model), so this shape names it too.
+                default_style: Some(&style),
                 font_size: SIZE as f32,
                 max_width: None,
                 min_width: 0.0,
