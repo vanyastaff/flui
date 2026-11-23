@@ -591,13 +591,9 @@ impl ViewState<TabBar> for TabBarState {
         }
     }
 
-    /// Unregisters this bar's listener from whatever controller it's
-    /// currently subscribed to. Without this, a controller that outlives the bar (an explicit
-    /// `TabBar::controller` shared with a sibling, or any
-    /// `DefaultTabController` ancestor that itself outlives one particular
-    /// `TabBar` child) keeps firing an `Rc` closure that calls
-    /// `rebuild.schedule(reason)` on a `RebuildHandle` whose element no longer
-    /// exists — a leaked listener per unmount.
+    /// Releases the companion, the clock lease and the listener before the
+    /// controller they hang from, the reverse of the order `build` took them
+    /// in; field order would drop the controller first.
     ///
     /// `&mut self` here (unlike `resolve_controller`, called from `build`'s
     /// `&self`) means the `RefCell`s can be read via `get_mut` — a plain
