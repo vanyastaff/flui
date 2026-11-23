@@ -44,8 +44,8 @@
 - **Amended:** 2026-11-03 — decision 5, by
   [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md): the
   runner hands the surface target to the owner's `SurfaceFactory::create`, whose surface reaches
-  the raster executor's slot in an `Attach` or `Restore` command, in place of `Renderer::new`; the
-  slot calls the target's `pre_present_notify` itself. The instance a surface is made from takes
+  the raster executor's slot in an `Attach` or `Restore` command, in place of the per-window
+  renderer; the slot calls the target's `pre_present_notify` itself. The instance a surface is made from takes
   its display from the platform's `DisplayConnection`, never from a window's target, because wgpu
   reads the instance's display at every surface it makes. The target's obligations are unchanged.
 - **Revised:** 2026-11-16 — decision 4: `AppHandler` also answers `turn_deadline`, required like
@@ -60,8 +60,8 @@
     application and `WindowHandle` (decision 4), placement and the notices themselves stay.
   - [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md), in part: the window itself as the
     `Send + Sync` surface target (decision 1's `Arc<dyn PlatformWindow>` handed to
-    `Renderer::new`; decision 5's `Unavailable` obligation on every `PlatformWindow`, which moves
-    to the separate surface target the window hands out) and decision 6's
+    the per-window renderer; decision 5's `Unavailable` obligation on every `PlatformWindow`,
+    which moves to the separate surface target the window hands out) and decision 6's
     `on_surface_status_change` registration (the handler's `surface_changed` obligation; the
     release-and-rebuild semantics stay).
   - [ADR-0213](ADR-0213-input-capabilities.md), in part: the delivery rules of decision 3 that
@@ -87,7 +87,7 @@
     only: the window's display is a field of the snapshot and its change arrives the same way;
     the snapshot and the refresh period stay.
 - **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
-  for §5's clause that `Renderer::new` keeps ADR-0063's `WindowTarget` bound: it takes the
+  for §5's clause that the window's surface keeps ADR-0063's `WindowTarget` bound: it takes the
   surface target itself, which also says who paces the surface (`SurfaceTarget::frame_pacing`).
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) (execution
   state), [ADR-0039](ADR-0039-event-loop-affinity-capability.md) (the owner proof and the owner
@@ -449,7 +449,7 @@ PlatformWindow`, and no `Rc` or `Arc` of one, crosses a thread, and a wrong-thre
 method stops compiling instead of being documented. The raster thread receives a separate object:
 
 - a `SurfaceTarget`, `Send + Sync`, implementing `HasWindowHandle + HasDisplayHandle`. The runner
-  hands it to `Renderer::new`, which keeps ADR-0063's `WindowTarget` bound, in place of the window;
+  hands it to the owner's `SurfaceFactory::create` (ADR-0305), in place of the window;
 - it answers rwh's `HandleError::Unavailable` once the native window is destroyed or suspended.
   That obligation, with the per-platform rules of ADR-0063 decision 5 (Win32 identity probe,
   AppKit closed flag, Android only for a terminated window, headless always), moves from the
@@ -510,8 +510,9 @@ seam.
 
 ### 8. The escape hatch is published, typed and total
 
-- `as_any` moves from `PlatformWindow` to `HostWindow`, so the concrete type of a window is no
-  longer exposed to every implementor of the open trait.
+- The downcast moves from `PlatformWindow` to `HostWindow`, whose `Any` supertrait a window
+  upcasts to, so the concrete type of a window is no longer exposed to every implementor of the
+  open trait.
 - Per-OS extension modules are published by the facade as `flui::native::<os>`, behind `cfg` and a
   `native` feature, as an Evolving surface (ADR-0089 decision 5). Their methods take and return
   FLUI types only, answer `Option` or `Unsupported`, and never panic on a window of a foreign
@@ -558,8 +559,8 @@ seam.
   `rg '^\s*(unsafe )?impl[^/]*PlatformWindow for'`) implement the new shape.
 - Good, because those test doubles also shed the `Mutex` and `Arc` that `Send + Sync` forced on
   them.
-- Bad, because `Renderer::new` call sites pass the surface target; the conformance rows for the
-  `Unavailable` obligation move to it, and `pre_present_notify` moves with them.
+- Bad, because the surface constructors' call sites pass the surface target; the conformance
+  rows for the `Unavailable` obligation move to it, and `pre_present_notify` moves with them.
 - Bad, because `PlatformProxy::open_window` carries a `Send` handler factory, a boxed `FnOnce`, the
   one closure the lane carries; ADR-0039 §3 described the lane as carrying no closures. The factory
   is run once, on the owner, to build the handler; every other request is unchanged.
@@ -668,7 +669,7 @@ on that platform.
 - Good, because it keeps what is better than the references: the triad and its revision rule,
   owner-turn application of commands, `OwnerPlatform` as a `!Send` proof, `DispatchEventResult`,
   and `Since<F>` gates inside the host (decision 9).
-- Bad, because every host, `flui-app` runner, test double and `Renderer::new` call site changes
+- Bad, because every host, `flui-app` runner, test double and surface-constructor call site changes
   (see Consequences).
 - Bad, because the admission token proves only that a command was validated against the
   capabilities read at admission; the OS keeps the last word, and the remaining test obligation is

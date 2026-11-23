@@ -3,11 +3,12 @@
 
 use std::rc::Rc;
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::Size;
 use flui_objects::{ClipSourceToken, RenderClipPath};
 use flui_painting::paint::{Clip, Path};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
 /// [`Path`] to clip against. It is owner-local under ADR-0027; render storage

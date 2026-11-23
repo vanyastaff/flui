@@ -382,7 +382,7 @@ impl Spread {
 /// # Examples
 ///
 /// ```
-/// use flui_widgets::motion::particles::{EmitterSource, ParticleConfig, Sprite};
+/// use flui_widgets::particles::{EmitterSource, ParticleConfig, Sprite};
 /// use flui_foundation::geometry::Point;
 ///
 /// let embers = ParticleConfig::builder()
@@ -394,7 +394,7 @@ impl Spread {
 ///     .sprite(Sprite::Circle)
 ///     .build()?;
 /// # let _ = embers;
-/// # Ok::<(), flui_widgets::motion::particles::ParticleConfigError>(())
+/// # Ok::<(), flui_widgets::particles::ParticleConfigError>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct ParticleConfig {

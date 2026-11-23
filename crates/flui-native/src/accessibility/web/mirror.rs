@@ -5,7 +5,7 @@
 //! with [`Op`]s, which the DOM side runs in order after the mirror's borrow
 //! is released, so no DOM listener runs while the tree is being changed.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use accesskit::{Action, Node, NodeId, Role, TextPosition, TextSelection, TreeId, TreeUpdate};
 
@@ -67,7 +67,7 @@ struct Entry {
 
 /// The mirrored tree.
 pub(crate) struct Mirror {
-    nodes: HashMap<NodeId, Entry>,
+    nodes: FxHashMap<NodeId, Entry>,
     root: Option<NodeId>,
     focus: Option<NodeId>,
     /// The node whose published selection the page shows, and that
@@ -80,7 +80,7 @@ impl Mirror {
     /// An empty mirror whose elements take their `id`s from `ids`.
     pub(crate) fn new(ids: ElementIds) -> Self {
         Self {
-            nodes: HashMap::new(),
+            nodes: FxHashMap::default(),
             root: None,
             focus: None,
             selection: None,
@@ -125,9 +125,9 @@ impl Mirror {
         self.check(&update, root)?;
 
         let mut ops = Vec::new();
-        let sent: HashSet<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+        let sent: FxHashSet<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
         let mut structure_changed = self.root != Some(root);
-        let mut placement_changed: HashSet<NodeId> = HashSet::new();
+        let mut placement_changed: FxHashSet<NodeId> = FxHashSet::default();
         let mut children_changed: Vec<NodeId> = Vec::new();
         let mut selected: Vec<(NodeId, Option<TextSelection>)> = Vec::new();
         for (id, node) in update.nodes {
@@ -169,7 +169,7 @@ impl Mirror {
         // in identity order, and one placed under its old descendant before
         // that descendant moves out would be a cycle the DOM refuses.
         if structure_changed {
-            let before: HashMap<NodeId, Option<NodeId>> = self
+            let before: FxHashMap<NodeId, Option<NodeId>> = self
                 .nodes
                 .iter()
                 .filter(|(_, entry)| entry.spec.is_some())
@@ -387,7 +387,7 @@ impl Mirror {
             }
             chain
         };
-        let over_focus: HashSet<NodeId> = ancestors(focus).into_iter().collect();
+        let over_focus: FxHashSet<NodeId> = ancestors(focus).into_iter().collect();
         ancestors(anchor).into_iter().find(|id| {
             over_focus.contains(id)
                 && self
@@ -400,7 +400,7 @@ impl Mirror {
     /// Every child named by the update, and the root, is either sent or
     /// already mirrored.
     fn check(&self, update: &TreeUpdate, root: NodeId) -> Result<(), Refused> {
-        let sent: HashSet<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+        let sent: FxHashSet<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
         let known = |id: &NodeId| sent.contains(id) || self.nodes.contains_key(id);
         if !known(&root) {
             return Err(Refused::UnknownNode(root));
@@ -414,8 +414,8 @@ impl Mirror {
     }
 
     /// Set each reachable node's parent and answer the reachable set.
-    fn relink(&mut self, root: NodeId) -> HashSet<NodeId> {
-        let mut reachable = HashSet::new();
+    fn relink(&mut self, root: NodeId) -> FxHashSet<NodeId> {
+        let mut reachable = FxHashSet::default();
         let mut stack = vec![(root, None)];
         while let Some((id, parent)) = stack.pop() {
             if !reachable.insert(id) {

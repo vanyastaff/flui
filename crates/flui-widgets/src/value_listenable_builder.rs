@@ -18,35 +18,28 @@
 //! # Instance identity, not value equality
 //!
 //! `did_update_view` decides whether to resubscribe by comparing the two
-//! `Arc` pointers ([`Arc::ptr_eq`]). A `PartialEq`-by-value comparison would
+//! `Rc` pointers ([`Rc::ptr_eq`]). A `PartialEq`-by-value comparison would
 //! be wrong here: two distinct notifiers that happen to hold equal values
 //! are still a listenable swap, and must still unsubscribe the old one.
 //!
-//! # Limitation: `child` passthrough is not a rebuild-skip
+//! # `child` passthrough keeps its identity
 //!
-//! A framework that tracks child identity can skip rebuilding a pre-built
-//! `child` subtree when the same instance is handed back. FLUI's
-//! [`BoxedView`] instead clones the child view's configuration (`dyn_clone`)
-//! on every read, so `child` reaches `builder` **unchanged in content** on
-//! every rebuild, but the framework does not special-case skipping that
-//! subtree's own reconciliation. This is not visible to `builder`'s caller.
+//! `child` is a [`BoxedView`], and cloning one shares its allocation, so
+//! `builder` receives the very view the widget holds on every call. A
+//! `builder` that places it in its output unchanged hands the reconciler the
+//! view the child's element already holds, and that element and everything
+//! below it are not built again (ADR-0245).
 
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_foundation::ValueListenable;
-use flui_view::context::{BuildContext, LifecycleContext};
 use flui_view::element::ElementKind;
 use flui_view::{BoxedView, IntoView, RebuildHandle, StatefulView, View, ViewExt, ViewState};
+use flui_view::{BuildContext, LifecycleContext};
 
-/// Builds a widget from the current value of a [`ValueListenable<T>`].
-///
-/// If `child` is `Some`, it is handed back unchanged in content on every
-/// call (the module doc's limitation note explains why identity is not
-/// preserved through `BoxedView`'s dyn-clone) — build the value-independent
-/// part of the subtree once (outside the closure) and incorporate it here,
-/// rather than reconstructing it every notification.
-pub type ValueWidgetBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedView>) -> BoxedView>;
+/// What [`ValueListenableBuilder::new`] keeps of its `builder`: shared, not
+/// boxed, because the view is cloned on every rebuild of its parent.
+type ValueViewFn<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedView>) -> BoxedView>;
 
 /// A widget whose content stays synced with a [`ValueListenable`].
 ///
@@ -64,36 +57,40 @@ pub type ValueWidgetBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedVi
 ///
 /// ```
 /// use std::rc::Rc;
-/// use std::sync::Arc;
 ///
 /// use flui_foundation::ValueNotifier;
 /// use flui_widgets::ValueListenableBuilder;
 /// use flui_widgets::prelude::*;
 ///
-/// let counter = Arc::new(ValueNotifier::new(0_i32));
+/// let counter = Rc::new(ValueNotifier::new(0_i32));
 /// let _widget = ValueListenableBuilder::new(
 ///     counter,
-///     Rc::new(|_ctx: &dyn BuildContext, value: &i32, _child| {
-///         SizedBox::square(*value as f64).boxed()
-///     }),
+///     |_ctx: &dyn BuildContext, value: &i32, _child| SizedBox::square(*value as f64).boxed(),
 /// );
 /// ```
 pub struct ValueListenableBuilder<T> {
-    value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
-    builder: ValueWidgetBuilder<T>,
+    value_listenable: Rc<dyn ValueListenable<T>>, // erases the concrete notifier type, which lives on the owner thread
+    builder: ValueViewFn<T>,
     child: Option<BoxedView>,
 }
 
 impl<T> ValueListenableBuilder<T> {
     /// Rebuild from `value_listenable`'s current value, via `builder`.
+    ///
+    /// `builder` receives the build context, the current value and the
+    /// [`child`](Self::child), if one is set: the very `BoxedView` the widget
+    /// holds, handed back on every call (the module doc explains why its
+    /// subtree is then not built again). Build the value-independent part of
+    /// the subtree once, outside the closure, and incorporate it there rather
+    /// than reconstructing it on every notification.
     #[must_use]
     pub fn new(
-        value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
-        builder: ValueWidgetBuilder<T>,
+        value_listenable: Rc<dyn ValueListenable<T>>, // erases the concrete notifier type, which lives on the owner thread
+        builder: impl Fn(&dyn BuildContext, &T, Option<BoxedView>) -> BoxedView + 'static,
     ) -> Self {
         Self {
             value_listenable,
-            builder,
+            builder: Rc::new(builder),
             child: None,
         }
     }
@@ -110,7 +107,7 @@ impl<T> ValueListenableBuilder<T> {
 impl<T> Clone for ValueListenableBuilder<T> {
     fn clone(&self) -> Self {
         Self {
-            value_listenable: Arc::clone(&self.value_listenable),
+            value_listenable: Rc::clone(&self.value_listenable),
             builder: Rc::clone(&self.builder),
             child: self.child.clone(),
         }
@@ -132,7 +129,7 @@ impl<T: 'static> StatefulView for ValueListenableBuilder<T> {
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view,
         // so the listenable the first subscription needs is copied here.
         ValueListenableBuilderState {
-            value_listenable: Arc::clone(&self.value_listenable),
+            value_listenable: Rc::clone(&self.value_listenable),
             handle: ctx.rebuild_handle(),
             subscription: None,
         }
@@ -157,7 +154,7 @@ pub struct ValueListenableBuilderState<T> {
     /// `dispose` and the unsubscribe half of `did_update_view` always
     /// remove the listener from the correct (old) instance — `init_state`
     /// and `did_update_view` receive no live `view` to re-read it from.
-    value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
+    value_listenable: Rc<dyn ValueListenable<T>>, // erases the concrete notifier type, which lives on the owner thread
     /// Schedules this element's rebuild when the listenable notifies.
     handle: RebuildHandle,
     /// The listener registered against `value_listenable`, if any: detaching
@@ -207,12 +204,12 @@ impl<T: 'static> ViewState<ValueListenableBuilder<T>> for ValueListenableBuilder
         _old_view: &ValueListenableBuilder<T>,
         new_view: &ValueListenableBuilder<T>,
     ) {
-        if Arc::ptr_eq(&self.value_listenable, &new_view.value_listenable) {
+        if Rc::ptr_eq(&self.value_listenable, &new_view.value_listenable) {
             return;
         }
 
         self.subscription.take();
-        self.value_listenable = Arc::clone(&new_view.value_listenable);
+        self.value_listenable = Rc::clone(&new_view.value_listenable);
         self.subscribe();
     }
 

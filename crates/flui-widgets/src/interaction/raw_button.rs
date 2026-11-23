@@ -44,7 +44,7 @@ type PressCallback = Rc<dyn Fn(&mut EventContext<'_>)>;
 /// activation key reaching it keeps bubbling.
 ///
 /// It is a design-agnostic press primitive with no Material styling and no
-/// pressed or hovered look; see `ARCHITECTURE.md` "Mapping decisions".
+/// pressed or hovered look; see `ARCHITECTURE.md`, "`RawButton` is a widgets-layer button".
 #[derive(Clone, StatelessView)]
 pub struct RawButton {
     on_pressed: Option<PressCallback>,
@@ -173,8 +173,8 @@ impl StatelessView for RawButton {
         let enabled = self.on_pressed.is_some();
         let press = Rc::new(Press(self.on_pressed.clone()));
         // One node for assistive technology: the button.
-        let description =
-            Description::new(crate::SemanticsRole::Button).identifier(self.identifier.clone());
+        let description = Description::new(flui_semantics::SemanticsRole::Button)
+            .identifier(self.identifier.clone());
         // The bindings are the node's own, so its focus node records them
         // and the root bindings resolve the activation here (ADR-0079).
         let mut node = InteractiveNode::new(self.child.clone())

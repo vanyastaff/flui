@@ -56,7 +56,7 @@ impl AnimationController {
     }
 
     /// A controller ticked by a presentation that is building refuses every
-    /// mutation (ADR-0086 §7): `build` describes the tree, and a listener the
+    /// mutation (ADR-0074 §5.2): `build` describes the tree, and a listener the
     /// mutation notifies could not write from there.
     pub(super) fn check_build(inner: &AnimationControllerInner) -> Result<(), AnimationError> {
         if inner

@@ -51,7 +51,7 @@ use flui_foundation::{ElementId, ViewKey};
 /// Snapshot of the framework's global-key lookup surface that
 /// `GlobalKey::current_element` / `with_current_state` consult.
 ///
-/// Held by one [`WidgetsBinding`](crate::WidgetsBinding) and activated only
+/// Held by one [`WidgetsBinding`](crate::binding::WidgetsBinding) and activated only
 /// while its owning UI runtime is entered.
 ///
 /// The struct is `Clone` so internal copies stay cheap — both
@@ -224,24 +224,22 @@ pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKe
 }
 
 type RegistryStack = RefCell<Vec<GlobalKeyRegistryHandle>>;
-type TestRegistrySlot = RefCell<Option<GlobalKeyRegistryHandle>>;
 type DropFreeRegistryStack = ManuallyDrop<RegistryStack>;
-type DropFreeTestRegistrySlot = ManuallyDrop<TestRegistrySlot>;
 
 // These thread-locals are instantiated inside hot-reloadable cdylibs. A TLS
 // destructor owned by such an image can make dlclose defer unmapping it, so a
 // same-path reload silently serves stale code. ManuallyDrop prevents destructor
-// registration; the scoped activation and explicit fixture take paths remain
+// registration; the scoped activation remains
 // responsible for returning the payloads to their empty quiescent states.
 const _: () = assert!(!std::mem::needs_drop::<DropFreeRegistryStack>());
-const _: () = assert!(!std::mem::needs_drop::<DropFreeTestRegistrySlot>());
 
 thread_local! {
     /// Active registry stack for this owner thread. A stack, rather than a
     /// replaceable singleton, makes nested UI runtime entry restore correctly.
     ///
     /// `ManuallyDrop` is required because this module can be instantiated in a
-    /// hot-reload cdylib. `RegistryActivation` empties the stack explicitly.
+    /// hot-reload cdylib: every `RegistryActivation` pops what it pushed, and a
+    /// test activation frees the buffer it leaves empty.
     #[cfg_attr(
         target_os = "android",
         allow(
@@ -252,24 +250,17 @@ thread_local! {
     static REGISTRY_STACK: DropFreeRegistryStack = const {
         ManuallyDrop::new(RefCell::new(Vec::new()))
     };
-    /// Legacy fixture lane. It never mutates the production activation stack.
-    /// `take_registry` is its explicit teardown path.
-    #[cfg_attr(
-        target_os = "android",
-        allow(
-            clippy::missing_const_for_thread_local,
-            reason = "Rust 1.99's Android OS TLS macro can misreport this explicit const initializer on cross hosts"
-        )
-    )]
-    static TEST_REGISTRY: DropFreeTestRegistrySlot = const {
-        ManuallyDrop::new(RefCell::new(None))
-    };
 }
 
-/// RAII activation token. Private so only the binding's scoped entry method
-/// can manipulate the ambient registry.
-struct RegistryActivation {
+/// RAII activation token. Crate-private so only the binding's scoped entry
+/// and the `testing` kit can manipulate the ambient registry.
+pub(crate) struct RegistryActivation {
     expected: GlobalKeyRegistryHandle,
+    /// Free the stack's buffer when this activation leaves it empty. The stack
+    /// is `ManuallyDrop`, so a buffer still held when its thread ends is never
+    /// freed: a test thread releases it, while the binding's entry keeps it so
+    /// that entering a runtime allocates nothing once warm.
+    release_empty_buffer: bool,
 }
 
 impl Drop for RegistryActivation {
@@ -285,14 +276,31 @@ impl Drop for RegistryActivation {
                 // aborts the process. Preserve the unexpected top for diagnosis.
                 stack.push(popped);
                 tracing::error!("GlobalKey registry scopes dropped out of order");
+                return;
+            }
+            if self.release_empty_buffer && stack.is_empty() {
+                *stack = Vec::new();
             }
         });
     }
 }
 
-fn activate_registry(handle: GlobalKeyRegistryHandle) -> RegistryActivation {
+fn push_registry(
+    handle: GlobalKeyRegistryHandle,
+    release_empty_buffer: bool,
+) -> RegistryActivation {
     REGISTRY_STACK.with(|stack| stack.borrow_mut().push(handle.clone()));
-    RegistryActivation { expected: handle }
+    RegistryActivation {
+        expected: handle,
+        release_empty_buffer,
+    }
+}
+
+/// Activate `handle` until the returned token drops, for a test thread: the
+/// stack's buffer is freed once the token leaves it empty.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) fn activate_registry(handle: GlobalKeyRegistryHandle) -> RegistryActivation {
+    push_registry(handle, true)
 }
 
 /// Activate `handle` for the dynamic extent of `f`.
@@ -300,27 +308,14 @@ pub(crate) fn with_active_registry<R>(
     handle: &GlobalKeyRegistryHandle,
     f: impl FnOnce() -> R,
 ) -> R {
-    let _activation = activate_registry(handle.clone());
+    let _activation = push_registry(handle.clone(), false);
     f()
 }
 
-/// Legacy test-fixture adapter: replace the top handle on this thread and
-/// return the previous one. Production uses [`with_active_registry`].
-pub(crate) fn install_registry(handle: GlobalKeyRegistryHandle) -> Option<GlobalKeyRegistryHandle> {
-    TEST_REGISTRY.with(|slot| slot.borrow_mut().replace(handle))
-}
-
-/// Legacy test-fixture adapter: remove the active handle on this thread.
-pub(crate) fn take_registry() -> Option<GlobalKeyRegistryHandle> {
-    TEST_REGISTRY.with(|slot| slot.borrow_mut().take())
-}
-
-/// Run `f` against the currently-active UI runtime handle (or isolated legacy
-/// fixture lane), returning the closure's result. Returns `None` when neither
-/// lane is active
-/// (the quiescent state — e.g. unit tests that bypass the binding).
+/// Run `f` against the registry activated innermost on this thread, returning
+/// the closure's result. Returns `None` when no registry is active (the
+/// quiescent state, e.g. unit tests that bypass the binding).
 pub(crate) fn with_registry<R>(f: impl FnOnce(&GlobalKeyRegistryHandle) -> R) -> Option<R> {
     let handle = REGISTRY_STACK.with(|stack| stack.borrow().last().cloned());
-    let handle = handle.or_else(|| TEST_REGISTRY.with(|slot| slot.borrow().clone()));
     handle.as_ref().map(f)
 }

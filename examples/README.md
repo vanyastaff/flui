@@ -25,7 +25,7 @@ or WASM targets with their own build step.
 
 | Example | Run |
 |---|---|
-| **scene_render** — end-to-end GPU compositor proof | `cargo run -p flui-hot-reload --example scene_render` |
+| **scene_render** — the desktop host of a scene plugin; `-- --capture-effects <png>` draws the engine's effects gallery headless into a PNG | `cargo run -p flui-hot-reload --features host-hook --example scene_render` |
 
 ## Hot reload
 
@@ -41,9 +41,9 @@ or WASM targets with their own build step.
 # Terminal 1 — rebuild the plugin on change (needs cargo-watch)
 cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
 
-# Terminal 2 — run the host with in-process reload (Linux/macOS; see
-# docs/hot-reload.md for the Windows .dll path)
-FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
+# Terminal 2 — run the host with in-process reload; it loads
+# target/debug/libflui_scene.so (.dylib, flui_scene.dll) unless FLUI_SCENE_PLUGIN names another path
+cargo run -p flui-hot-reload --features host-hook --example scene_render
 ```
 
 ## Web / WASM
@@ -51,12 +51,15 @@ FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --e
 | Example | Run |
 |---|---|
 | **web_demo** — Web/WASM platform demo | `cd examples/web_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/web_demo/` over HTTP |
-| **painting_demo** — Web/WASM painting + engine demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/painting_demo/` over HTTP |
+| **painting_demo** — Web/WASM `Canvas` painting demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/painting_demo/` over HTTP |
 
 The `painting_demo` crate contains browser code only and targets
-`wasm32-unknown-unknown`. Its surface takes ownership of the `HtmlCanvasElement`
-through wgpu's safe `SurfaceTarget::Canvas` API. Native workspace checks compile
-an empty cdylib; they do not exercise the browser demo.
+`wasm32-unknown-unknown`. It is an ordinary FLUI application on the `flui` facade: `run_app`
+starts the web runner, which takes the page's `<canvas id="flui-canvas">`. The root is a
+scrolling column of sections, each a `Text` title above a `CustomPaint` whose `CustomPainter`
+draws that section's geometry at the size it is given, with its captions as `Text` widgets under
+or beside it. Native workspace checks compile an empty cdylib; they do not exercise the browser
+demo.
 
 ## Android
 

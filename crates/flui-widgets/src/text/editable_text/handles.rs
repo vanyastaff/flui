@@ -11,6 +11,22 @@ use std::ops::Range;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
+use super::obscuring::{source_offset_at_global, source_word_range_at_global};
+use super::{CompositionCommit, EditableText, PlatformSelection};
+#[cfg(doc)]
+use crate::DefaultSelectionControls;
+use crate::interaction::actions::ActionChain;
+use crate::interaction::recognizer_attachment::RecognizerAttachment;
+use crate::interaction::{DragSlot, GestureDetector, Listener};
+use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
+use crate::text::controller::TextEditingController;
+use crate::text::selection_area::handles::{LinkFollower, Look, play_step};
+use crate::text::text_store::with_editable_global;
+use crate::text::{
+    MagnifierChoice, MagnifierInfo, MenuHost, MenuSettings, PopupOrigin, SelectionMagnifier,
+    ToolbarAnchors, editing_commands,
+};
+use crate::{HandleInfo, HandleSide, Positioned, SelectionHandles, Stack};
 use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
@@ -26,25 +42,6 @@ use flui_rendering::pipeline::{LeaderWatch, PipelineCell};
 use flui_view::environment::GesturePolicy;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, View, ViewExt};
-
-use super::{
-    CompositionCommit, EditableText, PlatformSelection, source_offset_at_global,
-    source_word_range_at_global,
-};
-#[cfg(doc)]
-use crate::DefaultSelectionControls;
-use crate::interaction::actions::ActionChain;
-use crate::interaction::recognizer_attachment::RecognizerAttachment;
-use crate::interaction::{DragSlot, GestureDetector, Listener};
-use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
-use crate::text::controller::TextEditingController;
-use crate::text::selection_area::handles::{LinkFollower, Look, play_step};
-use crate::text::text_store::with_editable_global;
-use crate::text::{
-    MagnifierChoice, MagnifierInfo, MenuHost, MenuSettings, PopupOrigin, SelectionMagnifier,
-    ToolbarAnchors, editing_commands,
-};
-use crate::{HandleInfo, HandleSide, Positioned, SelectionHandles, Stack};
 
 /// Whether a tap in an editable text shows a handle under its caret, which
 /// a drag moves, and how long it stays without a touch.

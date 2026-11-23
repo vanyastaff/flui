@@ -15,9 +15,11 @@ use std::sync::{
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::{StatefulBehavior, StatefulElement};
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, LifecycleContext, RebuildReason,
-    StatefulBehavior, StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, ElementBase, IntoView, LifecycleContext, RebuildReason, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -160,7 +162,7 @@ pub(crate) fn an_update_before_the_first_build_creates_the_state_from_the_newest
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root = tree.mount_root(&view("a"), &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view("a").boxed(), &mut owner.element_owner_mut());
 
     tree.update(root, &view("b"), &mut owner.element_owner_mut());
     tree.update(root, &view("c"), &mut owner.element_owner_mut());
@@ -201,7 +203,7 @@ pub(crate) fn a_retry_after_a_failed_init_state_creates_the_state_from_the_newes
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root = tree.mount_root(&view("fails"), &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view("fails").boxed(), &mut owner.element_owner_mut());
 
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -247,7 +249,7 @@ pub(crate) fn apply_view_runs_once_per_changed_configuration_before_the_build() 
     let entries = || log.lock().expect("the hook log is never poisoned").clone();
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root = tree.mount_root(&view("a"), &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view("a").boxed(), &mut owner.element_owner_mut());
 
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);

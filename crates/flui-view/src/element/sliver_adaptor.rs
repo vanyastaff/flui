@@ -621,7 +621,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&BoxedView)) {
         // No dense children to visit — this element only hosts lazy/sparse children.
     }
 }
@@ -1559,10 +1559,9 @@ impl SliverList {
     /// already-resident index (`SparseChildren::refresh_resident`, driven by
     /// `SliverAdaptorManager`'s internal `needs_resident_refresh` flag), so
     /// an owned `Vec<BoxedView>` cannot be handed out by value more than
-    /// once. Each call instead clones the stored [`BoxedView`] — a real,
-    /// deep `dyn_clone` of the underlying view (`BoxedView`'s own `Clone`
-    /// impl, `crates/flui-view/src/view/into_view.rs`), not a shared handle
-    /// — so every call reproduces an equivalent view.
+    /// once. Each call instead clones the stored [`BoxedView`], which shares
+    /// its allocation: every call hands back the same view, the one a
+    /// refreshed resident's element already holds.
     ///
     /// # Panics
     ///
@@ -1851,8 +1850,8 @@ mod tests {
     use flui_rendering::protocol::BoxProtocol;
 
     use super::*;
-    use crate::view::RenderView;
-    use crate::{BuildOwner, ElementTree};
+    use crate::view::{RenderView, ViewExt};
+    use crate::{owner::BuildOwner, tree::ElementTree};
 
     // -------------------------------------------------------------------------
     // Shared test fixture — minimal item view used as a list placeholder.
@@ -1921,7 +1920,7 @@ mod tests {
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
         let host = tree.mount_root_with_pipeline_owner(
-            &ItemView,
+            &ItemView.boxed(),
             Some(pipeline.clone()),
             &mut build_owner.element_owner_mut(),
         );
@@ -1970,10 +1969,10 @@ mod tests {
         assert!(did_work, "the substituted requested item was mounted");
         let recovered = build_owner.take_recovered_panics();
         assert_eq!(recovered.len(), 1, "one builder call yields one record");
-        assert_eq!(recovered[0].hook, crate::LifecycleHook::Build);
+        assert_eq!(recovered[0].hook, crate::owner::LifecycleHook::Build);
         assert!(matches!(
             recovered[0].at,
-            crate::RecoveredAt::LazyDelegate {
+            crate::owner::RecoveredAt::LazyDelegate {
                 host: recorded_host,
                 index: Some(1),
                 ..

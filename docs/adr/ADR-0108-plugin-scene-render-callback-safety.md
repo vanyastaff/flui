@@ -84,7 +84,7 @@ the production API deliberately cannot inject an image-local blob counter.
 These headless rows exercise the shared source selector; windowed entry-point
 wiring is inspected separately and still needs native smoke coverage.
 
-Renderer inspection covers the Android host callback, `SwapchainFrame` scene
+Inspection of the engine covers the Android host callback, `SwapchainFrame` scene
 borrowing, the borrowed layer walk, the annotation branch, draw segments and
 texture-cache image keys. A future renderer that retains opaque plugin values
 must revise its ownership and this safety proof before calling the hook. Native

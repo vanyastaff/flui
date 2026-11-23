@@ -127,7 +127,7 @@ pub(crate) struct ScrollableHooks {
     /// until the pass returns (ADR-0209 §3).
     pub(crate) in_pass: Box<dyn Fn() -> bool>,
     /// The build phase of the UI runtime the scrollable builds in: while it
-    /// builds, `jump_to` and `animate_to` refuse (ADR-0086 §7).
+    /// builds, `jump_to` and `animate_to` refuse (ADR-0074 §5.2).
     pub(crate) build_phase: flui_foundation::BuildPhase,
     /// The scrollable's wheel handling, for a scrollbar the wheel reaches
     /// instead of the content.
@@ -794,8 +794,8 @@ mod tests {
             // Establish a genuine RUNNING state FIRST, before any listener/hook
             // is wired up — otherwise starting the run itself would trigger the
             // reentrant cascade below synchronously, on this (main) thread,
-            // before the sanity check even runs. `fling_stub` is unbounded
-            // (#1183): `forward()` targets an infinite bound and is refused, so
+            // before the sanity check even runs. `fling_stub` is unbounded, so
+            // `forward()` targets an infinite bound and is refused;
             // `animate_to` with a large finite target is the unbounded-safe
             // substitute.
             fling

@@ -8,8 +8,8 @@
     (unchanged; the old crate re-exported it).
   - `flui_tree::{Arity, Leaf, Optional, Single, Exact, AtLeast, Range, Variable, Never}` →
     `flui_foundation::…` (`flui::rendering::*` is unchanged).
-  - `flui_tree::IndexedSlot` → `flui_foundation::IndexedSlot` (`flui_view::IndexedSlot` is
-    unchanged).
+  - `flui_tree::IndexedSlot` → `flui_foundation::IndexedSlot` (flui-view names it
+    `flui_view::element::IndexedSlot`).
   - `use flui_tree::TreeWrite; tree.remove(id)` on a `SemanticsTree` → `tree.remove(id)`:
     `SemanticsTree::remove` is inherent.
   - `TreeWrite::insert` on a `RenderTree` → `RenderTree::insert` (inherent).

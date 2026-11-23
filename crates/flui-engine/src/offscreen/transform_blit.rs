@@ -1,6 +1,7 @@
-// Presentation blit that converts working-space pixels to the surface's colour
-// space (`surface_color::OutputTransform`). The identity blit in `blit.rs`
-// stays the path for plain sRGB surfaces.
+//! Presentation blit that converts working-space pixels to the surface's
+//! colour space (`surface::color::OutputTransform`), with one
+//! [`TransformPipeline`] per swapchain format. The identity path in `blit.rs`
+//! stays the path for plain sRGB surfaces.
 
 use std::sync::Arc;
 
@@ -8,7 +9,7 @@ use wgpu::util::DeviceExt;
 
 use super::{FullscreenVertex, OffscreenRenderer, PreparedCost};
 use crate::error::EngineResult;
-use crate::surface_color::{OutputParams, OutputTransform};
+use crate::surface::color::{OutputParams, OutputTransform};
 
 /// One pipeline per swapchain format: the target format is baked into it, and
 /// a recreated surface can land on another one.
@@ -150,7 +151,7 @@ impl OffscreenRenderer {
         surface_format: wgpu::TextureFormat,
         transform: OutputTransform,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
+    ) -> EngineResult<Arc<crate::device::domain::PreparedPermit>> {
         self.domain.poll()?;
         let permit = self.domain.reserve(PreparedCost {
             objects: 1,

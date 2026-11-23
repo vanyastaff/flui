@@ -21,7 +21,8 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
         PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
     };
     use flui_platform::{EventTime, PlatformInput};
-    use flui_testing::{HeadlessHost, HeadlessWindow, PointerResampling};
+    use flui_runtime::presentation::PointerResampling;
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use std::cell::RefCell;
     use std::time::Duration;
     for enabled in [false, true] {

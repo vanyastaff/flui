@@ -15,8 +15,8 @@ use flui_layer::{DamageMode, DamageRegion, ScenePublication};
 use flui_runtime::sink::{FrameSettlement, SubmitVerdict};
 
 use super::{
-    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, ThreadSettled,
-    damage_mode_from,
+    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, damage_mode_from,
+    raster_slot::ThreadSettled,
 };
 
 const SIZE: (u32, u32) = (640, 480);
@@ -3075,7 +3075,7 @@ fn an_inline_device_request_asks_the_windows_for_the_frame_that_installs_it() {
         RasterFactory::Scripted(slots.clone()),
         RasterPlacement::Inline,
     );
-    let window = flui_testing::MockWindow::new();
+    let window = flui_platform::testing::MockWindow::new();
     host.attach(
         &window,
         address(),

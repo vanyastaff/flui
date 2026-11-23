@@ -148,7 +148,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// The closure receives a reference to the matched InheritedView as
     /// `&dyn Any` and runs synchronously while the implementation holds
     /// the necessary tree-lock — this preserves the declarative-build
-    /// invariant (Constitution Principle 5) AND avoids extending a
+    /// invariant AND avoids extending a
     /// `&self` borrow into the rest of `build()`. The typed wrapper
     /// [`BuildContextExt::depend_on`] handles `TypeId` resolution and
     /// downcast.
@@ -162,7 +162,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     ) -> bool;
 
     /// [`depend_on_inherited`](Self::depend_on_inherited) at **field**
-    /// granularity (issue #1090): the dependency is recorded with `mask`, and
+    /// granularity: the dependency is recorded with `mask`, and
     /// a later provider update schedules this element only if a field in the
     /// mask changed ([`InheritedView::changed_fields`]). `FieldSet::ALL`
     /// is exactly `depend_on_inherited`. The set is untyped here (this
@@ -217,7 +217,7 @@ pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope 
     /// The closure receives a reference to the matched ancestor View as
     /// `&dyn Any` and runs synchronously while the implementation holds
     /// the necessary tree-read-lock — this preserves the
-    /// declarative-build invariant (Constitution Principle 5) AND avoids
+    /// declarative-build invariant AND avoids
     /// extending a `&self` borrow into the rest of `build()`. The typed
     /// wrapper [`BuildContextExt::find_ancestor`] handles `TypeId`
     /// resolution and downcast.
@@ -440,7 +440,7 @@ pub trait LifecycleContext: BuildContext {
     /// with [`SignalError::WrittenDuringBuild`](crate::SignalError::WrittenDuringBuild).
     fn writer_source(&self) -> crate::WriterSource;
 
-    /// The UI runtime's build phase (ADR-0086 §7): building while any
+    /// The UI runtime's build phase (ADR-0074 §5.2): building while any
     /// element of the runtime builds.
     ///
     /// A widget that subscribes to a controller binds the controller to this
@@ -453,33 +453,33 @@ pub trait LifecycleContext: BuildContext {
     /// installed one.
     ///
     /// Spawn subscriptions from `create_state` / `init_state` / `did_change_dependencies`
-    /// and hold the returned [`crate::TaskToken`] in the state — dropping it cancels.
+    /// and hold the returned [`flui_scheduler::TaskToken`] in the state — dropping it cancels.
     ///
     /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
     /// unit test), reported honestly rather than by silently spawning into a
     /// driver nobody polls. Never reach for some OTHER binding's or UI runtime's
     /// `UpdateScheduler` from a widget: each `UiRuntime`, a headless host's
     /// included, owns its own — a task spawned into the wrong one would never run.
-    fn async_driver(&self) -> Option<crate::AsyncDriver>;
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver>;
 
-    /// The UI runtime's timer: [`Sleep`](crate::Sleep) futures that resolve
+    /// The UI runtime's timer: [`Sleep`](flui_scheduler::Sleep) futures that resolve
     /// on the runtime's clock (the testing kit's virtual clock in a test),
     /// for a task spawned on [`async_driver`](Self::async_driver) to await.
     ///
     /// `None` exactly when [`async_driver`](Self::async_driver) is: a tree
     /// bound to no UI runtime has no clock to sleep on. Acquire it in a
     /// lifecycle hook, like the driver.
-    fn timer(&self) -> Option<crate::TimerHandle> {
+    fn timer(&self) -> Option<flui_scheduler::TimerHandle> {
         self.async_driver().map(|driver| driver.timer())
     }
 
     /// The binding's post-frame capability — schedule work that must observe this
-    /// frame's committed layout. The callback receives [`crate::FrameTiming`].
+    /// frame's committed layout. The callback receives [`flui_scheduler::FrameTiming`].
     ///
     /// `None` when no binding installed one. Acquire it in a lifecycle hook
     /// (`create_state` / `init_state` / `did_change_dependencies`), never in `build`/layout/paint —
     /// the same rule `rebuild_handle` follows.
-    fn post_frame_handle(&self) -> Option<crate::PostFrameHandle>;
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle>;
 
     /// The binding's IME/text-input attach-detach capability, if a binding
     /// installed one.
@@ -814,7 +814,7 @@ pub trait BuildContextExt: BuildContext {
             .signal_owned_by(self.element_id(), value)
     }
 
-    /// [`depend_on`](Self::depend_on) at **field** granularity (issue #1090):
+    /// [`depend_on`](Self::depend_on) at **field** granularity:
     /// read through `f` as usual, but depend only on the fields in `mask` —
     /// the `FIELD_*` constants a `#[derive(InheritedData)]` data type emits.
     /// Changing `Theme.text_scale` then no longer rebuilds a
@@ -843,7 +843,7 @@ pub trait BuildContextExt: BuildContext {
     /// impl InheritedView for SizeProvider {
     ///     type Data = SizeData;
     ///     fn data(&self) -> &SizeData { &self.data }
-    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn child(&self) -> &BoxedView { &self.child }
     ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
     /// }
     ///
@@ -869,7 +869,7 @@ pub trait BuildContextExt: BuildContext {
     /// impl InheritedView for SizeProvider {
     ///     type Data = SizeData;
     ///     fn data(&self) -> &SizeData { &self.data }
-    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn child(&self) -> &BoxedView { &self.child }
     ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
     /// }
     ///
@@ -909,7 +909,7 @@ pub trait BuildContextExt: BuildContext {
     /// reparenting refreshes lifecycle dependencies before the next build.
     ///
     /// Callback form chosen over `Option<&T>` to preserve the
-    /// declarative-build invariant (Constitution Principle 5) and avoid
+    /// declarative-build invariant and avoid
     /// extending the inherited-data borrow across the rest of
     /// `build()`.
     ///
@@ -957,7 +957,7 @@ pub trait BuildContextExt: BuildContext {
     /// dependents).
     ///
     /// Callback form chosen over `Option<&V>` to preserve the
-    /// declarative-build invariant (Constitution Principle 5) and avoid
+    /// declarative-build invariant and avoid
     /// extending the ancestor-view borrow across the rest of `build()`.
     ///
     /// # Example

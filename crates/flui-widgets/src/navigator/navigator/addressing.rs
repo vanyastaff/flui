@@ -22,10 +22,11 @@
 //! assertion. The stack is untouched and the refused route is disposed
 //! unpushed.
 
-use std::collections::HashSet;
 use std::fmt;
 
 use std::cell::RefCell;
+
+use rustc_hash::FxHashSet;
 
 use crate::navigator::binding::is_pageless_popup;
 use crate::navigator::history::{ReplaceTarget, RouteHistory};
@@ -43,14 +44,14 @@ pub(super) struct Addressing {
     /// The pages the Router placed. A page that has left the history lingers
     /// until the next pop or removal asks about the last page, which prunes
     /// it; only present pages are ever counted.
-    pages: RefCell<HashSet<RouteId>>,
+    pages: RefCell<FxHashSet<RouteId>>,
 }
 
 impl Addressing {
     fn new(route_type: &'static str) -> Self {
         Self {
             route_type,
-            pages: RefCell::new(HashSet::new()),
+            pages: RefCell::new(FxHashSet::default()),
         }
     }
 
@@ -117,6 +118,7 @@ impl NavigatorHandle {
     ///
     /// A widget that pushes its own transient page (a container transform)
     /// asks this to choose the route it builds instead of being refused.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn admits_pages(&self) -> bool {
         self.shared.addressing.is_none()

@@ -6,7 +6,8 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform};
+use flui_native::testing::{HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, Platform};
 use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::{
     AdmittedCommand, ApplyError, CommandRefusal, Cursor, CursorError, PlatformSystemChrome,
@@ -277,8 +278,7 @@ struct Fixture {
 
 impl Fixture {
     fn mock(&self) -> &HeadlessHostWindow {
-        self.model
-            .as_any()
+        (&*self.model as &dyn std::any::Any)
             .downcast_ref::<HeadlessHostWindow>()
             .expect("a headless platform opens headless windows")
     }

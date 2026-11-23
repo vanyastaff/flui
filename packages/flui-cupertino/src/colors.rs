@@ -1,7 +1,7 @@
 //! [`CupertinoDynamicColor`] and [`CupertinoColors`] — the iOS
 //! brightness/contrast/elevation-adaptive color system.
 
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::BuildContext;

@@ -27,8 +27,8 @@ use flui_testing::a11y::{Action, Role};
 /// `.style(..)` override on the widget itself must resolve over the theme's
 /// `elevated_button_theme` (`widget_style ?? theme_style ?? default`).
 pub fn widget_level_style_wins_over_the_elevated_button_theme() {
-    let themed_background = flui_sdk::painting::Color::rgb(1, 1, 1);
-    let widget_background = flui_sdk::painting::Color::rgb(9, 9, 9);
+    let themed_background = flui_sdk::painting::styling::Color::rgb(1, 1, 1);
+    let widget_background = flui_sdk::painting::styling::Color::rgb(9, 9, 9);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         elevated_button_theme: Some(ElevatedButtonThemeData {
             style: Some(ButtonStyle {

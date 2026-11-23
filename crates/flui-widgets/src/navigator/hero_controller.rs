@@ -11,11 +11,10 @@
 //! itself — the overlay entry, `Tween`, shuttle, and driving animation — lives in
 //! `hero_flight.rs`.
 //!
-//! The pieces it stands on already exist: the private [`Hero`] view, the per-route
-//! [`HeroRegistry`] behind an ambient [`HeroScope`], and [`HeroHandle`] with its
-//! `start_flight` / `end_flight` placeholder machinery (`hero.rs`). The
-//! controller still does not call `start_flight` directly — the private `HeroFlight`
-//! does that when launched.
+//! It builds on the private [`Hero`] view, the per-route [`HeroRegistry`] behind an
+//! ambient [`HeroScope`], and [`HeroHandle`] with its `start_flight` / `end_flight`
+//! placeholder switch (`hero.rs`). The controller never calls `start_flight`; the
+//! private `HeroFlight` does that when launched.
 //!
 //! [`Hero`]: super::hero::Hero
 //! [`HeroRegistry`]: super::hero::HeroRegistry
@@ -36,9 +35,8 @@
 //! be at their destination, and the `to` route can go back onstage.
 //!
 //! So the sequence is: flip the destination offstage → let the frame build, lay out
-//! and commit → measure from a post-frame callback → put it back onstage. Every
-//! piece of that is a seam this ADR built, and this controller is the first thing
-//! that composes them:
+//! and commit → measure from a post-frame callback → put it back onstage. Each step
+//! rests on one of these:
 //!
 //! | Step | Seam |
 //! |---|---|
@@ -54,27 +52,27 @@
 //! | all heroes of a route | per-route `HeroRegistry`, filled by registration rather than an element walk |
 //! | a hero's rect in its route's space | `HeroHandle::bounding_box_in` |
 //!
-//! # What is deliberately absent
+//! # Hero customization
 //!
-//! The customization hooks: `Hero::create_rect_tween`,
-//! `Hero::flight_shuttle_builder` (which takes no foreign `BuildContext`),
-//! the state-preserving `Hero::placeholder`, and `Hero::curve` / `Hero::reverse_curve`
-//! with a `curves::FAST_OUT_SLOW_IN` default. `FlightDirection` is public
-//! for the shuttle builder, and `HeroMode` grounds a subtree.
+//! A `Hero` configures its flight with `Hero::create_rect_tween`,
+//! `Hero::flight_shuttle_builder` (which takes no foreign `BuildContext`), the
+//! state-preserving `Hero::placeholder`, and `Hero::curve` / `Hero::reverse_curve`
+//! (default `curves::FAST_OUT_SLOW_IN`). `FlightDirection` is public for the shuttle
+//! builder, and `HeroMode` grounds a subtree.
 //!
 //! The private surface stays out of the public API: `HeroTag`, `HeroRegistry`,
 //! `HeroScope`, `HeroHandle`, `HeroFlightManifest`, and the flight machinery live in
 //! crate-private modules, nameable only through the doc-hidden, temporary
 //! `__test_access` (ADR-0083 §4).
 //!
-//! Cross-navigator hero matching is live: [`MeasurementPass::collect_manifests`]
+//! Cross-navigator hero matching: [`MeasurementPass::collect_manifests`]
 //! matches against [`ModalHandle::all_heroes`](super::modal_route::ModalHandle::all_heroes),
 //! which pulls in a nested `Navigator`'s current `PageRoute` heroes recursively.
 //! `HeroControllerScope::none` still stops a nested navigator from auto-attaching
 //! its *own* controller (so it drives no flights of its own), but does not gate
 //! this matching.
 //!
-//! **User-gesture hero flights are live:**
+//! **User-gesture hero flights:**
 //! [`did_start_user_gesture`](HeroController::did_start_user_gesture) launches a
 //! flight the instant a drag begins, with a synchronous
 //! measurement fast path when the destination already has a valid laid-out size;
@@ -89,13 +87,17 @@
 //! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
 //! [`RouteSubtree`]: super::subtree::RouteSubtree
 
-// A `Navigator` now auto-attaches a `HeroController` in production, so the
-// controller and its flight path are live. What stays test-only are the `pub(crate)`
-// introspection accessors (`scheduled_count`, `measurements`, `manifests`), which the
-// integration tests read through `crate::__test_access::HeroControllerProbe`
+// A `Navigator` auto-attaches a `HeroController` in production. What is test-only are
+// the `pub(crate)` introspection accessors (`scheduled_count`, `measurements`,
+// `manifests`), which the integration tests read through
+// `crate::__test_access::HeroControllerProbe`
 // (ADR-0083 §4) to assert the measurement pass.
 
 use std::cell::{Cell, RefCell};
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hero tags, supplied by the application"
+)]
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -258,6 +260,7 @@ impl HeroRecordings {
         self.manifests.borrow_mut().extend(manifests);
     }
 
+    #[cfg(any(test, feature = "testing"))]
     fn manifests(&self) -> Vec<HeroFlightManifest> {
         // HeroTag clones its Arc identity; this copies no authored key code.
         self.manifests.borrow().clone()
@@ -329,21 +332,25 @@ impl HeroController {
     }
 
     /// How many post-frame measurements have been scheduled.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn scheduled_count(&self) -> usize {
         self.scheduled.get()
     }
 
     /// Everything the post-frame callbacks resolved, in order.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn measurements(&self) -> Vec<Measurement> {
         self.recordings.measurements.borrow().clone()
     }
 
     /// The flights that started, one per shared tag. Recorded even after they land.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn manifests(&self) -> Vec<HeroFlightManifest> {
         self.recordings.manifests()
     }
 
     /// The flights currently in the air.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn flights(&self) -> &Rc<FlightManager> {
         &self.flights
     }
@@ -683,6 +690,10 @@ impl MeasurementPass<'_> {
     /// hidden. A no-op for a programmatic transition
     /// (`is_user_gesture_transition == false`), where every hero participates
     /// unconditionally.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keys are hero tags, supplied by the application"
+    )]
     fn filter_for_gesture(
         &self,
         heroes: HashMap<HeroTag, HeroHandle>,
@@ -814,7 +825,7 @@ impl NavigatorObserver for HeroController {
         // their shuttle's painting forever. FLUI replaces the controller through
         // `add_observer`/`remove_observer` while the navigator stays alive, so a
         // controller does not live as long as its navigator. Recorded in
-        // `ARCHITECTURE.md` §18.
+        // `ARCHITECTURE.md`, "Replacing a `HeroController` retires its in-flight flights".
         let previous = Terminal::new(self.navigator.borrow_mut().take());
         self.flights.finish_all();
         drop(previous);

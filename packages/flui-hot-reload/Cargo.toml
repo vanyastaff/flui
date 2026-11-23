@@ -55,13 +55,13 @@ flui-rendering = { workspace = true, features = ["testing"] }
 # `tests/scene_ownership.rs` builds the layers a scene plugin returns;
 # `tests/plugin_pipeline_layout.rs` flattens the version an app plugin returns.
 flui-layer = { workspace = true, features = ["testing"] }
-# `examples/scene_render.rs`, the desktop host of a scene plugin: it opens a
-# window on the native host, polls `HotReloadDriver` and renders the plugin's
-# scene through the engine, and draws the engine's effects gallery.
-flui-engine = { workspace = true, features = ["dx12"] }
+# `examples/scene_render.rs`, a desktop host of a scene plugin: a facade
+# application that installs `ScenePluginHook` (path-only, so `cargo package`
+# drops it, as `flui-sdk` does), and its `--capture-effects` mode, which draws
+# the engine's effects gallery through `HeadlessRenderer` into a PNG.
+flui = { path = "../..", default-features = false }
+flui-engine = { workspace = true }
 flui-foundation = { workspace = true }
-flui-native = { workspace = true }
-flui-platform = { workspace = true }
 image = { workspace = true }
 pollster = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -72,6 +72,11 @@ workspace = true
 [[test]]
 name = "hot_reload_it"
 path = "tests/main.rs"
+
+# The host installs `ScenePluginHook`, which is behind `host-hook`.
+[[example]]
+name = "scene_render"
+required-features = ["host-hook"]
 
 [package.metadata.flui]
 tier = "pkg"

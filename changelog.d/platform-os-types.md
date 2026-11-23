@@ -1,7 +1,8 @@
 ### Removed
 
 - **`flui-platform`**: `PlatformWindow::as_any`. The window contract has no downcast; the core
-  host's windows offer it as `flui_native::HostWindow::as_any`. A test double that implements
+  host's windows offer it through `flui_native::HostWindow`, whose `Any` supertrait a
+  `&dyn HostWindow` upcasts to. A test double that implements
   `PlatformWindow` drops its `as_any`, and a test that downcast a headless window keeps it as the
   `Arc<dyn HostWindow>` the platform opened.
 - **`flui-native`**: the OS types of the core host's public paths (ADR-0151 §8): the

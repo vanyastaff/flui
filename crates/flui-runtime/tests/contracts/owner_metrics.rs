@@ -1454,7 +1454,7 @@ fn regional_formats_reach_media_query() {
 fn preferred_locales_select_resources_and_direction() {
     use flui_foundation::TextDirection;
     use flui_platform::{Locale, SystemPreferences};
-    use flui_widgets::localization::{
+    use flui_widgets::{
         BoxedLocalizationsDelegate, Directionality, GlobalWidgetsLocalizationsDelegate,
         Localizations, LocalizationsDelegate,
     };
@@ -2074,7 +2074,7 @@ type GeometryAnswer =
 /// A window over the shared one whose gesture-geometry query the test scripts, counts, slows
 /// and fails.
 struct ScriptedGeometry {
-    window: Rc<flui_testing::MockWindow<flui_testing::mock_window::Over>>,
+    window: Rc<flui_platform::testing::MockWindow<flui_platform::testing::mock_window::Over>>,
     /// How many gesture-geometry queries the window took.
     calls: Rc<Cell<usize>>,
     /// A clock the next queries advance, and by how much, while they read.
@@ -2096,24 +2096,25 @@ impl ScriptedGeometry {
             Rc::clone(&query_time),
             Rc::clone(&panic_next),
         );
-        let window =
-            flui_testing::MockWindow::over(Rc::clone(crate::owner_publication::window().window()))
-                .with_gesture_geometry(answer)
-                .with_observer(move |call| {
-                    if !matches!(call, flui_testing::WindowCall::GestureGeometry) {
-                        return;
-                    }
-                    let (calls, query_time, panic_next) = &observed;
-                    calls.set(calls.get() + 1);
-                    assert!(
-                        !panic_next.replace(false),
-                        "scripted geometry query failure"
-                    );
-                    let query_time = query_time.borrow().clone();
-                    if let Some((clock, duration)) = query_time {
-                        clock.advance(duration);
-                    }
-                });
+        let window = flui_platform::testing::MockWindow::over(Rc::clone(
+            crate::owner_publication::window().window(),
+        ))
+        .with_gesture_geometry(answer)
+        .with_observer(move |call| {
+            if !matches!(call, flui_platform::testing::WindowCall::GestureGeometry) {
+                return;
+            }
+            let (calls, query_time, panic_next) = &observed;
+            calls.set(calls.get() + 1);
+            assert!(
+                !panic_next.replace(false),
+                "scripted geometry query failure"
+            );
+            let query_time = query_time.borrow().clone();
+            if let Some((clock, duration)) = query_time {
+                clock.advance(duration);
+            }
+        });
         window.set_display(display);
         Self {
             window: Rc::new(window),
@@ -2340,23 +2341,25 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     let panic_regions = Rc::new(Cell::new(false));
     let panic_display = Rc::new(Cell::new(false));
     let window = Rc::new(
-        flui_testing::MockWindow::over(Rc::clone(crate::owner_publication::window().window()))
-            .taking_input_regions()
-            .with_observer({
-                let (panic_regions, panic_display) =
-                    (Rc::clone(&panic_regions), Rc::clone(&panic_display));
-                move |call| match call {
-                    flui_testing::WindowCall::State => assert!(
-                        !panic_display.replace(false),
-                        "scripted display query failure"
-                    ),
-                    flui_testing::WindowCall::SetInputRegions(_) => assert!(
-                        !panic_regions.replace(false),
-                        "scripted input-region failure"
-                    ),
-                    _ => {}
-                }
-            }),
+        flui_platform::testing::MockWindow::over(Rc::clone(
+            crate::owner_publication::window().window(),
+        ))
+        .taking_input_regions()
+        .with_observer({
+            let (panic_regions, panic_display) =
+                (Rc::clone(&panic_regions), Rc::clone(&panic_display));
+            move |call| match call {
+                flui_platform::testing::WindowCall::State => assert!(
+                    !panic_display.replace(false),
+                    "scripted display query failure"
+                ),
+                flui_platform::testing::WindowCall::SetInputRegions(_) => assert!(
+                    !panic_regions.replace(false),
+                    "scripted input-region failure"
+                ),
+                _ => {}
+            }
+        }),
     );
     let mut runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),

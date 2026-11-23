@@ -229,7 +229,7 @@ pub struct SceneSnapshot {           // Send + Sync; moves by value; never Arc<S
 1. The UI runtime stops accepting frames; the owner inbox flips to drain-and-refuse (`OwnerGone`).
 2. Worker jobs are cancelled; in-flight results hit the refused inbox or fail freshness.
 3. The slot's inbox closes with `Detach`; the executor finishes or drops the in-flight work.
-4. Renderer and surface teardown happen in the slot before the window handle is
+4. The slot tears down its surface before the window handle is
    destroyed.
 5. The UI runtime drops; surviving handles turn `OwnerGone`.
 

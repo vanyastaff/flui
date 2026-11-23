@@ -2,12 +2,13 @@
 
 use std::fmt;
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::Axis;
 use flui_objects::RenderListBody;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, CreationSite};
+use flui_view::BoxedView;
+use flui_view::ViewSeq;
 
 use crate::localization::{Directionality, resolve_horizontal_axis_direction};
 use crate::support::generic_render_view_element;
@@ -110,7 +111,7 @@ where
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&flui_view::BoxedView)) {
         self.children.for_each(|_index, child| visitor(child));
     }
 }

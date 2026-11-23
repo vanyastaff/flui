@@ -4,9 +4,8 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
-use flui_view::{
-    BuildOwner, ElementTree, GlobalKeyScope, RebuildReason, RenderView, View, ViewExt,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree, GlobalKeyScope};
+use flui_view::{RebuildReason, RenderView, View, ViewExt};
 use std::{
     any::Any,
     cell::{Cell, RefCell},
@@ -697,8 +696,8 @@ impl RenderView for Leaf {
         &self,
         _: &flui_view::RenderObjectContext<'_>,
         _: &mut Self::RenderObject,
-    ) -> flui_view::RenderUpdateImpact {
-        flui_view::RenderUpdateImpact::NONE
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
     }
 }
 fn mounted() {
@@ -712,7 +711,7 @@ fn mounted() {
         children: vec![Leaf(Arc::clone(&a)).boxed(), Leaf(Arc::clone(&b)).boxed()],
     };
     let root = tree.mount_root_with_pipeline_owner(
-        &row,
+        &row.boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),

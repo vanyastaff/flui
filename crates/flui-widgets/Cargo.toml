@@ -26,6 +26,8 @@ flui-view = { workspace = true }
 # trait without depending on futures-core directly. Trait-only: no
 # executor, no combinators, no proc macros.
 futures-core = { workspace = true }
+# Hash tables keyed by process-minted ids (AGENTS.md "Current forms").
+rustc-hash = { workspace = true }
 # Concrete RenderBox catalog every render-object widget wraps (also re-exports
 # the flex/stack config enums it owns).
 flui-objects = { workspace = true }
@@ -55,11 +57,6 @@ flui-interaction = { workspace = true }
 # (`text_boundaries`) `TextEditingController` moves and deletes by, which the
 # obscuring mask counts too.
 flui-painting = { workspace = true }
-# Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
-# `Overlay`'s entry list and its published `RebuildHandle` live behind private
-# `Mutex`es: the list is mutated from outside the tree, and
-# `ViewState::build` takes `&self`.
-parking_lot = { workspace = true }
 # The nested scroll chain a sequence snapshots: four participants inline, so
 # steady-state dispatch allocates nothing (ADR-0209 §7).
 smallvec = { workspace = true }
@@ -89,6 +86,8 @@ criterion = { workspace = true }
 flui-animation = { workspace = true, features = ["diagnostics"] }
 tracing-subscriber = { workspace = true }
 static_assertions = { workspace = true }
+# Integration tests record what callbacks saw in shared logs.
+parking_lot = { workspace = true }
 # Integration tests drive the real layout pipeline through the render harness, and
 # wake-counting tests take their wakers from the foundation kit.
 flui-foundation = { workspace = true, features = ["testing"] }
@@ -175,8 +174,10 @@ harness = true
 
 [features]
 default = []
-# `ScrollStep::for_test` and `FlingStep::for_test`: a nested scroll connection
-# exercised alone, outside the channel that otherwise builds every step.
+# `ScrollStep::for_test` and `FlingStep::for_test`, for a nested scroll connection
+# exercised alone, and the doc-hidden `__test_access` this crate's integration
+# tests name private items through (ADR-0083 §4). Only the dev-dependency on
+# this crate turns it on.
 testing = []
 # Decodes PNG, JPEG and GIF bytes or files through
 # `flui_painting::paint::Image::decode`, under its decoded-size limit.

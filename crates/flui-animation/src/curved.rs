@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 /// Captures the run's entering direction while animating (keeping an already
 /// captured one) and clears it at rest. Reads only the reported
-/// `AnimationStatus` â€” no separate "is a ticker literally running" check.
+/// `AnimationStatus` — no separate "is a ticker literally running" check.
 /// Shared by the constructor's seed call and the status-listener callback so
 /// both apply the identical rule.
 fn update_curve_direction(direction: &Cell<Option<AnimationStatus>>, status: AnimationStatus) {

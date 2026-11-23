@@ -19,7 +19,7 @@
 //! factor pair, not of `Clear`: `Clear`, `Src`, `SrcIn`, `SrcOut`, `Modulate`,
 //! `DstIn` and `DstATop` all fail it, while `DstOut` — the other erase-by-alpha
 //! mode — passes, because `(Zero, OneMinusSrcAlpha)` has exactly the absorbing
-//! shape. `crate::pipeline_cache::destination_alpha_scale_for` is the classification
+//! shape. `crate::pipelines::variants::destination_alpha_scale_for` is the classification
 //! under test; the exhaustive cross-check that it agrees with
 //! `blend_state_for`'s own factor table lives beside it.
 //!
@@ -230,7 +230,7 @@ fn modes_that_cannot_absorb_coverage_feather_their_partially_covered_edge(
 ///
 /// The assertion is that the two devices agree pixel-for-pixel, rather than a
 /// predicted value, because `DstOut` is tile-safe and therefore renders through
-/// the SSAA tile path (`pipeline_cache::ssaa_eligible_for`), whose 2× supersampled
+/// the SSAA tile path (`pipelines::variants::ssaa_eligible_for`), whose 2× supersampled
 /// edge reports a different coverage for the same column than the tessellated
 /// path does. Predicting that number would pin this test to the SSAA sample
 /// grid; agreeing across devices pins what actually matters — that nothing in

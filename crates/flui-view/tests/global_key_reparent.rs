@@ -16,14 +16,12 @@
 
 #![cfg(feature = "testing")]
 use flui_foundation::ViewKey;
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::LifecycleContext;
+use flui_view::testing::{CollectedEvent, reconcile_children};
 use flui_view::{
-    BuildContext, BuildOwner, ChildViews, ElementTree, GlobalKey, IntoView, StatefulView, View,
-    ViewExt, ViewState,
-    tree::{
-        ReconcileEventKind,
-        test_utils::{CollectedEvent, reconcile_children},
-    },
+    BuildContext, ChildViews, GlobalKey, IntoView, ReconcileEventKind, StatefulView, View, ViewExt,
+    ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -99,11 +97,15 @@ impl ViewState<KeyedCounter> for CounterState {
 // Helpers
 // ============================================================================
 
-fn fresh_tree() -> (Rc<RefCell<ElementTree>>, Rc<RefCell<BuildOwner>>) {
+fn fresh_tree() -> (
+    Rc<RefCell<ElementTree>>,
+    Rc<RefCell<BuildOwner>>,
+    flui_view::testing::GlobalKeyRegistryActivation,
+) {
     let tree = Rc::new(RefCell::new(ElementTree::new()));
     let owner = Rc::new(RefCell::new(BuildOwner::new()));
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
-    (tree, owner)
+    let registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
+    (tree, owner, registry)
 }
 
 fn direct_children_in_slot_order(
@@ -127,13 +129,12 @@ fn direct_children_in_slot_order(
 /// that is still ACTIVE under another parent in the same frame. The old parent
 /// forgets the child, the element id/state survive, and the trace event records
 /// `from_parent: Some(old_parent)`.
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
-    let (tree, owner) = fresh_tree();
+    let (tree, owner, _registry) = fresh_tree();
 
     let parent_a = tree
         .borrow_mut()
-        .mount_root(&Spacer, &mut owner.borrow_mut().element_owner_mut());
+        .mount_root(&Spacer.boxed(), &mut owner.borrow_mut().element_owner_mut());
     let key = GlobalKey::<CounterState>::new();
     let counter = KeyedCounter {
         key: key.clone(),
@@ -141,10 +142,7 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
     };
     let key_hash = key.key_hash();
 
-    let initial_views = ChildViews::from(vec![
-        Box::new(Spacer) as Box<dyn View>,
-        Box::new(counter.clone()),
-    ]);
+    let initial_views = ChildViews::from(vec![Spacer.boxed(), counter.clone().boxed()]);
     reconcile_children(
         &mut tree.borrow_mut(),
         parent_a,
@@ -245,6 +243,4 @@ pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() 
         mount_or_unmount, 0,
         "active reparent must not mount or unmount the migrated subtree",
     );
-
-    flui_view::test_only_clear_global_key_registry();
 }

@@ -37,7 +37,7 @@ impl CustomPainter for RectanglePainter {
     }
 
     fn semantics_regions(&self, size: Size) -> Vec<flui::painting::SemanticsRegion> {
-        let mut config = flui::widgets::SemanticsConfiguration::new();
+        let mut config = flui::semantics::SemanticsConfiguration::new();
         config.set_label("painted rectangle");
         vec![flui::painting::SemanticsRegion::new(
             flui::painting::SemanticsRegionKey(1),
@@ -378,7 +378,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
         flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("drag").child(
             GestureDetector::new()
                 .drag(flui::widgets::DragSlot::horizontal().on_down(
-                    move |_ctx, _details: flui::widgets::DragDownDetails| {
+                    move |_ctx, _details: flui::interaction::DragDownDetails| {
                         observed.fetch_add(1, Ordering::SeqCst);
                     },
                 ))
@@ -426,7 +426,7 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
             .expect("fixture contact admitted");
     }
 
-    fn handle_event(&self, dispatch: flui::widgets::PointerDispatch<'_>) {
+    fn handle_event(&self, dispatch: flui::interaction::PointerDispatch<'_>) {
         use flui::interaction::{PointerEvent, PointerEventExt};
         if let PointerEvent::Move(_) = dispatch.local {
             let origin = self.contact.current().expect("tracked pointer").local;
@@ -511,7 +511,7 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     }
 }
 
-use flui::view::{
+use flui::scheduler::{
     AsyncDriver, BoxedTask, FrameId, FrameTiming, Instant, PostFrameHandle,
     PostFrameScheduleError, TaskToken,
 };

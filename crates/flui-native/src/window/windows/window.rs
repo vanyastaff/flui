@@ -622,7 +622,7 @@ impl WindowsWindow {
                 limits_waived: std::cell::Cell::new(false),
                 kept_logical: std::cell::Cell::default(),
                 app_bars: std::cell::Cell::new(None),
-                show_requests: std::cell::Cell::new(0),
+                show_requests: super::show_requests::ShowRequests::default(),
                 visibility: super::proc::Visibility::new(),
                 in_size_move: std::cell::Cell::new(false),
                 in_system_command: std::cell::Cell::new(false),
@@ -2264,12 +2264,12 @@ impl WindowsWindow {
         if iconic {
             super::proc::with_window_context(self.hwnd(), "restore_hidden", |ctx| {
                 let _hold = ctx.hold_publishing();
-                let requests = ctx.show_requests.get();
+                let requests = ctx.show_requests.mark();
                 self.show_native(SW_RESTORE);
                 // The restore runs user callbacks. If one closed this window and
                 // opened another on the handle, or asked for this one to be shown,
                 // the hide below is not wanted.
-                let overtaken = !self.owns_handle() || ctx.show_requests.get() != requests;
+                let overtaken = !self.owns_handle() || ctx.show_requests.overtook(requests);
                 if !overtaken {
                     self.show_native(SW_HIDE);
                 }

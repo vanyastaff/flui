@@ -6,9 +6,9 @@ use flui_rendering::constraints::BoxConstraints;
 
 use super::*;
 
-fn counting_window(id: u64) -> Rc<flui_testing::MockWindow> {
+fn counting_window(id: u64) -> Rc<flui_platform::testing::MockWindow> {
     Rc::new(
-        flui_testing::MockWindow::new().with_id(
+        flui_platform::testing::MockWindow::new().with_id(
             flui_platform::WindowId::try_from_raw(id).expect("a test window id is nonzero"),
         ),
     )
@@ -252,7 +252,7 @@ pub(crate) fn a_secondary_presentation_is_laid_out_at_its_own_size() {
         .attach_root_widget(&SizedBox::square(10.0))
         .expect("primary root");
     let window: Rc<dyn PlatformWindow> = Rc::new(
-        flui_testing::MockWindow::new()
+        flui_platform::testing::MockWindow::new()
             .focused(false)
             .with_scale_factor(
                 flui_foundation::geometry::DevicePixelRatio::try_new(2.0)

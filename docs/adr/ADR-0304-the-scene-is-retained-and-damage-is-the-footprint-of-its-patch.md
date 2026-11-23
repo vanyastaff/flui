@@ -54,12 +54,12 @@ paint still works per frame and per scene:
 | Each paint pass builds a new `LayerTree` and pushes a clone of every layer of every clean boundary into it | `crates/flui-rendering/src/pipeline/owner/paint.rs:55-61`, `:197`, `:1128-1131`, `:1469-1471` |
 | The tree is append-only, its ids follow insertion order, and it lives for one frame | `crates/flui-layer/src/tree/layer_tree.rs:1-11`, `:218-237`; `crates/flui-layer/ARCHITECTURE.md:46-57` |
 | Damage is a walk of the whole frozen scene against the previous one, about 200 µs per 1,000 boundaries | the former `flui-app` `raster_lane.rs:359`; `crates/flui-layer/src/damage/differ.rs:92-108`, `:221`; `crates/flui-layer/ARCHITECTURE.md:172-173` |
-| Damage is one rectangle: a caret and a clock in opposite corners repaint everything between them | `crates/flui-layer/src/scene_snapshot.rs:20-29`; `crates/flui-engine/src/damage.rs:11-14`, `:29-33` |
+| Damage is one rectangle: a caret and a clock in opposite corners repaint everything between them | `crates/flui-layer/src/scene_snapshot.rs:20-29`; `crates/flui-engine/src/frame/damage.rs:11-14`, `:29-33` |
 | Content under a follower, textures, canvas layers, platform views and the performance overlay are damaged on every frame they exist | `differ.rs:230-239`, `:326-341`, `:477-478` |
 | A boundary that holds a `Leader` or `Follower` is never retained, because its capture does not carry the follower's render object | `paint.rs:1603-1609`, `:1650-1652` |
 | One picture run holds the output of several render objects | `paint.rs:1500-1503` |
-| The engine records every layer of the scene into its IR every frame, a partial frame included | `crates/flui-engine/src/renderer.rs:2652` |
-| Two rules say what a filter reads: the differ joins a backdrop's output bounds, the engine joins its input with another radius and treats every other filter as full | `differ.rs:480-507`, `:655-678`, `:738-748`; `crates/flui-engine/src/frame_protocol.rs:258-275`, `:283-299` |
+| The engine records every layer of the scene into its IR every frame, a partial frame included | `crates/flui-engine/src/layers/walk.rs` |
+| Two rules say what a filter reads: the differ joins a backdrop's output bounds, the engine joins its input with another radius and treats every other filter as full | `differ.rs:480-507`, `:655-678`, `:738-748`; `crates/flui-engine/src/frame/protocol.rs:258-275`, `:283-299` |
 | A non-finite damage rectangle is reported as `Unchanged` | `scene_snapshot.rs:71-76`; `differ.rs:509-511` |
 | The content certificate is an allocation because an owner-local counter restarts with each `PipelineOwner` | `crates/flui-layer/src/tree/stamp.rs:23-30` |
 
@@ -380,7 +380,7 @@ region already contains it, joins `reads ∪ writes`; damage that meets one memb
 group joins the rect over every member's, so the group lies in one rect and captures where a full
 frame captures (ADR-0230).
 The entries of a frame are a `Closures` set, which `close_over` takes. The joins and the region's merges repeat to a
-fixed point, at most 64 rounds (the cap of `frame_protocol.rs:285-299`), past which the frame is
+fixed point, at most 64 rounds (the cap of `frame/protocol.rs`), past which the frame is
 `Full(Unbounded)`; damage that meets a `Closure::Unbounded` is `Full(Unbounded)`. A
 foreground image filter is read only once the region meets its node's subtree footprint, which holds
 all it writes, and then with the node's other filters in one fold of its content; a backdrop or colour
@@ -389,7 +389,7 @@ closure entries keep the closure at O(filtered × depth), never a pass over a no
 plus one fold of each filtered node the damage reaches. The
 scene owner's `apply` and the raster side's texture
 damage (§9) call this function; the differ's rule (`differ.rs:480-507`) and the engine's
-(`frame_protocol.rs:215-300`) are deleted. At the fixed point every footprint the region meets lies
+(`frame/protocol.rs`) are deleted. At the fixed point every footprint the region meets lies
 inside one of its rects, so each rect can be redrawn alone (§9).
 
 §7. **The owner publishes a version and a base.**
@@ -570,7 +570,7 @@ and blended twice.
 
 The choice is made each time the damage is closed over its backdrop readers, at most
 `Region::MAX` rounds a frame, from a walk of the version culled by the bounding box
-(`crates/flui-engine/src/region_cost.rs`). For each chunk it reaches, the walk counts its commands
+(`crates/flui-engine/src/frame/region_cost.rs`). For each chunk it reaches, the walk counts its commands
 and the rects its device bounds meet, `m`, and predicts:
 
 ```text

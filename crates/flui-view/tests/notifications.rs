@@ -28,11 +28,12 @@ use std::{
 };
 
 use flui_foundation::{ElementId, RenderId};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::Lifecycle;
 use flui_view::testing::ElementBuildContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Notification, StatelessView,
-    View, ViewExt,
-    element::{Lifecycle, NotificationElementBase},
+    BuildContext, ElementBase, IntoView, Notification, StatelessView, View, ViewExt,
+    element::NotificationElementBase,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -227,9 +228,10 @@ pub(crate) fn dispatch_notification_calls_handler_and_stops_on_true() {
             true
         })
     };
-    let outer_id = tree
-        .borrow_mut()
-        .mount_root(&outer_listener, &mut owner.borrow_mut().element_owner_mut());
+    let outer_id = tree.borrow_mut().mount_root(
+        &outer_listener.boxed(),
+        &mut owner.borrow_mut().element_owner_mut(),
+    );
 
     let inner_listener = {
         let inner_called = Arc::clone(&inner_called);
@@ -241,14 +243,14 @@ pub(crate) fn dispatch_notification_calls_handler_and_stops_on_true() {
         })
     };
     let inner_id = tree.borrow_mut().insert(
-        &inner_listener,
+        &inner_listener.boxed(),
         outer_id,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
     );
 
     let child_id = tree.borrow_mut().insert(
-        &DummyChild,
+        &DummyChild.boxed(),
         inner_id,
         0,
         &mut owner.borrow_mut().element_owner_mut(),

@@ -7,15 +7,15 @@ use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-use flui_foundation::BuildPhase;
-use flui_foundation::ChangeNotifier;
+use flui_foundation::{BuildPhase, ChangeNotifier};
+use flui_scheduler::{AsyncDriver, FrameTiming, PostFrameHandle, TaskToken};
 use flui_view::__runtime::{UrlOwnerRegistration, UrlOwnerSlot};
 use flui_view::element::ElementKind;
 use flui_view::navigation::{
     NavigationIntent, NavigationOp, NavigationRefused, RouteParseError, RoutePath, UrlOwner,
 };
 use flui_view::prelude::*;
-use flui_view::{AsyncDriver, BoxedView, BuildContextExt, FrameTiming, PostFrameHandle, TaskToken};
+use flui_view::{BoxedView, BuildContextExt};
 
 use crate::navigator::lifecycle::{RetiredValues, Terminal};
 
@@ -47,7 +47,8 @@ type UnknownHook = Rc<dyn Fn(&RoutePath)>;
 ///
 /// ```
 /// use flui_widgets::prelude::*;
-/// use flui_widgets::{Routable, RouteParseError, RoutePath, Router, Text};
+/// use flui_view::navigation::{RouteParseError, RoutePath};
+/// use flui_widgets::{Routable, Router, Text};
 ///
 /// #[derive(Clone, PartialEq)]
 /// enum AppRoute { Home, About }
@@ -335,8 +336,8 @@ impl<R: Routable> InheritedView for RouterScope<R> {
         &self.shared
     }
 
-    fn child(&self) -> &dyn View {
-        &*self.child
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 
     /// A router's element keeps one shared state for its life, so this

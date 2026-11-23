@@ -168,7 +168,7 @@ where
     }
 
     fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        // FR-024 (c): expose the underlying `&dyn ViewKey`
+        // Expose the underlying `&dyn ViewKey`
         // so the reconciler can do semantic `key_eq` on a hash hit and
         // reject silent collisions across distinct keys with the same
         // `u64`. `core.view().key()` already returns
@@ -219,7 +219,7 @@ where
         // it. Every other behavior returns `None` for `render_id`, so the
         // `or_else` falls through to the pass-through `parent_render_id`
         // this element itself received (the nearest ancestor render
-        // object). This is the E3 propagation target for child inserts.
+        // object). `ElementTree::insert` reads this for a new child.
         self.behavior
             .render_id()
             .or_else(|| self.core.child_parent_render_id())
@@ -348,7 +348,7 @@ where
     // override `ElementBehavior::on_notification` to translate the
     // object-safe `(TypeId, &dyn Any)` shape into the typed
     // `NotifiableElement<N>` callback at the impl site — single dyn
-    // boundary at dispatch only (Constitution Principle 4).
+    // boundary at dispatch only.
     // ========================================================================
 
     fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn Any) -> bool {

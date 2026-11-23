@@ -157,7 +157,8 @@ fn a_change_with_no_turn_callback_reaches_the_next_one_registered() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_native::{HeadlessPlatform, Platform as _};
+    use flui_native::Platform as _;
+    use flui_native::testing::HeadlessPlatform;
 
     let platform = HeadlessPlatform::new();
     let turns = platform.owner_turns();

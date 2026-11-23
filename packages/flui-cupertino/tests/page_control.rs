@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use flui_cupertino::CupertinoPageControl;
 use flui_sdk::animation::Vsync;
-use flui_sdk::painting::{Color, DrawOp};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::{BoxedView, ViewExt};
 use flui_sdk::widgets::{

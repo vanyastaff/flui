@@ -56,7 +56,7 @@ wgpu = { workspace = true, default-features = false }
 # box a `HandleError` directly into `EngineError::SurfaceCreation` via the typed
 # `#[source] Box<dyn Error + Send + Sync + 'static>` ctor instead of stringifying.
 raw-window-handle = { version = "0.6", features = ["std"] }
-# Glyph atlas packer (`crate::glyph_atlas`): the bucketed shelf allocator
+# Glyph atlas packer (`crate::resources::glyph_atlas`): the bucketed shelf allocator
 # glyphon used, now driven directly — the engine rasterises through
 # `flui_painting::glyphs::SwashRasterizer` and owns the atlas (ADR-0067).
 etagere = "0.3"
@@ -64,6 +64,9 @@ etagere = "0.3"
 # SipHash costs more than the lookup it guards (measured: ~20% of a
 # text-heavy frame).
 rustc-hash = { workspace = true }
+# The path cache's table: its entries are found by a hash and compared by
+# value, which a std map cannot do without an owned key.
+hashbrown = { workspace = true }
 bytemuck = { workspace = true }
 
 # Vector graphics tessellation (`crate::wgpu::tessellator`).
@@ -77,15 +80,15 @@ parking_lot = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-# Portable Instant for GPU-path diagnostic spans (issue #1045). Same pin the
+# Portable Instant for GPU-path diagnostic spans. Same pin the
 # foundation clock and the app runner already use — std::time::Instant panics
 # on wasm32-unknown-unknown before surface acquire/present can complete.
 web-time = { workspace = true }
 # Raster executor lifecycle channel — bounded, typed
 # backpressure, following the render invalidation channel's precedent.
 crossbeam-channel = { workspace = true }
-# Compile-time Send/Sync pins (ADR-0045 decision 1's `Renderer: Send`
-# derivation and `!Sync` posture) — same convention as flui-app/flui-view/
+# Compile-time Send/Sync pins (`GpuContext: Send`, `HeadlessRenderer: !Sync`,
+# `SurfaceFactory: !Send`) — same convention as flui-app/flui-view/
 # flui-rendering etc.
 static_assertions = { workspace = true }
 
@@ -94,7 +97,7 @@ static_assertions = { workspace = true }
 # target-scoped entries are feature-unified with the base `wgpu` dependency
 # above, so every consumer of flui-engine gets the native backend for the
 # compile target without opting in. The mapping mirrors
-# `gpu_backend::Family::order`; the named features above (`vulkan`, `metal`,
+# `device::backend::Family::order`; the named features above (`vulkan`, `metal`,
 # `dx12`, `webgpu`, `gles`) remain available to enable additional backends.
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, default-features = false, features = ["dx12"] }
@@ -146,8 +149,8 @@ criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test
 # support) — the only remaining `image` consumer, and it is a dev/test one.
 image = { workspace = true }
-# Compile-fail fixtures pinning ADR-0045 decision 1: an unwrapped raw
-# platform handle breaks `Renderer`'s derived `Send`. Same
+# Compile-fail fixtures pinning ADR-0305 §2: a `SurfaceFactory` stays on its
+# owner thread and takes only owned, `'static` targets. Same
 # crate/version flui-painting uses for its compile-fail suite
 # (`crates/flui-painting/tests/compile_fail.rs`).
 trybuild = { workspace = true }
@@ -158,7 +161,8 @@ trybuild = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 flui-testing = { path = "../flui-testing" }
 
-# Executing wasm32 tests for the frame-timing helper (issue #1045). Pinned
+# Executes the device-rebuild backoff test in the wasm VM, where its clock is
+# `performance.now()` (`raster_executor::device_health`). Pinned
 # exactly like flui-foundation / flui-app: 0.3.77 pairs with the locked
 # wasm-bindgen 0.2.127; an unpinned `"0.3"` would bump the workspace lock.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
@@ -185,10 +189,12 @@ harness = false
 required-features = ["testing"]
 
 # Text-heavy frames end to end (record → encode → submit); the gate for the
-# engine-owned glyph rasteriser (ADR-0067).
+# engine-owned glyph rasteriser (ADR-0067). Drives `WgpuPainter`, which the
+# crate root re-exports only under the test feature.
 [[bench]]
 name = "text_throughput"
 harness = false
+required-features = ["testing"]
 
 [[bench]]
 name = "offscreen_resource_cache"

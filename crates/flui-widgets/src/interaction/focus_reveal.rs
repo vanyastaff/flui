@@ -61,7 +61,7 @@ impl InheritedView for FocusRevealScope {
         &self.target
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

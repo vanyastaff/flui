@@ -19,6 +19,11 @@
 //!
 //! [`publish`]: Storage::publish
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "the lanes are keyed by the storage names an application chooses"
+)]
+
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, Weak};

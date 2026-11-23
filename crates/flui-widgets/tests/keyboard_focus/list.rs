@@ -357,7 +357,7 @@ pub(crate) fn the_list_node_carries_the_list_name() {
         tree.describe()
     );
     assert!(
-        focus.supports_action(flui_testing::Action::Focus),
+        focus.supports_action(flui_testing::a11y::Action::Focus),
         "assistive technology can focus the empty list:\n{}",
         tree.describe()
     );

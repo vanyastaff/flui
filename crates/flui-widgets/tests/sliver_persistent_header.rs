@@ -25,10 +25,10 @@ use std::rc::Rc;
 use crate::common::{lay_out, tight};
 use flui_view::BoxedView;
 use flui_view::IntoView;
-use flui_view::view::ViewExt;
+use flui_view::ViewExt;
+use flui_view::element::SliverPersistentHeaderDelegate;
 use flui_widgets::{
-    ColoredBox, CustomScrollView, SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate,
-    SliverToBoxAdapter,
+    ColoredBox, CustomScrollView, SizedBox, SliverPersistentHeader, SliverToBoxAdapter,
 };
 
 use flui_painting::styling::Color;
@@ -166,8 +166,8 @@ impl SliverPersistentHeaderDelegate for SnappingDelegate {
         120.0
     }
 
-    fn snap_configuration(&self) -> Option<flui_widgets::FloatingHeaderSnapConfiguration> {
-        Some(flui_widgets::FloatingHeaderSnapConfiguration::new(
+    fn snap_configuration(&self) -> Option<flui_objects::FloatingHeaderSnapConfiguration> {
+        Some(flui_objects::FloatingHeaderSnapConfiguration::new(
             flui_animation::SharedCurve::new(flui_animation::curves::LINEAR),
             std::time::Duration::from_millis(64),
         ))
@@ -369,11 +369,11 @@ impl SliverPersistentHeaderDelegate for StretchingDelegate {
         100.0
     }
 
-    fn stretch_configuration(&self) -> Option<flui_widgets::OverScrollHeaderStretchConfiguration> {
+    fn stretch_configuration(&self) -> Option<flui_objects::OverScrollHeaderStretchConfiguration> {
         let calls = Rc::clone(&self.calls);
-        Some(flui_widgets::OverScrollHeaderStretchConfiguration::new(
+        Some(flui_objects::OverScrollHeaderStretchConfiguration::new(
             STRETCH_TRIGGER_OFFSET,
-            Some(flui_widgets::StretchTrigger::new(move || {
+            Some(flui_objects::StretchTrigger::new(move || {
                 calls.set(calls.get() + 1);
             })),
         ))

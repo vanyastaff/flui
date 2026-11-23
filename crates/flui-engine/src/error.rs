@@ -21,8 +21,8 @@
 //! lifetime of the process, and validation failures surface through wgpu's
 //! `on_uncaptured_error` host-level handler (which logs and aborts) rather
 //! than a `Result` the engine propagates. There is therefore no typed
-//! shader/pipeline error variant to wrap. Resource I/O failures (font/shader
-//! file loads) use [`EngineError::ResourceIo`]; GPU-side init failures use
+//! shader/pipeline error variant to wrap. The engine reads no files, so it has no
+//! I/O variant either; GPU-side init failures use
 //! [`EngineError::SurfaceCreation`] / [`EngineError::DeviceCreation`] /
 //! [`EngineError::AdapterRequest`].
 
@@ -305,23 +305,6 @@ pub enum EngineError {
     },
 
     // ========================================================================
-    // Resource errors
-    // ========================================================================
-    /// Filesystem-backed resource (font, shader file, asset) failed to load.
-    ///
-    /// Preserves the underlying `std::io::Error` via `#[source]` so callers can
-    /// match on `io::ErrorKind::{NotFound, PermissionDenied, ...}` without
-    /// re-parsing the formatted message.
-    #[error("Resource I/O failure ({context})")]
-    ResourceIo {
-        /// Caller-supplied context (e.g. `"font load /path/to/font.ttf"`).
-        context: String,
-        /// Underlying `std::io::Error`.
-        #[source]
-        source: std::io::Error,
-    },
-
-    // ========================================================================
     // Initialization errors
     // ========================================================================
     /// Failed to create surface from window
@@ -414,7 +397,7 @@ pub enum EngineError {
     )]
     NoSupportedGpu {
         /// Each backend tried, in order, with why it failed.
-        tried: Vec<crate::gpu_backend::BackendFailure>,
+        tried: Vec<crate::device::backend::BackendFailure>,
     },
 
     /// Failed to create GPU device
@@ -427,12 +410,6 @@ pub enum EngineError {
     // ========================================================================
     // State errors
     // ========================================================================
-    /// Renderer was not properly initialized
-    ///
-    /// An operation was attempted before the renderer was fully initialized.
-    #[error("Renderer not initialized")]
-    NotInitialized,
-
     /// A capture or render target was requested at a zero-sized extent.
     ///
     /// wgpu rejects a zero-byte buffer and a zero-sized texture, and its own
@@ -537,7 +514,6 @@ impl EngineError {
             | Self::DeviceCreation(_)
             | Self::InvalidTargetSize { .. }
             | Self::ReadbackTimedOut { .. }
-            | Self::NotInitialized
             | Self::SlotIdentityExhausted => Recoverability::Fatal,
             Self::UnsupportedMaskShader
             | Self::UnsupportedBackdropFilter { .. }
@@ -553,7 +529,6 @@ impl EngineError {
             | Self::PreparedResourceAllocation { .. }
             | Self::DeviceDomainMismatch
             | Self::FrameAlreadyActive
-            | Self::ResourceIo { .. }
             | Self::UnsupportedSurfaceColorConfiguration { .. } => Recoverability::Unrecoverable,
         }
     }
@@ -600,20 +575,6 @@ impl EngineError {
     {
         EngineError::AdapterRequest(Box::new(error))
     }
-
-    /// Create a filesystem-resource-load error from an [`std::io::Error`].
-    ///
-    /// `context` is a caller-supplied free-form description (e.g.
-    /// `"font load /path/to/font.ttf"`); the underlying `io::Error` is
-    /// preserved via `#[source]` so callers can match on
-    /// [`std::io::ErrorKind`].
-    #[must_use]
-    pub fn resource_io<S: Into<String>>(context: S, source: std::io::Error) -> Self {
-        EngineError::ResourceIo {
-            context: context.into(),
-            source,
-        }
-    }
 }
 
 // ============================================================================
@@ -623,9 +584,9 @@ impl EngineError {
 /// A Result type alias for engine operations.
 pub type EngineResult<T> = Result<T, EngineError>;
 
-impl From<crate::device_domain::DomainError> for EngineError {
-    fn from(error: crate::device_domain::DomainError) -> Self {
-        use crate::device_domain::DomainError;
+impl From<crate::device::domain::DomainError> for EngineError {
+    fn from(error: crate::device::domain::DomainError) -> Self {
+        use crate::device::domain::DomainError;
         match error {
             DomainError::Overflow => Self::PreparedResourceOverflow,
             DomainError::Budget {

@@ -105,9 +105,10 @@
 //! A `flui-app` host does not drive these types itself: it installs a
 //! development reload hook (ADR-0094 §1) on its configuration, and the runner
 //! drives it. With the `host-hook` feature, `WorkerReloadHook` drives the
-//! host/worker split and `ScenePluginHook` lets an Android scene plugin draw
-//! frames. An application adds this package as a dependency of its own (the
-//! facade names no official package, ADR-0311 §6).
+//! host/worker split and `ScenePluginHook` lets a scene plugin draw a
+//! window's frames on every native host. An application adds this package as
+//! a dependency of its own (the facade names no official package, ADR-0311
+//! §6).
 //!
 //! ```rust,ignore
 //! use flui_hot_reload::WorkerReloadHook;
@@ -179,15 +180,33 @@ mod plugin;
 #[cfg(feature = "app-plugin")]
 pub use flui_sdk::hooks::{PluginFrameError, PluginPipeline};
 
-// Re-exported so `app_plugin!`'s generated `flui_app_build` can report a frame
-// that produced no scene where the plugin's platform shows it: the host's
-// tracing subscriber does not reach a `dlopen`ed image, so this writes to
-// logcat on Android and to stderr elsewhere. `#[doc(hidden)]`, never named
-// outside this crate's own macros.
+/// Draws `app_plugin!`'s frame at the size the host passed across the ABI.
+///
+/// A frame that produced no scene still hands the host a valid scene, an
+/// empty one, and its reason with each `source` is written where the
+/// plugin's platform shows it: the host's tracing subscriber does not reach a
+/// `dlopen`ed image, so this writes to logcat on Android and to stderr
+/// elsewhere. `#[doc(hidden)]`, never named outside this crate's own macros.
 #[cfg(feature = "app-plugin")]
 #[doc(hidden)]
-pub fn __private_report_frame(error: &PluginFrameError) {
-    let message = error.to_string();
+pub fn __private_draw_frame(pipeline: &mut PluginPipeline, width: f64, height: f64) -> Scene {
+    pipeline
+        .draw_frame(flui_sdk::geometry::Size::new(width, height))
+        .unwrap_or_else(|error| {
+            report_frame(&error);
+            Scene::default()
+        })
+}
+
+#[cfg(feature = "app-plugin")]
+fn report_frame(error: &PluginFrameError) {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
     #[cfg(target_os = "android")]
     {
         let tag = c"PluginPipeline";

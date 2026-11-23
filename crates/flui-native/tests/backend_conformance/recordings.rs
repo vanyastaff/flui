@@ -11,10 +11,11 @@
 //! installs it. A [`Fault`] breaks what the backend does with its journal or its delivery: a
 //! capture installed after the platform, a journal that redacts, a reopen it never delivers.
 
+use flui_native::OwnerPlatform;
 use flui_native::journal::codec::{Backend, NativeRecording, Stream};
 use flui_native::journal::recorder::{Privacy, Recorder};
+use flui_native::testing::HeadlessPlatform;
 use flui_native::testing::app::{AppCall, AppLog, run_keeping_owner};
-use flui_native::{HeadlessPlatform, OwnerPlatform};
 use flui_platform::{DisplayKey, DisplayRegistry, PlatformInput};
 use flui_testing::backend_conformance::{Recorded, RecordingReplay};
 
@@ -264,7 +265,7 @@ fn replay_stream(
     owner: &OwnerPlatform,
     log: &AppLog,
     labels: &Labels,
-    events: &mut Option<flui_native::HeadlessHostEvents>,
+    events: &mut Option<flui_native::testing::HeadlessHostEvents>,
     sources: &mut Option<Sources>,
 ) -> Result<Vec<Recorded>, String> {
     let whole = |replayed: Result<flui_native::journal::codec::Replayed, _>| match replayed {

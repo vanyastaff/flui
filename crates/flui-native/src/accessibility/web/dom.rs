@@ -23,7 +23,9 @@
 //! nothing here needs an OS-entry boundary.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::FxHashMap;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
@@ -191,7 +193,7 @@ enum Stage {
 
 struct Tree {
     mirror: Mirror,
-    elements: HashMap<NodeId, HtmlElement>,
+    elements: FxHashMap<NodeId, HtmlElement>,
 }
 
 /// The page's side of one canvas window's accessibility.
@@ -247,7 +249,7 @@ impl Page {
             stage: RefCell::new(Stage::Retired),
             tree: RefCell::new(Tree {
                 mirror: Mirror::new(ElementIds::new(scope())),
-                elements: HashMap::new(),
+                elements: FxHashMap::default(),
             }),
             work: RefCell::default(),
             running: Cell::new(false),
@@ -1294,7 +1296,7 @@ fn run(
     document: &Document,
     host: &HtmlElement,
     field: &FocusedField,
-    elements: &mut HashMap<NodeId, HtmlElement>,
+    elements: &mut FxHashMap<NodeId, HtmlElement>,
     scrolled: &mut Vec<(HtmlElement, Scroll)>,
     op: Op,
 ) -> Result<(), JsValue> {

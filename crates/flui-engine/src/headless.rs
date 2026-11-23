@@ -1,8 +1,8 @@
 //! Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 //! read the pixels back to the CPU.
 //!
-//! The on-screen [`crate::Renderer`] hard-requires a `wgpu::Surface`
-//! (its `render_scene` acquires a swapchain texture). Golden-image and
+//! A window slot presents to a `wgpu::Surface` (its frame acquires a
+//! swapchain texture). Golden-image and
 //! screenshot tooling needs the same raster path against a texture instead,
 //! so the headless renderer is a GPU context with one offscreen slot
 //! (ADR-0305 §3): the context records and replays the tree with the painter
@@ -64,12 +64,12 @@ impl HeadlessRenderer {
     /// Acquire a surface-less GPU device for offscreen capture.
     ///
     /// Requests [`wgpu::Features::DUAL_SOURCE_BLENDING`] where the adapter
-    /// exposes it, so a capture shows the same clip fringe the windowed
-    /// renderer does — `Renderer::required_features` makes the same request for
-    /// the same reason. Nothing else about the device is negotiated.
+    /// exposes it, so a capture shows the same clip fringe a window does —
+    /// `adapter::required_features` makes the same request for the same
+    /// reason. Nothing else about the device is negotiated.
     ///
     /// Async because wgpu's adapter and device requests are async. Calling
-    /// `Renderer::new` and this from the same async context is the point: a
+    /// `GpuContext::bootstrap` and this from the same async context is the point: a
     /// blocking constructor would stall whichever executor thread it ran on,
     /// and the sync wrapper belongs to the caller (an example, a test) that
     /// owns its runtime, not to the library.
@@ -218,7 +218,7 @@ impl HeadlessRenderer {
                 context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
                 *slot.insert(id)
             };
-            context.render_slot(slot, content, crate::recording_cache::CacheReads::On, None)?;
+            context.render_slot(slot, content, crate::record::cache::CacheReads::On, None)?;
             context.read_slot(slot)
         })();
         // A capture is synchronous, so it returns once its work has retired,
@@ -249,12 +249,12 @@ impl HeadlessRenderer {
     pub(crate) fn retained_capture_with_limits(
         &self,
         size: (u32, u32),
-        limits: crate::device_domain::PreparedIrLimits,
+        limits: crate::device::domain::PreparedIrLimits,
     ) -> EngineResult<RetainedCapture> {
         let domain = Arc::clone(self.context().domain());
         self.retained_capture_in_domain(
             size,
-            crate::device_domain::DeviceDomain::with_limits(
+            crate::device::domain::DeviceDomain::with_limits(
                 Arc::clone(domain.device()),
                 Arc::clone(domain.queue()),
                 limits,
@@ -266,7 +266,7 @@ impl HeadlessRenderer {
     fn retained_capture_in_domain(
         &self,
         size: (u32, u32),
-        domain: Arc<crate::device_domain::DeviceDomain>,
+        domain: Arc<crate::device::domain::DeviceDomain>,
     ) -> EngineResult<RetainedCapture> {
         let (width, height) = size;
         let max_dim = self.max_texture_dimension();
@@ -276,7 +276,7 @@ impl HeadlessRenderer {
         let device = Arc::clone(domain.device());
         let surface = create_capture_texture(&device, width, height);
         let surface_view = surface.create_view(&wgpu::TextureViewDescriptor::default());
-        let timer = crate::gpu_timer::FrameGpuTimer::try_new(domain.device(), domain.queue());
+        let timer = crate::device::timer::FrameGpuTimer::try_new(domain.device(), domain.queue());
         Ok(RetainedCapture {
             domain: Arc::clone(&domain),
             queue: Arc::clone(domain.queue()),
@@ -285,7 +285,7 @@ impl HeadlessRenderer {
             offscreen: crate::offscreen::OffscreenRenderer::with_domain(domain, None),
             surface,
             surface_view,
-            frame: crate::frame_protocol::FrameProtocol::new(),
+            frame: crate::frame::protocol::FrameProtocol::new(),
             size,
             intermediate_required: false,
             fail_after_begin: false,
@@ -294,7 +294,7 @@ impl HeadlessRenderer {
             last_plan: None,
             last_ir: None,
             keep_ir: false,
-            lineage: crate::recording_cache::DrawnLineages::new(),
+            lineage: crate::record::cache::DrawnLineages::new(),
             timer,
             epoch: flui_foundation::FrameEpoch::ZERO,
         })
@@ -338,7 +338,7 @@ pub(crate) fn record_background_clear(
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(crate::frame_protocol::background_clear_value()),
+                    load: wgpu::LoadOp::Clear(crate::frame::protocol::background_clear_value()),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -363,7 +363,7 @@ pub(crate) fn record_background_clear(
 /// re-enter the `wgpu-core` panic, which is worth one conversion not to have
 /// to re-derive later.
 pub(crate) fn readback_rgba(
-    domain: &crate::device_domain::DeviceDomain,
+    domain: &crate::device::domain::DeviceDomain,
     texture: &wgpu::Texture,
     width: u32,
     height: u32,
@@ -441,26 +441,26 @@ pub(crate) fn readback_rgba(
     Ok(pixels)
 }
 
-/// A windowless stand-in for the windowed [`Renderer`]'s frame path, for
+/// A windowless stand-in for a window slot's frame path, for
 /// tests of partial frames: it keeps a [`FrameProtocol`] and a "surface"
 /// texture across frames and runs each frame through the same
-/// [`FrameProtocol::plan`] and [`FrameProtocol::run`] the windowed renderer
-/// does, recording content through the same `Renderer::record_frame_content`
+/// [`FrameProtocol::plan`] and [`FrameProtocol::run`] a window slot
+/// does, recording content through the same `frame::protocol::record_frame_content`
 /// (the partial-frame scissor and clear included). Only the clear, the
-/// content encoding and presentation target are its own ([`FrameSteps`]).
+/// content encoding and presentation target are its own ([`FrameSteps`]),
+/// and it owns its painter where a slot draws with the context's.
 ///
 /// Crate-private and test-only: the public golden-image API is settled with
 /// the CPU backend (ADR-0087 §2), and this exists to pin the GPU partial
 /// path's pixels, which a swapchain cannot be read back to show.
 ///
-/// [`Renderer`]: crate::Renderer
-/// [`FrameProtocol`]: crate::frame_protocol::FrameProtocol
-/// [`FrameProtocol::plan`]: crate::frame_protocol::FrameProtocol::plan
-/// [`FrameProtocol::run`]: crate::frame_protocol::FrameProtocol::run
-/// [`FrameSteps`]: crate::frame_protocol::FrameSteps
+/// [`FrameProtocol`]: crate::frame::protocol::FrameProtocol
+/// [`FrameProtocol::plan`]: crate::frame::protocol::FrameProtocol::plan
+/// [`FrameProtocol::run`]: crate::frame::protocol::FrameProtocol::run
+/// [`FrameSteps`]: crate::frame::protocol::FrameSteps
 #[cfg(test)]
 pub(crate) struct RetainedCapture {
-    domain: Arc<crate::device_domain::DeviceDomain>,
+    domain: Arc<crate::device::domain::DeviceDomain>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     painter: WgpuPainter,
@@ -468,7 +468,7 @@ pub(crate) struct RetainedCapture {
     /// Stands in for the swapchain image the windowed path presents.
     surface: wgpu::Texture,
     surface_view: wgpu::TextureView,
-    frame: crate::frame_protocol::FrameProtocol,
+    frame: crate::frame::protocol::FrameProtocol,
     size: (u32, u32),
     /// Stands in for a surface without `COPY_SRC`: every frame renders
     /// through the retained target.
@@ -482,17 +482,17 @@ pub(crate) struct RetainedCapture {
     /// When set, the next frame fails once its content is recorded, before
     /// it is submitted, and the flag clears itself.
     fail_after_record: bool,
-    last_plan: Option<crate::damage::FramePlan>,
+    last_plan: Option<crate::frame::damage::FramePlan>,
     /// The IR the last frame that recorded content recorded.
     last_ir: Option<Vec<u8>>,
     /// Whether a frame keeps its IR in `last_ir`.
     keep_ir: bool,
-    /// The lineage of the version the capture last drew, as a `Renderer`
-    /// keeps it.
-    lineage: crate::recording_cache::DrawnLineages<()>,
+    /// The lineage of the version the capture last drew, as the context
+    /// keeps each slot's.
+    lineage: crate::record::cache::DrawnLineages<()>,
     /// Times each frame on the GPU, as a window slot's timer does, where the
     /// device writes timestamps; each frame takes the next epoch.
-    timer: Option<crate::gpu_timer::FrameGpuTimer>,
+    timer: Option<crate::device::timer::FrameGpuTimer>,
     epoch: flui_foundation::FrameEpoch,
 }
 
@@ -635,10 +635,11 @@ impl RetainedCapture {
                 .register(
                     id,
                     texture,
-                    crate::ExternalTextureDescriptor {
-                        sampling: crate::ExternalSampling::Nearest,
-                        alpha: crate::ExternalAlpha::Straight,
-                        color: crate::ExternalColorEncoding::EncodedSrgb,
+                    crate::resources::external_textures::ExternalTextureDescriptor {
+                        sampling: crate::resources::external_textures::ExternalSampling::Nearest,
+                        alpha: crate::resources::external_textures::ExternalAlpha::Straight,
+                        color:
+                            crate::resources::external_textures::ExternalColorEncoding::EncodedSrgb,
                     },
                 )
                 .expect("supported test texture");
@@ -686,7 +687,7 @@ impl RetainedCapture {
     }
 
     /// The plan the last frame ran.
-    pub(crate) fn last_plan(&self) -> Option<crate::damage::FramePlan> {
+    pub(crate) fn last_plan(&self) -> Option<crate::frame::damage::FramePlan> {
         self.last_plan
     }
 
@@ -701,7 +702,7 @@ impl RetainedCapture {
         self.painter.set_recording_cache_budget(budget);
     }
 
-    /// Renders `scene` the way `Renderer::render_scene` does: a frame no
+    /// Renders `scene` as a window slot renders a lent scene: a frame no
     /// damage producer accounted for.
     ///
     /// # Errors
@@ -716,8 +717,9 @@ impl RetainedCapture {
         result
     }
 
-    /// The headless twin of Renderer::render_plugin_scene.
-    pub(crate) fn render_plugin_scene(
+    /// The headless twin of `WindowSlot::render_lent`: a plugin's scene, with
+    /// the fonts it carries, rendered outside the damage protocol.
+    pub(crate) fn render_lent(
         &mut self,
         scene: &flui_layer::Scene,
         reset_fonts: bool,
@@ -736,7 +738,7 @@ impl RetainedCapture {
     ) -> Result<crate::raster::PresentDisposition, EngineError> {
         self.frame.select_font_source(
             &mut self.painter,
-            crate::frame_protocol::FontSource::Plugin,
+            crate::frame::protocol::FontSource::Plugin,
             reset_fonts,
         );
         self.render_frame_inner(scene)
@@ -757,7 +759,7 @@ struct CaptureFrame<'a> {
 }
 
 #[cfg(test)]
-impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
+impl crate::frame::protocol::FrameSteps for CaptureFrame<'_> {
     fn clear(
         &mut self,
         view: &wgpu::TextureView,
@@ -770,7 +772,7 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(crate::frame_protocol::background_clear_value()),
+                    load: wgpu::LoadOp::Clear(crate::frame::protocol::background_clear_value()),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -785,14 +787,14 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         texture: &wgpu::Texture,
         _retained: bool,
         partial: Option<&flui_layer::Region>,
-        reads: crate::recording_cache::CacheReads,
+        reads: crate::record::cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<crate::frame_protocol::RasterCounters> {
+    ) -> EngineResult<crate::frame::protocol::RasterCounters> {
         if std::mem::take(self.fail) {
             return Err(EngineError::Timeout);
         }
         let recorded =
-            crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
+            crate::frame::protocol::record_frame_content(self.painter, self.scene, partial, reads)?;
         if let Some(ir) = self.ir.as_deref_mut() {
             *ir = Some(self.painter.recorded_ir());
         }
@@ -813,12 +815,12 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         surface: &wgpu::Texture,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
+    ) -> EngineResult<Arc<crate::device::domain::PreparedPermit>> {
         self.offscreen.encode_presentation(
             retained,
             surface,
             view,
-            crate::surface_color::OutputEncoding::Identity,
+            crate::surface::color::OutputEncoding::Identity,
             encoder,
         )
     }
@@ -826,7 +828,7 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
     fn submit(
         &mut self,
         encoder: wgpu::CommandEncoder,
-        permits: Vec<Arc<crate::device_domain::PreparedPermit>>,
+        permits: Vec<Arc<crate::device::domain::PreparedPermit>>,
     ) -> EngineResult<()> {
         self.painter
             .submit_frame_encoder(encoder, permits)
@@ -852,7 +854,7 @@ impl RetainedCapture {
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<crate::raster::PresentDisposition, EngineError> {
-        use crate::damage::FramePlan;
+        use crate::frame::damage::FramePlan;
         use crate::raster::PresentDisposition;
 
         let plan = self.frame.plan_scene(
@@ -880,7 +882,7 @@ impl RetainedCapture {
         let ran = self.frame.run(
             plan,
             &self.domain,
-            crate::frame_protocol::FrameTarget {
+            crate::frame::protocol::FrameTarget {
                 view: &self.surface_view,
                 texture: &self.surface,
                 size: self.size,
@@ -908,7 +910,7 @@ impl RetainedCapture {
     ) -> Result<crate::raster::PresentDisposition, EngineError> {
         self.frame.select_font_source(
             &mut self.painter,
-            crate::frame_protocol::FontSource::Ordinary,
+            crate::frame::protocol::FontSource::Ordinary,
             false,
         );
         self.render_frame_inner(scene)
@@ -931,7 +933,7 @@ impl RetainedCapture {
     }
 
     /// What the last frame's walk and recording did.
-    pub(crate) fn counters(&self) -> crate::frame_protocol::RasterCounters {
+    pub(crate) fn counters(&self) -> crate::frame::protocol::RasterCounters {
         self.frame.counters()
     }
 
@@ -1203,7 +1205,7 @@ mod twin_readback_tests {
             outcome.map(|bytes| bytes.len())
         );
         let domain = std::sync::Arc::clone(renderer.context().domain());
-        let whole = crate::device_domain::PreparedIrLimits::default().cost;
+        let whole = crate::device::domain::PreparedIrLimits::default().cost;
         let reserved = domain.reserve(whole).map(drop);
         assert!(
             reserved.is_ok(),

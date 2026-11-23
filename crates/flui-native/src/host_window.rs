@@ -13,10 +13,12 @@
 //! Every backend fixes its bridge when it builds the window, so reading it
 //! once at open time sees the same bridge a later read would.
 //!
-//! The downcast to a host's own window ([`HostWindow::as_any`]) is here too,
-//! not on the open [`PlatformWindow`] (ADR-0151 §8): the OS extensions
-//! (`WindowsWindowExt`, `MacOSWindowExt`) are implemented for
-//! `dyn HostWindow` over it and answer `None` for another host's window.
+//! The downcast to a host's own window is here too, not on the open
+//! [`PlatformWindow`] (ADR-0151 §8): [`Any`] is a supertrait of
+//! [`HostWindow`], so a `&dyn HostWindow` upcasts to `&dyn Any`. The OS
+//! extensions (`WindowsWindowExt`, `MacOSWindowExt`) are implemented for
+//! `dyn HostWindow` over that upcast and answer `None` for another host's
+//! window.
 //!
 //! The window's text-store host (ADR-0135) is owner-thread state, so it is
 //! not read here directly: [`HostWindow::text_store_host`] takes an
@@ -62,9 +64,6 @@ mod sealed {
         note = "only the windows the core host builds implement `HostWindow` (inside `flui-native`, a new window adds `impl CoreHostWindow for` it); a test double implements `PlatformWindow`, which stays open (ADR-0151 §5)"
     )]
     pub trait Sealed {
-        /// The window as its own type: [`HostWindow::as_any`](super::HostWindow::as_any).
-        fn any(&self) -> &dyn std::any::Any;
-
         /// What the window delivers to the handler it was opened with.
         fn delivery(&self) -> &crate::owner::window_delivery::WindowDelivery;
     }
@@ -73,7 +72,8 @@ mod sealed {
     /// `HostWindow`. The seal reaches them through one generic
     /// implementation rather than one per window, so the compiler's account
     /// of a refused outside `impl HostWindow` names the same implementations
-    /// on every target and feature set, and the downcast is written once.
+    /// on every target and feature set. It is `'static`, which the
+    /// [`Any`](std::any::Any) supertrait of `HostWindow` asks of every window.
     pub trait CoreHostWindow: 'static {
         /// What the window delivers to the handler it was opened with.
         fn window_delivery(&self) -> &crate::owner::window_delivery::WindowDelivery;
@@ -81,10 +81,6 @@ mod sealed {
 
     #[diagnostic::do_not_recommend]
     impl<W: CoreHostWindow> Sealed for W {
-        fn any(&self) -> &dyn std::any::Any {
-            self
-        }
-
         fn delivery(&self) -> &crate::owner::window_delivery::WindowDelivery {
             self.window_delivery()
         }
@@ -108,7 +104,27 @@ pub(crate) fn delivery_of(
 /// in this crate, so an outside `impl HostWindow` does not compile
 /// (`trybuild_ui::ui_tests` pins the error). A test double handed to the
 /// framework implements [`PlatformWindow`], which stays open.
-pub trait HostWindow: sealed::Sealed + PlatformWindow {
+///
+/// [`Any`] is a supertrait, so a `&dyn HostWindow` upcasts to `&dyn Any` and
+/// downcasts to its host's own type, which the crate's OS extensions
+/// (`WindowsWindowExt`, `MacOSWindowExt`) downcast to: a window of another
+/// host is not that type, and they answer `None` for it (ADR-0151 §8). The
+/// downcast is the host's, not the window contract's: the framework programs
+/// against [`PlatformWindow`], which offers none. The native hosts' window
+/// types are not public, so outside this crate only the headless host's
+/// window can be named and downcast to (`HeadlessHostWindow`, its test
+/// controls). Upcast the window itself, never its `Rc`, which is `Any` too:
+///
+/// ```rust
+/// # use std::any::Any;
+/// # use std::rc::Rc;
+/// # use flui_native::HostWindow;
+/// fn host_own<W: HostWindow>(window: &Rc<dyn HostWindow>) -> Option<&W> {
+///     let window: &dyn Any = &**window;
+///     window.downcast_ref::<W>()
+/// }
+/// ```
+pub trait HostWindow: Any + sealed::Sealed + PlatformWindow {
     /// Acquire this presentation's native numeric converter on the owner lane.
     /// Pending acquisition owns a completion wake obligation; no frame path waits.
     /// The hidden token is minted by `capture_text_sizing`, which takes the owner.
@@ -164,17 +180,4 @@ pub trait HostWindow: sealed::Sealed + PlatformWindow {
     /// toplevel's frames are held, and Win32, mobile and the Web tell no
     /// covering). Every host names its own.
     fn occluded_surface(&self) -> flui_platform::OccludedSurface;
-
-    /// This window as its host's own type, which the crate's OS extensions
-    /// (`WindowsWindowExt`, `MacOSWindowExt`) downcast to: a window of another
-    /// host is not that type, and they answer `None` for it (ADR-0151 §8).
-    ///
-    /// It is the host's, not the window contract's: the framework programs
-    /// against [`PlatformWindow`], which offers no downcast. The native hosts'
-    /// window types are not public, so outside this crate only the headless
-    /// host's window can be named and downcast to (`HeadlessHostWindow`, its test
-    /// controls). Every window gets this one body, through the seal.
-    fn as_any(&self) -> &dyn Any {
-        sealed::Sealed::any(self)
-    }
 }

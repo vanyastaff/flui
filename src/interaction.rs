@@ -116,7 +116,7 @@ pub use flui_interaction::gesture::DoubleTapDetails;
 pub use flui_interaction::gesture::GestureSettingsProvider;
 pub use flui_interaction::gesture::MultiTapDetails;
 pub use flui_interaction::gesture::{
-    ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
+    ArenaMembership, BeginContactError, CancelOutcome, ContactEnd, ContactId, ContactSnapshot,
     GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all,
 };
 pub use flui_interaction::gesture::{
@@ -197,8 +197,8 @@ pub use flui_interaction::focus::{
 };
 pub use flui_interaction::ids::FocusNodeId;
 pub use flui_interaction::pointer::{
-    HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError, PointerCapture,
-    PointerCaptureError, PointerDispatch,
+    EventPropagation, HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError,
+    PointerCapture, PointerCaptureError, PointerDispatch,
 };
 pub use flui_interaction::text_input::{
     ClientToken, ClipboardBackend, ClipboardCapability, ClipboardHandle, DetachOutcome,

@@ -25,7 +25,8 @@ use crate::owner::BuildOwner;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::{RootElement, BuildOwner, ElementBase};
+/// use flui_view::ElementBase;
+/// use flui_view::__runtime::{BuildOwner, RootElement};
 ///
 /// struct MyRootElement {
 ///     owner: Option<Arc<BuildOwner>>,
@@ -212,7 +213,7 @@ impl crate::view::ElementBase for RootElementImpl {
     ) -> crate::view::ChildViews {
         self.needs_build = false;
         // This root has no *view* child to reconcile — its child is wired
-        // by id (`set_child`). E3: child traversal is via the slab
+        // by id (`set_child`). Child traversal is via the slab
         // `child_ids`, so there are no owned child views to return.
         crate::view::ChildViews::none()
     }

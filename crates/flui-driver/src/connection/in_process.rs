@@ -26,7 +26,8 @@ use std::time::Duration;
 
 use flui_protocol::events::Event;
 use flui_protocol::session::{AppDescription, HelloReply};
-use flui_testing::{HeadlessAgentService, HeadlessConversation, HeadlessHost, HeadlessWindow};
+use flui_testing::agent_service::{HeadlessAgentService, HeadlessConversation};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use serde_json::Value;
 use web_time::Instant;
 

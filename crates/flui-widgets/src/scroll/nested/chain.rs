@@ -10,7 +10,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_interaction::gesture::RemainderHandoff;
 use flui_interaction::gesture::{GestureArena, Velocity};
 use flui_platform::EventTime;
-use flui_view::{BoxedView, BuildContext, BuildContextExt, InheritedView, IntoView, View, ViewExt};
+use flui_view::{BoxedView, BuildContext, BuildContextExt, InheritedView, IntoView, ViewExt};
 use smallvec::SmallVec;
 
 use super::idle_end::IdleEnd;
@@ -192,7 +192,7 @@ impl InheritedView for NestedScrollScope {
         &self.node
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

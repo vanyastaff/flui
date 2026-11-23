@@ -2,7 +2,6 @@
 //! (`native-capture`), one per registry, so a run of the backend on a device
 //! journals with the same code the in-process captures use.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use flui_platform::ImeEvent;
@@ -397,7 +396,13 @@ fn redacted_lock(lock: &StoreLock) -> (StoreLock, bool) {
 /// counter in order of first sight, never derived from the key, so a redacted
 /// recording keeps which reads saw the same display without naming it.
 #[derive(Debug, Default)]
-pub(super) struct Pseudonyms(HashMap<String, String>);
+pub(super) struct Pseudonyms(
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by the display keys the platform reports, which the recording only reads"
+    )]
+    std::collections::HashMap<String, String>,
+);
 
 impl Pseudonyms {
     /// `display` with its name replaced and its persistent key pseudonymized.

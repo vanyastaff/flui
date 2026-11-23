@@ -1,9 +1,10 @@
 //! In-tree test utilities for the reconciler.
 //!
-//! FR-035. Public only under `cfg(any(test, feature =
+//! Public only under `cfg(any(test, feature =
 //! "testing"))` so downstream test crates (notably the
 //! 6-permutation corpus and the GlobalKey reparenting tests)
-//! can re-use the [`ReconcileEventCollector`] without duplicating
+//! can re-use the [`ReconcileEventCollector`], which `crate::testing`
+//! re-exports, without duplicating
 //! the `Visit` machinery, while production builds keep the module
 //! gone.
 

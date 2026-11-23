@@ -4,10 +4,11 @@
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderCustomSingleChildLayoutBox;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A widget that sizes and positions one child using a layout delegate.
 ///

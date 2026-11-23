@@ -11,7 +11,8 @@ use flui_foundation::{ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{BoxedView, BuildOwner, ElementTree, GlobalKey, RenderView, View, ViewExt};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::{BoxedView, GlobalKey, RenderView, View, ViewExt};
 
 #[derive(Clone)]
 struct Leaf {
@@ -121,7 +122,7 @@ impl RenderView for Host {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -188,7 +189,7 @@ fn setup(unrelated_count: usize) -> Fixture {
     }));
     let root = Host::new(0, root_children);
     let root_id = tree.mount_root_with_pipeline_owner(
-        &root,
+        &root.boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );

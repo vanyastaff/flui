@@ -32,9 +32,9 @@ mod gpu_tests {
     use flui_painting::styling::Color;
 
     use crate::{
-        command_ir::{ImageFilterSpec, MorphOp},
+        frame::render_target::RenderTarget,
         painter::WgpuPainter,
-        render_target::RenderTarget,
+        record::command_ir::{ImageFilterSpec, MorphOp},
     };
 
     // ── Harness constants ─────────────────────────────────────────────────────

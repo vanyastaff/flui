@@ -55,9 +55,9 @@ AppRuntime (loop-scoped composition root)
   display-pass cadence on native AppKit (ADR-0353) — not
   from the scheduler itself — `UpdateScheduler` makes no refresh-rate
   assumption of its own.
-- **Embedder** (`embedder`) — adapter types connecting the framework to
-  windowing, GPU, and input on desktop (Win32/AppKit/headless via
-  flui-native + wgpu); Android/iOS/Web entry points are feature-gated.
+- **Platform hosts** (`app/runner/`) — the desktop (Win32, AppKit, X11 and Wayland
+  through flui-native and wgpu), Android, iOS and web run loops, each handing
+  the platform's windows, input and GPU surface to the runner.
 
 This crate deliberately owns **no design tokens**. Colours, typography,
 spacing, radius, and motion belong to `flui-material` / `flui-cupertino`;

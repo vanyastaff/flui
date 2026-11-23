@@ -15,7 +15,7 @@ use flui_foundation::testing::CountingWaker;
 use flui_protocol::session::AppDescription;
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_runtime::agent::{Limits, Service, ServiceConfig};
-use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 use flui_widgets::Text;
 use serde_json::{Value, json};

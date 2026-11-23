@@ -6,8 +6,9 @@ use flui_foundation::inspect::SnapshotQuery;
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::WidgetsBinding;
+use flui_view::ElementBase;
 use flui_view::prelude::*;
-use flui_view::{ElementBase, WidgetsBinding};
 
 #[derive(Clone)]
 struct Leaf;

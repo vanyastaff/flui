@@ -11,12 +11,14 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::ElementId;
 use flui_objects::RenderSizedBox;
+use flui_rendering::RenderUpdateImpact;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::prelude::*;
-use flui_view::tree::ElementTree;
 use flui_view::{Signal, SignalSender};
 
 static_assertions::assert_not_impl_any!(Signal<u32>: Send, Sync);
@@ -161,7 +163,7 @@ impl StatelessView for ManyReader {
 }
 
 #[derive(Clone)]
-struct ReaderRow(Vec<ManyReader>);
+struct ReaderRow(Vec<BoxedView>);
 
 impl RenderView for ReaderRow {
     type Protocol = BoxProtocol;
@@ -183,7 +185,7 @@ impl RenderView for ReaderRow {
         !self.0.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for reader in &self.0 {
             visitor(reader);
         }
@@ -210,7 +212,9 @@ pub(crate) fn changing_read_sets_preserves_peer_rebuild_order() {
             label,
         })
         .collect::<Vec<_>>();
-    laid.pump_widget(ReaderRow(readers.clone()));
+    laid.pump_widget(ReaderRow(
+        readers.iter().cloned().map(BoxedView::new).collect(),
+    ));
     laid.pump_for(FRAME);
     let mut expected = (0..9).collect::<Vec<_>>();
 
@@ -293,7 +297,7 @@ impl Drop for ReleaseProbe {
 }
 
 pub(crate) fn explicit_release_allows_destructor_reentry_and_slot_reuse() {
-    let owner = flui_view::BuildOwner::new();
+    let owner = flui_view::__runtime::BuildOwner::new();
     let graph = owner.signal_graph().clone();
     let writer = owner.writer_source();
     let drops = Rc::new(Cell::new(0));
@@ -337,7 +341,7 @@ pub(crate) fn owner_release_commits_the_batch_before_the_first_destructor_failur
     let graph = owners.build_owner.signal_graph().clone();
     let writer = owners.build_owner.writer_source();
     let element = owners.tree.mount_root_with_pipeline_owner(
-        &Leaf,
+        &Leaf.boxed(),
         Some(owners.pipeline_owner.clone()),
         &mut owners.build_owner.element_owner_mut(),
     );
@@ -437,7 +441,7 @@ pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
     let mut owners = Owners::fresh();
     let graph = owners.build_owner.signal_graph().clone();
     let element = owners.tree.mount_root_with_pipeline_owner(
-        &Leaf,
+        &Leaf.boxed(),
         Some(owners.pipeline_owner.clone()),
         &mut owners.build_owner.element_owner_mut(),
     );
@@ -464,7 +468,7 @@ pub(crate) fn owner_release_refuses_signals_its_destructors_reintroduce() {
     assert_eq!(graph.live_slot_count(), 0);
 
     let element = owners.tree.mount_root_with_pipeline_owner(
-        &Leaf,
+        &Leaf.boxed(),
         Some(owners.pipeline_owner.clone()),
         &mut owners.build_owner.element_owner_mut(),
     );
@@ -534,7 +538,7 @@ pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
     // Twice: the second release shows the first left no refusal state behind.
     for pass in 1..=2 {
         let element = owners.tree.mount_root_with_pipeline_owner(
-            &Leaf,
+            &Leaf.boxed(),
             Some(owners.pipeline_owner.clone()),
             &mut owners.build_owner.element_owner_mut(),
         );
@@ -558,7 +562,7 @@ pub(crate) fn owner_release_bounds_a_destructor_that_always_recreates_itself() {
     }
 
     let element = owners.tree.mount_root_with_pipeline_owner(
-        &Leaf,
+        &Leaf.boxed(),
         Some(owners.pipeline_owner.clone()),
         &mut owners.build_owner.element_owner_mut(),
     );
@@ -602,7 +606,7 @@ pub(crate) fn a_panicking_refusal_diagnostic_cannot_unwind_into_a_retained_value
     let graph = owners.build_owner.signal_graph().clone();
     let drops = Rc::new(Cell::new(0));
     let element = owners.tree.mount_root_with_pipeline_owner(
-        &Leaf,
+        &Leaf.boxed(),
         Some(owners.pipeline_owner.clone()),
         &mut owners.build_owner.element_owner_mut(),
     );
@@ -635,7 +639,7 @@ pub(crate) fn a_panicking_refusal_diagnostic_cannot_unwind_into_a_retained_value
     );
 
     let element = owners.tree.mount_root_with_pipeline_owner(
-        &Leaf,
+        &Leaf.boxed(),
         Some(owners.pipeline_owner.clone()),
         &mut owners.build_owner.element_owner_mut(),
     );
@@ -664,7 +668,7 @@ pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
 
     laid.pump_widget(root);
     assert_eq!(
-        writer.write(|ctx| flui_view::ReadGraph::graph_id(ctx)),
+        writer.write(|ctx| flui_foundation::read_scope::ReadGraph::graph_id(ctx)),
         graph.id(),
         "the writer writes the owner's graph"
     );
@@ -801,7 +805,7 @@ pub(crate) fn run_released_loan_child() -> bool {
                 self.0.release(self.1);
             }
         }
-        let owner = flui_view::BuildOwner::new();
+        let owner = flui_view::__runtime::BuildOwner::new();
         let graph = owner.signal_graph().clone();
         let writer = owner.writer_source();
         let drops = Rc::new(Cell::new(0));
@@ -847,7 +851,7 @@ pub(crate) fn run_released_loan_child() -> bool {
         }
     }
     struct ReleaseOnDrop {
-        graph: flui_view::reactive::Reactive,
+        graph: flui_view::Reactive,
         slot: flui_view::SignalSlot,
         drops: Rc<Cell<usize>>,
     }
@@ -857,7 +861,7 @@ pub(crate) fn run_released_loan_child() -> bool {
             self.graph.release(self.slot);
         }
     }
-    let owner = flui_view::BuildOwner::new();
+    let owner = flui_view::__runtime::BuildOwner::new();
     let graph = owner.signal_graph().clone();
     let writer = owner.writer_source();
     let next = graph.signal(10u32);

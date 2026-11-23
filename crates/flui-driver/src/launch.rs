@@ -509,7 +509,7 @@ pub(crate) struct HeadlessLaunch {
 /// Attaches the launch's root view to the host on the app's thread.
 #[cfg(feature = "headless")]
 pub(crate) type HeadlessAttach =
-    Box<dyn FnOnce(&flui_testing::HeadlessHost) -> std::result::Result<(), String> + Send>;
+    Box<dyn FnOnce(&flui_testing::host::HeadlessHost) -> std::result::Result<(), String> + Send>;
 
 #[cfg(feature = "headless")]
 impl Launch {

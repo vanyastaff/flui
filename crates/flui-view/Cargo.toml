@@ -69,10 +69,6 @@ tracing.workspace = true
 # revision.
 serde = { workspace = true, optional = true }
 
-# Trait utilities
-downcast-rs = { workspace = true }
-dyn-clone = { workspace = true }
-
 # `ReconcileEventCollector` (gated to `testing` feature
 # or `cfg(test)`) needs `tracing_subscriber::Layer` and the `registry`
 # extension trait. Optional + gated so production builds don't pull
@@ -109,10 +105,8 @@ flui-scheduler = { workspace = true, features = ["testing"] }
 # both declarations; no duplication in the lockfile.
 tracing-subscriber = { workspace = true }
 static_assertions = { workspace = true }
-# Serialize legacy fixtures that install the
-# thread-local fallback GlobalKey registry via `test_only_set_global_key_registry`.
-# The adapter is isolated from the production UI runtime-activation stack, but the
-# fixture tests still share assumptions about explicit install/clear pairing.
+# Serialize the tests that activate a GlobalKey registry through
+# `testing::activate_global_key_registry`.
 serial_test = "4"
 # trybuild drives the `tests/ui/` compile-fail corpus: the
 # `#[diagnostic::on_unimplemented]` messages on the view traits.
@@ -149,11 +143,6 @@ default = []
 testing = ["dep:tracing-subscriber"]
 # Serialization of `persist::Revision`.
 serde = ["dep:serde"]
-
-# The `legacy-downcast` feature flag was retired
-# (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside
-# `ElementCore::update_view` is gone — `dispatch_view_update`
-# (TypeId-keyed `Box::downcast::<V>`) is the only path now.
 
 [[bench]]
 name = "key_storage_shape"

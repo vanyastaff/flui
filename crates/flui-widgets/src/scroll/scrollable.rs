@@ -490,8 +490,8 @@ impl StatefulView for Scrollable {
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // Unbounded: pixel values from the ballistic simulation are never
         // clamped — the simulation's own `is_done` terminates the run.
-        // Unboundedness is a constructor fact (#1183), not a bound value —
-        // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
+        // Unboundedness is a constructor fact, not a bound value:
+        // `without_ticker_bounds` rejects a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
         let owner = Rc::new(RefCell::new(None));
         let fling_controller = AnimationController::builder(Duration::from_millis(1))
@@ -1867,7 +1867,7 @@ fn scroll_semantics(
     let (axis, reversed) = (direction.axis(), direction.is_reversed());
     let mut semantics = Semantics::new()
         .container(true)
-        .role(crate::SemanticsRole::ScrollView)
+        .role(flui_semantics::SemanticsRole::ScrollView)
         .scroll_source(controller.position(), direction);
     if let Some(label) = label {
         semantics = semantics.label(label);
@@ -1876,7 +1876,7 @@ fn scroll_semantics(
     let adjustment = Semantics::new()
         .container(true)
         .explicit_child_nodes(true)
-        .role(crate::SemanticsRole::Slider)
+        .role(flui_semantics::SemanticsRole::Slider)
         .label(position_label)
         .scroll_source(controller.position(), direction);
     let reveal_controller = controller.clone();

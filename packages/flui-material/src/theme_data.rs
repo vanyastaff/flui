@@ -1,10 +1,11 @@
 //! [`ThemeData`] — the value [`crate::Theme`] publishes to a subtree.
 
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
+use flui_sdk::painting::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::platform::Brightness;
-use flui_sdk::widgets::{FocusRingStyle, SelectionStyle, WidgetStateProperty};
+use flui_sdk::rendering::objects::FocusRingStyle;
+use flui_sdk::widgets::{SelectionStyle, WidgetStateProperty};
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;

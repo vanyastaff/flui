@@ -7,9 +7,10 @@ use std::rc::Rc;
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::widgets::{lay_out, tight};
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook};
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, IntoView, LifecycleContext, LifecycleHook, RenderView,
-    StatefulView, UnmountHook, View, ViewExt, ViewState,
+    BuildContext, IntoView, LifecycleContext, RenderView, StatefulView, UnmountHook, View, ViewExt,
+    ViewState,
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;
@@ -147,7 +148,7 @@ fn mounted(hooks: Hooks) -> (ElementTree, BuildOwner, flui_foundation::ElementId
     };
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view.boxed(), &mut owner.element_owner_mut());
     owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     (tree, owner, root, log)

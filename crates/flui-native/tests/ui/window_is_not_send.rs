@@ -1,4 +1,4 @@
-use flui_native::HeadlessHostWindow;
+use flui_native::testing::HeadlessHostWindow;
 
 fn assert_send<T: Send>() {}
 

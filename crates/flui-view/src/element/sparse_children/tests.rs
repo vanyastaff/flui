@@ -3,9 +3,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use flui_foundation::Leaf;
-use flui_foundation::ViewKey;
 use flui_foundation::geometry::Size;
+use flui_foundation::{Leaf, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::{BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
@@ -13,8 +12,8 @@ use flui_rendering::{BoxLayoutContext, parent_data::BoxParentData, traits::Rende
 use super::SparseChildren;
 use crate::GlobalKey;
 use crate::owner::RecoveredAt;
-use crate::view::{RenderView, View};
-use crate::{BuildOwner, ElementTree};
+use crate::view::{RenderView, View, ViewExt};
+use crate::{owner::BuildOwner, tree::ElementTree};
 
 /// A minimal render-bearing leaf view used as both host and child in these
 /// tests — mirrors the `SizedBoxView` in `view/render.rs` tests.
@@ -131,7 +130,7 @@ fn host_tree() -> (
     let mut build_owner = BuildOwner::new();
     let mut tree = ElementTree::new();
     let host = tree.mount_root_with_pipeline_owner(
-        &LeafBox { side: 10.0 },
+        &LeafBox { side: 10.0 }.boxed(),
         Some(pipeline.clone()),
         &mut build_owner.element_owner_mut(),
     );
@@ -146,7 +145,7 @@ fn host_tree() -> (
 fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let (mut tree, mut build_owner, pipeline, host_a) = host_tree();
     let host_b = tree.insert(
-        &LeafBox { side: 10.0 },
+        &LeafBox { side: 10.0 }.boxed(),
         host_a,
         1,
         &mut build_owner.element_owner_mut(),
@@ -161,7 +160,7 @@ fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let mut list_a = SparseChildren::new();
     let first = list_a.ensure(
         0,
-        &keyed_item,
+        &keyed_item.clone().boxed(),
         host_a,
         &mut tree,
         &mut build_owner.element_owner_mut(),
@@ -173,7 +172,7 @@ fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let mut list_b = SparseChildren::new();
     let moved = list_b.ensure(
         0,
-        &keyed_item,
+        &keyed_item.boxed(),
         host_b,
         &mut tree,
         &mut build_owner.element_owner_mut(),
@@ -185,7 +184,7 @@ fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
         "the keyed child must relocate, preserving element identity, not mount a duplicate"
     );
     assert_eq!(
-        tree.get(moved).and_then(crate::ElementNode::parent),
+        tree.get(moved).and_then(crate::tree::ElementNode::parent),
         Some(host_b),
         "the relocated child must be reparented onto the new host"
     );
@@ -250,7 +249,7 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
     let mut children = SparseChildren::new();
     let first = children.ensure(
         0,
-        &item,
+        &item.clone().boxed(),
         host,
         &mut tree,
         &mut build_owner.element_owner_mut(),
@@ -277,7 +276,7 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
     // still resolves by GlobalKey, not by index.
     let recovered = children.ensure(
         1,
-        &item,
+        &item.clone().boxed(),
         host,
         &mut tree,
         &mut build_owner.element_owner_mut(),
@@ -317,7 +316,10 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
         "exactly one panic must be recorded, not double-counted across the retake \
              and its substitute mount"
     );
-    assert_eq!(recovered_panics[0].hook, crate::LifecycleHook::Activate);
+    assert_eq!(
+        recovered_panics[0].hook,
+        crate::owner::LifecycleHook::Activate
+    );
     // `StatefulBehavior::on_activate` catches its OWN panic and records
     // it under its own accurate identity — `first`,
     // the retaken candidate itself, since `activate` panicked on the

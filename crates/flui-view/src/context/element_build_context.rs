@@ -1,5 +1,5 @@
 //! The build-time [`BuildContext`]/[`LifecycleContext`] implementation a
-//! behavior constructs during [`BuildOwner::build_scope`](crate::BuildOwner):
+//! behavior constructs during [`BuildOwner::build_scope`](crate::owner::BuildOwner):
 //! a borrowed view of the live tree and the deferred dependent-record sink,
 //! plus the shared [`DependentRecord`] and [`BuildCapabilities`] it carries.
 
@@ -26,7 +26,7 @@ pub(crate) struct DependentRecord {
     pub(crate) dependent: ElementId,
     /// The dependent's tree depth (for dirty-heap ordering).
     pub(crate) depth: usize,
-    /// The provider fields the dependent read (#1090).
+    /// The provider fields the dependent read.
     pub(crate) mask: crate::view::FieldSet,
     /// Recorded from `init_state` / `did_change_dependencies` rather than
     /// `build`: such reads are kept until unmount (they accumulate),
@@ -91,7 +91,7 @@ pub(crate) struct LiveBuildContext<'b> {
     element_id: ElementId,
     depth: usize,
     tree: &'b ElementTree,
-    dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+    dep_sink: &'b std::cell::RefCell<Vec<DependentRecord>>,
     /// Owned rebuild capability for `element_id`, minted by `make_build_ctx`
     /// from the element's own core. Cloned out by
     /// [`LifecycleContext::rebuild_handle`]; the build itself never schedules —
@@ -109,7 +109,7 @@ impl<'b> LiveBuildContext<'b> {
         element_id: ElementId,
         depth: usize,
         tree: &'b ElementTree,
-        dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+        dep_sink: &'b std::cell::RefCell<Vec<DependentRecord>>,
         rebuild: crate::RebuildHandle,
         capabilities: BuildCapabilities,
     ) -> Self {
@@ -226,7 +226,7 @@ impl BuildContext for LiveBuildContext<'_> {
         // dependent, so a later inherited change reschedules it and it recovers.
         // Recording only after the callback would drop the registration on that
         // panic and strand the element on the `ErrorView`.
-        self.dep_sink.lock().push(DependentRecord {
+        self.dep_sink.borrow_mut().push(DependentRecord {
             provider: provider_id,
             dependent: self.element_id,
             depth: self.depth,
@@ -490,7 +490,7 @@ impl LifecycleContext for LiveBuildContext<'_> {
 /// Resolve a typed capability from the presentation's source, or refuse it by
 /// name when the runtime registered none.
 pub(crate) fn acquire_capability(
-    source: Option<&dyn crate::CapabilitySource>,
+    source: Option<&dyn crate::owner::CapabilitySource>,
     capability: std::any::TypeId,
     name: &'static str,
 ) -> Result<Box<dyn std::any::Any>, flui_platform::Unsupported> {

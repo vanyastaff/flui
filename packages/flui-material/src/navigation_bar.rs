@@ -133,16 +133,20 @@ use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpe
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
 use flui_sdk::painting::Alignment;
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{Canvas, Paint};
+use flui_sdk::painting::Canvas;
+use flui_sdk::painting::CustomPainter;
+use flui_sdk::painting::paint::Paint;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::rendering::objects::MainAxisAlignment;
+use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::interaction::node::Description;
+use flui_sdk::widgets::__private::node::Description;
 use flui_sdk::widgets::{
-    Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, IndexedStack,
-    MainAxisAlignment, MotionBuilder, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
-    Stack, SymbolEffect, Text, WidgetState, WidgetStateProperty, WidgetStates,
+    Column, CustomPaint, Expanded, IconTheme, IconThemeData, IndexedStack, MotionBuilder, Padding,
+    Row, SafeArea, Semantics, SizedBox, Stack, SymbolEffect, Text, WidgetState,
+    WidgetStateProperty, WidgetStates,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -191,7 +195,7 @@ type DestinationSelectedCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'
 /// ```rust
 /// use flui_material::NavigationDestination;
 /// use flui_sdk::widgets::Icon;
-/// use flui_sdk::widgets::icon::IconData;
+/// use flui_sdk::widgets::IconData;
 ///
 /// let _home = NavigationDestination::new(Icon::new(IconData::new(0xE88A)), "Home");
 /// ```
@@ -251,7 +255,7 @@ impl std::fmt::Debug for NavigationDestination {
 /// ```rust
 /// use flui_material::{NavigationBar, NavigationDestination};
 /// use flui_sdk::widgets::Icon;
-/// use flui_sdk::widgets::icon::IconData;
+/// use flui_sdk::widgets::IconData;
 ///
 /// let _bar = NavigationBar::new(vec![
 ///     NavigationDestination::new(Icon::new(IconData::new(0xE88A)), "Home"),

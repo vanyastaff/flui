@@ -1,11 +1,12 @@
 //! [`Texture`] — shows an external texture fed through the presentation's
 //! texture registry.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderTexture;
 use flui_painting::paint::{FilterQuality, TextureId};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, StatelessView};
-use flui_view::{CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{IntoView, RenderView, impl_render_view};
 
 /// Shows the newest frame of an external texture over its whole box.
 ///
@@ -84,7 +85,7 @@ impl RenderView for RawTexture {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn flui_view::View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&flui_view::BoxedView)) {}
 }
 
 impl_render_view!(RawTexture);

@@ -18,11 +18,15 @@ use flui_sdk::animation::{
     Vsync,
 };
 use flui_sdk::foundation::Listenable;
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::{Rect, Size};
-use flui_sdk::painting::{Canvas, Color, Paint, TextDirection};
+use flui_sdk::painting::Canvas;
+use flui_sdk::painting::CustomPainter;
+use flui_sdk::painting::paint::Paint;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{CustomPaint, CustomPainter, Directionality};
+use flui_sdk::widgets::{CustomPaint, Directionality};
 
 use super::{Fraction, STROKE, moves, paint_linear_track, progress_semantics};
 use crate::theme::Theme;

@@ -430,7 +430,7 @@ Checklist for a new recognizer or a behavioral widget built on one:
   performs the first through `GestureAlternatives::handle`, and the
   alternatives give it a custom action, its keys and a visible control or a
   context menu (ADR-0216). A row of the widget × input-path matrix runs
-  `flui_testing::assert_gesture_alternatives` over it.
+  `flui_testing::gesture_alternatives::assert_gesture_alternatives` over it.
 - **Localization.** Command labels name their target ("Delete Alice") in the
   app's language; the labels the alternatives make themselves come from
   `WidgetsLocalizations` with their parameters, and controls mirror in RTL.

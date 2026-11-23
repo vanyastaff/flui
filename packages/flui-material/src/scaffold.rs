@@ -142,15 +142,16 @@
 use std::any::Any;
 
 use flui_sdk::foundation::ElementId;
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::{EdgeInsets, Offset, Size};
-use flui_sdk::painting::{Color, TextDirection};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::rendering::{MultiChildLayoutContext, MultiChildLayoutDelegate};
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{
-    ConstrainedBox, CustomMultiChildLayout, Directionality, LayoutId, MultiChildLayoutContext,
-    MultiChildLayoutDelegate, PreferredSizeView,
+    ConstrainedBox, CustomMultiChildLayout, Directionality, LayoutId, PreferredSizeView,
 };
 
 use crate::horizontal_side::HorizontalSide;
@@ -435,7 +436,7 @@ impl InheritedView for ScaffoldScope {
         &self.handle
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

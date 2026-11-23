@@ -1,0 +1,4 @@
+### Changed
+
+- **`flui-native`: the headless host's doubles and controls are named at `flui_native::testing`, not at the crate root.** `HeadlessPlatform`, `HeadlessHostWindow`, `HeadlessOpenWindows`, `HeadlessWindowPolicy`, `HeadlessWindowSystem`, `UnknownDisplay`, `HeadlessOwnerTurns`, `HeadlessExitReevaluation`, `HeadlessDeferredWindowOpens`, `HeadlessHostEvents`, `HeadlessInputDevices`, `HeadlessDragAndDrop`, `HeadlessPreferences`, `HeadlessDisplayControls`, `DisplayChange`, `DisplayChangeError`, `DisplaySpec`, `FakeTextInput` and `FakeAccessibility` move from `flui_native::…` to `flui_native::testing::…`. The `testing` module is compiled with the `scripted` feature (as the doubles were), so a crate that enables `scripted` alone reaches them there; its host-test submodules (`testing::app`, `testing::clipboard`, …) stay behind the `testing` feature.
+- **`flui-native`: `executor` is no longer a public module.** `NativeExecutor` stays at the crate root.

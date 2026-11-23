@@ -79,7 +79,7 @@ pub trait InheritedElementAccess {
     /// Idempotent: re-registering the same id overwrites its depth
     /// in its one entry, so reconciliation-driven depth changes are
     /// captured without leaving stale entries, and unions `mask` into the
-    /// fields it depends on (issue #1090: a dependent that read two fields in
+    /// fields it depends on (a dependent that read two fields in
     /// two builds depends on both).
     fn record_dependent(
         &mut self,

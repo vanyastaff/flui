@@ -60,8 +60,9 @@ use super::hero_controller::{FlightDirection, HeroFlightManifest};
 use super::hero_tags::{HeroTags, TagSeat};
 use super::lifecycle::{RetiredValues, Terminal};
 use super::navigator::UserGestureSignal;
-use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
+use crate::{IgnorePointer, Opacity, Positioned, Stack};
 use crate::{InsertPosition, OverlayEntry, OverlayHandle};
+use flui_objects::StackFit;
 
 /// The manifest-derived facts a divert can replace: which way the
 /// flight runs, which two heroes it connects, and the coordinate space its
@@ -433,36 +434,42 @@ impl HeroFlight {
     }
 
     /// The overlay entry this flight presents its shuttle in, while it has one.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn entry_id(&self) -> Option<crate::OverlayEntryId> {
         self.inner.entry.borrow().as_ref().map(OverlayEntry::id)
     }
 
     /// The tween's current evaluation — where the shuttle is.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn shuttle_rect(&self) -> Rect {
         self.inner.current_rect()
     }
 
     /// The tween's destination, re-aimed by every tick.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn target_rect(&self) -> Rect {
         self.inner.rect.get().end
     }
 
     /// The tween's origin. Re-aiming the destination must never move it.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn begin_rect(&self) -> Rect {
         self.inner.rect.get().begin
     }
 
     /// The shuttle's current opacity.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn opacity(&self) -> f64 {
         self.inner.opacity.get()
     }
 
     /// Which way the flight currently runs — a divert can flip it.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn direction(&self) -> FlightDirection {
         self.inner.state.borrow().direction
@@ -557,7 +564,8 @@ impl HeroFlight {
     /// This exists because a controller can be replaced while the navigator lives;
     /// were the controller owned by the navigator for its whole life, leaving the
     /// placeholders frozen would be harmless, since the tree would be torn down
-    /// anyway. Recorded in `ARCHITECTURE.md`.
+    /// anyway. Recorded in `ARCHITECTURE.md`, "Replacing a `HeroController` retires its
+    /// in-flight flights, restoring both heroes".
     fn abort(&self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
         let Some((from_hero, to_hero)) = self.teardown(recovery) else {
             return;
@@ -937,6 +945,7 @@ impl FlightManager {
     }
 
     /// How many flights are parked awaiting a safe drop.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn retired_count(&self) -> usize {
         self.retired.borrow().len()
@@ -944,6 +953,7 @@ impl FlightManager {
 
     /// How many end-of-frame drains have been scheduled — coalescing must keep this at
     /// one per frame no matter how many flights land.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn drains_scheduled(&self) -> usize {
         self.drains_scheduled.get()
@@ -987,11 +997,13 @@ impl FlightManager {
         clippy::len_without_is_empty,
         reason = "a test-facing count; nothing asks whether the manager is empty"
     )]
+    #[cfg(any(test, feature = "testing"))]
     pub fn len(&self) -> usize {
         self.flights.len()
     }
 
     /// The flight for `tag`, if any.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroFlight> {
         self.flights.get(tag)
@@ -1561,18 +1573,22 @@ mod terminal_tests {
             ),
         };
         let manager = Rc::new(FlightManager::default());
-        let exhausted = std::sync::atomic::AtomicU64::new(0);
+        let exhausted =
+            flui_foundation::AtomicIdMint::<std::num::NonZeroU64>::starting_after(u64::MAX);
         let failure = catch_unwind(AssertUnwindSafe(|| {
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
             recovery.run_with(|recovery| {
                 manager.start_reserving(&manifest, plan(), &manager.epoch(), recovery, || {
-                    crate::OverlayEntryId::from_counter(&exhausted)
+                    crate::OverlayEntryId::next_from(&exhausted)
                 });
             });
             recovery.finish();
         }))
         .expect_err("the shuttle's overlay identity is refused");
-        assert_failure(failure, "overlay entry identity space exhausted: 0");
+        assert_failure(
+            failure,
+            "overlay entry identities exhausted; OverlayEntry::try_new reports it as IdExhausted",
+        );
         assert_eq!(
             from.placeholder_size(),
             None,

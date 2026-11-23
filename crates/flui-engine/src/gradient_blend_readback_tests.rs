@@ -24,8 +24,8 @@ use flui_painting::{
 
 use crate::{
     blend_oracle::{PORTER_DUFF_MODES, SIDE, as_bytes, assert_pixel, blend, premultiplied},
-    effects_pipeline::GradientKind,
     headless::HeadlessRenderer,
+    pipelines::effects::GradientKind,
 };
 
 /// The destination every oracle blends into.
@@ -513,7 +513,7 @@ fn gradient_stops_past_the_first_texture_row_read_back() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    let full = crate::batches::MAX_GRADIENT_STOPS;
+    let full = crate::record::batches::MAX_GRADIENT_STOPS;
     let column = |index: u32| Rect::from_xywh(f64::from(index * 20), 0.0, 20.0, f64::from(SIDE));
     let mut builder = SceneBuilder::new();
     let mut canvas = Canvas::new();
@@ -1174,7 +1174,7 @@ fn excessive_gradient_work_refuses_then_next_frame_renders() {
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
     );
     crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
-    let mut painter = crate::WgpuPainter::with_shared_device(
+    let mut painter = crate::painter::WgpuPainter::with_shared_device(
         std::sync::Arc::clone(&device),
         std::sync::Arc::clone(&queue),
         wgpu::TextureFormat::Rgba8Unorm,

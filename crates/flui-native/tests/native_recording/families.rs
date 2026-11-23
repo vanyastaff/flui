@@ -8,15 +8,16 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use flui_native::OwnerPlatform;
 use flui_native::journal::codec::{
     CloseCause, CodecError, DisplayRead, FailureKind, NativeRecording, PreferenceRead, ReadFailure,
     RecordedWindowState, ReplayError, ReplayTarget, Replayed, Row, Unsupported,
 };
 use flui_native::journal::store::{RecordedStore, StoreFocus};
 use flui_native::testing::app::{AppCall, AppLog, run_keeping_owner};
-use flui_native::{
+use flui_native::testing::{
     HeadlessDisplayControls, HeadlessHostEvents, HeadlessHostWindow, HeadlessPlatform,
-    HeadlessPreferences, OwnerPlatform,
+    HeadlessPreferences,
 };
 use flui_platform::CloseDecision;
 use flui_platform::text::store::TextStore;
@@ -415,8 +416,7 @@ pub(crate) fn headless_window(
         .expect("a headless window opens")
         .try_ready()
         .expect("at once");
-    let mock = window
-        .as_any()
+    let mock = (&*window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("a headless window")
         .clone();
@@ -1631,17 +1631,17 @@ struct Captured {
 /// reported minimized.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Captured {
-    use flui_native::DisplayChange;
     use flui_native::journal::codec::Backend;
     use flui_native::journal::recorder::Recorder;
+    use flui_native::testing::DisplayChange;
     use flui_platform::{PlatformWindow, WindowMode};
 
     let recorder = Recorder::with_privacy(Backend::Headless, privacy);
     // Displays the OS identifies, by keys that name the hardware.
     let platform = HeadlessPlatform::new().with_displays(vec![
-        flui_native::DisplaySpec::new("Built-in Retina", 1440, 900)
+        flui_native::testing::DisplaySpec::new("Built-in Retina", 1440, 900)
             .persistent_key("EDID-0610-A050-SERIAL-C02XL0"),
-        flui_native::DisplaySpec::new("Studio Display", 2560, 1440)
+        flui_native::testing::DisplaySpec::new("Studio Display", 2560, 1440)
             .persistent_key("7A1C2E44-5B6D-4F0E-9C3A-2D8E1F4B6A90"),
     ]);
     let events = platform.host_events();

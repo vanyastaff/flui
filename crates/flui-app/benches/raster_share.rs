@@ -611,7 +611,7 @@ mod grid {
     }
 
     impl FrameCountsSubscriber {
-        const TARGET: &'static str = "flui_engine::frame_protocol";
+        const TARGET: &'static str = "flui_engine::frame::protocol";
         const FIELD: &'static str = "region_passes";
 
         fn wanted(metadata: &tracing::Metadata<'_>) -> bool {

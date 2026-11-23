@@ -16,7 +16,7 @@ use flui_protocol::{
     session::AppDescription,
 };
 use flui_runtime::agent::{Limits, Service, ServiceConfig, Session};
-use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::Signal;
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 use flui_view::prelude::*;

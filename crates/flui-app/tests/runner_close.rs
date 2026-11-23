@@ -9,19 +9,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use flui_app::app::{
+use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
+use flui_app::{
     AppConfig, AppHandle, AppWindowError, Application, CloseReason, CloseRequestHandler,
     CloseResponse, DeviceRecovery, ExitPolicy, FrameFailureHandler, FrameFailureHandlerFactory,
     FrameFailureKind, WindowPolicy, open_window, request_presentation_close,
 };
-use flui_app::testing::{HeadlessRun, HeadlessRunHandle, RunExit, StandInRenderer, TeardownStep};
 use flui_foundation::Leaf;
 use flui_foundation::PresentationAddress;
 use flui_foundation::geometry::Size;
 use flui_rendering::{
     BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
 };
-use flui_testing::{DropLedger, DropSentinel};
+use flui_testing::drop_ledger::{DropLedger, DropSentinel};
 use flui_view::element::FutureBuilder;
 use flui_view::prelude::*;
 use flui_view::{CloseGuard, PendingClose};
@@ -295,10 +295,10 @@ fn observed_app(
 struct Started {
     run: HeadlessRunHandle,
     handle: AppHandle,
-    window: flui_native::HeadlessHostWindow,
+    window: flui_native::testing::HeadlessHostWindow,
     renderer: StandInRenderer,
     /// What the platform reports, as the operating system does.
-    events: flui_native::HeadlessHostEvents,
+    events: flui_native::testing::HeadlessHostEvents,
 }
 
 fn start(observed: &Observed) -> Started {
@@ -320,7 +320,7 @@ fn start_configured(
 ) -> Started {
     let ready = Rc::new(RefCell::new(None));
     let (application, root) = observed_app(observed.clone(), Rc::clone(&ready), configure);
-    let platform = flui_native::HeadlessPlatform::new();
+    let platform = flui_native::testing::HeadlessPlatform::new();
     let events = platform.host_events();
     let run = HeadlessRun::start_on(application, root, platform);
     run.run_owner_turn();
@@ -653,7 +653,7 @@ pub(crate) fn a_close_from_a_thread_without_a_loop_is_refused() {
         .expect("the request does not panic");
     assert_eq!(
         answered,
-        Err(flui_app::app::PresentationCloseError::NoHostedRuntime)
+        Err(flui_app::PresentationCloseError::NoHostedRuntime)
     );
     started.run.run_owner_turn();
     assert!(started.run.is_running(), "the window stayed open");

@@ -63,7 +63,7 @@ use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]
 use flui_scheduler::SchedulerPhase;
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
-use flui_view::{BuildInProgress, GlobalKeyScope};
+use flui_view::__runtime::{BuildInProgress, GlobalKeyScope};
 #[cfg(test)]
 use parking_lot::RwLock;
 
@@ -137,7 +137,7 @@ pub(crate) use agent_events::EventHub;
 pub(crate) use agent_input::{Abandoned as AbandonedInput, AgentInput};
 pub(crate) use agent_inspect::{PendingLayerRead, StagedLayerRead, deliver_each};
 pub use agent_record::{NativeForms, NativeLines};
-pub use agent_serve::window_answers;
+pub(crate) use agent_serve::window_answers;
 pub(crate) use agent_stability::AgentStability;
 pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
@@ -210,8 +210,8 @@ pub struct UiRuntime {
     /// installed into every presentation's `BuildOwner` at assembly time
     /// (`PresentationState::new`). Retained here (not just handed off once)
     /// so a later-installed presentation can share the same scope: both
-    /// [`Self::assemble_presentation`] (production, issue #555's
-    /// addressed-routing slice) and its `install_second_presentation_for_test`
+    /// [`Self::assemble_presentation`] (production) and its
+    /// `install_second_presentation_for_test`
     /// counterpart (the isolation test suite) read it back to assemble a
     /// second presentation sharing this exact scope.
     global_key_scope: GlobalKeyScope,
@@ -221,15 +221,14 @@ pub struct UiRuntime {
     build_in_progress: BuildInProgress,
     /// The insertion-ordered set of UI-owner presentation domains this UI runtime
     /// hosts (ADR-0043 §1 — `PresentationForest`). Production topology
-    /// allows any number of presentations per UI runtime since issue #555's addressed-routing slice
-    /// lifted the forest's former `len()<=1` ratchet; see
+    /// allows any number of presentations per UI runtime; see
     /// [`PresentationForest`]'s doc. Everything that builds, lays out,
     /// focuses, or presents for one surface lives in and dies with its own
     /// `PresentationState` inside this forest — the UI runtime owns only what is
     /// genuinely cross-tree (this struct's other fields).
     presentations: PresentationForest,
     /// Runtime-level arbitration of which presentation currently owns OS
-    /// keyboard focus (ADR-0043 §4, issue #555's addressed-routing slice). See
+    /// keyboard focus (ADR-0043 §4). See
     /// [`FocusCoordinator`]'s own doc.
     focus_coordinator: FocusCoordinator,
     host_lifecycle: Cell<HostLifecycle>,
@@ -239,8 +238,8 @@ pub struct UiRuntime {
     /// its siblings' failures, so a report handler's pass is not counted
     /// inside it.
     lifecycle_passes: Cell<u32>,
-    /// Wall-clock origin for the production `raw_frame_time` computation, moved
-    /// here from the retired `AppBinding`: frame times are UI runtime-relative.
+    /// Wall-clock origin for the production `raw_frame_time` computation: frame
+    /// times are UI runtime-relative.
     /// `raw_frame_time()` = `start.elapsed()`, stored once here so
     /// every frame this UI runtime produces shares one monotonically-increasing
     /// origin instead of drifting between the Vsync tick and elsewhere.
@@ -281,8 +280,7 @@ pub struct UiRuntime {
     /// `frame_wake_callback()`; retained here (not just cloned into
     /// [`UiCommandSender`]) so this UI runtime's own frame methods can wake the
     /// loop directly (the vsync/gesture-deadline continuation and the
-    /// render-retry path all need this, exactly as the retired
-    /// `AppBinding::wake_frame` did).
+    /// render-retry path all need this).
     wake: Arc<dyn Fn() + Send + Sync>,
     /// The tap registry and the records awaiting delivery (ADR-0215 §1).
     input_taps: crate::InputTaps,
@@ -418,20 +416,16 @@ pub(crate) enum FramePaintOutcome {
 /// has already armed a retry. **Two** verdict arms in the frame transaction
 /// behind [`UiRuntime::render_frame`] are that shape —
 /// `SurfaceStale` (covering a lost surface, a validation failure, and a
-/// stale surface-generation stamp, which used to be two separate
-/// `SurfaceLost`/`SurfaceValidation` arms) and `DeviceLost`. `DeviceLost`
-/// and the validation flavor joined when device loss gained a retry at all;
-/// before that they drained, and this sentence named only `SurfaceLost`.
+/// stale surface-generation stamp) and `DeviceLost`.
 /// Each underlying failure flavor is pinned by its own
 /// `*_retry_preserves_the_original_input_epoch_for_the_presented_frame`
-/// test, so flipping either arm back to `Drain` turns one red — the
-/// invariant used to be documentation alone. Draining on such an arm
+/// test, so flipping either arm back to `Drain` turns one red. Draining on such an arm
 /// leaves the
 /// eventual retry's own real submit with nothing pending to attribute to
 /// the frame that actually reaches the screen, so the inputs that arrived
 /// before the failure would never be attributed to any frame at all. Every
 /// other outcome (a real present, or a submit failure with no armed retry)
-/// uses `Drain`, the same as before this type existed.
+/// uses `Drain`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EpochDisposition {
     /// Drain pending epochs into the recorded snapshot (the common case).
@@ -514,7 +508,7 @@ impl Drop for UiRuntime {
         // destroyed here too, under the same catch, and never by the drop glue
         // that runs after this body: once a failure resumes below, a capture
         // that failed in that glue would be a second panic in one unwind, and
-        // abort (#1165). Queued commands carry cross-thread signal writes'
+        // abort. Queued commands carry cross-thread signal writes'
         // closures; the frame-failure handler is the embedder's. After a
         // failure they are destroyed too, each under its own catch, and the
         // first failure stays the one resumed (ADR-0281 §3).

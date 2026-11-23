@@ -39,9 +39,10 @@ use crate::localization::{BoxedWidgetsLocalizations, Directionality};
 use crate::navigator::{NavigatorHandle, PopupRoute, RouteId};
 use crate::{
     Align, ColoredBox, Column, ConstrainedBox, CustomSingleChildLayout, ExcludeSemantics,
-    IntrinsicWidth, Padding, PopupOrigin, SelectionMenu, SelectionPopup, Semantics, SemanticsRole,
-    Text, ToolbarItems,
+    IntrinsicWidth, Padding, PopupOrigin, SelectionMenu, SelectionPopup, Semantics, Text,
+    ToolbarItems,
 };
+use flui_semantics::SemanticsRole;
 use flui_view::environment::GestureArenaScope;
 
 // ============================================================================

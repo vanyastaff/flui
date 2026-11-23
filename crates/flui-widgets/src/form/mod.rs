@@ -16,7 +16,7 @@
 //!   `init_state`, moves in `did_change_dependencies`, and leaves in
 //!   `dispose`, never in `build`.
 //!
-//! `flui-widgets/ARCHITECTURE.md`'s `## Mapping decisions` records each
+//! `flui-widgets/ARCHITECTURE.md`, "Forms", records each
 //! divergence and the test that pins it.
 //!
 //! # Not provided
@@ -612,7 +612,7 @@ impl InheritedView for FormScope {
         &self.handle
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

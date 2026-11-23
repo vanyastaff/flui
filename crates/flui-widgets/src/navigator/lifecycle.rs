@@ -30,12 +30,7 @@ pub(crate) use crate::support::retirement::{
 /// Declaration order matters, minus `staging` and `disposing` — see the module
 /// docs. `Ord` is derived so the predicates below are index comparisons, spelled
 /// as ranges.
-/// `PushReplace` gained its production producer when
-/// `NavigatorHandle::push_replacement` was exported (2026-07-10). `Replace` still
-/// has none: `replace` / `replace_route_below` are implemented and tested but not
-/// exported, pending their own sign-off. The state is kept because the flush's
-/// arms and the range predicates depend on the declaration order, and deleting a
-/// variant would silently shift four predicates.
+/// `PushReplace` is entered by the push-replacement doors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum RouteLifecycle {
@@ -49,8 +44,6 @@ pub enum RouteLifecycle {
     PushReplace,
     /// Awaiting the push transition.
     Pushing,
-    /// Will call `install` + `did_replace`. Entered from `replace`.
-    Replace,
     /// Settled and present.
     Idle,
     /// Will call `did_pop`.

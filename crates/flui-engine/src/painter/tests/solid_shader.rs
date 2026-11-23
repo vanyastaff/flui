@@ -82,8 +82,8 @@ fn record(
             }
             canvas.restore();
             let list = canvas.finish();
-            let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(p);
-            crate::dispatch::dispatch_commands(&list, &mut dispatcher);
+            let mut dispatcher = crate::layers::dispatcher::LayerDispatcher::new(p);
+            crate::layers::dispatch::dispatch_commands(&list, &mut dispatcher);
         }
     }
 }

@@ -5,7 +5,7 @@
   block (Windows, macOS, headless), waits a bounded time (Linux, through logind's delay
   inhibitor) or only tells (Android, iOS, the web).
 - `RuntimeStatus::checked_out`.
-- `flui_view::__runtime::SESSION_END_BUDGET`, which `flui_testing::SESSION_END_BUDGET` now
+- `flui_view::__runtime::SESSION_END_BUDGET`, which `flui_testing::host::SESSION_END_BUDGET` now
   re-exports.
 - `HeadlessPlatform::with_session_end_support`, so a test stands in for a phone or a browser tab.
 

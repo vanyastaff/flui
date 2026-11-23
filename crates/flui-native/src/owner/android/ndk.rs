@@ -521,13 +521,13 @@ impl Drop for LoadedLibraries {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     use super::*;
 
     /// A symbol table the test fills.
     #[derive(Default)]
-    struct FakeSymbols(HashMap<&'static CStr, *const ()>);
+    struct FakeSymbols(FxHashMap<&'static CStr, *const ()>);
 
     impl FakeSymbols {
         fn with(mut self, name: &'static CStr, address: *const ()) -> Self {

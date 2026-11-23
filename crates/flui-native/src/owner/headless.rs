@@ -7,11 +7,12 @@
 //! opens it defers.
 
 use std::{
-    collections::HashMap,
     rc::Rc,
     sync::{Arc, Weak, atomic::Ordering},
     thread::{self, ThreadId},
 };
+
+use rustc_hash::FxHashMap;
 
 use crate::host::MemoryClipboard;
 use flui_foundation::geometry::Point;
@@ -42,7 +43,7 @@ use flui_platform::{DisplayId, DisplaySnapshot, WindowHandler, WindowId, WindowO
 type OpenWindowResult = Result<crate::owner::OpenedWindow, OpenWindowError>;
 
 /// Builds the text-store host a headless window offers
-/// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)).
+/// ([`HeadlessPlatform::with_text_store_host`](crate::testing::HeadlessPlatform::with_text_store_host)).
 /// Shared with every window, so `Send + Sync`; what it builds is owner-thread
 /// state.
 pub(crate) type TextStoreHostFactory =
@@ -217,7 +218,7 @@ pub(crate) trait TrackedWindows: OpenWindows {
 ///
 /// The headless host creates no real windows or graphics contexts; it serves
 /// unit tests, CI without a display server and benchmarks without rendering.
-/// [`HeadlessPlatform`](crate::HeadlessPlatform) is its platform.
+/// [`HeadlessPlatform`](crate::testing::HeadlessPlatform) is its platform.
 pub struct HeadlessLoop {
     pub(crate) signal: Arc<crate::owner::signal::OwnerSignal>,
     pub(crate) turn: std::rc::Rc<crate::owner::signal::OwnerTurnSlot>,
@@ -238,7 +239,7 @@ pub(crate) struct OsDrags {
     pub(crate) session: Option<OsDragSession>,
     /// The providers behind offers still open at the system, by id, so a
     /// target may fetch after the drop until it concludes it.
-    pub(crate) open: HashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
+    pub(crate) open: FxHashMap<DataTransferId, Arc<OwnerSlot<OsDragProvider>>>,
 }
 
 /// One drag session in flight at the simulated system.
@@ -275,18 +276,18 @@ pub(crate) struct DragOver {
 pub(crate) struct SimulatedDisplays {
     pub(crate) snapshot: DisplaySnapshot,
     /// The failure the next `Platform::display_snapshot` read reports instead
-    /// of the snapshot ([`HeadlessDisplayControls::fail_next_read`](crate::HeadlessDisplayControls::fail_next_read)).
+    /// of the snapshot ([`HeadlessDisplayControls::fail_next_read`](crate::testing::HeadlessDisplayControls::fail_next_read)).
     pub(crate) failure: Option<String>,
 }
 
 /// The preferences the simulated system reports: unknown until
-/// [`HeadlessPlatform::with_preferences`](crate::HeadlessPlatform::with_preferences)
-/// or [`HeadlessPreferences::set`](crate::HeadlessPreferences::set).
+/// [`HeadlessPlatform::with_preferences`](crate::testing::HeadlessPlatform::with_preferences)
+/// or [`HeadlessPreferences::set`](crate::testing::HeadlessPreferences::set).
 #[derive(Debug, Default)]
 pub(crate) struct SimulatedPreferences {
     pub(crate) values: flui_platform::SystemPreferences,
     /// The failure the next `Platform::preferences` read reports instead of a
-    /// value ([`HeadlessPreferences::fail_next_read`](crate::HeadlessPreferences::fail_next_read)).
+    /// value ([`HeadlessPreferences::fail_next_read`](crate::testing::HeadlessPreferences::fail_next_read)).
     pub(crate) failure: Option<String>,
 }
 pub(crate) struct HeadlessState {
@@ -294,7 +295,7 @@ pub(crate) struct HeadlessState {
     pub(crate) drags: Arc<Mutex<OsDrags>>,
     /// When a window opened from now on may start a drag session at the
     /// system; `None`, the default: its windows have no drag source
-    /// ([`HeadlessPlatform::with_os_drag`](crate::HeadlessPlatform::with_os_drag)).
+    /// ([`HeadlessPlatform::with_os_drag`](crate::testing::HeadlessPlatform::with_os_drag)).
     pub(crate) os_drag_start: Option<OsDragStart>,
     pub(crate) owner_signal: Weak<crate::owner::signal::OwnerSignal>,
     pub(crate) owner_turn: std::rc::Weak<crate::owner::signal::OwnerTurnSlot>,
@@ -316,7 +317,7 @@ pub(crate) struct HeadlessState {
     )]
     turn_deadline: crate::owner::wake_deadline::TurnDeadline,
     /// Deferred-window-open test mode (see
-    /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)): when `true`,
+    /// [`HeadlessPlatform::enable_deferred_window_open`](crate::testing::HeadlessPlatform::enable_deferred_window_open)): when `true`,
     /// `Platform::run` installs `HeadlessDeferredOwnerHooks` instead of
     /// `DirectOwnerHooks`, so `OwnerPlatform::open_window` enqueues into
     /// `pending_opens` and returns `WindowOpen::Pending` instead of
@@ -334,17 +335,17 @@ pub(crate) struct HeadlessState {
     /// on a turn of its choosing rather than inside the call that asked.
     exit_reevaluation_requested: bool,
     /// What every window opened from now on offers as its text-store host
-    /// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)); `None`: push-model.
+    /// ([`HeadlessPlatform::with_text_store_host`](crate::testing::HeadlessPlatform::with_text_store_host)); `None`: push-model.
     pub(crate) text_store_host: Option<TextStoreHostFactory>,
-    /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
+    /// What this backend reports implemented ([`HeadlessPlatform::with_input_availability`](crate::testing::HeadlessPlatform::with_input_availability)).
     pub(crate) input_availability: flui_platform::input::capabilities::InputCapabilities,
     /// The attached input devices, as the table made them
     /// ([`HeadlessHost::devices`]).
     pub(crate) devices: Box<dyn SimulatedDevices>,
     /// The displays this platform reports, which the table lays out
     /// ([`HeadlessHost::displays`]); replaced by
-    /// [`HeadlessPlatform::with_displays`](crate::HeadlessPlatform::with_displays) and changed through
-    /// [`HeadlessDisplayControls`](crate::HeadlessDisplayControls).
+    /// [`HeadlessPlatform::with_displays`](crate::testing::HeadlessPlatform::with_displays) and changed through
+    /// [`HeadlessDisplayControls`](crate::testing::HeadlessDisplayControls).
     pub(crate) displays: Arc<Mutex<SimulatedDisplays>>,
     /// The channel system notices take to the host; a wake marks every window
     /// opened here stale first.
@@ -354,17 +355,22 @@ pub(crate) struct HeadlessState {
     pub(crate) session_end_releases: Arc<std::sync::atomic::AtomicUsize>,
     /// How this platform stands in for the session's end: `Hold`, a desktop
     /// that waits for a block, until
-    /// [`HeadlessPlatform::with_session_end_support`](crate::HeadlessPlatform::with_session_end_support).
+    /// [`HeadlessPlatform::with_session_end_support`](crate::testing::HeadlessPlatform::with_session_end_support).
     pub(crate) session_end_support: flui_platform::SessionEndSupport,
     /// The disk root a test gave this platform
-    /// ([`HeadlessPlatform::with_data_root`](crate::HeadlessPlatform::with_data_root)):
+    /// ([`HeadlessPlatform::with_data_root`](crate::testing::HeadlessPlatform::with_data_root)):
     /// each application keeps its values under `<root>/roaming/<app>` and
     /// `<root>/local/<app>`. `None`, the default: they stay in `memory`.
     pub(crate) data_root: Option<std::path::PathBuf>,
     /// The values each application on this platform keeps without a root, one
     /// store per application, for as long as the platform lives; never the
     /// user's data directories.
-    pub(crate) memory: HashMap<flui_platform::AppDataDir, crate::storage::MemoryStore>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by the data directories the application supplies"
+    )]
+    pub(crate) memory:
+        std::collections::HashMap<flui_platform::AppDataDir, crate::storage::MemoryStore>,
     /// What `Platform::preferences` reports, which the OS may change from any
     /// thread, as Linux's portal source does.
     pub(crate) preferences: Arc<Mutex<SimulatedPreferences>>,
@@ -424,7 +430,7 @@ impl HeadlessLoop {
             drags: Arc::new(Mutex::new(OsDrags {
                 table: H::offers(),
                 session: None,
-                open: HashMap::new(),
+                open: FxHashMap::default(),
             })),
             os_drag_start: None,
             owner_signal: Weak::new(),
@@ -450,7 +456,11 @@ impl HeadlessLoop {
             session_end_releases: Arc::default(),
             session_end_support: flui_platform::SessionEndSupport::Hold,
             data_root: None,
-            memory: HashMap::new(),
+            #[expect(
+                clippy::disallowed_types,
+                reason = "keyed by the data directories the application supplies"
+            )]
+            memory: std::collections::HashMap::default(),
             preferences: Arc::default(),
             drag_source: H::drag_source,
         };
@@ -732,7 +742,7 @@ const fn default_input_availability() -> flui_platform::input::capabilities::Inp
 
 /// [`OwnerHooks`] for the headless backend's deferred-open test mode
 /// (installed by `Platform::run` in place of `DirectOwnerHooks` when
-/// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open) was called first).
+/// [`HeadlessPlatform::enable_deferred_window_open`](crate::testing::HeadlessPlatform::enable_deferred_window_open) was called first).
 /// Exercises the `WindowOpen::Pending` arm of the owner-lane contract
 /// without needing a real event loop: every `open_owner_window` call
 /// enqueues a [`ClaimSlot`] request into `HeadlessState::pending_opens`
@@ -902,7 +912,7 @@ impl HeadlessOwnerTurns {
 
 /// Probe/drive handle for parked
 /// `Platform::request_exit_policy_reevaluation` requests on the headless
-/// host — obtained via [`HeadlessPlatform::exit_reevaluation`](crate::HeadlessPlatform::exit_reevaluation) BEFORE
+/// host — obtained via [`HeadlessPlatform::exit_reevaluation`](crate::testing::HeadlessPlatform::exit_reevaluation) BEFORE
 /// `Platform::run` consumes the platform. The headless host has no event
 /// loop of its own, so the owner-thread half of a re-evaluation request (the
 /// owner loop's control arm) is driven explicitly by the
@@ -982,7 +992,7 @@ impl HeadlessExitReevaluation {
     }
 }
 
-/// Test handle returned by [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)
+/// Test handle returned by [`HeadlessPlatform::enable_deferred_window_open`](crate::testing::HeadlessPlatform::enable_deferred_window_open)
 /// — resolves the oldest still-pending deferred window-open request,
 /// completing the [`PendingWindow`] a `HeadlessDeferredOwnerHooks` call
 /// returned. `Weak`: this handle must never keep the platform state alive

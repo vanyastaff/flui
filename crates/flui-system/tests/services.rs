@@ -19,7 +19,7 @@ use flui_system::shortcuts::{
 use flui_system::taskbar::{EntryState, Fraction, Progress, TaskbarCapability};
 use flui_system::testing::ScriptedSystem;
 use flui_system::user_dirs::{UserDir, UserDirCapability};
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
 use crate::{acquire_on, acquire_twice_on, outcome_slot, turn};
 

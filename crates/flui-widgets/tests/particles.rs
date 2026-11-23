@@ -13,7 +13,7 @@ use flui_painting::DrawOp;
 use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
 use flui_widgets::TickerMode;
-use flui_widgets::motion::particles::{
+use flui_widgets::particles::{
     Coverage, EmitterDuration, EmitterSource, MAX_CAPACITY, ParticleConfig, ParticleConfigError,
     ParticleController, ParticleEmitter, ParticleField, Sprite,
 };

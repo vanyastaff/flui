@@ -14,8 +14,8 @@ use common::{lay_out, tight};
 use flui_material::{SliverAppBar, Theme, ThemeData};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::IntoView;
+use flui_sdk::view::ViewExt;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
-use flui_sdk::view::view::ViewExt;
 use flui_sdk::widgets::{
     CustomScrollView, ScrollController, ScrollView, SizedBox, SliverToBoxAdapter, Text,
 };

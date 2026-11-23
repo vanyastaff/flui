@@ -1,24 +1,28 @@
-//! FLUI Application Framework
+//! The application layer of FLUI: it starts an application, owns the loop it
+//! runs in and hosts one owner-affine `UiRuntime` (from `flui-runtime`) per
+//! window.
 //!
-//! This crate provides the application framework for FLUI, hosting:
-//! - an owner-affine `UiRuntime` with `WidgetsBinding` (build phase)
-//! - `PipelineOwner` from flui_rendering (layout/paint phases)
-//! - a UI runtime-owned `GestureBinding` from flui_interaction (input handling + event coalescing)
+//! Applications enter through [`run_app`], or through an [`Application`] that
+//! names the configuration and capabilities, from a function marked [`main`].
+//! The runner builds and owns the UI runtime; the application never holds it.
+//! Every public item is at the crate root, once.
 //!
-//! # Architecture
+//! # Layout
 //!
 //! ```text
 //! flui_app
 //!   ├── app/
+//!   │   ├── launch.rs       - Application and LaunchError: the builder of a run
+//!   │   ├── config.rs       - AppConfig: the window and runtime configuration
 //!   │   ├── runtime.rs      - AppRuntime: the loop-scoped composition root
-//!   │   ├── ui_runtime/     - owner-affine widget, render, and gesture runtime
-//!   │   ├── presentation.rs - per-presentation window/haptics/frame-accounting state
-//!   │   ├── config.rs       - AppConfig
-//!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)
-//!   │   └── runner/         - platform bootstrap (desktop/android/web run loops)
-//!   │
-//!   ├── bindings/           - Re-exports from other crates
-//!   └── embedder/           - Platform embedder adapters (window handle, GPU surface)
+//!   │   ├── runner/         - the run loops (desktop, Android, iOS, web), the
+//!   │   │                     frame driver, the raster host and the window routes
+//!   │   ├── lifecycle.rs    - tasks, workers and services with a staged shutdown
+//!   │   ├── application_control.rs - AppHandle and window requests (desktop)
+//!   │   ├── hot_reload.rs, dev_agent.rs, agent/ - development hooks and the driver agent
+//!   │   └── *_host.rs       - the storage, HTTP, asset and memory hosts
+//!   ├── native              - the core host's per-system window extensions (`native` feature)
+//!   └── testing             - an application run on the headless platform (`testing` feature)
 //! ```
 //!
 //! # This crate owns no design tokens
@@ -30,11 +34,6 @@
 //! by an in-tree inherited widget, separately in each window. See
 //! [ADR-0042](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0042-theming-ownership.md);
 //! the app-shell widgets that implement it are tracked separately.
-//!
-//! Applications enter through [`run_app`], or an [`Application`] that names
-//! the configuration and capabilities, from a function marked [`main`]; the
-//! runner constructs and owns
-//! the UI ui_runtime.
 
 #![cfg_attr(
     test,
@@ -43,21 +42,23 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-// Proving `flui_engine::Renderer: Send` (for the `Send` frame
-// callbacks that capture it) descends through wgpu-core past the default
-// recursion limit under the next-generation trait solver; see the matching
-// attribute and rationale at the top of flui-engine's `lib.rs`.
+// Proving `flui_engine::GpuContext: Send`, where the raster host boxes the
+// context as a `dyn RasterBackend + Send`, descends through the context's
+// wgpu handles past the default recursion limit under the next-generation
+// trait solver; see the matching attribute and rationale at the top of
+// flui-engine's `lib.rs`.
 #![recursion_limit = "256"]
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 // A `_` arm must not absorb a variant added later; see the
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
 #![warn(clippy::wildcard_enum_match_arm)]
+// Ids and fingerprints the process mints hash with `rustc_hash`; a table keyed
+// by values an application supplies says so at its site.
+#![warn(clippy::disallowed_types)]
 
 // Modules
-pub mod app;
-pub mod bindings;
-pub mod embedder;
+mod app;
 #[cfg(all(
     feature = "testing",
     not(target_os = "android"),
@@ -153,7 +154,7 @@ pub use app::{
     RecoveredAt, SamplingFailure, SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
 // Multi-window policy knobs — not
-// available on iOS, where `AppRuntime`/`UiRuntime`'s ui_runtime-hosting machinery
+// available on iOS, where `AppRuntime`/`UiRuntime`-hosting machinery
 // itself is not compiled (see `runtime::ExitPolicy`'s own doc).
 #[cfg(not(target_os = "ios"))]
 pub use app::ExitPolicy;
@@ -167,11 +168,14 @@ pub use app::{
     CloseReason, CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
     PresentationCloseError, request_presentation_close, window_handle,
 };
-// `open_secondary_window` additionally needs the desktop GPU renderer path,
-// so it is narrower than the policy enums above: desktop only (matching
-// `run_desktop`'s own cfg gate).
+// The entry macro's seam: `#[flui::main]` expands to calls into it.
 #[doc(hidden)]
 pub use app::__entry;
+// The development reload driver `AppConfig::dev_reload` installs.
+pub use app::DevReload;
+// `open_secondary_window` additionally needs the desktop GPU renderer path,
+// so it is narrower than the policy enums above: desktop only (matching
+// `run_desktop`'s own cfg gate), as are the handle and the window requests.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -186,50 +190,16 @@ pub use app::open_secondary_window;
 ))]
 #[cfg(feature = "unstable-windows")]
 pub use app::open_window;
-/// Marks the function an application starts from, so that one entry runs on
-/// every platform. Re-exported from `flui-macros`; see [`Application::run`].
-pub use flui_macros::main;
-// Bindings re-exports
-pub use bindings::{
-    GestureBinding, PipelineCell, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,
-};
-// Application identity is part of `AppConfig`; low-level subscriber/filter
-// controls remain in `flui-log` rather than leaking through this API surface.
-pub use flui_foundation::{AppId, AppIdError};
-pub use flui_log::identity::AppIdentity;
-// Convenience re-exports from flui-view
-pub use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,
-    StatelessElement, StatelessView, View,
-};
-
-// ============================================================================
-// PRELUDE
-// ============================================================================
-
-/// Prelude module with commonly used types.
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// use flui_app::prelude::*;
-/// ```
-pub mod prelude {
-    // Application types
-    // Logging: the macros come straight from `tracing`, which is where every
-    // FLUI crate emits from. Nothing in the prelude installs a subscriber.
-    pub use tracing::{debug, error, info, trace, warn};
-
-    pub use crate::{AppConfig, Application, LaunchError, run_app};
-    // Bindings
-    pub use crate::{
-        GestureBinding, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,
-    };
-}
-
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
 pub use app::{AppControlError, AppHandle, AppWindowError, WindowRequest};
+/// Marks the function an application starts from, so that one entry runs on
+/// every platform. Re-exported from `flui-macros`; see [`Application::run`].
+pub use flui_macros::main;
+// Application identity is part of `AppConfig`; low-level subscriber/filter
+// controls remain in `flui-log` rather than leaking through this API surface.
+pub use flui_foundation::{AppId, AppIdError};
+pub use flui_log::identity::AppIdentity;

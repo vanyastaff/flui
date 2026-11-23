@@ -1,10 +1,10 @@
 //! Application configuration.
 
+pub use flui_animation::MotionOverride;
 use flui_engine::FrameLatency;
 use flui_foundation::AppId;
 use flui_foundation::geometry::{Point, Size};
 use flui_log::identity::AppIdentity;
-pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
 
 use flui_platform::WindowMode;
@@ -56,14 +56,12 @@ impl Default for DiagnosticsProfile {
 /// ```rust
 /// use flui_app::AppConfig;
 ///
-/// let config = AppConfig::new()
+/// let _config = AppConfig::new()
 ///     .title("My App")
 ///     .size(1024, 768)
 ///     .resizable(true);
-/// assert_eq!(config.title, "My App");
 /// ```
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub struct AppConfig {
     /// Process-level application identity used by native diagnostics sinks
     /// and the storage host.
@@ -72,119 +70,64 @@ pub struct AppConfig {
     /// application has one identity and may give every window a different title.
     /// The default carries the identifier `flui build` and `flui run` compile
     /// the application with (`FLUI_APP_ID`, from `flui.toml`), if any.
-    pub application_identity: AppIdentity,
+    pub(crate) application_identity: AppIdentity,
 
     /// Diagnostics defaults for a managed application.
-    pub diagnostics_profile: DiagnosticsProfile,
+    pub(crate) diagnostics_profile: DiagnosticsProfile,
 
     /// Animation policy for this UI runtime and its later presentations.
-    pub motion_override: MotionOverride,
+    pub(crate) motion_override: MotionOverride,
 
     /// Window title.
-    pub title: String,
+    pub(crate) title: String,
 
     /// Initial content size, in logical pixels.
-    pub size: flui_platform::WindowExtent,
+    pub(crate) size: flui_platform::WindowExtent,
 
     /// Minimum window size.
-    pub min_size: Option<flui_platform::WindowExtent>,
+    pub(crate) min_size: Option<flui_platform::WindowExtent>,
 
     /// Maximum window size.
-    pub max_size: Option<flui_platform::WindowExtent>,
+    pub(crate) max_size: Option<flui_platform::WindowExtent>,
 
     /// Initial outer position, in whole logical pixels of the primary display
     /// from its top-left corner (the first display where the platform marks
     /// none primary); `None` lets the system place the window. A platform that
     /// cannot place a window ignores it, and so does one that reports no
     /// display to measure it on.
-    pub position: Option<Point<i32>>,
+    pub(crate) position: Option<Point<i32>>,
 
     /// The mode the window opens in. A platform that cannot enter it opens the
     /// window in [`WindowMode::Normal`].
-    pub mode: WindowMode,
+    pub(crate) mode: WindowMode,
 
     /// Whether the window is resizable.
-    pub resizable: bool,
+    pub(crate) resizable: bool,
 
     /// What frames the window: the system's title bar, the application's, or none.
     /// A desktop host that cannot take a title bar of the application's opens the window
     /// with the system's frame. Hosts without a system frame, such as mobile and web,
     /// retain their native frame policy.
-    pub frame: flui_platform::WindowFrame,
+    pub(crate) frame: flui_platform::WindowFrame,
 
     /// What the window is created with on each operating system that has
     /// options of its own, each read only by that system's host (ADR-0254
     /// §8); see [`OsWindowOptions`](flui_platform::window::os_options::OsWindowOptions).
-    pub os_options: flui_platform::window::os_options::OsWindowOptions,
+    pub(crate) os_options: flui_platform::window::os_options::OsWindowOptions,
 
-    /// Whether to show the performance overlay — FPS, average frame time, and
-    /// runtime tail-latency/counter telemetry drawn over the app's own content.
-    ///
-    /// Scope, deliberately narrow: the overlay's three rows are shaped
-    /// through the UI runtime's text context at scene assembly and the renderer
-    /// only rasterizes them. The sampled
-    /// interval is between *composited* frames — an idle frame publishes no
-    /// scene, so it is a repaint rate, not a wall-clock frame rate. The telemetry
-    /// row reports p99 present/input latency, deferred/dropped counts, and
-    /// whether input attribution was truncated by the bounded per-frame buffer.
-    ///
-    /// The bootstrap runner forwards this
-    /// to `UiRuntime::set_performance_overlay`, which is what actually starts
-    /// the rolling frame-time window; each painted frame then publishes the
-    /// readout as one chunk under a clip, at a scene node slotted after the
-    /// frame's own, so no boundary of the app repaints for it. Off costs a
-    /// cheap `None` check per frame; snapshot collection, percentile reduction,
-    /// and line formatting run only while the overlay is enabled.
-    ///
-    /// [`window_options`](Self::window_options) drops this field: it is a
-    /// compositing concern, not a window-creation one.
-    pub show_performance_overlay: bool,
+    /// Whether to draw the performance overlay; see [`Self::performance_overlay`].
+    pub(crate) show_performance_overlay: bool,
 
-    /// How many frames a window's swapchain holds ahead of the display (ADR-0347).
-    ///
-    /// [`FrameLatency::Balanced`] by default; [`FrameLatency::Low`] trades throughput for the
-    /// newest frame on screen, for drawing and games. Every window the application opens starts
-    /// with it.
-    pub frame_latency: FrameLatency,
+    /// Swapchain depth of every window; see [`Self::frame_latency`].
+    pub(crate) frame_latency: FrameLatency,
 
-    /// How early pointer samples reach every window the application opens.
-    ///
-    /// [`InputLatency::Balanced`](flui_platform::InputLatency::Balanced) by
-    /// default: the system's per-frame batches.
-    /// [`InputLatency::Low`](flui_platform::InputLatency::Low) asks for every
-    /// sample as soon as the system has it, for live ink and drawing: the web
-    /// host listens to `pointerrawupdate`, Android (API 30+) asks for unbuffered
-    /// pointer dispatch; a host that cannot deliver earlier ignores it.
-    pub input_latency: flui_platform::InputLatency,
+    /// How early pointer samples reach every window; see [`Self::input_latency`].
+    pub(crate) input_latency: flui_platform::InputLatency,
 
-    /// The development reload driver, if the application installed one with
-    /// [`Self::dev_reload`] (ADR-0094 §1).
-    ///
-    /// `None` (the default): nothing reloads, and no reload tool is in the
-    /// application's graph. `Some`: the desktop and iOS runners attach the
-    /// hook once per event loop and poll it at every UI runtime's frame boundary;
-    /// the Android runner lets its scene plugin own a frame. Every window
-    /// opened with a clone of this configuration shares the one hook, so a
-    /// secondary window reloads only when opened with the application's
-    /// configuration. The web runner drives no hook.
-    pub dev_reload: Option<DevReload>,
+    /// The development reload driver, installed with [`Self::dev_reload`].
+    pub(crate) dev_reload: Option<DevReload>,
 
-    /// The development agent hooks the application installed with
-    /// [`Self::dev_agent`] (ADR-0095 §3).
-    ///
-    /// `None` (the default): the application installed none. The event loop
-    /// that starts with this configuration, or a clone of it, takes the hooks
-    /// and owns them until it ends (ADR-0288 §7): it attaches each when it
-    /// starts and hands each every window that mounts a root view once the
-    /// window is installed, whatever configuration the window was opened with;
-    /// a window with no content, and a presentation opened into another
-    /// window's UI runtime, are not handed over. A loop started later with a
-    /// clone finds the hooks taken. The web runner does the same for the
-    /// page's one window and never detaches the hooks.
-    ///
-    /// The driver agent (ADR-0239) is not one of these: in a debug build, or
-    /// with the `driver` feature, the runner installs it beside them when the
-    /// launch names an endpoint.
+    /// The development agent hooks, installed with [`Self::dev_agent`].
     pub(crate) dev_agent: Option<DevAgent>,
 
     /// Governs when the platform loop exits once every hosted window has
@@ -194,101 +137,36 @@ pub struct AppConfig {
     /// iOS: [`ExitPolicy`]/`AppRuntime` are themselves not compiled there
     /// (`run_ios` never reads any field of this config beyond ignoring it
     /// entirely — see that function's own doc).
-    pub exit_policy: ExitPolicy,
+    pub(crate) exit_policy: ExitPolicy,
 
-    /// Host-injected background executors.
-    ///
-    /// `None` (the default): the runtime constructs its own worker pools,
-    /// lazily, on first background spawn. `Some`: all background work routes
-    /// to the host's pools and the default pools are **never** constructed —
-    /// the seam by which FLUI embedded next to an engine that already owns a
-    /// thread pool avoids oversubscribing the machine. See
-    /// [`HostExecutors`]'s own doc for the contract layered on top.
-    pub executors: Option<HostExecutors>,
+    /// Host-injected background executors; see [`Self::executors`].
+    pub(crate) executors: Option<HostExecutors>,
 
-    /// Optional embedder callback receiving addressed sampling failures,
-    /// terminal frame failures and contained recoveries. `None`
-    /// (the default): reports remain surfaced through `tracing`; only typed
-    /// delivery is skipped. See
-    /// [`FrameFailureHandler`](flui_runtime::frame_failure::FrameFailureHandler)'s
-    /// own doc for the delivery timing and owner-admission contract.
-    ///
-    /// The handler is owner-local (`Rc`), so the configuration carries a
-    /// factory that crosses threads, and each runtime the app builds for a
-    /// window installs a fresh handler from it before its first frame. State a
-    /// handler captures is therefore per window; see
-    /// [`FrameFailureHandlerFactory`] for sharing it across windows.
-    pub frame_failure_handler: Option<FrameFailureHandlerFactory>,
+    /// The factory of frame-failure handlers; see [`Self::frame_failure_handler`].
+    pub(crate) frame_failure_handler: Option<FrameFailureHandlerFactory>,
 
-    /// Optional recording hook: each runtime the app builds installs a fresh
-    /// tap from this factory before its first input, and the tap observes
-    /// every input, arena verdict and preference revision the runtime applies
-    /// (ADR-0215 §1). `None` (the default): nothing is recorded or cloned.
-    /// The serialiser for these records lives in test and tool builds only.
-    pub input_tap: Option<InputTapFactory>,
+    /// The factory of input taps; see [`Self::input_tap`].
+    pub(crate) input_tap: Option<InputTapFactory>,
 
-    /// The factory that renders a view whose build, mount or update failed,
-    /// for every window of this app. `None` (the default): the framework's
-    /// `ErrorView`. Held per UI runtime, never in a process global, so two apps
-    /// in one process (or one test process) keep their own.
-    pub error_view_builder: Option<flui_view::ErrorViewBuilder>,
+    /// The factory that renders a failed view; see [`Self::error_view_builder`].
+    pub(crate) error_view_builder: Option<flui_view::ErrorViewBuilder>,
 
-    /// Controls whether typed panic reports retain string payloads, and whether
-    /// FLUI-owned pipeline tracing materializes error text. Debug builds default
-    /// to [`FrameFailureDetail::Verbatim`];
-    /// release builds default to [`FrameFailureDetail::Redacted`]. This is
-    /// independent of [`Self::diagnostics_profile`], so changing the broader
-    /// logging profile never silently changes the data retained in typed panic
-    /// reports.
-    /// This does not sanitize a handler's `FrameFailureReport` `Debug` output
-    /// or its typed pipeline `RenderError`; handlers must treat those as
-    /// potentially sensitive.
-    pub frame_failure_detail: FrameFailureDetail,
+    /// How much text frame-failure diagnostics retain; see [`Self::frame_failure_detail`].
+    pub(crate) frame_failure_detail: FrameFailureDetail,
     /// Pointer interpolation for this window's presentation; disabled by default.
-    pub pointer_resampling: PointerResampling,
+    pub(crate) pointer_resampling: PointerResampling,
     /// The colour capability requested of this window's surface; `Srgb8` by default.
-    /// The renderer grants as much as the surface and display allow and reports
-    /// the rest through `Renderer::surface_color`.
-    pub surface_color: flui_engine::SurfaceColor,
+    /// The window's slot grants as much as the surface and display allow, falls
+    /// back toward `Srgb8` for the rest and logs a `surface_color_downgraded`
+    /// warning on the `flui.gpu` target when it does.
+    pub(crate) surface_color: flui_engine::SurfaceColor,
 
-    /// Optional per-window close-request veto: asked, for
-    /// each window opened with this config, whether that window may
-    /// actually close when the user requests it.
-    ///
-    /// `None` (the default): every close request is allowed, exactly as
-    /// before this seam was wired. `Some`: the handler is registered
-    /// against the presentation's own [`PresentationAddress`](flui_foundation::PresentationAddress)
-    /// and receives it back on every request, so one handler shared by
-    /// several windows can still answer per window. See
-    /// [`CloseRequestHandler`]'s own doc for the thread and panic
-    /// contract, and
-    /// [`CloseResponse::KeepOpen`](super::CloseResponse::KeepOpen)
-    /// for why a veto needs no deadline.
-    ///
-    /// Only the Win32, AppKit, X11 and Wayland backends consult the underlying
-    /// platform seam; on web and Android a registered handler is inert.
-    /// Not present on iOS; UIKit scene destruction does not use the desktop
-    /// close-request veto policy.
-    pub close_request_handler: Option<CloseRequestHandler>,
+    /// The per-window close-request veto; see [`Self::close_request_handler`].
+    pub(crate) close_request_handler: Option<CloseRequestHandler>,
 
-    /// Application services to start at bootstrap — durable,
-    /// app-lifetime background work with a declared
-    /// [`ServiceLifetime`](super::lifecycle::ServiceLifetime) (does the
-    /// last window closing stop the app, or does the service keep it
-    /// alive?) and a graceful-shutdown contract: at loop exit each service
-    /// is cancelled cooperatively, given a bounded flush window, and
-    /// joined with evidence. Started by the desktop and Android bootstraps
-    /// after the UI runtime install resolves the loop's execution services; a
-    /// start failure fails the bootstrap. On Android the platform installs
-    /// no exit-policy hook, so [`ServiceLifetime`](super::lifecycle::ServiceLifetime)
-    /// has no observable effect on process lifetime there yet — the
-    /// services themselves still run and get the staged teardown.
-    /// On iOS services start once during process bootstrap and survive scene
-    /// disconnection; framework quit cancels and joins them. Their lifetime
-    /// does not grant background execution time from the operating system.
-    /// Native-only: `wasm32` does not build the lifecycle module.
+    /// The application services started at bootstrap; see [`Self::service`].
     #[cfg(not(target_arch = "wasm32"))]
-    pub services: Vec<ServiceDefinition>,
+    pub(crate) services: Vec<ServiceDefinition>,
 
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::storage_dir`].
@@ -413,8 +291,8 @@ impl AppConfig {
     }
 
     /// Ask for a wider or brighter surface than 8-bit sRGB. The request is met
-    /// as far as the surface and the display allow; read what was granted from
-    /// `Renderer::surface_color`.
+    /// as far as the surface and the display allow; a request it cannot meet is
+    /// logged as a `surface_color_downgraded` warning on the `flui.gpu` target.
     #[must_use]
     pub fn surface_color(mut self, color: flui_engine::SurfaceColor) -> Self {
         self.surface_color = color;
@@ -433,7 +311,14 @@ impl AppConfig {
         self
     }
 
-    /// Set the process-level identity used by native diagnostics sinks.
+    /// Set the process-level identity used by native diagnostics sinks and the
+    /// storage host.
+    ///
+    /// This is deliberately independent from [`title`](Self::title): a
+    /// multi-window application has one identity and may give every window a
+    /// different title. The default carries the identifier `flui build` and
+    /// `flui run` compile the application with (`FLUI_APP_ID`, from
+    /// `flui.toml`), if any.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn application_identity(mut self, identity: AppIdentity) -> Self {
         self.application_identity = identity;
@@ -451,7 +336,7 @@ impl AppConfig {
     /// is what the window reports as its content size once it is open. A side
     /// of zero is no size a window can be asked for: the application does not
     /// start, on any platform, and `run` answers
-    /// [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// [`LaunchError::InvalidWindowOption`](crate::LaunchError::InvalidWindowOption)
     /// naming `size`.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn size(mut self, width: u32, height: u32) -> Self {
@@ -462,7 +347,7 @@ impl AppConfig {
     /// Set the minimum window size. A side of zero, or a minimum above the
     /// [maximum](Self::max_size) in either dimension, is a limit no window can
     /// be asked for: the application does not start, on any platform, and
-    /// `run` answers [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// `run` answers [`LaunchError::InvalidWindowOption`](crate::LaunchError::InvalidWindowOption)
     /// naming the limit and its numbers.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn min_size(mut self, width: u32, height: u32) -> Self {
@@ -567,7 +452,12 @@ impl AppConfig {
         self
     }
 
-    /// Set how many frames each window's swapchain holds ahead of the display.
+    /// Set how many frames each window's swapchain holds ahead of the display
+    /// (ADR-0347).
+    ///
+    /// [`FrameLatency::Balanced`] by default; [`FrameLatency::Low`] trades
+    /// throughput for the newest frame on screen, for drawing and games. Every
+    /// window the application opens starts with it.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn frame_latency(mut self, latency: FrameLatency) -> Self {
         self.frame_latency = latency;
@@ -575,7 +465,14 @@ impl AppConfig {
     }
 
     /// Set how early pointer samples reach every window the application
-    /// opens; see [`Self::input_latency`].
+    /// opens.
+    ///
+    /// [`InputLatency::Balanced`](flui_platform::InputLatency::Balanced) by
+    /// default: the system's per-frame batches.
+    /// [`InputLatency::Low`](flui_platform::InputLatency::Low) asks for every
+    /// sample as soon as the system has it, for live ink and drawing: the web
+    /// host listens to `pointerrawupdate`, Android (API 30+) asks for unbuffered
+    /// pointer dispatch; a host that cannot deliver earlier ignores it.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn input_latency(mut self, latency: flui_platform::InputLatency) -> Self {
         self.input_latency = latency;
@@ -593,7 +490,25 @@ impl AppConfig {
         self
     }
 
-    /// Enable performance overlay.
+    /// Show the performance overlay: FPS, average frame time, and runtime
+    /// tail-latency/counter telemetry drawn over the app's own content.
+    ///
+    /// Scope, deliberately narrow: the overlay's three rows are shaped
+    /// through the UI runtime's text context at scene assembly and the renderer
+    /// only rasterizes them. The sampled
+    /// interval is between *composited* frames — an idle frame publishes no
+    /// scene, so it is a repaint rate, not a wall-clock frame rate. The telemetry
+    /// row reports p99 present/input latency, deferred/dropped counts, and
+    /// whether input attribution was truncated by the bounded per-frame buffer.
+    ///
+    /// Each painted frame publishes the readout as one chunk under a clip, at
+    /// a scene node slotted after the frame's own, so no boundary of the app
+    /// repaints for it. Off costs a cheap `None` check per frame; snapshot
+    /// collection, percentile reduction, and line formatting run only while the
+    /// overlay is enabled.
+    ///
+    /// [`window_options`](Self::window_options) drops this setting: it is a
+    /// compositing concern, not a window-creation one.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn performance_overlay(mut self, show: bool) -> Self {
         self.show_performance_overlay = show;
@@ -609,9 +524,18 @@ impl AppConfig {
     }
 
     /// Install a development reload driver, such as `flui-hot-reload`'s
-    /// `WorkerReloadHook`. See [`Self::dev_reload`] for when the runners
-    /// call it, and [`DevReloadHook`](flui_view::dev_reload::DevReloadHook)
-    /// for the hook's contract. Replaces any hook installed before.
+    /// `WorkerReloadHook` (ADR-0094 §1); see
+    /// [`DevReloadHook`](flui_view::dev_reload::DevReloadHook) for the hook's
+    /// contract. Replaces any hook installed before.
+    ///
+    /// Without one nothing reloads, and no reload tool is in the
+    /// application's graph. With one, the desktop and iOS runners attach the
+    /// hook once per event loop and poll it at every UI runtime's frame
+    /// boundary, and every native runner (the desktop, iOS and Android) lets
+    /// its scene plugin own a window's frame (ADR-0391). Every window opened
+    /// with a clone of this configuration shares the one hook, so a secondary
+    /// window reloads only when opened with the application's configuration.
+    /// The web runner drives no hook.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn dev_reload(mut self, hook: impl flui_view::dev_reload::DevReloadHook) -> Self {
         self.dev_reload = Some(DevReload::new(hook));
@@ -626,14 +550,29 @@ impl AppConfig {
     /// contract. Adds to the hooks installed before, each of which keeps
     /// being served if another panics. The driver agent needs none of this:
     /// the runner installs it itself (ADR-0239).
+    ///
+    /// The event loop that starts with this configuration, or a clone of it,
+    /// owns the hooks until it ends (ADR-0288 §7): it attaches each when it
+    /// starts and hands each every window that mounts a root view once the
+    /// window is installed, whatever configuration the window was opened with;
+    /// a window with no content, and a presentation opened into another
+    /// window's UI runtime, are not handed over. A loop started later with a
+    /// clone finds the hooks taken. The web runner does the same for the
+    /// page's one window and never detaches the hooks.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn dev_agent(mut self, hook: impl flui_view::dev_agent::DevAgentHook) -> Self {
         self.dev_agent = Some(DevAgent::with(self.dev_agent.take(), hook));
         self
     }
 
-    /// Inject the host's own background executors. See
-    /// [`Self::executors`]'s doc for what this changes.
+    /// Inject the host's own background executors.
+    ///
+    /// Without them the runtime constructs its own worker pools, lazily, on
+    /// first background spawn. With them, all background work routes to the
+    /// host's pools and the default pools are **never** constructed — the seam
+    /// by which FLUI embedded next to an engine that already owns a thread
+    /// pool avoids oversubscribing the machine. See [`HostExecutors`]'s own
+    /// doc for the contract layered on top.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn executors(mut self, executors: HostExecutors) -> Self {
         self.executors = Some(executors);
@@ -641,25 +580,42 @@ impl AppConfig {
     }
 
     /// Register a factory of typed frame-failure callbacks, one for each
-    /// window's runtime. See [`Self::frame_failure_handler`]'s doc and
+    /// window's runtime: the embedder's receiver of addressed sampling
+    /// failures, terminal frame failures and contained recoveries.
+    ///
+    /// Without one, reports remain surfaced through `tracing`; only typed
+    /// delivery is skipped. See
     /// [`FrameFailureHandler`](flui_runtime::frame_failure::FrameFailureHandler)'s
-    /// delivery timing and owner-admission contract.
+    /// own doc for the delivery timing and owner-admission contract.
+    ///
+    /// The handler is owner-local (`Rc`), so the configuration carries a
+    /// factory that crosses threads, and each runtime the app builds for a
+    /// window installs a fresh handler from it before its first frame. State a
+    /// handler captures is therefore per window; see
+    /// [`FrameFailureHandlerFactory`] for sharing it across windows.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn frame_failure_handler(mut self, factory: FrameFailureHandlerFactory) -> Self {
         self.frame_failure_handler = Some(factory);
         self
     }
 
-    /// Record every runtime's input stream through taps `factory` makes. See
-    /// [`Self::input_tap`]'s doc.
+    /// Record every runtime's input stream through taps `factory` makes.
+    ///
+    /// Each runtime the app builds installs a fresh tap from the factory
+    /// before its first input, and the tap observes every input, arena verdict
+    /// and preference revision the runtime applies (ADR-0215 §1). Without one,
+    /// nothing is recorded or cloned. The serialiser for these records lives in
+    /// test and tool builds only.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn input_tap(mut self, factory: InputTapFactory) -> Self {
         self.input_tap = Some(factory);
         self
     }
 
-    /// Render a view whose build, mount or update failed with `builder`. See
-    /// [`Self::error_view_builder`]'s doc.
+    /// Render a view whose build, mount or update failed with `builder`, for
+    /// every window of this app. Without one, the framework's `ErrorView`
+    /// renders it. Held per UI runtime, never in a process global, so two apps
+    /// in one process (or one test process) keep their own.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn error_view_builder(mut self, builder: flui_view::ErrorViewBuilder) -> Self {
         self.error_view_builder = Some(builder);
@@ -668,13 +624,22 @@ impl AppConfig {
 
     /// Select how much unstructured text frame-failure diagnostics retain.
     ///
+    /// This controls whether typed panic reports retain string payloads, and
+    /// whether FLUI-owned pipeline tracing materializes error text. Debug
+    /// builds default to [`FrameFailureDetail::Verbatim`]; release builds
+    /// default to [`FrameFailureDetail::Redacted`]. It is independent of
+    /// [`diagnostics_profile`](Self::diagnostics_profile), so changing the
+    /// broader logging profile never silently changes the data retained in
+    /// typed panic reports. It does not sanitize a handler's
+    /// `FrameFailureReport` `Debug` output or its typed pipeline
+    /// `RenderError`; handlers must treat those as potentially sensitive.
+    ///
     /// # Examples
     ///
     /// ```
     /// use flui_app::{AppConfig, FrameFailureDetail};
     ///
-    /// let config = AppConfig::new().frame_failure_detail(FrameFailureDetail::Redacted);
-    /// assert_eq!(config.frame_failure_detail, FrameFailureDetail::Redacted);
+    /// let _config = AppConfig::new().frame_failure_detail(FrameFailureDetail::Redacted);
     /// ```
     #[must_use]
     pub fn frame_failure_detail(mut self, detail: FrameFailureDetail) -> Self {
@@ -682,18 +647,45 @@ impl AppConfig {
         self
     }
 
-    /// Register a per-window close-request veto. See
-    /// [`Self::close_request_handler`]'s doc for what it is asked and
-    /// when, and [`CloseRequestHandler`]'s for the contract the callback
-    /// must honor.
+    /// Register a per-window close-request veto: asked, for each window
+    /// opened with this configuration, whether that window may actually close
+    /// when the user requests it.
+    ///
+    /// Without one, every close request is allowed. With one, the handler is
+    /// registered against the presentation's own
+    /// [`PresentationAddress`](flui_foundation::PresentationAddress) and
+    /// receives it back on every request, so one handler shared by several
+    /// windows can still answer per window. See [`CloseRequestHandler`]'s own
+    /// doc for the thread and panic contract, and
+    /// [`CloseResponse::KeepOpen`](super::CloseResponse::KeepOpen) for why a
+    /// veto needs no deadline.
+    ///
+    /// Only the Win32, AppKit, X11 and Wayland backends consult the underlying
+    /// platform seam; on web and Android a registered handler is inert. Not
+    /// present on iOS; UIKit scene destruction does not use the desktop
+    /// close-request veto policy.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
         self.close_request_handler = Some(handler);
         self
     }
 
-    /// Register an application service to start at bootstrap. See
-    /// [`Self::services`]'s doc for the lifetime and shutdown contract.
+    /// Register an application service to start at bootstrap: durable,
+    /// app-lifetime background work with a declared
+    /// [`ServiceLifetime`](super::lifecycle::ServiceLifetime) (does the last
+    /// window closing stop the app, or does the service keep it alive?) and a
+    /// graceful-shutdown contract: at loop exit each service is cancelled
+    /// cooperatively, given a bounded flush window, and joined with evidence.
+    ///
+    /// Services start in the desktop and Android bootstraps after the UI
+    /// runtime install resolves the loop's execution services; a start failure
+    /// fails the bootstrap. On Android the platform installs no exit-policy
+    /// hook, so the lifetime has no observable effect on process lifetime there
+    /// yet — the services themselves still run and get the staged teardown. On
+    /// iOS services start once during process bootstrap and survive scene
+    /// disconnection; framework quit cancels and joins them. Their lifetime
+    /// does not grant background execution time from the operating system.
+    /// Native-only: `wasm32` does not build the lifecycle module.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn service(mut self, service: ServiceDefinition) -> Self {

@@ -8,7 +8,7 @@
 use std::num::NonZeroUsize;
 
 use flui_sdk::animation::Animation;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{PageController, PageIndicator, PageIndicatorStyle};
 

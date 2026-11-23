@@ -608,8 +608,7 @@ mod tests {
         let haptics = window.haptics().expect("a Win32 window has an actuator");
         assert_unavailable(haptics.as_ref(), super::NOT_NOW, "with no pen in range");
 
-        let win32 = window
-            .as_any()
+        let win32 = (&*window as &dyn std::any::Any)
             .downcast_ref::<WindowsWindow>()
             .expect("Win32 window");
         let this = WindowRef::new(win32.hwnd(), win32.identity);
@@ -654,8 +653,7 @@ mod tests {
         };
         let (first, second) = (open("flui haptics a"), open("flui haptics b"));
         let win32 = |window: &std::rc::Rc<dyn crate::host_window::HostWindow>| {
-            let window = window
-                .as_any()
+            let window = (&**window as &dyn std::any::Any)
                 .downcast_ref::<WindowsWindow>()
                 .expect("Win32 window");
             (window.hwnd(), window.identity)

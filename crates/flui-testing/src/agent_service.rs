@@ -8,7 +8,7 @@
 //! Nothing reads a clock: every call names the instant it happens at, so a driver running the host
 //! on its virtual clock sees the deadlines of that clock, and a run is deterministic.
 //!
-//! [`HeadlessHost`]: crate::HeadlessHost
+//! [`HeadlessHost`]: crate::host::HeadlessHost
 
 use std::fmt;
 use std::task::Waker;
@@ -19,7 +19,7 @@ use flui_runtime::agent::{Limits, Service, ServiceConfig, Session, Status};
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 use web_time::Instant;
 
-use crate::HeadlessDevAgent;
+use crate::host::HeadlessDevAgent;
 
 /// The driver agent of headless hosts, served to conversations in process.
 ///
@@ -50,7 +50,7 @@ impl HeadlessAgentService {
     }
 
     /// A development agent whose hook hands the service each window a host built
-    /// [`with`](crate::HeadlessHost::with_dev_agent) it serves, and stops the service when it is
+    /// [`with`](crate::host::HeadlessHost::with_dev_agent) it serves, and stops the service when it is
     /// dropped.
     #[must_use]
     pub fn dev_agent(&self) -> HeadlessDevAgent {

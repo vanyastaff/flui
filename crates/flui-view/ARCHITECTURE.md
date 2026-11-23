@@ -13,7 +13,7 @@ an arity marker `A: ElementArity`, and an `ElementBehavior` `B` that supplies th
 view-specific build/lifecycle half. `ElementCore<V, A>` carries the common logic
 (mount/unmount/activate/deactivate, view storage and update, `PipelineOwner`
 propagation, dirty tracking). `ElementArity` is a marker subtrait of
-`flui_foundation::Arity`; it no longer carries an associated child storage (the
+`flui_foundation::Arity`; it carries no associated child storage (the
 slab-resident `ElementTree` is the single element graph).
 
 The behavior families, each at one arity:
@@ -128,7 +128,12 @@ returns `ViewUpdate::Unchanged` before replacing or marking dirty: no `did_updat
 render-object update, no rebuild. The element holds the allocation, so another view cannot
 take its address. Boxing a `BoxedView` returns it
 unchanged; `Child` and `Children` lend their `BoxedView`s, not the views inside, so the
-reconciler sees the identity. A parent that rebuilds for its own reasons (a focus edge, a
+reconciler sees the identity. The child accessors (`ProxyView::child`, `InheritedView::child`,
+`ParentDataView::child`) and `RenderView::visit_child_views` hand on the `&BoxedView` the view
+holds, `ChildViews` holds `BoxedView`s, and `ElementTree::insert` and `mount_root*` mount from
+one, so an element is never created from a copy of a view a parent holds shared; a `ViewSeq`
+tuple, array or `Vec` of a concrete type erases each child into a `BoxedView` of its own clone
+as it is visited. A parent that rebuilds for its own reasons (a focus edge, a
 route change) therefore rebuilds what it builds and hands the child it was given back
 as it is. Anything the child reads reaches it by its own schedule (state, an inherited
 value, a signal); a `build` reading something else no longer refreshes when an ancestor
@@ -196,31 +201,7 @@ retired tag. The final nonzero tag is admitted once; after that, owner
 construction panics permanently. Existing scoped claims stay usable, and a
 stale release cannot withdraw a later owner's claim.
 
-### Binding observers and returned futures retire independently
-
-**Rule:** observer registries and each notification snapshot own separately
-guarded observer envelopes. Healthy destruction keeps container order; after
-the first propagating destructor failure, or during an incoming unwind, the
-remaining envelopes are still destroyed (ADR-0281). Snapshot callbacks run after the
-binding guard is released. A registry change affects the next notification;
-a running dispatch keeps its snapshot, and a callback panic stops that
-notification. A legacy lifecycle failure precedes the scoped lifecycle drain,
-and its payload stays the first failure.
-
-**Rule:** suspended pop, push and application-exit notifications await each
-observer's response future in turn; cancelling the notification destroys the
-current future, its observer and the remaining snapshot normally (ADR-0281).
-Pop and push stop at the first handled response; exit consults every observer.
-
-**Limits:** a destructor that panics while a cancellation is already unwinding
-aborts, as in std, and whole-binding destruction is not covered.
-Predictive-back list clearing and replacement still retire entries under the
-write guard.
-
-**Pinned by:** the `binding_observer_ownership_and_notifications` rows of
-`lifecycle_panic_containment_matrix`.
-
-### Same-drain absorption of a mid-drain external schedule (issue #1180)
+### Same-drain absorption of a mid-drain external schedule
 
 **Rule:** `BuildOwner::drain_build_scope`'s heap loop absorbs the
 out-of-frame external inbox (`ExternalBuildScheduler` /
@@ -236,19 +217,16 @@ during a `LayoutBuilder(scope)` drain defers to the root bucket for the next
 Global pass, and the mirror lands a scope-local id in `isolated[scope]`
 during a Global drain.
 
-**Conflict:** issue #1180 — a build that calls another element's
-`RebuildHandle` synchronously (a `Listenable` notifying a subscriber it
-owns, the common `AnimatedBuilder`/`AnimatedView` shape) lands in the
-inbox, but the OLD `drain_build_scope` only ever emptied that inbox once,
-before its loop started. A schedule arriving mid-loop therefore sat until
-the *next* `build_scope` call — a whole extra frame — even though the
-notifying build and the notified rebuild belong to the same
-user-observable action. Concretely: a `Duration::ZERO` implicit-animation
-retarget snaps the controller's value synchronously in `did_update_view`,
-and the dependent `AnimatedBuilder`'s listener fires in that same instant —
-but used to need a second pump to actually rebuild, because its schedule
-missed the retargeting build's own drain by one absorb call. The inbox-based
-external scheduling had no per-iteration re-entry point.
+**Reason:** a build that calls another element's `RebuildHandle`
+synchronously (a `Listenable` notifying a subscriber it owns, the common
+`AnimatedBuilder`/`AnimatedView` shape) lands in the inbox. Emptying the inbox
+only once, before the loop starts, would leave a schedule that arrives
+mid-loop until the *next* `build_scope` call, a whole extra frame, although
+the notifying build and the notified rebuild belong to the same
+user-observable action. A `Duration::ZERO` implicit-animation retarget, for
+example, snaps the controller's value synchronously in `did_update_view` and
+the dependent `AnimatedBuilder`'s listener fires in that same instant, so its
+rebuild has to join the same drain.
 
 **Choice:** absorb per pop, bounded by a per-*frame* budget
 (`BuildOwner::mid_drain_absorbs_left`, reset to `MAX_MID_DRAIN_ABSORBS = 16`
@@ -353,7 +331,7 @@ still reaches its caller, the binding. Pinned by
 time. There is no element-side child-mutation seam (insert / move / remove /
 attach / detach of a child render object on the parent element): a seam
 of that shape had zero production callers across the workspace and was
-deleted. The audit table behind this decision is recorded in issue #1203; it
+deleted. The audit behind this decision
 mapped every consumer family of such a seam, including the hard cases
 (multi-child reorder, GlobalKey reparent, parent-data attach).
 
@@ -387,9 +365,6 @@ path — `render_custody::mount`'s diagnostic when an element-tree parent
 with an active `PipelineOwner` leaves the chain with no render ancestor,
 plus its debug-build refusal test
 (`crates/flui-view/tests/orphaned_render_mount.rs`).
-That gate and its tests arrived with the #1198 fix and are untouched here;
-the else-arm diagnostics the same fix added to the six (now deleted) seam
-methods vanish with them, as intended.
 
 
 ### Lifecycle capability types are nameable through the facade
@@ -799,20 +774,39 @@ without shadowing the element's fact or diffing against it. Pinned by `flui-test
 `an_id_from_before_a_removal_is_gone` and
 `a_views_field_named_as_an_element_fact_reads_and_diffs_as_its_own`.
 
+### One public path per item
+
+An item of a closed module is named at the crate root; an item of an open module is named only
+through its module. The closed modules (`binding`, `child`, `context`, `key`, `owner`,
+`reactive`, `seq`, `tree`, `view`) are private, and the root re-exports what a widget, package
+or render-view author writes with. The open modules (`background`, `dev_agent`, `dev_reload`,
+`element`, `environment`, `navigation`, `persist`, `testing`) are namespaces whose items are not
+also at the root: `element` holds what an element author names (`ElementKind`, the element and
+behaviour types, `Lifecycle`, the slots, the builder elements). The root re-exports no other
+crate's items beyond the derives of `flui-macros`, beside the traits they implement, and the
+vocabulary of this crate's own traits (`ValueKey`, `RebuildReason`, `AppLifecycleState`, the
+signal types of `flui_foundation::read_scope`): ids and creation sites are `flui_foundation`'s,
+the frame scheduler's handles `flui_scheduler`'s, and the facade and `flui-sdk` name them in
+their `foundation` and `scheduler` modules. `prelude` holds the authoring forms only, and no
+`tracing` macro.
+
 ### The composition-root seam is a hidden module, not a feature
 
 What the UI runtime-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`)
-need from a binding lives in `#[doc(hidden)] pub mod __runtime` (ADR-0081 §4): the
+need from a binding lives in `#[doc(hidden)] pub mod __runtime` (ADR-0081 §4): the owners a
+composition root builds and drives (`WidgetsBinding`, `BuildOwner`, `ElementTree` and its
+`ElementNode`, the root element and render view, the presentation's capability source, its
+`GlobalKeyScope`, `BuildInProgress`, and what a frame's build and a contained panic report), the
 `GlobalKey` registry activation, the frame-phase stamp at the build-to-finalize boundary
 (`FramePhaseMarker`), the multi-presentation `GlobalKeyRegistryComposite`, and the terminal
-lifecycle ladder (`LifecycleSource`). The module is always
-compiled, so no build configuration changes what `WidgetsBinding` holds, and it has no semver
-promise. The methods it adds to `WidgetsBinding` are on the sealed `BindingRuntime` trait
-rather than inherent, so they resolve only where the trait is imported and are not part of the
-binding's surface as `flui::view` and `flui_sdk::view` expose it. Those two re-export this
-crate as a glob module with a private `mod __runtime {}` that shadows the glob's, so the seam
-is not reachable through them; a `compile_fail,E0603` doctest on each pins it. Pinned from
-outside the crate by `tests/runtime_seam.rs`.
+lifecycle ladder (`LifecycleSource`). A test that drives a bare owner names it there too. The
+module is always compiled, so no build configuration changes what `WidgetsBinding` holds, and it
+has no semver promise. The methods it adds to `WidgetsBinding` are on the sealed
+`BindingRuntime` trait rather than inherent, so they resolve only where the trait is imported.
+`flui::view` and `flui_sdk::view` re-export this crate as a glob module with a private
+`mod __runtime {}` that shadows the glob's, so the seam is not reachable through them; a
+`compile_fail,E0603` doctest on each pins it. Pinned from outside the crate by
+`tests/runtime_seam.rs`.
 
 ### A presentation's URL owner is a slot below the catalog
 
@@ -1051,7 +1045,7 @@ graph rejects is dropped normally, during an unwind too
 `BuildOwner::drop` reclaims its global keys and tells the tree observer `detached()`, contained,
 and never resumes a failure; the element tree drops a `ReconcileGuard` that only resets a cell.
 A `dispose` that panics while a presentation tears down is contained and recorded per element, so
-the tree's teardown is no source of the raised failure that #1165 is about.
+the tree's teardown is no source of the failure a presentation raises.
 
 ### Independent child and contained payload retirement
 

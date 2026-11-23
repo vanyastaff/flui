@@ -519,7 +519,7 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
         let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
         // A window that counts the frames asked of it.
         let window = Rc::new(
-            flui_testing::MockWindow::new()
+            flui_platform::testing::MockWindow::new()
                 .with_size(100.0, 100.0)
                 .focused(true),
         );

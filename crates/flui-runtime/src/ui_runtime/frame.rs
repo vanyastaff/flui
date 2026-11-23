@@ -30,7 +30,7 @@ pub(super) fn presentation_span(presentation: PresentationId) -> tracing::Span {
 
 impl UiRuntime {
     // ========================================================================
-    // Frame production (moved from the retired `AppBinding`)
+    // Frame production
     // ========================================================================
 
     /// Draw a frame and return the [`Scene`](flui_layer::Scene) holding the
@@ -342,9 +342,7 @@ impl UiRuntime {
             // stale value.
             presentation.set_last_segment_span(segment_start, presentation.clock().now());
             // Latch "first frame confirmed sent" only for an unconditional
-            // `Produce` that didn't error -- mirrors the old
-            // `RenderingBinding::mark_first_frame_sent`'s `!errored`
-            // guard, now also excluding `ProduceWithheld`: a withheld
+            // `Produce` that did not error, and not for `ProduceWithheld`: a withheld
             // result was never sent, by construction, so confirming it as
             // sent would be self-contradictory and would wrongly disarm a
             // later `defer_first_frame` call. `render_frame` below
@@ -568,21 +566,19 @@ impl UiRuntime {
         self.enter(UiRuntime::run_commit_anchor);
     }
 
-    /// One presentation's build+layout+paint segment — moves VERBATIM from
-    /// the retired `AppBinding::draw_frame_entered`'s Phase 1–4, now
-    /// parameterized by `presentation` instead of hard-wired to
-    /// `self.presentations.primary()`.
+    /// One presentation's build+layout+paint segment, parameterized by
+    /// `presentation` rather than hard-wired to `self.presentations.primary()`.
     ///
     /// **Why the caller's dirty gate cannot skip a segment this body would
     /// have produced `Painted` for:** `run_frame_with_layout_builders`
     /// itself returns `None` (this function's `Idle` outcome) whenever
-    /// nothing is dirty — that decision already lived inside the pipeline
-    /// before this loop existed. `Self::has_pending_work` (build pending OR
+    /// nothing is dirty, a decision the pipeline owns.
+    /// `Self::has_pending_work` (build pending OR
     /// a dirty render node) is exactly the union of conditions that
     /// decision depends on, so gating the CALL on the same union, one level
     /// up, changes nothing observable: either both agree nothing is dirty
     /// (skip here, `Idle` there — same outcome, cheaper), or either finds
-    /// real work and the segment runs exactly as it always did.
+    /// real work and the segment runs.
     #[cfg(test)]
     pub(super) fn draw_frame_for_presentation(
         presentation: &PresentationState,
@@ -1010,12 +1006,11 @@ impl UiRuntime {
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a
         // secondary and exercises this attribution. Production secondary
-        // windows are contentless today, and simultaneous paintable
-        // presentations remain unsupported because this transaction has
-        // one constraints set, one sink, and retains only the last produced
-        // scene. Issue #559 must add per-presentation constraints, sinks,
-        // and submit routing before production secondary content is enabled;
-        // this producer lookup does not define last-scene-wins behavior.
+        // windows share a UI runtime only without content, because this
+        // transaction has one constraints set, one sink, and retains only the
+        // last produced scene. Admitting content in a shared UI runtime needs
+        // per-presentation constraints, sinks, and submit routing; this
+        // producer lookup does not define last-scene-wins behavior.
         let producer = self
             .presentations
             .get(producer_id)
@@ -1198,7 +1193,7 @@ impl UiRuntime {
             );
 
             if retry_needed {
-                // Issue #637: `wake_frame()` alone re-opens `draw_frame_entered`'s
+                // `wake_frame()` alone re-opens `draw_frame_entered`'s
                 // per-presentation segment gate but never touches `PipelineOwner`'s
                 // own independent dirty tracking — the frame that just failed to
                 // submit had already consumed whatever was dirty producing the
@@ -1409,22 +1404,16 @@ impl UiRuntime {
     /// `presentation` must be the exact presentation whose segment produced
     /// the outcome being submitted this call — [`Self::render_frame`]
     /// resolves this from `draw_frame_entered`'s own returned producer id,
-    /// never `self.presentations.primary()` unconditionally. The bug this
-    /// guards against: with more than one presentation mounted, a pump where
-    /// the primary's segment is skipped (nothing dirty) while a secondary's
-    /// produces used to still record against `primary()`; because the old
-    /// per-clock segment-span latch was never cleared once set, a primary
-    /// that HAD produced on some EARLIER pump still read `Some` here (stale,
-    /// from that earlier pump, not this one), so the guard below wrongly
-    /// passed — recording a `FrameSnapshot` with the primary's stale span, a
-    /// duplicate `frame_id` (the primary's own `produced_count` unchanged
-    /// since it didn't poll-produce this pump), and the primary's own
-    /// pending input epochs drained into a frame it never produced. Reading
-    /// and clearing PER-PRESENTATION via `take_last_segment_span` (rather
-    /// than a shared, never-cleared `get`) and resolving the correct
-    /// producer together close this: a presentation not addressed here never
-    /// has its span read, and the addressed one's stale cross-pump reads are
-    /// impossible because the span is cleared the moment it is used.
+    /// never `self.presentations.primary()` unconditionally. With more than
+    /// one presentation mounted, a pump where the primary's segment is
+    /// skipped (nothing dirty) while a secondary's produces must not record
+    /// against `primary()`: a stale span from an earlier pump would pass the
+    /// guard below and record a `FrameSnapshot` with a duplicate `frame_id`
+    /// (the primary's `produced_count` is unchanged) and drain the primary's
+    /// pending input epochs into a frame it never produced. The span is read
+    /// and cleared per presentation by `take_last_segment_span`, so a
+    /// presentation not addressed here never has its span read and a span is
+    /// never read twice.
     ///
     /// Called only from the branches of [`Self::render_frame`] that
     /// reached a real submit attempt (never for `Ok(false)`/no-damage, whose

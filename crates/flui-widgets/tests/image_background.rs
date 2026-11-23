@@ -117,7 +117,7 @@ impl ImageProvider for CountedDecode {
 /// Red-check: skip the job when the capability is missing (nothing runs).
 fn without_background_lanes_a_decode_job_runs_on_the_owner_thread() {
     use flui_runtime::capability::CapabilityRegistry;
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
     // A registry that provides nothing, background lanes included.
     let registry = CapabilityRegistry::builder()
@@ -172,7 +172,7 @@ impl flui_platform::executor::Executor for Saturated {
 fn a_saturated_lane_decodes_on_the_owner_thread() {
     use flui_platform::capability::{CapabilityRegistrar, ProviderContext};
     use flui_runtime::capability::CapabilityRegistry;
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use flui_view::background::{Background, BackgroundCapability};
 
     let mut registrar = CapabilityRegistrar::new();

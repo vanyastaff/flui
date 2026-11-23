@@ -183,7 +183,7 @@ Option 1.
 
 - `a_delivered_vsync_is_the_frames_time_held_between_the_last_frame_and_the_wake` and
   `a_target_present_time_bounds_the_idle_work_of_its_frame` (flui-runtime) pin decisions 2 and 3;
-  `a_frame_latency_setting_reaches_the_configuration_and_survives_release` (flui-engine) decision 4.
+  `a_windows_colour_and_latency_reach_the_backend_once_a_turn` (flui-engine) decision 4.
 - `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (flui-runtime) pins the report's
   grid, the stale report and the refusal of another presentation's frame;
   `the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead` and

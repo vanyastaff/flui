@@ -9,6 +9,7 @@
 //! window's state, not a method here: a second way would leave the snapshot
 //! behind.
 
+use std::any::Any;
 use std::sync::atomic::Ordering;
 
 use flui_platform::{Unsupported, UnsupportedReason};
@@ -65,7 +66,8 @@ pub trait MacOSWindowExt {
 
 impl MacOSWindowExt for dyn HostWindow + '_ {
     fn appkit(&self) -> Option<AppKitWindow<'_>> {
-        self.as_any().downcast_ref().map(AppKitWindow)
+        let window: &dyn Any = self;
+        window.downcast_ref::<MacOSWindow>().map(AppKitWindow)
     }
 }
 
@@ -398,8 +400,8 @@ impl<'a> AppKitWindow<'a> {
     /// one, or either is closed.
     pub fn add_tab_to_window(self, other: &dyn HostWindow) -> Result<(), TabJoinError> {
         let this = self.0;
+        let other: &dyn Any = other;
         let other = other
-            .as_any()
             .downcast_ref::<MacOSWindow>()
             .ok_or(TabJoinError::NotAppKit)?;
         if this.native_key() == other.native_key() {

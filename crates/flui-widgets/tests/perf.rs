@@ -50,11 +50,12 @@ use flui_painting::paint::{Image as PixelImage, TextureId};
 use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::{OffsetWriteCause, ScrollOffsetWriter, ScrollPosition};
+use flui_testing::FrameReport;
 use flui_testing::control_cost::control_over_text;
 use flui_testing::heap::{CountingAllocator, HeapCounts, assert_rounds_plateau};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::widgets::{LaidOut, lay_out, tight};
-use flui_testing::{FrameReport, HeadlessHost, HeadlessWindow};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, RawButton, RepaintBoundary, SingleChildScrollView, SizedBox,
@@ -815,7 +816,7 @@ fn perf_a_not_shown_retry_republishes_the_held_version() {
         laid.pump_for(FRAME);
     }
     label.set(String::from("withheld"));
-    laid.leave_unshown(1, flui_testing::UnshownFrame::Withdrawn);
+    laid.leave_unshown(1, flui_testing::host::UnshownFrame::Withdrawn);
     let withheld = laid.pump_report(FRAME);
     assert!(
         counter(&withheld, "nodes_painted") > 0,
@@ -1190,7 +1191,8 @@ fn round_of_a_scrolled_lazy_list() {
 /// Presses through the window's agent: the gesture arena, the recognizers, a state's signal
 /// and the semantics tree the locators read.
 fn round_of_presses() {
-    use flui_testing::{Tester, find};
+    use flui_testing::find;
+    use flui_testing::tester::Tester;
 
     let mut tester = Tester::mount(PressCounter);
     for presses in 1..=3 {

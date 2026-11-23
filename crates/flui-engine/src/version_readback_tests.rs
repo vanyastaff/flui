@@ -18,9 +18,9 @@ use flui_layer::{
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, paint::Paint};
 
-use crate::damage::FramePlan;
+use crate::frame::damage::FramePlan;
 use crate::headless::RetainedCapture;
-use crate::recording_cache::admission::DRAWS_TO_ADMIT;
+use crate::record::cache::admission::DRAWS_TO_ADMIT;
 
 const SIDE: u32 = 128;
 const SURFACE: SurfaceKey = SurfaceKey {
@@ -1490,7 +1490,7 @@ fn a_backdrop_filter_filters_the_pixel_a_clip_edge_shows_in_part() {
 /// chunk alone in one pass, and a frame with nothing to draw counts nothing.
 #[test]
 fn a_frame_counts_the_chunks_it_records() {
-    use crate::frame_protocol::RasterCounters;
+    use crate::frame::protocol::RasterCounters;
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -1670,7 +1670,7 @@ fn caret_blink_counters(
     renderer: &crate::headless::HeadlessRenderer,
     rows: usize,
     blinks: usize,
-) -> crate::frame_protocol::RasterCounters {
+) -> crate::frame::protocol::RasterCounters {
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     let mut list = CaretOverList::new(rows);
     apply(
@@ -1684,7 +1684,7 @@ fn caret_blink_counters(
     capture
         .render_scene(&Scene::of_version(list.version()))
         .expect("the warm-up renders");
-    let mut total = crate::frame_protocol::RasterCounters::default();
+    let mut total = crate::frame::protocol::RasterCounters::default();
     for _ in 0..blinks {
         let damage = list.blink();
         apply(&mut capture, damage);
@@ -1903,7 +1903,7 @@ fn mixed_scene() -> SceneVersion {
 
 /// What one frame did, recorded and drew.
 struct Drawn {
-    counters: crate::frame_protocol::RasterCounters,
+    counters: crate::frame::protocol::RasterCounters,
     ir: Vec<u8>,
     pixels: Vec<u8>,
 }
@@ -3231,8 +3231,8 @@ fn a_slot_that_draws_another_owners_version_drops_the_first_owners_recordings() 
     drop(first);
 }
 
-/// The capture that stands in for a `Renderer` plans its frames as the
-/// `Renderer` does: a frame of another scene owner's version drops the
+/// The capture, which owns its painter, plans its frames as a target that
+/// owns one must: a frame of another scene owner's version drops the
 /// recordings of the owner drawn before.
 #[test]
 fn a_renderer_frame_of_another_owners_version_drops_the_first_owners_recordings() {

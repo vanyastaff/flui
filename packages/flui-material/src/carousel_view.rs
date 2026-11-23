@@ -17,13 +17,15 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_sdk::geometry::{EdgeInsets, Radius};
-use flui_sdk::painting::{BorderRadius, Clip, Color};
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::{BorderRadius, Color};
+use flui_sdk::rendering::objects::CarouselLayout;
+use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{EventContext, EventOutcome};
 use flui_sdk::widgets::{
     AnimatedBuilder, Carousel, CarouselAutoplay, CarouselController, CarouselItemScope,
-    CarouselLayout, KeylineSnap, Positioned, SemanticsRole, Stack, WidgetState,
-    WidgetStateProperty,
+    KeylineSnap, Positioned, Stack, WidgetState, WidgetStateProperty,
 };
 
 use crate::event_callback::{ValueCallback, value_callback};
@@ -33,7 +35,7 @@ use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
-use flui_sdk::widgets::interaction::node::Description;
+use flui_sdk::widgets::__private::node::Description;
 
 /// M3's extra-large corner, the cards' radius.
 const DEFAULT_CORNER_RADIUS: f64 = 28.0;

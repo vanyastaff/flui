@@ -1,8 +1,8 @@
 //! What one hook of FLUI's window class keeps of each window, and the scale
 //! every hook reads a window at.
 
+use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use flui_foundation::geometry::DevicePixelRatio;
@@ -23,7 +23,7 @@ use super::{WindowIdentity, WindowRef};
 /// application code that reaches the table again. A read runs its closure with
 /// the table borrowed, so the closure only copies out what it needs.
 pub(crate) struct WindowTable<T> {
-    windows: RefCell<HashMap<WindowIdentity, Kept<T>>>,
+    windows: RefCell<FxHashMap<WindowIdentity, Kept<T>>>,
 }
 
 /// One window's value, with the reference the window was announced with.
@@ -35,7 +35,7 @@ struct Kept<T> {
 impl<T> Default for WindowTable<T> {
     fn default() -> Self {
         Self {
-            windows: RefCell::new(HashMap::new()),
+            windows: RefCell::new(FxHashMap::default()),
         }
     }
 }

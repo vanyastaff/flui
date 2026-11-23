@@ -24,7 +24,7 @@ use flui_view::prelude::*;
 use flui_widgets::{Column, SingleChildScrollView, SizedBox, Text};
 
 use crate::heap::HeapCounts;
-use crate::{HeadlessHost, HeadlessWindow};
+use crate::host::{HeadlessHost, HeadlessWindow};
 
 /// The rows a scenario mounts: enough that the app around them is noise in
 /// a per-row figure.

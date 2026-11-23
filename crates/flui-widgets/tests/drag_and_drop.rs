@@ -20,6 +20,7 @@ use flui_interaction::drag::{
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
+use flui_objects::StackFit;
 use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::transfer::data::{TransferActions, TransferFormat};
 use flui_platform::transfer::drag::OsDragEnd;
@@ -32,7 +33,7 @@ use flui_widgets::{
     AlternativeKind, CommandAppearance, CopySelectionTextIntent, Directionality, DragAnchor,
     DragCommands, Draggable, DropCommands, DropHover, DropTarget, InsertPosition, Overlay,
     OverlayEntry, OverlayHandle, Padding, PasteTextIntent, Positioned, SingleActivator, SizedBox,
-    Stack, StackFit, Text,
+    Stack, Text,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -441,12 +442,12 @@ fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
     );
     let wait = Duration::from_millis(16);
     let press = match pointer {
-        Pointer::Mouse => flui_testing::MouseScript::new("mouse press")
+        Pointer::Mouse => flui_testing::replay::MouseScript::new("mouse press")
             .press(at)
             .wait(wait)
             .release()
             .build(),
-        Pointer::Finger => flui_testing::TouchScript::new("touch press")
+        Pointer::Finger => flui_testing::replay::TouchScript::new("touch press")
             .down(1, at)
             .wait(wait)
             .up(1)

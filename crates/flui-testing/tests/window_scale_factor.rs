@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use flui_testing::a11y::A11yRect;
-use flui_testing::{HeadlessHost, HeadlessWindow, HeadlessWindowId};
+use flui_testing::host::{HeadlessHost, HeadlessWindow, HeadlessWindowId};
 use flui_view::ViewExt as _;
 use flui_widgets::{Semantics, SizedBox};
 

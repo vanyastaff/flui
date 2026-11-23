@@ -1,14 +1,13 @@
 //! S1 KeyId interning prototype bench.
 //!
-//! Resolves the spec's Deferred S1 question against a synthetic mock: does
+//! Answers the "S1" question against a synthetic mock: does
 //! `Option<KeyId>` (NonZeroU64 newtype, 8 bytes) beat the `Option<Box<dyn ViewKey>>`
 //! (fat-pointer, 16 bytes + heap) baseline by a material margin on a 10K-element
 //! 80% unkeyed-leaf / 20% keyed-branch distribution?
 //!
-//! Phase 0 (this bench) does **not** modify production `ElementNode` storage —
-//! the spec FR-022 commits to the boxed-dyn baseline absent a strong S1 inversion.
-//! The gate report uses these numbers to decide whether to re-open FR-022
-//! before a later phase lands the storage shape.
+//! This bench does **not** modify production `ElementNode` storage, which
+//! keeps `Option<Box<dyn ViewKey>>`; it measures whether interning keys would
+//! be worth changing that.
 //!
 //! # Bench groups
 //!
@@ -25,9 +24,9 @@
 //!
 //! # Why a placeholder reconciler
 //!
-//! The production keyed reconciler does not land until a later phase (and its
-//! callers don't get rewired until still later). The S1 question is a *storage-shape*
-//! question, not a *reconciler-algorithm* question. The minimal kernel that
+//! The S1 question is a *storage-shape* question, not a *reconciler-algorithm*
+//! question, so the bench does not run the production keyed reconciler. The
+//! minimal kernel that
 //! isolates the storage-shape cost is a `HashMap<key_hash, idx>` build +
 //! per-new-position lookup. That is what we measure.
 
@@ -81,8 +80,8 @@ fn bench_reconcile_baseline_box_dyn(c: &mut Criterion) {
 // ----------------------------------------------------------------------------
 
 /// Reconcile workload over `Option<KeyId>`-keyed nodes. Each iteration builds a
-/// fresh interner — we explicitly want construction-included cost so the gate
-/// report compares apples-to-apples against the boxed-dyn shape.
+/// fresh interner — we explicitly want construction-included cost so the report
+/// compares apples-to-apples against the boxed-dyn shape.
 fn bench_reconcile_interned_key_id(c: &mut Criterion) {
     let mut group = c.benchmark_group("s1_reconcile/interned_key_id");
     for &perm in Permutation::ALL {
@@ -117,14 +116,14 @@ fn bench_reconcile_interned_key_id(c: &mut Criterion) {
 /// Strips the per-iteration construction cost from the outer reconcile bench
 /// (the construction overhead amortised across all 10K nodes in `iter_batched`'s
 /// setup phase). What remains is the inner walk cost — the column the S1
-/// verdict cares about.
+/// question cares about.
 fn bench_hash_lookup_baseline_box_dyn(c: &mut Criterion) {
     let nodes = build_baseline_nodes();
     let order = identity_order();
-    // Pre-build the keyed map OUTSIDE `b.iter` per Codex review #5 — the
+    // Pre-build the keyed map OUTSIDE `b.iter`: the
     // hash-lookup probe must measure lookup latency in isolation, not lookup
-    // + per-iteration map construction. The map build cost was previously
-    // contaminating the lookup column of the S1 verdict.
+    // + per-iteration map construction, whose cost would
+    // contaminate the lookup column.
     let map = build_keyed_map_baseline(&nodes);
     c.bench_function("s1_hash_lookup/baseline_box_dyn", |b| {
         b.iter(|| {
@@ -138,7 +137,7 @@ fn bench_hash_lookup_baseline_box_dyn(c: &mut Criterion) {
 fn bench_hash_lookup_interned_key_id(c: &mut Criterion) {
     let (nodes, _interner) = build_interned_nodes();
     let order = identity_order();
-    // Same pre-built-map discipline as the baseline probe — see Codex #5.
+    // Same pre-built-map discipline as the baseline probe.
     let map = build_keyed_map_interned(&nodes);
     c.bench_function("s1_hash_lookup/interned_key_id", |b| {
         b.iter(|| {
@@ -157,9 +156,8 @@ fn bench_hash_lookup_interned_key_id(c: &mut Criterion) {
 /// numbers land in the same `target/criterion/` report as the latency groups.
 /// The bench body recomputes [`MemoryAccounting::for_baseline`] per iteration
 /// (a pure `const`-style arithmetic over `NODE_COUNT`) so the value is
-/// reproducibly visible in the report without `println!` (forbidden by
-/// Constitution Principle 6). The gate report reads the canonical totals
-/// from this source file's accounting struct, not from runtime output.
+/// reproducibly visible in the report without `println!`. The canonical
+/// totals are read from this source file's accounting struct, not from runtime output.
 fn bench_memory_baseline_box_dyn(c: &mut Criterion) {
     c.bench_function("s1_memory/baseline_box_dyn", |b| {
         b.iter(|| {

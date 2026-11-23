@@ -30,10 +30,11 @@ use flui_foundation::{ElementId, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementNode, ElementTree, LifecycleHook, RecoveredAt};
 use flui_view::{
-    BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementNode, ElementTree, ErrorView,
-    GlobalKey, InheritedView, IntoView, LifecycleContext, LifecycleHook, RebuildReason,
-    RecoveredAt, RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, BuildContextExt, ErrorView, GlobalKey, InheritedView, IntoView,
+    LifecycleContext, RebuildReason, RenderView, StatefulView, StatelessView, View, ViewExt,
+    ViewState,
 };
 
 // ============================================================================
@@ -198,7 +199,7 @@ impl RenderView for Row {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -321,7 +322,8 @@ pub(crate) fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_co
                 }
                 .boxed(),
             ],
-        },
+        }
+        .boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );
@@ -426,7 +428,8 @@ pub(crate) fn a_child_init_state_panic_payload_is_destroyed_under_containment() 
                 }
                 .boxed(),
             ],
-        },
+        }
+        .boxed(),
         Some(pipeline),
         &mut owner.element_owner_mut(),
     );
@@ -465,7 +468,7 @@ pub(crate) fn a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed
     let row_v1 = Row {
         children: vec![PlainLeaf.boxed(), counter.boxed(), PlainLeaf.boxed()],
     };
-    let parent_id = tree.mount_root(&row_v1, &mut owner.element_owner_mut());
+    let parent_id = tree.mount_root(&row_v1.boxed(), &mut owner.element_owner_mut());
     owner.schedule_build_for(parent_id, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
@@ -551,7 +554,7 @@ pub(crate) fn a_dispose_panic_on_a_global_keyed_element_still_clears_the_registr
 
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root_id = tree.mount_root(&counter, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&counter.boxed(), &mut owner.element_owner_mut());
     owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
@@ -637,7 +640,7 @@ pub(crate) fn a_dispose_panic_on_a_global_keyed_element_still_clears_the_registr
 #[derive(Clone)]
 struct CountProvider {
     value: u32,
-    child: Row,
+    child: BoxedView,
 }
 
 impl InheritedView for CountProvider {
@@ -647,7 +650,7 @@ impl InheritedView for CountProvider {
         &self.value
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -760,9 +763,10 @@ pub(crate) fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_in
         value: 1,
         child: Row {
             children: vec![counter.clone().boxed(), sibling.clone().boxed()],
-        },
+        }
+        .boxed(),
     };
-    let provider_id = tree.mount_root(&provider_v1, &mut owner.element_owner_mut());
+    let provider_id = tree.mount_root(&provider_v1.boxed(), &mut owner.element_owner_mut());
     owner.schedule_build_for(provider_id, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
@@ -842,7 +846,8 @@ pub(crate) fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_in
         value: 2,
         child: Row {
             children: vec![sibling.clone().boxed()],
-        },
+        }
+        .boxed(),
     };
     tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
     assert_eq!(

@@ -1,9 +1,10 @@
 //! [`FractionalTranslation`] — translates its child by a fraction of the
 //! child's own size when painting.
 
+use flui_foundation::CreationSite;
 use flui_objects::{RenderFractionalTranslation, TranslationFraction};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Translates its child by `(dx, dy)` × the child's size before painting (e.g.
 /// `dx = -0.5` shifts the child left by half its width). Layout is unaffected.

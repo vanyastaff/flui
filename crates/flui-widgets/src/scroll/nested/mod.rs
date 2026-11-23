@@ -191,7 +191,8 @@ pub enum OverscrollBehavior {
 }
 
 /// One delta a participant is offered (ADR-0209 §1), in the participant's
-/// own plane (see the [module](self) documentation).
+/// own plane: the local space of the box it wraps, into which the channel
+/// converts the delta, the velocity and the [focal point](ScrollStep::focal_point).
 ///
 /// Only the channel builds steps.
 #[derive(Debug, Clone, Copy, PartialEq)]

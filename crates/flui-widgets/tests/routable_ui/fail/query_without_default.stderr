@@ -4,7 +4,7 @@ error[E0277]: the trait bound `Page: std::default::Default` is not satisfied
 24 |         page: Page,
    |               ^^^^ the trait `std::default::Default` is not implemented for `Page`
    |
-note: required by a bound in `flui_widgets::router::__derive::assert_query_defaulted`
+note: required by a bound in `flui_widgets::__derive::assert_query_defaulted`
   --> src/router/__derive.rs
    |
    | pub fn assert_query_defaulted<T: FromStr + Display + Default>() {}

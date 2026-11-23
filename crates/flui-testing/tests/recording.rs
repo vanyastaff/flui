@@ -16,11 +16,11 @@ use flui_platform::{
 };
 use flui_runtime::owner::InputOutcome;
 use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow, ShownFrame};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::recording::{
     Privacy, RecordingClock, RecordingError, RecordingReader, RecordingWriter, ReplayableRecording,
     record,
 };
-use flui_testing::{HeadlessHost, HeadlessWindow};
 
 /// A box that taps and long-presses, logging which fired.
 fn host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
@@ -49,7 +49,7 @@ fn host_on(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> Head
 /// not committed, so pointer input waits for the next presented frame.
 fn uncommitted(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
     let mut host = attached(HeadlessWindow::new(200, 200), log);
-    host.leave_unshown(1, flui_testing::UnshownFrame::NotReady);
+    host.leave_unshown(1, flui_testing::host::UnshownFrame::NotReady);
     let _ = host.pump(Duration::from_millis(16));
     host
 }

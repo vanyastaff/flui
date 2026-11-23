@@ -1,9 +1,10 @@
 //! [`IgnoreBaseline`] — hides its child's baseline from a baseline-aligning
 //! parent.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderIgnoreBaseline;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Hides `child`'s baseline from the parent, so a baseline-aligning parent
 /// treats this subtree as having no baseline at all.

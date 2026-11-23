@@ -59,7 +59,7 @@ use flui_foundation::RebuildReasons;
 use rustc_hash::FxHashMap;
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
-/// `build_scope` drain runs an element's `build()` (PR-K).
+/// `build_scope` drain runs an element's `build()`.
 ///
 /// Lets a behavior construct a live
 /// [`LiveBuildContext`](crate::context::LiveBuildContext) — reading the real tree and
@@ -74,7 +74,7 @@ use rustc_hash::FxHashMap;
 #[derive(Clone, Copy)]
 pub(crate) struct BuildHandle<'a> {
     pub(crate) tree: &'a crate::tree::ElementTree,
-    pub(crate) dep_sink: &'a parking_lot::Mutex<Vec<crate::context::DependentRecord>>,
+    pub(crate) dep_sink: &'a std::cell::RefCell<Vec<crate::context::DependentRecord>>,
 }
 
 /// When [`ElementOwner::schedule_build_for`] requests the frame its fresh
@@ -229,7 +229,7 @@ pub struct ElementOwner<'a> {
     /// listener tick can request a frame from outside the build.
     pub(crate) external_request_frame: Option<&'a Arc<dyn Fn() + Send + Sync>>,
 
-    /// Live-tree access during a `build_scope` drain (PR-K). `Some` only
+    /// Live-tree access during a `build_scope` drain. `Some` only
     /// while an element's `build()` runs; `None` on every other lifecycle
     /// path (mount / unmount / update / reconcile). The behavior reads it
     /// to build a live [`LiveBuildContext`](crate::context::LiveBuildContext).
@@ -360,7 +360,7 @@ impl ElementOwner<'_> {
 
     /// Atomically remove and return the element registered under
     /// `key` for a reparent operation. Wrapper around
-    /// [`BuildOwner::take_global_key_for_reparent`](crate::BuildOwner::take_global_key_for_reparent)
+    /// [`BuildOwner::take_global_key_for_reparent`](crate::owner::BuildOwner::take_global_key_for_reparent)
     /// for the split-borrow `ElementOwner` handle that the
     /// reconciler holds.
     pub fn take_global_key_for_reparent(&mut self, key: &dyn ViewKey) -> Option<ElementId> {
@@ -372,7 +372,7 @@ impl ElementOwner<'_> {
     /// Every path that attaches or re-declares a keyed child funnels through
     /// here, so the frame boundary can tell an ordinary `GlobalKey` reparent
     /// (one declaring parent) from a duplicate (two). Verified and cleared
-    /// by [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree).
+    /// by [`BuildOwner::finalize_tree`](crate::owner::BuildOwner::finalize_tree).
     pub fn reserve_global_key(&mut self, parent: ElementId, child: ElementId, key: &dyn ViewKey) {
         self.global_key_reservations.reserve(parent, child, key);
     }

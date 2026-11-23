@@ -444,8 +444,8 @@ impl InheritedView for LocalHistoryScope {
         &self.handle
     }
 
-    fn child(&self) -> &dyn View {
-        &*self.child
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 
     fn update_should_notify(&self, _old: &Self) -> bool {

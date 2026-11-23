@@ -1,8 +1,9 @@
 //! Recovery drops opaque payloads once it has recorded them, before invoking factories and diagnostics.
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
 use flui_view::LifecycleContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, ErrorView, IntoView, LifecycleHook, RebuildReason,
-    RecoveredAt, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BuildContext, ErrorView, IntoView, RebuildReason, StatefulView, StatelessView, View, ViewExt,
+    ViewState,
 };
 use std::{
     any::TypeId,
@@ -115,7 +116,7 @@ impl<S: tracing::Subscriber> Layer<S> for FailedTelemetry {
     }
 }
 
-fn failing_factory(_: &flui_view::FrameworkError) -> Box<dyn View> {
+fn failing_factory(_: &flui_view::FrameworkError) -> flui_view::BoxedView {
     panic!("recovery factory failed")
 }
 
@@ -148,7 +149,8 @@ fn run_child(kind: &str) {
     let parent = tree.mount_root_with_pipeline_owner(
         &super::Row {
             children: vec![host.clone().boxed()],
-        },
+        }
+        .boxed(),
         Some(flui_rendering::pipeline::PipelineCell::new(
             flui_rendering::pipeline::PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),

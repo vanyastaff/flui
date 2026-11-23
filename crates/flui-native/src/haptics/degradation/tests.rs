@@ -16,7 +16,8 @@ use crate::haptics::degradation::{
     web_feedback, web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
 use crate::haptics::headless::HeadlessHaptics;
-use crate::{HeadlessPlatform, OwnerPlatform, Platform as _};
+use crate::testing::HeadlessPlatform;
+use crate::{OwnerPlatform, Platform as _};
 use flui_platform::WindowOptions;
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,

@@ -17,7 +17,6 @@
 
 use std::{
     any::{Any, TypeId},
-    collections::{HashMap, HashSet},
     fmt,
     rc::Rc,
     sync::Arc,
@@ -33,8 +32,9 @@ use flui_platform::{
         WindowRef,
     },
 };
-use flui_view::CapabilitySource;
+use flui_view::__runtime::CapabilitySource;
 use parking_lot::Mutex;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 mod built_ins;
 
@@ -103,7 +103,7 @@ pub enum CapabilityConflict {
 /// every acquisition with [`UnsupportedReason::NotRegistered`].
 #[derive(Clone, Default)]
 pub struct CapabilityRegistry {
-    providers: Rc<HashMap<TypeId, RegisteredProvider>>,
+    providers: Rc<FxHashMap<TypeId, RegisteredProvider>>,
     /// What the running host offers providers beyond the window; the
     /// composition root fills it for each run's host.
     host: HostBridge,
@@ -227,9 +227,9 @@ impl CapabilityRegistryBuilder {
         // Stable: within a tier, registration order decides which conflict
         // is reported first.
         self.registrations.sort_by_key(|(tier, _)| *tier);
-        let mut names: HashMap<&'static str, TypeId> = HashMap::new();
-        let mut registered: HashSet<(ProviderTier, TypeId)> = HashSet::new();
-        let mut chosen: HashMap<TypeId, RegisteredProvider> = HashMap::new();
+        let mut names: FxHashMap<&'static str, TypeId> = FxHashMap::default();
+        let mut registered: FxHashSet<(ProviderTier, TypeId)> = FxHashSet::default();
+        let mut chosen: FxHashMap<TypeId, RegisteredProvider> = FxHashMap::default();
         for (tier, provider) in self.registrations {
             let (capability, name) = (provider.capability(), provider.name());
             if let Err(reason) = flui_platform::capability::ResultKey::try_new(name) {

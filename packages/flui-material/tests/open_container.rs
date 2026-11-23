@@ -18,15 +18,17 @@ use common::{LaidOut, lay_out_animated, tight};
 use flui_material::{CloseAction, ContainerTransition, MaterialApp, OpenAction, OpenContainer};
 use flui_sdk::animation::{Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::{EdgeInsets, Point, Radius};
-use flui_sdk::painting::{Alignment, BorderRadius, Color, DrawOp};
+use flui_sdk::painting::styling::{BorderRadius, Color};
+use flui_sdk::painting::{Alignment, DrawOp};
+use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisSize};
 use flui_sdk::view::environment::VsyncScope;
+use flui_sdk::view::navigation::{RouteParseError, RoutePath};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ColoredBox, Column, CrossAxisAlignment, MainAxisSize, Padding, PageHandle, Routable,
-    RouteParseError, RoutePath, RouteResultError, Router, ScrollController, ScrollView, Semantics,
-    SingleChildScrollView, SizedBox, Transform,
+    ColoredBox, Column, Padding, PageHandle, Routable, RouteResultError, Router, ScrollController,
+    ScrollView, Semantics, SingleChildScrollView, SizedBox, Transform,
 };
-use flui_testing::{Action, ActionRequest, TreeId};
+use flui_testing::a11y::{Action, ActionRequest, TreeId};
 
 const WIDTH: f64 = 400.0;
 const HEIGHT: f64 = 800.0;
@@ -312,7 +314,7 @@ fn assert_closed_again(rig: &Rig) {
 }
 
 /// The fill path the morph's surface paints in `color`, in its own coordinates.
-fn surface_path(app: &LaidOut, color: Color) -> Option<flui_sdk::painting::Path> {
+fn surface_path(app: &LaidOut, color: Color) -> Option<flui_sdk::painting::paint::Path> {
     app.draw_ops()
         .into_iter()
         .find_map(|command| match &command.op {

@@ -66,9 +66,9 @@ unstable-windows = []
 
 # The `testing` module (ADR-0243): an application run on the headless platform,
 # driven from the test thread, through the headless host's doubles and
-# controls (`flui-native`'s `scripted`). Off by default and not part of the
-# release API; this crate's tests turn it on through the dev-dependency on
-# itself.
+# controls (`flui-native`'s `scripted`, at `flui_native::testing`). Off by
+# default and not part of the release API; this crate's tests turn it on
+# through the dev-dependency on itself.
 testing = ["flui-engine/testing", "flui-native/scripted"]
 
 # The driver agent (ADR-0239) in an optimized build: a debug build always
@@ -112,6 +112,9 @@ flui-widgets = { workspace = true }
 # reload an installed development reload hook (ADR-0311 §1) applies to a
 # UI runtime; it names no reload tool.
 flui-runtime = { workspace = true, features = ["hot-reload"] }
+# `MotionOverride`, the motion setting `AppConfig` carries and this crate re-exports
+# (ADR-0218).
+flui-animation = { workspace = true }
 
 # Utilities
 tracing.workspace = true
@@ -196,7 +199,6 @@ serde_json = { workspace = true }
 # A raster host test counts the times a window is asked for its native
 # surface.
 raw-window-handle.workspace = true
-# `HeldPointerQueue::append`/`len`, `SemanticsHost::ensure_semantics`,
 # `ExecutionServices::with_limits`/`default_pools_started`, the UI runtime's test
 # constructors and the `testing` doubles, which this crate's tests use and
 # which exist only under `testing`.

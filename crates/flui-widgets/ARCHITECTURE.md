@@ -1,646 +1,41 @@
 # flui-widgets architecture
 
-## Sliver fade owns a stable animation proxy
-
-`SliverFadeTransition` connects `RenderSliverAnimatedOpacity` to a sliver view.
-Its existing `ProxySlot` retargets source identity without replacing the render
-object or its listener. The caller owns the animation run; render subscriptions
-end at detach or owner release. Opacity changes leave scroll geometry unchanged.
-`sliver_fade_keeps_geometry_and_retargets_paint_and_semantics` observes submitted
-layer alpha, zero-opacity semantics, retained identity, replacement, stale source
-silence and source retirement after unmount through a real viewport.
-
-## Flow presentation and accessibility
-
-Flow shares its owner-local delegate through `Rc`. Repaint notifications refresh
-the presented child subset and accessibility geometry without rebuilding child
-views. Replacing the delegate migrates its actual repaint subscription.
-`flow_repaint_and_delegate_replacement_update_accessible_children` observes both
-paths through the mounted widget and adapter-facing tree (ADR-0224).
-
-## Custom painter accessible regions
-
-`CustomPaint` reports paint and semantics impact independently when replacing
-delegates. Its committed layout size supplies `CustomPainter::semantics_regions`
-even when the new delegate declines a configuration-driven semantics rebuild.
-`custom_painter_regions_follow_semantics_only_updates_and_layout_size` observes
-label-only replacement and resized region bounds through the adapter-facing
-accessibility tree, retaining the host/key identity (ADR-0223).
-
-## Activity indicator paint isolation
-
-ActivityIndicator owns a repaint boundary around its animated CustomPaint.
-Its geometry and semantics stay unchanged while each tick updates only its
-boundary's content certificate. `indicator_ticks_preserve_surrounding_paint_content`
-observes a moving arc alongside an unchanged surrounding certificate through
-the mounted widget's submitted layer tree. The keyed permission-migration
-cases also exercise nested isolation across pause, relocation and resumption.
-
-## Route animation crossing
-
-Route replacement preserves the displayed secondary animation until its current
-and replacement sources actually cross. Only exactly equal values or an idle
-replacement permit an immediate handoff; an absolute floating-point tolerance
-would discard representable progress. The mounted Navigator case
-`replacement_retains_near_zero_secondary_progress_until_crossing` observes the
-old value, crossing and new source through the secondary animation handle.
-
-## Grouped animation ownership
-
-Switcher transfers all current and outgoing controller seats in one Vsync update
-before exposing migration to callbacks. `switching_entries_finish_migration_before_a_wake_failure`
-observes the committed registrations inside a failing wake and verifies disposal
-of the faulted lifecycle actor followed by a fresh working cross-fade.
-
-Completed Switcher entries leave the outgoing collection before any cancellation
-or authored destruction. Cached transition snapshots retain `Rc` ownership under
-the collection borrow, then clone authored views after releasing it. Each entry
-keeps independent curve, child and transition ownership in terminal slots, while
-its driver always performs logical cancellation, including during incoming unwind.
-Collection cleanup therefore withdraws the remaining drivers after a first
-failure without invoking the opaque capture tail. Lifecycle disposal withdraws
-both current and outgoing entries before retiring either collection.
-
-`outgoing_switcher_retirement_preserves_independent_captures` exercises an actual
-mounted cross-fade, outgoing-child destruction and a subsequent healthy switch.
-The private `switcher_entry_retirement_preserves_logical_cleanup` matrix isolates
-physical entry destruction: healthy, a first entry's child or transition failure,
-an incoming unwind and the entry tail, each destroyed once. It also verifies every
-registry seat and run future is cancelled, followed by healthy retirement.
-
-Dismissible restores its shared collapse owner before publishing that same
-batched migration. `collapse_owner_storage_is_committed_before_migration_callouts`
-uses the private storage seam to check reentrant access, failure propagation and
-completion through the retained owner. The mounted row
-`a_collapsing_dismissible_survives_a_migration_wake_failure` separately verifies
-the lifecycle fault boundary retires both owners and a fresh collapse completes.
-
-## Floating header snap ownership
-
-Floating headers share scroll-edge state between their activity listener and
-build through an owner-local cell. The listener commits the latest command
-before requesting a rebuild; neither a borrow nor a lock spans that request.
-Command epochs refuse permanently at exhaustion and retain the last admitted
-command, verified by `exhausted_snap_epochs_never_reissue_a_command` with a
-private counter seed.
-
-The host owns its snap controller and rebinds it through lifecycle dependency
-changes. `an_active_floating_snap_migrates_and_unmounts` exercises floating and
-pinned-floating headers through real pointer release, checks continuous reveal
-across a registry replacement, advances the unfinished snap from the new registry,
-and removes the subtree while it is active. Removal withdraws frame registration
-and prevents later delegate builds.
-`unmounting_a_floating_header_mid_snap_cancels_the_snap` retains the original
-future through the host's actual disposal method and checks immediate cancellation,
-withdrawal before the continuation, reentrant registration and repeated disposal.
-This private seam is necessary because the renderer discards the future returned
-when starting the snap; the public mounted case separately proves the gesture and
-unmount entry points.
-
-## Hero handles observe the presentation without owning it
-
-A mounted Hero shares owner-local state through `Rc`, `Cell` and `RefCell`
-(ADR-0175). Its render capability is a `WeakPipelineCell`: a retained flight or
-handle cannot keep a closed presentation alive. Immutable `Hero` configuration
-is prepared outside the slot borrow and committed as one `Rc` snapshot. Readers
-snapshot it before authored child cloning; replacement retires it after the
-borrow ends. Rebuild requests likewise snapshot their capability before scheduling.
-
-Disposal withdraws configuration, rebuild capability, render access and the
-placeholder before retiring captures. Registry removal and outgoing retirement
-complete under one per-Hero first-failure context. A completed pop keeps its source
-frozen while mounted; unmount removes that authority even from retained handles.
-
-`a_retained_hero_handle_does_not_keep_its_presentation_alive` mounts a real Hero,
-unmounts it, mounts a replacement with the same tag and closes the presentation.
-It checks stale refusal, independent replacement identity and weak render-owner
-release. `unmount_releases_hero_configuration_despite_a_retained_handle` verifies
-capture destruction and reentry observe the withdrawn registration and inert
-handle. These cases use the existing ADR-0083 test-access registry seam, which
-is not exported to applications. The gesture completion case also measures the
-destination's real child after the source disappears.
-
-## A flight seat is shared; a flight is not
-
-`navigator/flight_seat.rs` holds what any widget that hands its content to a
-flying copy must leave behind: the render anchor it publishes, its measurement
-(in an ancestor's or another seat's coordinates, asked again every time, never
-cached) and the frozen placeholder with the `SeatHold` allowed to release it.
-`Hero` sits on it, and so does Material's `OpenContainer`, through `__private`.
-What a flight is (tag matching and divert for `Hero`, a route morph for
-`OpenContainer`) stays with the flight. The Hero suite passed unchanged across
-the extraction.
-
-## Hero registration follows mounted identity
-
-A Hero's match tag belongs to its current immutable configuration; its mounted
-identity is the shared handle. Tag updates move registration without recreating
-the state. The registration record retains its current tag, registry and passive
-release authority. Rejected duplicates have no release authority, and an old
-authority cannot remove a replacement. Scope dependencies notify on registry replacement and refresh after
-GlobalKey reparenting. Old registration is withdrawn before new admission and
-outgoing captures retire outside storage borrows under first-failure recovery.
-
-`changing_a_mounted_hero_tag_moves_its_registration` measures the updated child
-through the same handle. `retagging_to_a_duplicate_preserves_the_existing_winner`
-checks first-wins matching and harmless rejected cleanup.
-`replacing_a_hero_scope_moves_the_existing_hero` and
-`reparenting_a_hero_moves_registration_without_recreating_it` verify scope adoption
-and preserved mounted state through the existing test-access registry seam.
-`reparenting_an_unscoped_hero_adopts_its_first_route` also starts with no scope:
-the inherited lookup miss remains an ancestry dependency until reactivation.
-
-## Hero matching runs outside storage borrows
-
-Route registries and flight registries share private owner-local tag storage.
-Authored hashing precedes borrowing; equality runs against owning bucket pins.
-The result revalidates the complete ordered bucket by allocation identity before
-admission or lookup. One fresh comparison is permitted after mutation; a second
-invalidation refuses the requested operation while independently accepted changes
-remain authoritative. This follows the bounded comparison policy of ADR-0126.
-Removal uses cached hash and a typed weak allocation identity, without key callbacks.
-Admission rollback exists before outgoing comparison pins retire. Removed flights
-enter the deferred retirement queue before scheduling or key retirement calls out.
-
-`registry_key_callbacks_can_read_their_registry` mounts real Heroes and drives
-PageRoute flights with authored hashing and equality reading the same route or
-flight registry through the existing test-access seam. It observes a real shuttle
-and subsequent landing. `hero_registry_matching_preserves_authority_under_reentry`
-uses the private registration seam for same-length replacement, repeated mutation,
-hash/equality failure, passive release, formatting reentry and snapshot retirement.
-Its physical last-release cases cover aliases, healthy destruction, an incoming
-unwind and a first key failure, destroying every key once (ADR-0281).
-
-Nested visibility snapshots sources before resolving them. Traversal retains
-owning registry identities and visits each once, preserving local-first matching
-without recurring through a cycle. The private resolver case
-`nested_hero_resolution_preserves_local_identity_through_cycles` pins this graph
-contract; ordinary application trees do not expose the resolver constructor.
-
-## Hero controller attachment and recording ownership
-
-The controller's attachment and diagnostic counter are owner-local cells. One
-`Rc` recording owner shares measurements and manifests with queued post-frame
-callbacks. `HeroTag` cloning retains its `Arc` identity and invokes no authored
-key code. Physical recording retirement withdraws both collections before
-destroying manifests; the existing terminal policy preserves an opaque tail
-after the first failure.
-
-Attachment commits its replacement before releasing outgoing navigator handles.
-`replacing_a_hero_navigator_retires_routes_after_attachment` seeds an ordinary
-`SimpleRoute` whose capture destructor reads the same controller, installs a
-third attachment or fails. It verifies the committed replacement, independent
-handle lifetime and the next healthy detach/attach. The private
-`hero_controller_terminal_retirement` matrix additionally covers recording
-aliases, healthy destruction, a first failure and an incoming unwind, with
-every manifest and capture destroyed once (ADR-0281).
-
-## Hero placeholders belong to logical flights
-
-A placeholder carries the allocation identity of its logical flight alongside
-its geometry and child-preservation role. Mounted Hero identity alone cannot
-authorize cleanup: the same mounted Hero can already belong to a replacement
-flight when an old subscription's cancellation returns. Flight completion and
-abort compare the captured flight identity before changing the placeholder.
-Diversion retains the identity; a new flight allocates a fresh one. A completed
-source keeps a settled placeholder. Unmount clears either state. Gesture
-filtering separately restores an excluded Hero's placeholder, including before
-the previous flight's deferred completion drain. The mounted
-`an_excluding_gesture_restores_pending_programmatic_placeholders` checks this
-ordering and verifies the subsequent drain cannot refreeze the restored Hero.
-
-`hero_flight_terminal_retirement` launches actual replacement flights through
-the private subscription-cancellation seam, both during cleanup and before it.
-It verifies abort, both terminal statuses, first and later failures, and a
-fresh flight after recovery. Moving cleanup before callouts alone cannot protect
-the replacement already admitted before cleanup; allocation identity also avoids
-a wrapping generation counter. Placeholder borrows contain only framework-owned
-geometry and identity markers and end before rebuild scheduling.
-
-## Hero rect mappings execute outside flight guards
-
-The shuttle publishes only finite coordinates and representable non-negative
-sizes. Invalid mapping output preserves the last accepted rect; finite inverted
-axes collapse at their original origin, including a negative difference that
-underflows. Manifest admission applies the same domain before seeding the cache.
-Each read reserves publication authority before sampling. A nested read,
-redirection or re-aim invalidates older authority, and cancellation makes retained
-flight readers inert. Mapping and factory retirement finish before publication
-because their destructors can reenter too. The final frame samples before logical
-completion so retained readers preserve the accepted landing geometry.
-
-A missing destination fades over the remaining uneased route progress, reversed
-for a pop. Spatial easing and rect remapping cannot become fade interval bounds:
-overshoot remains valid for geometry, while opacity has its own bounded domain.
-Diversion replaces the fade clock with the new manifest's route and resets its
-anchor. `disappearing_hero_destination_keeps_a_finite_fade` unmounts a destination
-through its lifecycle rebuild handle, checks gradual fading after curve recovery
-and final zero opacity, and covers push, pop and both direction-changing diversions
-with linear, overshoot, undershoot, NaN and both infinite curve samples.
-Its visible-redirection row restores the destination, diverts the same faded
-shuttle to a new page and checks full opacity followed by normal landing.
-
-`hero_geometry_samples_preserve_the_last_finite_shuttle` drives mounted PageRoute
-flights through NaN, infinity, positive extent overflow, inverted axes and recovery
-on the same flight, then checks its retained landing rect.
-`hero_geometry_reentry_preserves_the_newer_authority` exercises factory,
-evaluation and mapping destruction: a nested accepted read wins; public observer
-detachment rejects the outgoing sample and a subsequent flight lands normally.
-Both use the existing ADR-0083 flight probe shared with the actual shuttle producer.
-The private `measured_hero_rectangles_must_fit_the_shuttle_domain` pins defensive
-manifest admission; ordinary measured boxes do not produce the overflowing fixture.
-`hero_geometry_capacity_refuses_without_reissuing_authority` seeds the private
-terminal counter, verifies one final accepted read and permanent refusal, including
-a nested refusal that revokes the last pending publication.
-
-Hero snapshots its owner-local rect factory before invoking user code. The
-factory, its returned mapping and that mapping's destructor can read the same
-flight without holding a flight storage borrow. `Animatable<Value = Rect>` allows
-custom mappings to retain owner-local state without worker-thread bounds.
-`hero_rect_mappings_are_owner_local_and_reentrant` drives a mounted navigator
-flight through all three reentry points, verifies the committed shuttle rect,
-and checks that the flight subsequently lands.
-
-The flight's rect, opacity, fade anchor and lifecycle flags use owner-local
-`Cell` storage. Terminal status is `Cell<Option<AnimationStatus>>`, shared with
-the relays that report it. Coherent manifest facts and owning slots use short
-`RefCell` borrows. The shuttle configuration has an `Rc` snapshot; cloning a
-`BoxedView` shares it, so no authored `Clone` runs under the slot borrow, and
-retiring that configuration happens after the borrow ends.
-
-Diversion rechecks cancellation after rect mapping returns, before freezing its
-selected heroes. `cancelling_a_hero_mapping_does_not_refreeze_the_previous_page`
-cancels through factory, transform and mapping destruction, then returns to the
-previous page and verifies actual taps reach its restored child.
-
-Teardown withdraws its cancellation rights and snapshots both heroes before
-calling out. Subscription cancellation, overlay removal and each placeholder
-restoration share one first-failure context with registry retirement. Controller
-detachment completes the remaining flights before resuming a cancellation
-failure. `hero_flight_terminal_retirement` uses the private cancellation seam
-to pin first and later contained failures, peer restoration and fresh admission.
-Physical last
-release withdraws owned fields before the same cleanup protocol; an incoming unwind
-destroys them under the same containment (ADR-0281). ADR-0178 governs
-the cancellation bridge to the animation and foundation layers.
-
-Reversing a flight between the same heroes retains its rect factory and evaluates
-the original endpoint order at mirrored progress. Swapping endpoints alone
-does not reverse an arbitrary mapping. A different destination selects a new
-forward mapping. `a_nonlinear_hero_pop_retraces_the_airborne_push` checks several
-points on an asymmetric path, a conflicting return-side factory, redirection to
-a third hero and subsequent landing through a mounted navigator.
-
-The factory snapshot and its returned mapping use the navigator's terminal
-ownership policy. Healthy reads retire both normally; after evaluation fails,
-the mapping is destroyed by the unwind and the evaluation failure is the one
-raised (ADR-0281). `hero_rect_mapping_failures_preserve_recovery` covers
-factory, evaluation and destruction failures, healthy destruction, and a fresh
-read and landing through the same flight.
-
-## Gesture release retains the painted position
-
-Dismissible moves content through its `AnchoredDrag`'s layer-patched
-translation; an offset listener rebuilds only when the uncovered side, and so
-the background, changes. An owner-local event source snapshots `on_update`
-payloads independently of build and delivers them through the existing
-post-frame lane using the latest callback. Its configuration contains only
-direction, threshold and extent data, and the offset listener retains a weak
-route to that source; updates are accepted as the drag publishes its moves, so
-a callback accepted before those moves runs first. Collapse remains a layout
-phase with its own rebuilds. `dismissible_slides_without_rebuilding_per_frame`
-uses public frame reports for drag and return frames on both axes and signs,
-and verifies that update events continue on each moving frame.
-`dismissal_updates_follow_owner_lifetime` queues several pointer updates before
-one frame and verifies ordered delivery through writable event contexts,
-callback replacement, cancellation on unmount, and accepted tail delivery
-after a callback panic. Capture retirement during configuration replacement
-follows lifecycle substitution; retirement by the last queued event follows
-post-frame propagation. Neither path delivers updates to the removed actor.
-The same table verifies the original failure, competing post-frame failures,
-healthy tail delivery and fresh drag input after recovery.
-
-Dismissible preserves the dragged side while a reverse release moves back
-toward the origin: the drag stops at the card's extent, and the release
-velocity seeds the scrollable's settle spring. `a_dismissible_release_keeps_finger_speed_on_any_width` measures
-painted coordinates before and after release and the first frame velocity for
-both axes and release directions under tight, loose and unbounded incoming
-constraints. A contact going down reads the card's committed size through a
-`SubtreeAnchor` before the drag moves, and the collapse starts from that size
-after the frame the card came to rest out in. Build never queries the pipeline.
-`a_dismissible_collapses_its_laid_out_size` verifies the initial painted collapse
-extent and single completion delivery.
-
-Resize samples enter that same owner post-frame lane directly from the collapse
-controller listener. Build retains only completion debt; it cannot erase accepted
-resize samples when completion arrives before the next build. Weak listener routes
-avoid retaining the widget after disposal, and delivery resolves current callbacks.
-`resize_delivery_keeps_accepted_ticks_before_completion` admits two samples and
-completion without an intervening build, verifies their order with a healthy or
-panicking resize callback, checks replacement and unmount before delivery, and
-checks that recovery does not repeat delivery.
-
-## Selected pointer coordinates retain the admitted motion sample
-
-A selected hit path carries its global-to-local mapping through delivery.
-Changing the animation after selection does not remap that pointer event;
-the next selection observes the new committed sample.
-`a_moving_slide_preserves_selected_pointer_coordinates` drives an owner-bound
-slide, changes its public sample between selection and delivery, and observes
-actual `Listener` local and root coordinates in LTR and RTL without rebuilding.
-Removing the transition's hit transform makes this acceptance row fail.
-
-## Independent implicit property motion
-
-`AnimatedContainer` uses the same independent property ownership for alignment,
-insets, Oklab color and both sizes. Its transform has separate normalized motion
-and a concrete `TransformTween` using ADR-0149 decomposition. Changing color
-does not restart size or transform. Matrix replacement guarantees C⁰ continuity;
-numeric components retain C¹ motion. Absent endpoints snap. Non-finite initial
-optional properties are omitted; non-finite live targets preserve the existing
-numeric update as a whole. Plain `Lerp` keeps its own NaN contract.
-
-`container_retarget_preserves_the_laid_out_size_velocity` measures both axes
-with layout quantization included in its tolerance. The painted alpha row
-`container_color_retarget_preserves_painted_alpha_progress` reads display-list
-paint within 8-bit color precision. `container_property_motion_settles_and_unmounts_independently`
-observes curve and spring exact settlement after a color-only update and registry
-withdrawal on unmount. `non_finite_container_targets_preserve_the_last_admitted_layout`
-pins initial omission and delivery of previously admitted size goals after refusal.
-
-`AnimatedAlign` owns alignment and optional factor motion independently. Each
-property uses typed `AnimatedValue` components under the presentation's Vsync;
-one weakly connected notification channel dirties its inner `AnimatedBuilder`.
-Retargeting alignment does not restart a factor's run or extend its deadline.
-Present factors preserve their physical velocities; appearing and disappearing
-factors snap because there is no value to interpolate on the absent side.
-Unset factors reach `Align` as unset, preserving constraints-fill semantics.
-Negative factor overshoot clamps to zero at layout. Non-finite targets refuse
-the whole numeric update before any property's motion is changed.
-
-`align_retarget_preserves_the_laid_out_velocity` observes position differences
-through actual layout. `align_changes_leave_an_unchanged_factor_on_its_original_deadline`
-pins independent progress. `align_spring_settles_and_optional_factors_snap_independently`
-covers exact spring settlement, absent factors and unmount withdrawal.
-`invalid_align_targets_preserve_all_running_layout_properties` verifies rejected
-numeric updates keep both old layout trajectories deliverable.
-
-## Inherited presentation data
-
-Focus traversal's lazy rectangle provider reads only published complete layout.
-An incomplete paragraph or competing checkout leaves the node's explicit fallback
-rectangle available; replacement completion restores its live render geometry.
-The runtime's `parked_text_preparation_does_not_publish_partial_ime_geometry`
-also pins the focus and lifecycle hit-test paths through an actual editable.
-
-`MediaQuery` and `MediaQueryData` live in `flui_view::environment`; this crate
-and its tests import the types from there, and package authors reach them as
-the SDK's `flui_sdk::view::environment`. `flui_widgets` owns no presentation-data
-module: the `app` module provides the shell and `SafeArea`, not the source of
-inherited presentation data. The gesture arena and the shared frame registry
-(`GestureArenaScope`, `VsyncScope`) live there too, for the same reason: they
-are views the presentation installs, not catalog widgets. Field-specific
-dependency behavior is pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
-
-`MediaQuery::motion_of` observes the presentation's resolved policy, while
-controllers obey the clock rather than an inherited subtree override. Physical
-scroll and viewer inertia explicitly use Preserve; ordinary transitions remain
-Normal (ADR-0195). Loading indicators use Normal and visible static feedback under
-Reduce (ADR-0192). `TickerMode::is_enabled` exposes effective configured permission
-for representation; registry topology still owns delivery. The private inherited
-wrapper remains present across permission and binding changes, retaining descendants.
-`keyed_indicator_moves_between_configured_permissions_without_restarting` pins
-that continuity. Runtime publication is pinned by
-`system_motion_change_reaches_media_query_and_the_clock`.
-
-`WidgetsApp` resolves supported resources from ordered `preferred_locales`,
-subscribing only to that media field when no explicit locale is authored.
-Complete locale identity determines exact matches before the established
-script/region/language fallback (ADR-0173). A nested `MediaQuery` remains a whole
-replacement; it does not fall through to an ancestor for an unavailable field.
-`locale_override_removal_uses_the_nearest_current_preferences` pins override
-removal and nested-provider precedence. The runtime's
-`preferred_locales_select_resources_and_direction` exercises loaded resources.
-
-`RichText` reads inherited text sizing and weight adjustment during its stateless
-build, and the ambient `Directionality` when it names no direction of its own (a
-run that names one takes no dependency), and passes them, the resolved direction
-included, with its unchanged authored spans to a private render view
-(`a_text_run_reads_the_ambient_direction_unless_it_names_one`).
-It reads them in `build` rather than through `RenderObjectContext::depend_on`,
-and native settings never enter `RenderObjectContext`. The paragraph update reports layout and semantics invalidation when sizing changes, so the same
-render object produces updated geometry. Weight changes likewise invalidate layout
-and semantics; EditableText forwards the same inherited adjustment to its painter.
-The common shaping policy runs after authored span inheritance (ADR-0174).
-`Text` composes this path after merging its ambient style. `MediaQueryData`
-carries one validated numeric sizing policy rather than a writable scalar.
-The nearest provider replaces the outer policy, including fixed sizing;
-copying parent data preserves its policy while changing another field.
-Without a provider, the render pipeline supplies the policy. Removing a provider
-restores the current outer authority. Raw system text-scale observations retain
-their separate admitted range `1/64..=64`. Initial sizing is pinned by
-`media_text_scaling_changes_the_laid_out_text`; live updates, restoration from
-authored size and nested override retention by
-`a_text_scale_change_relayouts_a_preserved_text_subtree`. Each span resolves
-once, from its own authored size: unstyled text from the default, ambient
-styles after `Text` merges them, and fixed spans not at all. The paragraph's
-intrinsics measure the same resolved sizes as its layout.
-`the_system_text_scale_grows_each_span_once` pins this under the runtime's root
-policy, with no provider of the test's own.
-
-`Icon` resolves its square and glyph from one logical size. Its default stays
-fixed; `IconThemeData::apply_text_scaling` opts both into the nearest inherited
-policy, including an explicit icon-size override. `RenderIcon` resolves during
-measurement and shapes the glyph at that admitted size with fixed sizing,
-without applying inheritance again. Ordinary text retains
-its inherited sizing and weight preferences. The public producer row
-`icon_text_sizing_keeps_box_and_glyph_together` checks raster glyph keys and the
-allocated square across live changes, exact answers, fractional sizes and theme
-policy; tight constraints can allocate a rectangle without changing glyph size.
-The widget's canonical Semantics wrapper publishes an explicitly authored label
-with no role of its own, including a labelled absent glyph, so inside a button
-or another control the label names the control's node, as Flutter's `Icon` does;
-alone it is a text node. Decorative icons publish no font
-codepoint label. `icon_labels_reach_the_assembled_accessibility_tree` checks the
-assembled tree across label replacement and removal.
-
-`EditableText` subscribes during its own build and carries sizing through its
-appearance value to `RenderEditable`. The editor retains authored styles and
-document offsets; selection and caret position use the newly laid-out paragraph.
-The default caret follows the laid-out line height, including empty text and
-authored font sizes, through `RenderEditable`'s automatic-height policy.
-`RawTextField` preserves that default. An explicitly configured caret height
-remains a logical length; removing the override restores automatic height. Mount/update
-equivalence and restoration of glyph/caret geometry are pinned by
-`inherited_text_sizing_updates_editable_glyphs_and_caret`. The field's
-intrinsics and a tap both resolve against the glyphs of the current scale,
-after a live change in either direction:
-`a_field_measures_and_hit_tests_the_current_text_scale`.
-
-## Accessibility of hidden retained children
-
-`Visibility::maintain_size` preserves layout while hidden, with child semantics
-excluded by default. `maintain_semantics` explicitly retains accessibility and
-requires `maintain_size`, so the retained child keeps its normal geometry.
-Pointer interactivity and focus remain independently configured. The composed
-`VisibilityGate` forwards retention to `RenderVisibility`'s existing child
-visitation hook; it also provides the same default and opt-in when used directly.
-No global rule ties paint suppression to semantics suppression.
-
-`retained_visibility_hides_child_semantics_by_default` pins the visible premise
-and hidden default in the assembled a11y tree.
-`retained_visibility_updates_semantics_without_changing_layout` updates a
-mounted widget through visible, hidden and explicitly retained configurations,
-asserting the child's accessibility label and unchanged allocated size.
-
-## Overlay entry identity admission
-
-Overlay entry allocation admits the final nonzero identity once and then refuses
-construction permanently, so an entry's removal authority and its consumer view
-key are never shared with a later entry. The rejected builder is destroyed by
-the refusal's unwind (ADR-0281).
-
-## Terminal navigation ownership
-
-The mounted navigator acquires its frame registry through `VsyncScope::maybe_of`
-during lifecycle initialization and dependency changes. Each transition peer
-publishes a weak callback to its route-owned `DrivenController`. The navigator
-commits the clock and snapshots those callbacks before invoking them, outside
-registry guards. A route withdraws its handle before rebinding and restores it
-only if disposal has not superseded it. Unmount clears the clock even when an
-external navigator handle retains the route state. Registry replacement keeps
-the last sampled elapsed time, rather than restarting the transition.
-`scope_replacement_moves_an_existing_route_without_restarting_it` pins progress
-and withdrawal through a mounted navigator.
-
-The same two hooks read the ambient `PageTransitions` slots into the navigator's
-registry (ADR-0221). A modal route adopts the slot of its kind in `install`,
-before its controller is built from the durations, with the builder's page chrome
-(`back_gesture`, `barrier_color`), and only for what its
-author left unset: an explicit `.transitions(…)` keeps the route out entirely,
-an explicit duration, back gesture or barrier colour keeps its value. A
-barrier colour fades in along the route's entrance and out along its exit, and
-under an opaque page that has entered it paints nothing, as Flutter's overlay
-skips a barrier entry beneath an opaque page. The adoption happens once, so a replaced
-hook reaches routes installed later and never a running transition
-(`a_replaced_hook_does_not_swap_a_running_transition`). `PageTransitions`
-publishes its own slots merged over the enclosing scope's, so each kind
-resolves to its nearest builder
-(`each_route_kind_adopts_the_nearest_builder_of_its_kind`).
-
-Navigation bindings hold the navigator's registry weakly. The navigator closes
-the registry before retiring its history, so a closure installed by a modal
-route or overlay entry cannot keep its route alive through the registry or
-enqueue work for a navigator that is gone. A lookup through a closed registry
-returns nothing and a mutation does nothing. Modal, transition and hero handles
-that outlive the navigator keep only their own state; a transition handle does
-not keep a modal page alive.
-
-Route identities never wrap: the integer maximum
-permanently refuses allocation, so a caught capacity failure cannot reissue an
-identity held by history. A rejected route and its
-replacement result are destroyed by the refusal's unwind (ADR-0281).
-
-An admission reserves every identity it spends, route and overlay entry alike,
-before its first observable side effect: a recorded Router page, a filled
-binding slot, an inserted entry, a hero frozen as a placeholder. Batch
-replacement reserves for every member before preparing any. Exhaustion
-therefore fails the whole operation with nothing changed, and caller-owned
-values carried across the reservation (a result, a predicate, a Router's
-unseeded initial values) are destroyed on refusal. Spent reservations
-are not returned.
-
-Route, router, overlay, modal and hero owners withdraw each owned value from
-shared state before dropping it, so no destructor runs under an internal lock.
-After the first destructor failure in a retirement the remaining values are
-still destroyed, each under containment, and the first failure propagates; a
-retirement during an incoming unwind destroys them too, and a destructor that
-panics while the thread is already unwinding aborts, as in std
-([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
-Router parser inputs and partially built router clones are owned before any
-user code runs, so a failure there destroys them under the same rule. A route result and the waker waiting for it are retired
-separately. Tested by `delivered_route_results_remain_completed` and
-`terminal_binding_authority_is_closed_before_route_retirement`.
-
-## Event callback phase boundary
-
-`InteractiveViewer`, `PopScope`, `AnimatedSize`,
-`Dismissible`, `Draggable` and `PageView` event setters receive `EventContext`
-(ADR-0086), and so do `CallbackShortcuts` bindings and `Action::invoke`, which
-run inside the key event's dispatch. Composite input
-handlers forward their child's context; wheel and pinch claim handlers keep
-their query signature and open the viewer's lifecycle-acquired `WriterSource`
-only for the interaction notifications. `PopScope` preserves synchronous
-navigation outcome delivery and the existing observer ordering.
-
-Animation listeners accept owner-local captures. Each `AnimatedSize` completed
-status admits one event directly to the owner post-frame lane, before later
-owner events. Build has no completion counter or delivery responsibility.
-Delivery resolves the current `on_end` and opens its writable event context;
-unmount cancels delivery. A callback failure leaves the lane's accepted tail
-for the next frame rather than an internal completion loop dropping it.
-`size_completion_keeps_owner_event_order_and_lifetime` checks ordering,
-callback replacement and late installation, unmount, failure recovery and
-painted endpoints; `animated_size_completion_writes_a_signal_after_build`
-pins writable delivery after the frame.
-`Dismissible` snapshots movement payloads from its offset listener and
-collapse transitions from committed layout geometry, then queues events on
-the owner-local post-frame lane; a card at rest out without a collapse reports
-its dismissal from that lane, after the frame. Animation-listener
-notifications are never delivered synchronously to user code: user effects must
-not execute during a FLUI build. Deferred events use the latest configured
-callback and are cancelled when their widget is disposed. A missing or closed
-post-frame lane reports a warning and drops the event, never dispatches inline.
-
-`GestureDetector`'s assistive activation runs inside the platform request's
-own `EventContext`, the owner-local dispatch `Semantics` hands its handlers
-(mapping decision 17), exactly as a key's activation does: the handler reads
-the current callback from the live slots, releases the slot borrow and calls
-it, and a disposed detector runs nothing. There is no queue, no rebuild and
-no post-frame hop, so an Invoke on a `RawButton`, a `ControlSpec` control or a
-`ContextMenuArea` row performs in the same dispatch as Enter
-(`raw_button_press_is_reachable_through_a_platform_click`). Each request runs
-its handler once and no frame replays it
-(`repeated_assistive_taps_run_once_each_in_their_dispatch`,
-`repeated_assistive_long_presses_run_once_each_in_their_dispatch`), and a
-panicking handler reaches its dispatcher without costing the next request
-(`a_panicking_assistive_action_leaves_the_next_one_deliverable`).
-
-`Draggable`'s drag sessions open each callback's write through the widget's
-`WriterSource`; its configuration cell is owner-local and never borrowed across
-user code. An unmount mid-drag cancels from `dispose`, which runs in
-`finalize_tree` outside any build, so the cancel callbacks' writes land; the
-session's feedback entry is removed before its end runs user code
-(`unmounting_the_source_mid_drag_cancels_it`). `PageView`'s
-controller listener only records each page change
-and schedules a rebuild; `build` queues one post-frame entry per recorded page,
-and delivery reads the current callback (mapping decision 37).
-
-Tests: `tests/drag_and_drop.rs`, `tests/page_view_events.rs`, and the
-`event_context_tests` module of `tests/shortcuts.rs`.
-
-`DropTarget`'s `on_drop` and spring-loading callback and `Semantics`' action
-handlers take `EventContext` too. Their render data must stay `Send + Sync`, so each
-widget registers its owner-local state (the drop target's receiver, the node's
-action table, each with its `WriterSource`) in the interaction lane and stores
-only the lane's `LocalPayloadTarget` ticket; the drag session and the semantics
-action handler resolve it inside the UI runtime (ADR-0086 §3, amended 2026-09-30;
-mapping decisions 1 and 17). The unmounted `LocalHistoryEntry::on_remove`
-navigation primitive is not migrated: it needs an explicit navigation
-write-context contract rather than an invented ambient writer.
-
 The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
 overlay behavior. Layer rules, dependency direction, and the crate's place in
 the workspace DAG live in [`docs/architecture.md`](../../docs/architecture.md)
-and this crate's `[package.metadata.flui] layer`; this file
-records the per-widget design decisions that would otherwise read as drift.
+and this crate's `[package.metadata.flui]` tier; this file records the rules
+that hold across the crate and then, one area at a time, the design of each
+widget family that would otherwise read as drift.
 
 Cross-crate protocol decisions belong in an ADR (`docs/adr/`). What belongs
 here is a decision local to this crate: a widget's internal shape, a callback
 bound, a payload type.
 
-## Module layers
+The areas follow the crate's modules: layout and paint, controls, images, icons,
+motion, semantics, gestures, drag and drop, context menus, focus and keyboard,
+text, forms, scrolling, reorderable lists and swipe rows, the overlay, the
+navigator, the router, heroes, and the app shell with localization.
+
+## Crate-wide rules
+
+### One public path
+
+Every top-level module is private, and the crate root re-exports each public item once:
+`flui_widgets::Padding`, never `flui_widgets::layout::Padding`, as Flutter's `widgets.dart` is
+one flat library. `particles` is the one namespace the root keeps whole (its configuration
+vocabulary — `Sprite`, `Coverage`, `MAX_CAPACITY` — would crowd the catalog), and the root does
+not also flatten its items. A type another crate owns is not re-exported: a semantics role, a
+pointer event, a layout enum or a render delegate is reached from its owner (`flui::semantics`,
+`flui::interaction`, `flui::rendering`, `flui::painting`), and the `prelude` imports the ones an
+app author needs from their owning crates. The widgets `flui-view` defines beside their element
+state (`LayoutBuilder`, `SliverList`, `SliverGrid`, `FutureBuilder`, `StreamBuilder` and its
+snapshot vocabulary) are catalog items, re-exported at the root. The doc-hidden seams are
+`__private` (the catalogs' `node`, form-field core, flight seat), `__derive` (what
+`#[derive(Routable)]` expands to calls of, and the `RoutePath`/`RouteParseError` it names) and
+the `testing`-only `__test_access`.
+
+### Module layers
 
 The crate is one crate with a declared import direction between its top-level
 modules. Non-test code of a module names only modules in lower layers, and
@@ -709,19 +104,789 @@ The clipboard intents live in `interaction`, not `text`, so the
 `DefaultFocusTraversal` that `app_root` installs can bind them without naming
 the text module that answers them.
 
-A new module takes a place in `layers`; a move that changes the direction
-edits `layers` in the same change, which is where it is reviewed. An edge the
-layers refuse and that cannot move yet goes into `exceptions` with the ADR
-whose change removes it and the date it was added.
+No program checks the list (ADR-0371): a reader of a change holds it. A new
+module takes a place in the list above, and a move that changes the direction
+edits the list in the same change, which is where it is reviewed (ADR-0081 §5).
 
-## Integration tests
+### Integration tests
 
-The scenario functions in `tests/*.rs` are rows of the capability-family tables in
-`tests/contracts.rs`: one `#[test]` per family, each row run in turn and every failing row
-named in the panic message. The test names cited in this document are those row names;
-find one with `rg <name> tests/`.
+Most integration tests are modules of one binary (`tests/main.rs`); the few that need a
+process of their own are `[[test]]` targets of `Cargo.toml`. The scenario functions in
+`tests/*.rs` are mostly rows of the capability-family tables in `tests/contracts.rs`, and a
+few files keep a table of their own (`tests/router.rs`, `tests/url_owner.rs`,
+`tests/controller_labels.rs`): one `#[test]` per family, each row run in turn through
+`run_cases` and every failing row named in the panic message. The test names cited in this
+document are those row names or plain test names; find one with `rg <name> tests/ src/`.
 
-## Mapping decisions
+### Event callback phase boundary
+
+`InteractiveViewer`, `PopScope`, `AnimatedSize`,
+`Dismissible`, `Draggable` and `PageView` event setters receive `EventContext`
+(ADR-0086), and so do `CallbackShortcuts` bindings and `Action::invoke`, which
+run inside the key event's dispatch. Composite input
+handlers forward their child's context; wheel and pinch claim handlers keep
+their query signature and open the viewer's lifecycle-acquired `WriterSource`
+only for the interaction notifications. `PopScope` preserves synchronous
+navigation outcome delivery and the existing observer ordering.
+
+A widget whose render data must stay `Send + Sync` registers its owner-local state (a
+`DropTarget`'s receiver, a `Semantics` node's action table, each with its
+`WriterSource`) in the interaction lane and stores only the lane's
+`LocalPayloadTarget` ticket; the drag session and the semantics action handler resolve it
+inside the UI runtime (ADR-0086 §3). The receiver is described under "`DropTarget`
+registers one `DropReceiver` for its whole life", the action table under "`Semantics`
+action handlers are owner-local `EventContext` callbacks behind one `Send + Sync` ticket
+handler per node".
+
+Animation listeners accept owner-local captures. Each `AnimatedSize` completed
+status admits one event directly to the owner post-frame lane, before later
+owner events. Build has no completion counter or delivery responsibility.
+Delivery resolves the current `on_end` and opens its writable event context;
+unmount cancels delivery. A callback failure leaves the lane's accepted tail
+for the next frame rather than an internal completion loop dropping it.
+`size_completion_keeps_owner_event_order_and_lifetime` checks ordering,
+callback replacement and late installation, unmount, failure recovery and
+painted endpoints; `animated_size_completion_writes_a_signal_after_build`
+pins writable delivery after the frame.
+
+`Dismissible` and `PageView` queue their events on the same lane ("Gesture release
+retains the painted position" and "`PageView` reports page changes after the frame, in
+order"). Animation-listener notifications are never delivered synchronously to user code:
+user effects must not execute during a FLUI build. Deferred events use the latest
+configured callback and are cancelled when their widget is disposed. A missing or closed
+post-frame lane reports a warning and drops the event, never dispatches inline.
+
+`GestureDetector`'s assistive activation runs inside the platform request's
+own `EventContext`, the owner-local dispatch `Semantics` hands its handlers
+(see the `Semantics` action handlers section), exactly as a key's activation does: the handler reads
+the current callback from the live slots, releases the slot borrow and calls
+it, and a disposed detector runs nothing. There is no queue, no rebuild and
+no post-frame hop, so an Invoke on a `RawButton`, a `ControlSpec` control or a
+`ContextMenuArea` row performs in the same dispatch as Enter
+(`raw_button_press_is_reachable_through_a_platform_click`). Each request runs
+its handler once and no frame replays it
+(`repeated_assistive_taps_run_once_each_in_their_dispatch`,
+`repeated_assistive_long_presses_run_once_each_in_their_dispatch`), and a
+panicking handler reaches its dispatcher without costing the next request
+(`a_panicking_assistive_action_leaves_the_next_one_deliverable`).
+
+`Draggable`'s drag sessions open each callback's write through the widget's
+`WriterSource`; its configuration cell is owner-local and never borrowed across
+user code. An unmount mid-drag cancels from `dispose`, which runs in
+`finalize_tree` outside any build, so the cancel callbacks' writes land; the
+session's feedback entry is removed before its end runs user code
+(`unmounting_the_source_mid_drag_cancels_it`).
+
+The unmounted `LocalHistoryEntry::on_remove` navigation primitive takes no
+`EventContext`: it needs an explicit navigation write-context contract rather than an
+invented ambient writer.
+
+Tests: `tests/drag_and_drop.rs`, `tests/page_view_events.rs`, and the
+`event_context_tests` module of `tests/shortcuts.rs`.
+
+## Layout and paint
+
+### `Container` is one render object, not a conditional widget stack
+
+**Rule:** a convenience widget's implementation shape must
+not make the caller's unkeyed child state depend on which cosmetic options are
+set.
+
+**Problem:** a `Container` built as a conditional stack of `Align` / `Padding` /
+`ColoredBox` / `DecoratedBox` / `ConstrainedBox` / margin `Padding` / `Transform`,
+one level per set field, inserts or removes a level between the parent and the
+child whenever a field is toggled, so reconciliation diverges there and an
+unkeyed stateful child below is rebuilt from scratch. Alternatives (keyed
+reparenting, a "compressed element" holding the intermediate widgets, a local
+deactivated-element map) each duplicate an existing mechanism or add a new one.
+
+**Choice:** render-level composition. `Container` is a `RenderView`
+over one `RenderContainer` (`flui-objects`) that carries margin, additional
+constraints, padding, alignment, color, decoration and transform as *fields*.
+The child's slot is therefore structurally fixed and no option can move it.
+
+**What it costs.** One alternative keeps composition in the render layer, with a
+composed box building a real render-object subtree
+(`RenderPadding` → `RenderDecoratedBox` → …) behind one widget/element. FLUI's
+is a single render object that *re-derives* that subtree's geometry, paint,
+hit-test and intrinsics as its own code. The upside is one node and no
+composition machinery to build. The cost is that every contract the levels
+would have inherited has to be re-proved here, and that is where this object's
+defects have actually come from: an absent level and a zero-inset level are
+not the same thing for hit-testing (which is why `padding` is `Option` and the
+child-recursion gate is conditional — see **Hit-testing** below), and the
+layered-range predicate now exists in two places. A composed
+shape would make those classes unrepresentable rather than tested-for. It is a
+legitimate future reshape, not a defect in this one.
+Render-level composition fixes `Container` and not the general class, so any
+other conditional-layer widget in this catalog keeps the same hazard.
+
+Three properties follow:
+
+* **State survives every toggle** with no `GlobalKey`, no retake, and no
+  lifecycle churn — nothing for the caller to opt into, and no reparenting
+  semantics leaking into an unmoved subtree.
+* **The element tree is where the win is, not the render tree.** A conditional
+  stack inflates and deflates an *element* per toggled option, and elements are
+  not free: an upstream report on the equivalent widget-stack `Container`
+  measures element inflation/deflation as a bottleneck during fast
+  scrolling — "a thousand cuts problem" — and names constraining `Container` to
+  a single element as a direct improvement. That is the load-bearing argument
+  for this shape. The render-node accounting below is a cost statement, not
+  the justification; read it as "what this costs", not "why we did it". FLUI has
+  no equivalent measurement of its own yet, so this rests on an upstream
+  maintainer's profiling, not ours.
+* **Node count depends on whether there is a child.** With a child, identity
+  (no options at all) in a widget stack passes the child straight through —
+  zero extra nodes — so the stack is cheaper there. At exactly one option,
+  the stack is also exactly one extra node (a single `padding` builds
+  one `RenderPadding`), so node count ties. `RenderContainer` only wins on
+  count from two options up, where the stack would otherwise add one level
+  per option (up to seven if every option is set). **Childless, the stack is
+  never free**: it reaches for a two-node placeholder (`LimitedBox` +
+  `ConstrainedBox`) even with no option set at all (`Container()`), so
+  `RenderContainer` already wins there. The only childless tie is a *tight*
+  effective constraint — both `width` and `height` set, or an explicit tight
+  `constraints` — which suppresses the placeholder and leaves the stack a
+  single `ConstrainedBox` against one node here; a lone `width` does not
+  qualify, since `BoxConstraints::is_tight` requires both axes, so that case
+  still takes the placeholder and costs three. Every
+  other childless option (color, padding, decoration, an alignment paired
+  with a fixed size) only grows the stack's node count further, never brings
+  it back below one. **What node count never buys, in either regime, is
+  node weight**: `RenderContainer` carries every field — alignment, padding,
+  margin, color, decoration, additional constraints, transform, plus the
+  committed child offset/size/baselines — whether or not that option is
+  set, so it is heavier than whichever single-purpose object the stack
+  would have used, in every configuration including identity. The reason
+  for this shape is the stable slot, not a cheaper or lighter
+  `Container`.
+
+**Intrinsics:** a tight additional width or height answers before the child
+is queried, matching `RenderConstrainedBox`. Without that short-circuit a
+`LayoutBuilder` (or any child that rejects speculative intrinsic queries)
+would be asked even though the result is discarded.
+
+**Parent-data transparency:** a widget-stack identity `Container` (every option
+absent) would build to the child itself, so `Row → Container → Expanded` and
+`Stack → Container → Positioned` attach the parent-data widget directly to
+Flex/Stack. A `RenderView` always inserts `RenderContainer`
+(`ParentData = BoxParentData`) between them, so those trees panic at
+`apply_ancestor_parent_data`. That is a named consequence of the stable-slot
+choice, not an accidental drop: restoring identity passthrough would rebuild
+the unkeyed child's state the moment any option is toggled on. The supported
+shape is `Row → Expanded → Container` / `Stack → Positioned → Container`.
+No test pins the panic.
+
+Parent data is not the only consequence of that always-a-node choice.
+Hit-testing has the same shape one level up: `RenderContainer` always bounds
+the incoming position against its own box before doing anything else, while
+an identity widget-stack `Container` is not a node at all and so bounds nothing. A
+child whose own `hit_test` deliberately does not bound itself — `RenderTransform`
+is the documented case — is therefore reachable outside the container's box in
+that stack and not here, whenever *no* margin and *none* of the five gated
+properties are set. Measured under a shared `RenderPadding` parent with a
+scaled child, three of four probe points outside the box hit in the stack's tree
+and miss here. Unlike the margin-band gate below, this one is **not** closed:
+the gated-level reasoning that fixes that case does not extend to the outer
+gate, because at identity there is no level to reason about — the node itself
+is the difference.
+
+**Collapsed branch:** the stack's three childless shapes — the placeholder
+`LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
+inner widget at all — all resolve to the same box, so `RenderContainer` has no
+childless branch. `harness_container_childless_fills_bounded_and_collapses_unbounded`
+pins the box it resolves to against hand-computed sizes (a bounded axis fills,
+an unbounded one collapses, each axis independently). No test pins that the three
+shapes agree with each other and with `RenderContainer`.
+
+**Not carried over:** `foregroundDecoration`, `clipBehavior`, `isAntiAlias` and
+`transformAlignment` have no FLUI `Container` setter. These are four
+different kinds of gap, not one undifferentiated "not yet":
+
+- **`clipBehavior` does not fit this shape at all.** [`PaintEffects`] gives a
+  node exactly one clip slot, wrapping everything the node's `paint` records
+  as one fragment. A stacked `ClipPath` (the `clipBehavior != Clip.none`
+  branch) sits between `ColoredBox` and `DecoratedBox`:
+  it clips the padding, color and child, and explicitly does **not** clip
+  the decoration (`DecoratedBox` wraps the already-clipped `current`
+  afterward, unclipped). `RenderContainer::paint` records decoration, color
+  and child as one fragment, so a `PaintEffects.clip` here would clip the
+  decoration too — wrong. Adding this needs a paint-level re-split (a second
+  recorded fragment, or a clip scoped to a sub-range of one), not a new
+  `Option` field.
+- **`foregroundDecoration` is additive.** A second decoration field, a
+  `BoxDecoration::paint` call after the child (painted on top rather than
+  behind), and a hit arm —
+  `DecoratedBox`'s own doc states a foreground decoration participates in
+  `hitTestSelf` exactly like the background one does.
+- **`transformAlignment` is additive but not local.** It needs an
+  `alignment: Option<Alignment>` field folded into the pivot the way
+  [`RenderTransform::effective_transform`] already combines one with its own
+  base matrix, and that combined value would have to move together through
+  `apply_paint_transform`, `hit_test_transform`, `paint_translation`,
+  `skip_paint` and `owns_effect_layer` — every site that reads `self.transform`
+  today.
+- **`isAntiAlias` is additive and narrow.** In the stack it is a
+  `ColoredBox`-only flag; nothing else in the stack reads it. FLUI's own color fill
+  (`ctx.canvas().draw_rect(rect, &Paint::fill(color))`) always anti-aliases
+  (`Paint::fill`'s default), with `Paint::with_anti_alias` already available
+  to turn it off — adding the setter is one field plus one call-site change,
+  not a structural gap.
+
+A `BoxDecoration` border's thickness is separately still not folded into the
+effective padding (`_paddingIncludingDecoration`) because
+`flui_painting::styling::BoxDecoration` exposes no border insets. `color`
+and `decoration` are not mutually exclusive: FLUI accepts both and paints color
+over the decoration — the order the widget stack would have produced
+(`DecoratedBox` enclosing `ColoredBox`) — rather than panicking.
+
+**Tests:** the geometry the collapsed stack owes is pinned against
+the stack itself by `harness_container_matches_the_widget_stack_it_collapses`
+(size, child size, absolute child position and hit path, over eight
+configurations spanning both wet layout and hit-testing, each making a
+different level decide). Chrome self-hit uses the same half-open gate as the
+stacked `DecoratedBox`: the same differential probes the exclusive max edges of
+the chrome. No test pins the decorated box's own paint rect inside the margin
+(the level a stacked `DecoratedBox` exposes and a single node does not expose
+as a separate render object), the state stability of an unkeyed child as each
+optional property toggles (on `Container` and `AnimatedContainer`), tight
+additional constraints answering an intrinsic without querying a `LayoutBuilder`
+child, or baselines adding the child's offset.
+
+**Hit-testing gates the child behind the SAME boxes the stack does — only
+when a level exists to gate on, and none always does.** `RenderContainer::
+hit_test` tests the child before the decoration/color path (a child hittable
+in a cut-out the decoration's rounded corners exclude must stay reachable),
+but ordering is not the only thing that has to match the stack: the stack
+inserts `Padding`/`ColoredBox`/`DecoratedBox`/`ConstrainedBox`/`Align`
+between `Padding(margin)` and the child only when `padding`/`color`/
+`decoration`/`additional_constraints`/`alignment` (respectively) is set —
+`_paddingIncludingDecoration` is null, and so no `Padding` level exists,
+precisely when `padding` is unset (FLUI's `BoxDecoration` never contributes
+a padding of its own, so a decoration alone can't supply one either). With
+NONE of those five set, the composed shape is `Padding(margin) → child`
+with nothing between them, and nothing gates a hit-test there either — a
+`RenderContainer` that always applied the `inner_size` gate regardless would
+reject a tap the real stack accepts. `padding` is therefore `Option
+<EdgeInsets>` on `RenderContainer`, not a plain `EdgeInsets` defaulting to
+zero: `None` (unset) and `Some(EdgeInsets::ZERO)` (explicitly zero) are
+geometrically identical but hit-test differently, since an explicit zero
+inset still gets a real (zero-inset) level.
+
+Once at least one of those five IS set, every level that exists reports the
+same margin-offset `inner_size` box and rejects a position outside it
+(`is_within_own_size`) before ever reaching the child, and when an alignment
+is set specifically, the stack additionally inserts an `Align` level gating
+on the narrower CONTENT box (inside the margin AND the padding) — a gate
+whose OWN condition needs nothing else, since an `Align` level exists
+whenever alignment does, independent of whichever of the other four are
+also set. A collapsed node that let a child overflow past either gate, once
+its condition holds, would expose a child whose own `hit_test` does not
+bound itself to its laid-out box — `RenderTransform` deliberately does not,
+so a scaled child stays hittable across its whole visually-overflowing
+area — to a tap the real stack rejects.
+
+Pinned in both directions by two cases of
+`harness_container_matches_the_widget_stack_it_collapses`: a non-zero margin
+with nothing else set (the overflowing child's tap in the margin band DOES hit)
+against the same margin with a real padding level added (the identical tap does
+NOT). `padding` is `Option<EdgeInsets>` on `ContainerStackCase` for the same
+reason it is on `RenderContainer` — a composed tree that always inserted a
+zero-inset `Padding` level would silently endorse the difference instead of
+detecting it. No test pins the narrower content-box gate (padding with alignment
+set does not expose an overflowing child, and the same padding without alignment
+does not narrow the gate).
+
+### `ParentDataView` ancestry is checked at attach, with catalog diagnostic labels
+
+**Rule:** framework-user composition errors must not surface as internal
+render-protocol panics.
+
+**Choice:** misuse (e.g. `Expanded` under `Stack`) is rejected early with a
+diagnostic naming the widget, its typical ancestor and the ownership chain, and
+debug and release agree on the contract. It is expressed in Rust
+as:
+
+- `ParentDataView::{debug_type_name, typical_ancestor_description}` — catalog
+  widgets (`Expanded`/`Flexible`/`Positioned`/`DirectionalPositioned`/`TableCell`/
+  `LayoutId`/`SliverCrossAxisItem`) override with short labels and ancestor
+  families;
+- `RenderObject::child_parent_data_type_id` — the render parent declares the
+  `ParentData` `TypeId` it expects on children;
+- `ElementTree::apply_ancestor_parent_data` validates provider `TypeId` against
+  that expectation **before** `apply_parent_data_config` / `update_parent_data`
+  touch the child's parent data, and panics with the same semantic message in
+  debug and release.
+
+**Why not wait for layout.** A mismatch left to
+`RawBoxLayoutContext::from_erased`'s `debug_assert!` would differ between debug
+and release builds, hide the offending widget behind `TypeId` text, and let
+secondary bootstrap `InvalidGeometry` panics mask the primary failure in
+harnesses.
+
+**Tests:** `expanded_under_stack_panics_at_attach_with_ancestry_diagnostic`
+(`tests/parent_data_ancestry.rs`) asserts the attach-seam diagnostic and that the
+message is not `RawBoxLayoutContext::from_erased`. Happy paths are in
+`tests/flex_parent_data.rs` and `tests/stack_positioned.rs`.
+
+### Flow presentation and accessibility
+
+Flow shares its owner-local delegate through `Rc`. Repaint notifications refresh
+the presented child subset and accessibility geometry without rebuilding child
+views. Replacing the delegate migrates its actual repaint subscription.
+`flow_repaint_and_delegate_replacement_update_accessible_children` observes both
+paths through the mounted widget and adapter-facing tree (ADR-0224).
+
+### Custom painter accessible regions
+
+`CustomPaint` reports paint and semantics impact independently when replacing
+delegates. Its committed layout size supplies `CustomPainter::semantics_regions`
+even when the new delegate declines a configuration-driven semantics rebuild.
+`custom_painter_regions_follow_semantics_only_updates_and_layout_size` observes
+label-only replacement and resized region bounds through the adapter-facing
+accessibility tree, retaining the host/key identity (ADR-0223).
+
+## Controls
+
+### Controlled catalog inputs
+
+`Slider` and `Disclosure` implement ADR-0124. Input proposes values through
+`EventContext`; only parent configuration commits them. The slider paints and maps
+pointers against allocated bounds, honors inherited or explicit direction, and
+keeps extreme interpolation finite. Disclosure unmounts its collapsed body and
+keeps a real focusable header. Both recheck mounted writer and focus authority
+after reentry, and guard independently owned callback and view retirement tails.
+`controlled_slider_input_and_geometry` and
+`controlled_disclosure_state_and_geometry` pin these decisions through
+actual input, frame geometry, semantics and retirement producers.
+
+Captured gesture groups share their owning state's mounted admission. Disposal
+revokes admission before recognizer retirement, and delivery checks it between
+recognizers so an earlier callback can unmount the group safely. A retained
+Listener route still receives its terminal event; its disposed composite
+recognizers are no longer invoked. The controlled slider retirement row pins
+mid-contact disablement, stale Move/Up delivery and a fresh mounted contact.
+Disclosure explicitly merges its named Focus/action header semantics while its
+body remains a separate subtree; indicator direction uses the header allocation.
+
+### Activity indicator paint isolation
+
+ActivityIndicator owns a repaint boundary around its animated CustomPaint.
+Its geometry and semantics stay unchanged while each tick updates only its
+boundary's content certificate. `indicator_ticks_preserve_surrounding_paint_content`
+observes a moving arc alongside an unchanged surrounding certificate through
+the mounted widget's submitted layer tree. The keyed permission-migration
+cases also exercise nested isolation across pause, relocation and resumption.
+
+## Images
+
+### Asset and network images load through their UI runtime's cache
+
+Each UI runtime keeps one `flui_assets::ImageCache`, which `Image` acquires in
+`init_state` as `ImageCacheCapability` beside its lanes and HTTP client and
+hands its provider in `ImageServices` (ADR-0387). The cache keeps the decoded
+images within a byte budget and the loads in flight (ADR-0250; `flui-assets`'
+`ARCHITECTURE.md`): it coalesces loads and cancels one when its last waiter is
+dropped, so every `AssetImage` and `NetworkImage` of one source in one runtime
+shares a decode, another runtime keeps its own, and the runtime trims its cache
+under memory pressure. Eviction cannot invalidate a pixel handle held by an
+already displayed image. `Image` probes `ImageProvider::cached` before it starts a
+load, so an image the provider already holds renders in the same frame. On a host
+without the capability a load answers `ImageProviderError::ImageCacheUnavailable` and
+reads nothing. An `AssetImage` reads through the asset bundle `Image` acquires as
+`AssetBundleCapability` (ADR-0384 §6). Their `ImageCacheKey` holds the asset key or the URL
+alone: the cache, the bundle and the client an `Image` acquired do not change while it is
+mounted, so the key need not name them. Two HTTP clients can be answered different images at one
+URL, so the cache keeps a network image under its client's `HttpAuthority` as
+well (ADR-0280 §6), and `NetworkImage::cached` probes with the client its
+`Image` acquired. A custom provider keys by a typed value
+(`ImageCacheKey::custom`), never equal to a built-in key or to a value of
+another type.
+
+**Tests:** `asset_images_share_their_runtimes_cache_until_memory_pressure`,
+`network_images_scope_cached_and_pending_responses_to_their_cache`,
+`an_image_missing_a_service_answers_which_one`,
+`one_cache_keeps_two_clients_images_of_one_url_apart` (`flui-assets`), and
+`asset_image_async_reuses_completed_decodes_after_cold_failure_recovery`, which
+removes the actual source after decoding and repeats async resolution, including
+cold failure followed by recovery.
+
+## Icons
+
+### Animated icon data is constant key frames, checked once
+
+`AnimatedIconData` is key frames: one time line, and per path an opacity and a point list per
+command for every frame, with an optional cubic per gap. Constant data borrows `'static`
+slices (`from_static`, no allocation, usable in a `const`), run-time data is checked by
+`try_new` and shared behind an `Arc`; both are one type, so a pack's constants and an imported
+icon draw the same way. The check refuses mismatched frame counts, unordered times, values
+that are not finite, opacities outside `[0, 1]`, and a gap whose curve overshoots out of the
+finite range. Interpolation weighs the two ends (`a·(1−t) + b·t`), never their difference, so
+two finite extremes stay finite through the middle. `AnimatedIcon` takes the caller's
+animation, clamps its progress and keeps the last finite one, so an icon never vanishes and
+never publishes geometry that is not finite; mirroring under right-to-left text is the data's
+flag, because only the icon's author knows whether it points somewhere. The pictures come in
+as constants generated ahead of time from SVG key frames (`flui-material`'s
+`tests/animated_icon_data.rs` writes its pairs), not through a runtime parser.
+
+`animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
+`animated_icon::theme_and_direction_shape_the_icon` pin the three.
+
+### A symbol effect moves the painted box, never the layout or the label
+
+`SymbolEffect` wraps an icon's built content in a crate-private host that owns one controller
+and turns its progress into scale, turn and opacity tracks (`Keyframes` over a one-second
+cycle, stretched to the effect's duration and `Speed`), so an effect is a transform and an
+opacity on the icon's own box and layout never changes. What plays it is part of the type: a
+one-shot effect needs `on_change(u64)` and a repeating one `active(bool)`, so a bounce with no
+trigger does not compile. A one-shot or repeating effect ends at rest, which is where an
+inactive repeating effect stops: it runs the cycle in progress to its end. Transitions play
+when first applied, which keeps them declarative: an app toggles by switching `appear` and
+`disappear`. A replace keeps the outgoing content under an `ExcludeSemantics` until the fade
+ends, so assistive technology hears one label. A trim belongs to paths, so `PathEffect` is a
+method of `AnimatedIcon` only and a glyph icon cannot be handed one. `IconThemeData` carries
+an ambient effect for icons a container did not build itself, the way `NavigationBar` bounces
+whatever icon view a destination holds.
+
+`symbol_effect::each_effect_peaks_where_its_timing_says`,
+`symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard` and
+`symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end` pin the three.
+
+## Motion
+
+### Grouped animation ownership
+
+Switcher transfers all current and outgoing controller seats in one Vsync update
+before exposing migration to callbacks. `switching_entries_finish_migration_before_a_wake_failure`
+observes the committed registrations inside a failing wake and verifies disposal
+of the faulted lifecycle actor followed by a fresh working cross-fade.
+
+Completed Switcher entries leave the outgoing collection before any cancellation
+or authored destruction. Cached transition snapshots retain `Rc` ownership under
+the collection borrow, then clone authored views after releasing it. Each entry
+keeps independent curve, child and transition ownership in terminal slots, while
+its driver always performs logical cancellation, including during incoming unwind.
+Collection cleanup therefore withdraws the remaining drivers after a first
+failure without invoking the opaque capture tail. Lifecycle disposal withdraws
+both current and outgoing entries before retiring either collection.
+
+`outgoing_switcher_retirement_preserves_independent_captures` exercises an actual
+mounted cross-fade, outgoing-child destruction and a subsequent healthy switch.
+The private `switcher_entry_retirement_preserves_logical_cleanup` matrix isolates
+physical entry destruction: healthy, a first entry's child or transition failure,
+an incoming unwind and the entry tail, each destroyed once. It also verifies every
+registry seat and run future is cancelled, followed by healthy retirement.
+
+Dismissible restores its shared collapse owner before publishing that same
+batched migration. `collapse_owner_storage_is_committed_before_migration_callouts`
+uses the private storage seam to check reentrant access, failure propagation and
+completion through the retained owner. The mounted row
+`a_collapsing_dismissible_survives_a_migration_wake_failure` separately verifies
+the lifecycle fault boundary retires both owners and a fresh collapse completes.
+
+### Independent implicit property motion
+
+`AnimatedContainer` uses the same independent property ownership for alignment,
+insets, Oklab color and both sizes. Its transform has separate normalized motion
+and a concrete `TransformTween` using ADR-0149 decomposition. Changing color
+does not restart size or transform. Matrix replacement guarantees C⁰ continuity;
+numeric components retain C¹ motion. Absent endpoints snap. Non-finite initial
+optional properties are omitted; non-finite live targets preserve the existing
+numeric update as a whole. Plain `Lerp` keeps its own NaN contract.
+
+`container_retarget_preserves_the_laid_out_size_velocity` measures both axes
+with layout quantization included in its tolerance. The painted alpha row
+`container_color_retarget_preserves_painted_alpha_progress` reads display-list
+paint within 8-bit color precision. `container_property_motion_settles_and_unmounts_independently`
+observes curve and spring exact settlement after a color-only update and registry
+withdrawal on unmount. `non_finite_container_targets_preserve_the_last_admitted_layout`
+pins initial omission and delivery of previously admitted size goals after refusal.
+
+`AnimatedAlign` owns alignment and optional factor motion independently. Each
+property uses typed `AnimatedValue` components under the presentation's Vsync;
+one weakly connected notification channel dirties its inner `AnimatedBuilder`.
+Retargeting alignment does not restart a factor's run or extend its deadline.
+Present factors preserve their physical velocities; appearing and disappearing
+factors snap because there is no value to interpolate on the absent side.
+Unset factors reach `Align` as unset, preserving constraints-fill semantics.
+Negative factor overshoot clamps to zero at layout. Non-finite targets refuse
+the whole numeric update before any property's motion is changed.
+
+`align_retarget_preserves_the_laid_out_velocity` observes position differences
+through actual layout. `align_changes_leave_an_unchanged_factor_on_its_original_deadline`
+pins independent progress. `align_spring_settles_and_optional_factors_snap_independently`
+covers exact spring settlement, absent factors and unmount withdrawal.
+`invalid_align_targets_preserve_all_running_layout_properties` verifies rejected
+numeric updates keep both old layout trajectories deliverable.
+
+### Implicit widgets are named types over one motion builder
+
+Each implicit widget is its own thin public struct (`AnimatedOpacity`,
+`AnimatedScale`, `AnimatedPositioned`, …), not an instance of one generic
+`Implicit<P>`: rustdoc and compiler errors name the widget the author wrote.
+What they share is the `MotionBuilder` trait (`duration`, `curve`, `spring`,
+`motion` over one `MotionSpec`), which the controls in `flui-material`
+(`Switch`, `NavigationBar`, `DefaultTabController`) implement too, and the
+lifecycle of a single animated value, `ImplicitMotion<T>`, which stays
+`pub(crate)`: a public owner type would freeze the SDK surface for no caller
+that needs it. `AnimatedAlign` and `AnimatedContainer` keep their per-property
+motion and take only the builder.
+
+`AnimatedSize` moves during layout, so its owner lives in the view state, not
+the render object (ADR-0190): the state binds the `SizeMotion` to the
+ambient `VsyncScope` in `did_change_dependencies`, and the render object holds
+a non-owning `SizeMotionHandle` it retargets from `perform_layout`. It moves on
+a critically damped spring unless told otherwise.
+
+`changing_only_the_duration_preserves_motion_and_sets_a_new_deadline` pins the
+builder merge, `new_implicit_widgets_keep_velocity_across_a_spring_retarget`
+the spring path on every new widget,
+`animated_size_defaults_to_a_critically_damped_spring` the default and
+`an_active_size_run_migrates_between_registries` the owner staying with the
+state.
+
+### Implicit retarget captures the displayed sample before changing easing
+
+When a target changes, implicit animations read their current value or eased
+progress before configuring the new curve. The replacement tween starts at that
+sample. Container and alignment properties share an optional restart progress,
+so unchanged properties are re-anchored at the same instant as changed ones.
+A curve-only update keeps the existing run timeline.
+
+The public rows `opacity_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`padding_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`container_retarget_with_a_new_curve_keeps_the_displayed_sample`,
+`align_retarget_with_a_new_curve_keeps_the_displayed_sample` and
+`rotation_retarget_with_a_new_curve_keeps_the_displayed_sample` pin continuity
+through rendered opacity, layout and a transform layer. The container row also
+keeps an unchanged height continuous. The separate row
+`changing_only_the_curve_keeps_the_existing_deadline` pins the original completion
+deadline. It does not prove position or velocity continuity for curve-only
+changes. Container and alignment still use the shared progress path described above.
+
+Opacity, padding and rotation own `AnimatedValue` motion rather than reconstructing
+a tween over normalized progress. Target and curve changes are admitted together;
+each component inherits its last published velocity. Opacity keeps the same
+render proxy; padding's builder keeps a stable observed stream and reads its
+component sample for layout. Rotation's stable proxy observes angular motion in
+turns. All three expose curve and spring configuration, and
+retain the owning registration until state disposal. Non-finite initial values
+use transparent opacity or zero insets; invalid later targets retain the admitted
+run. Padding clamps sampled insets to non-negative values at the layout boundary.
+`opacity_retarget_preserves_the_painted_velocity` and
+`padding_retarget_preserves_the_laid_out_velocity` compare the actual producer's
+position intervals on either side of interruption;
+`rotation_retarget_preserves_the_painted_velocity` does the same through the
+transform layer. Changing to the shorter rotation path retains the incoming
+velocity, brakes and settles at the nearest equivalent; the public
+`animated_rotation_retargets_on_a_path_change` row pins that behavior.
+
+### One effect primitive, two compositions
+
+`Effect` (fade, slide, scale, rotate, shimmer) is the one primitive, composed
+two ways. A `Transition` is reversible: an entry and an exit slot per effect
+kind, so appearing and disappearing play the same effects backwards;
+`a + b` keeps `b`'s effect in every slot both fill, and `asymmetric` takes the
+two sides from different transitions. `Effects` is a timeline: entries run in
+sequence (`then`) or together, each over its own span, which a reversible
+value cannot express. One algebra for both would lose either reversal or
+sequencing. `AnimatedSwitcher`, the animated lists and `Animate::transition`
+play a `Transition`; `Animate` with a trigger plays `Effects`.
+
+`transition_merge_keeps_the_right_operand_per_slot` pins the merge;
+`motion::on_mount_plays_the_timeline_in_order` pins the timeline.
+
+### Effect progress is linear in time and a transition's side latches at rest
+
+`Animate` drives its progress with an `AnimationController`, not an
+`AnimatedValue`: a value owner starts and arrives at rest, so a timeline read
+through it would bend every entry's timing, while a controller's `animate_to`
+runs linearly and scales a partial run by the distance it covers. Each
+`Effects` entry eases its own span; a `Transition` reads progress through its
+curve. Interrupting a run reverses from the displayed progress, and the side of
+a `Transition` (entry or exit effects) is chosen only when a run leaves rest,
+so an interrupted exit plays its own effects back instead of switching to the
+entry's. Effects compose in a fixed order, rotation inside scale inside
+translation, and a scale about a non-centre alignment is a centre scale plus a
+translation, so no new render object is needed.
+
+`motion::on_mount_plays_the_timeline_in_order`,
+`motion::target_reverses_mid_flight_without_a_jump` and
+`motion::a_scale_effect_keeps_its_alignment_fixed` pin the three.
+
+### A shimmer publishes its phase; each skeleton paints its share
+
+`Shimmer` owns one sweep and publishes its phase to the subtree; a `Skeleton`
+paints its own slice of the one band, offset by its position under the
+shimmer's paint anchor, so every placeholder in a shimmer shares a band
+without an offscreen group. The shimmer effect over arbitrary content is a
+`ShaderMask` layer instead, which the engine already applies. The render-side choice is recorded in
+`flui-objects`' `ARCHITECTURE.md` ("Skeletons paint their own share of one
+shimmer band"). `skeletons_share_one_band` and
+`a_shimmer_effect_masks_the_child_mid_sweep` pin the two.
+
+### Particles step on the frame clock and stop when idle
+
+`ParticleEmitter` runs its system on an unbounded `AnimationController` whose simulation reads
+elapsed seconds, so time comes only from the frame scheduler and the virtual clock drives
+tests. Each tick integrates in fixed steps of 1/60 s, at most fifteen a tick: a pause of the
+ticker up to a quarter second is caught up exactly, a longer one removes the live particles,
+and the rate never makes up a pause. The simulation's `is_done` reads an idle flag the clock's
+listener sets once nothing is alive and the rate has finished, so the clock ends its own run
+rather than being stopped from inside its listener; a burst starts a new run. Every quantity
+that reaches the atlas is checked when a particle is placed, and a particle whose sprite is not
+finite, leaves the engine's `f32` range or lies farther than its size outside the box is
+removed in that step. A `ParticleController` holds a weak link to at most one mounted emitter:
+a second emitter built with it runs without it until the first unmounts. The particles cases
+of `animation_and_visibility` pin each rule (`a_paused_ticker_catches_up_in_fixed_steps`,
+`non_finite_particles_never_reach_the_atlas`, `a_controller_drives_one_emitter`,
+`presets_never_flash`, …).
+
+### Selected pointer coordinates retain the admitted motion sample
+
+A selected hit path carries its global-to-local mapping through delivery.
+Changing the animation after selection does not remap that pointer event;
+the next selection observes the new committed sample.
+`a_moving_slide_preserves_selected_pointer_coordinates` drives an owner-bound
+slide, changes its public sample between selection and delivery, and observes
+actual `Listener` local and root coordinates in LTR and RTL without rebuilding.
+Removing the transition's hit transform makes this acceptance row fail.
+
+## Semantics
+
+### `Semantics` action handlers are owner-local `EventContext` callbacks behind one `Send + Sync` ticket handler per node
+
+**Rule:** the lane mechanism is ADR-0086 §3; how this
+widget uses it is local to this crate, so it is recorded here rather than in an
+ADR.
+
+**Choice:** the builders are named after the actions they register
+(ADR-0203). The payload-free ones — `on_click`, `on_show_context_menu`,
+`on_increment`, `on_decrement`, `on_focus`,
+`on_blur`, and `expandable`'s pair — take `Fn(&mut EventContext<'_>) -> R`; the
+others take their payload typed: `on_set_value` a `&str`,
+`on_set_numeric_value` an `f64`, `on_set_scroll_offset` an `Offset<f64>`,
+`on_scroll_{left,right,up,down}` the request's `ScrollUnit`,
+`on_scroll_into_view` an `Option<Reveal>`. `on_action` takes any
+`SemanticsAction` with `Fn(&mut EventContext<'_>, ActionCall)` for what the typed
+set does not cover. None needs `Send + Sync`: the closures never reach the
+configuration.
+
+**Why the handlers stay owner-local, and where they are stored.**
+`SemanticsActionHandler` is the owner-local `Rc<dyn Fn(ActionCall)>`
+(`crates/flui-semantics/src/action.rs`), stored in a `SemanticsConfiguration`
+that rides in the annotation render object. The handler is never invoked
+across a thread — resolution is owner-local
+(`PipelineOwner::resolve_semantics_action`) and the UI runtime drains it at a
+frame boundary, inside its entry; an accessibility adapter sends a
+`SemanticsActionRequest`, not the handler. The widget keeps its closures and its
+`WriterSource` in the interaction lane as one table per node, stores only the
+lane's ticket on the render object (`SemanticsActionRoute`), and advertises
+every action through one handler that holds the ticket and resolves it when
+invoked. A rebuild replaces the table under the same ticket and reuses the same
+handler, so the configuration compares equal and raises no semantics update. This is the shape the surveyed frameworks
+point at — none puts `Send` on the handler; Bevy, Iced, Slint and Dioxus/Blitz
+put it on something the widget owns — reached through ADR-0086's lane payload.
+
+**Consequences, named rather than left to be discovered:**
+
+- **The ordinary "activation toggles this control's own state" closure is a
+  signal write.** `on_increment(move |ctx| value.update(ctx, |v| *v += 1))`
+  (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
+  write is reported, not panicked
+  (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
+- **An action invoked outside its UI runtime is dropped with a warning.** A caller
+  that holds a `SemanticsActionInvocation` and invokes it with no UI runtime entered
+  has no owner to run the closure in
+  (`an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning`). A node
+  mounted in a detached render-object context advertises none of these
+  actions, so no platform sees a control nothing can run
+  (`a_detached_mount_advertises_no_actions`). Unmount releases the node's
+  table from the lane, closures and their captures with it
+  (`unmounting_a_node_releases_its_action_table`; a `DropTarget`'s receiver the
+  same way, `unmounting_a_target_releases_its_receiver`).
+- **`Semantics` publishes actions; a control that wants to be activatable
+  advertises its own.** `GestureDetector` advertises its own `on_tap` and
+  `on_long_press` through these handlers, so they run synchronously in the
+  drain, like a raw `Semantics` handler.
+
+**A rebuild with a fresh closure costs no semantics update.** The
+configuration compares handlers with `Rc::ptr_eq`
+(`crates/flui-semantics/src/configuration.rs`). The per-node ticket handler is
+minted once, at mount, and reused by every update, which replaces only the
+lane's table under the same ticket; so a closure literal in `build` leaves the
+mounted configuration equal and `set_configuration` answers `NONE`, and the
+action runs the rebuilt closure
+(`rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one`).
+
+**Builder inventory, and what has no builder.** Every `SemanticsAction` has a
+platform route (ADR-0203; `every_action_round_trips_through_accesskit` in
+`flui-semantics`). `SetTextSelection` has `on_set_text_selection` (and the
+document form `on_set_document_selection`), `ReplaceSelectedText` has
+`on_replace_selected_text`, and a custom action has `custom_action` and
+`custom_action_when`. `ShowTooltip` and `HideTooltip` have no typed builder yet
+and are reachable through `on_action`; they get one with the first widget that
+handles them.
+
+**A payload that did not cross the seam never reaches a handler.** A handler
+receives an `ActionCall`, which carries exactly its action's payload; a
+platform request without one is refused while it is decoded. `""` and the
+origin are both legitimate values a platform can mean, so substituting either
+would turn a lost payload into a silent edit or a scroll to the origin — a
+wrong result that reads as a right one.
+
+**Tests** (`tests/semantics.rs`), each with what it can fail on:
+
+- `a_covered_retained_form_stays_absent_after_a_late_controller_update`
+  observes both assembled semantics and actual owner-flush packets. Queries
+  follow the current root's child links, so disconnected historical payloads
+  cannot count as exposed controls. A focused retained form disappears under
+  an opaque entry, remains absent after a real controller notification without
+  forcing the root dirty, refuses its old action and returns with its draft and
+  action intact. This is a headless overlay contract; it does not establish
+  native adapter behavior or elapsed route-transition completion.
+- `a_tap_handler_round_trips_from_a_platform_click_to_the_callback` — the
+  acceptance test, and it asserts both halves: the node *tells* the platform the
+  action exists (`supports_action(Action::Click)`) and pressing it *runs* the
+  callback exactly once. A node passing only the first half is the dead control
+  this surface exists to rule out.
+- The negative control — a node with no tap handler advertises no click — so
+  the advertise half is not satisfied by a node that advertises everything.
+  **Unasserted:** no test pins this.
+- The payload path — a set-value request carries its text into the handler —
+  which no payload-free test reaches. **Unasserted:** no test pins this.
+- `a_set_value_request_without_its_text_is_refused_rather_than_emptied` — a
+  request that lost its payload is refused while it is decoded, and the
+  handler does not run.
+- That every action routes back from the platform, and that a new upstream
+  AccessKit action stops `semantics_action_for` compiling, is pinned in
+  `flui-semantics` (`every_action_round_trips_through_accesskit`).
+- `block_user_actions` refusing a click the node still holds a handler for, in
+  both halves. The refusal half: the request errors *and* the handler does not
+  run. The advertise half: the blocked node does **not** advertise the click —
+  `blocks_user_actions` narrows the effective action set that snapshot export and
+  input dispatch both consult, so the node is invisible to assistive technology
+  instead of a control it can see and press to no effect.
+  **Unasserted:** no test pins this.
+
+### Accessibility of hidden retained children
+
+`Visibility::maintain_size` preserves layout while hidden, with child semantics
+excluded by default. `maintain_semantics` explicitly retains accessibility and
+requires `maintain_size`, so the retained child keeps its normal geometry.
+Pointer interactivity and focus remain independently configured. The composed
+`VisibilityGate` forwards retention to `RenderVisibility`'s existing child
+visitation hook; it also provides the same default and opt-in when used directly.
+No global rule ties paint suppression to semantics suppression.
+
+`retained_visibility_hides_child_semantics_by_default` pins the visible premise
+and hidden default in the assembled a11y tree.
+`retained_visibility_updates_semantics_without_changing_layout` updates a
+mounted widget through visible, hidden and explicitly retained configurations,
+asserting the child's accessibility label and unchanged allocated size.
+
+## Gestures
 
 ### `RawGestureDetector` reconfigures recognizers in place
 
@@ -837,8 +1002,8 @@ them. A visible-control row keeps the kind of constraint it receives (a tight
 width fills, a loose one takes the content's width) through a
 `LayoutBuilder`, which costs the row its intrinsic dimensions; a menu row
 stacks its focus decorations over the content, which keeps its constraints
-and its element. Until the owner announcer exists, announcements are
-live-region nodes, which `assert_gesture_alternatives` compares across paths.
+and its element. Announcements go through the owner announcer (`BuildContext::announcer`),
+whose live-region nodes `assert_gesture_alternatives` compares across paths.
 Pinned by the `gesture_alternatives` family in `tests/contracts.rs` and by
 `a_package_gesture_widget_reaches_its_intent_on_every_path` in flui-sdk.
 
@@ -875,6 +1040,136 @@ written (`the_alternatives_perform_the_transfer_the_drag_would`). `Dismissible`
 and `SwipeActions` keep taking commands: the caller chooses the intent their
 gesture performs, and the gesture performs the first command of the same
 alternatives.
+
+### Mounted gesture policy ownership
+
+`RawGestureDetector` (and through it every `GestureDetector`), `Draggable` and
+the navigator's edge-swipe detector acquire the resolved
+`GestureSettingsProvider` in lifecycle hooks. Live host publication
+updates that same provider; recognizers snapshot policy at admission and retain
+it through the contact or candidate's terminal event. An authored fixed profile
+or a different source identity replaces the owning recognizers instead. Equal
+profiles and the same live source preserve active work.
+
+Mounted listeners retain private weak attachments. Replacement commits every
+incoming owner and target before cancelling outgoing owners, so cached routes
+cannot reach a retired actor. Disposal revokes admission before cleanup.
+`authored_settings_replace_active_owners_and_preserve_equal_profiles`,
+`authored_settings_retire_tap_candidates_and_deadlines` and
+`authored_settings_retire_native_scale_session_before_fresh_admission` pin the
+six detector families. `draggable_reads_admission_profiles_and_retires_authored_owners`
+and `replacing_authored_back_swipe_policy_cancels_the_outgoing_contact` cover
+the direct consumers and their next healthy operation.
+
+The back-swipe settle converts the admitted fling vector's signed horizontal
+component to route widths per second, then applies directionality. Raw measured
+velocity remains available for reporting; `Draggable` reports it without an
+internal inertial animation. `mounted_back_swipe_settle_uses_the_admitted_fling_bound`
+pins retained policy and the subsequent contact's fresh bound against actual
+mounted route transitions.
+
+Native scale Begin stages the actor's immutable profile without claiming the
+stream or delivering recognized callbacks. The actor's typed disposition
+distinguishes dormant admission from refusal and recognized handling. A Begin
+refused while touch contacts are active remains refused until its terminal
+event; a later Update cannot revive that session after touch release. Admitted
+dormant End and cancellation retire the actor before an independent Update can
+start. `mounted_native_begin_retains_estimator_before_first_claim` pins the
+estimator at Begin, identity updates and unclaimed terminal cleanup;
+`mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal` pins
+refusal, standalone updates and fresh-session recovery.
+
+## Drag and drop
+
+### `DropTarget` registers one `DropReceiver` for its whole life
+
+**Choice:** the target's state owns one `Rc` receiver (implementing
+`flui_interaction::drag::DropReceiver`) that holds the current build's
+callbacks, the hover standing of every drag over it, and the element's
+`RebuildHandle` and `WriterSource`. Its anchor registers that receiver in the
+owner's interaction lane once, as a `DropReceiverSlot`, and tags its render
+node with the lane's `LocalPayloadTarget` ticket; a build refreshes the
+callbacks inside the receiver and never registers another.
+
+**Why one receiver:** the drag machinery identifies a receiver by its ticket
+holding the same receiver (ADR-0211 §5). A target that registered a fresh
+receiver per build would be a new receiver to every drag over it: one leave,
+one enter, a lost spring-loading clock and a dropped acceptance on each
+rebuild, and a rebuild is exactly what its builder's `DropHover` causes.
+
+**Consequences:** the payload a hit test carries is only the ticket, so the
+render data stays `Send + Sync` while the callbacks stay owner-local and take
+`&mut EventContext` (ADR-0086 §3). `accept` is a query asked at every enter and
+move and takes no `EventContext`; `on_drop` and the spring-loading callback run
+inside the drag's dispatch, so a drop lands before the source's
+`on_drag_end`. Unmounting the target unregisters the ticket, which the drag
+machinery treats as the receiver leaving: one leave at the next move or tick,
+never a drop. The anchor tags itself `HitTestBehavior::Translucent` so
+targets beneath it are found too. **Tests:** `spring_loading_fires_once_per_hover`,
+`a_target_removed_mid_drag_takes_no_drop`,
+`unmounting_a_target_releases_its_receiver`,
+`a_drag_drops_on_the_target_that_accepted_its_last_move`.
+
+### A paste drops at the target's reading-start top corner
+
+**Choice:** the cut, copy and paste that reach a drop from the keyboard and
+assistive technology drop at the target's top-left, or its top-right in a
+right-to-left locale, in both its own space and the window's.
+
+**Why:** a paste has no pointer. A receiver that turns the drop point into an
+insertion position (a list, a canvas) then inserts at the start in reading
+order, which is where a keyboard user expects pasted content, and does so
+alike in both directions; the centre would land in the middle of a list. The
+target learns its node from a payload-free probe mounted under its anchor,
+whose `find_render_object()` is the anchor's, and maps the corner through
+`PipelineOwner::local_to_global`, so the corner is right under ancestor
+transforms. **Test:** `a_paste_drops_at_the_targets_reading_start_corner`.
+
+### `Draggable`'s feedback follows the pointer's window position
+
+**Choice:** the feedback is an overlay entry positioned at the drag's window
+position, read from the session's `moved` reports, minus the overlay's own
+window origin and the grab offset of the anchor (`DragAnchor::Child` keeps
+where the child was pressed, `DragAnchor::Pointer` puts the pointer at the
+feedback's corner). The entry learns the overlay's node the way the paste
+probe does, and the origin is mapped through `PipelineOwner::local_to_global`.
+
+**Why:** the session's positions are window positions (the recognizer reports
+the platform's root-space position), and the feedback must sit
+under the pointer wherever the overlay is. Every session has its own entry,
+removed when the session ends or when the operating system takes the drag and
+draws its own image. The feedback takes no pointer input, so the targets
+beneath it are found. **Test:** `a_drag_drops_on_the_target_that_accepted_its_last_move`.
+
+### A drag reports to the `on_drag_end` it started with
+
+**Choice:** each session of a `Draggable` keeps the `on_drag_end` of the
+build that started it, and its end, a drop with the action a target took or a
+cancel, goes to that callback; the items are also made once, at the start.
+
+**Why:** an unkeyed list that loses an item mid-drag hands the dragged item's
+mounted draggable to the next item. Reading the live callback at the end would
+tell the next item that it was moved, and a source that removes a moved item
+would delete the wrong one. The callback takes one `DragOutcome`, the shape
+`callback_with` fixes for a `let`-bound closure.
+**Test:** `a_drag_reports_to_the_callbacks_it_started_with`.
+
+### A dragged row keeps itself alive while its drag runs
+
+**Choice:** a `Draggable` acquires a `KeepAliveHandle` in its lifecycle hooks
+and holds one lease from the start of its first live drag (a held cut or copy
+included) to the end of its last. A lazy list that scrolls the row out of its
+cache band, by the drag's own autoscroll or otherwise, skips it in band
+eviction, so the row keeps its state and its sessions, and the drag still
+drops. Disposal, which cancels the drags, comes only from removing the row
+or its list.
+
+**Why:** the drag's feedback is drawn in the overlay, so the row needs its
+state, not a layout: the plain keep-alive hold is enough, and the pinned slot
+that lays a focused row out beyond the band is not needed for it.
+**Test:** `a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag`.
+
+## Context menus
 
 ### `ContextMenuArea` shows its menu as a popup route
 
@@ -916,359 +1211,142 @@ the `context_menu_area` family in `tests/contracts.rs`
 `context_menu_area` and `context_menu_area_right_to_left` in the
 `gesture_alternatives` family.
 
-### Animated lists diff by key and keep leaving items in place
+## Focus, actions and keyboard
 
-`AnimatedList`, `AnimatedGrid` and `SliverAnimatedList` share one stateful
-sliver and one keyed diff (`scroll/animated_list/roster.rs`). Keys are computed
-once, when the view is constructed, and a duplicate panics there with a `BUG:`
-message naming it. The merge keeps every new item in its new order and files
-each dropped key right after the key that preceded it, so a leaving item holds
-an index slot beside its old neighbour; the lazy builder and the key lookup
-both count it. Each entry owns a driver for its presence (`Trigger::Controller`
-of an `Animate::transition`), so a key returning mid-exit reverses the same run
-along the exit's effects, and its keyed element (the salted repaint boundary
-over a keyed wrapper) is reclaimed wherever it now sits. Only the item builder
-captured when the item was last present renders a leaving entry: the caller
-rebuilds nothing. An exit that cannot run (already absent, or refused) is
-dismissed at once rather than left in the roster. The dismissal callback only
-sets a flag and schedules a rebuild; `build` sweeps dismissed entries and drops
-them after the roster borrow ends, each withdrawing its driver even during an
-unwind. Placement is the sliver's FLIP (`flui-objects`, "Lazy slivers slide a
-moved child only across a roster change"); the state advances its generation
-whenever order or membership changes, a sweep included, so the followers of a
-dropped item slide up.
+### Actions are invoked with the key event's `EventContext`
 
-A staggered entrance (`stagger(effects, stagger)`) plays for the items the list
-mounts with, while the mount frame's window is open; a post-frame callback
-closes it, so an item first scrolled in later rests rather than waiting out a
-stagger delay for its index. Rows `a_removed_item_plays_its_exit_and_then_drops`,
-`a_key_returning_mid_exit_reclaims_its_element`,
-`swapped_items_slide_between_their_places`, `a_duplicate_key_panics_naming_it`,
-`an_item_entering_the_band_takes_its_place_without_sliding`,
-`a_resized_item_moves_its_followers_at_once`,
-`reduced_motion_lands_every_change_on_the_next_frame`,
-`grid_tiles_slide_between_cells`,
-`a_staggered_list_mounts_its_items_one_after_another` and
-`a_panicking_item_drop_leaves_the_list_working` pin these through mounted trees.
+**Choice:** `Action::invoke(&self, ctx: &mut EventContext<'_>, intent: &T)`; the
+`Shortcuts` key handler passes its own `ctx`, as `CallbackShortcuts` passes it
+to its bindings (ADR-0086). `Actions` has no `maybe_invoke`: a caller could hold
+a `BuildContext` only in `build`, which has no event context, and a write there is
+refused. The one invoker resolved at build time and called from an event is a
+gesture's `CommandHandle` ("Gesture alternatives perform one intent on every
+path"). `is_enabled` and `to_key_event_result` are queries.
+**Tests:** `tests/actions.rs` (resolution through key dispatch),
+`tests/shortcuts.rs`'s `event_context_tests`.
 
-### A reorderable row is a drag session over its own list's rows
+### `SingleActivator` compares ASCII letters without case
 
-`ReorderableList` moves nothing itself. A row's move is a drag-and-drop session
-that stays in the window (`DragReach::Window`), carrying the row's list and its
-model key. Every row is a `DropTarget` that accepts only drags of its own list,
-so the row under the pointer says where a drop lands. The drop reports one
-`Reorder` with `to` counted after the item leaves `from`, and the app moves the
-item and rebuilds. Rows are keyed by the model key, so the element, the state
-and the focus follow the item.
+**Choice:** `Key::Character` carries what the key produced, so Caps
+Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
+matches either case; the exact Shift comparison still tells Ctrl+Shift+C
+apart. `character_ignoring_shift` is a separate character-only constructor:
+Shift may be held or released, while interpreted Control, Alt and Meta remain exact. A
+named key cannot acquire that policy. `Slider` consumes logical `+` and `-`
+through this constructor, including characters produced by native Shift key
+translation. ADR-0156 states the Shift policy of this constructor.
+**Asserted:** `a_shift_produced_character_matches_when_shift_is_ignored` and
+`slider_focus_keys_and_semantic_actions_share_controlled_proposals`.
 
-The handle drags on the list's axis (`MultiDragAxis`), which makes it the
-innermost same-axis member over the list's scroll, so it wins the contact
-(ADR-0208 §2). The drag then follows the pointer freely. Its whole box takes
-the press. On touch and pen a long press on the row drags it too; the row's
-menu hold hands the contact to the drag, and anything deeper that wants the
-long press (a `SelectionArea`) wins it. The default handle sits at the reading
-start, because keyboard focus reveals the row's menu control at the trailing
-edge. A drag shows the row's label, a plate of the row's size when it has
-none, or what `feedback` builds, never the row's content built again: that
-would mount a second copy of what the row owns alone.
+### Observed modifiers are distinct from keyboard command dimensions
 
-The moves are commands on the row (ADR-0216 §2): a context menu that the
-handle's tap and every menu trigger open, or visible controls when the list
-asks for them. The row's own `Shortcuts` bind Alt with the arrows, Home and
-End. Every move, dropped or commanded, is announced with the row's name and new
-position. The list has roving focus (`ListView::focusable`), whose row marker
-pins the focused row, so a row moved far down a lazy list keeps its focus.
-Rows `a_handle_drag_reports_one_move_counted_after_removal`,
-`a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle`,
-`a_drag_that_does_not_drop_moves_nothing`,
-`the_preview_follows_the_drag_over_the_rows`,
-`the_move_commands_move_a_row_and_announce_it`,
-`a_dragged_row_scrolled_out_of_the_band_still_drops`,
-`a_long_press_on_selectable_text_selects_and_the_handle_still_drags`,
-`moving_a_row_to_the_end_of_a_long_list_keeps_its_focus` and the matrix row
-`reorderable_list` pin these.
+ADR-0201 preserves raw input while one private widget projection supplies the
+command dimensions used by SingleActivator, EditableText and Slider. Explicit
+AltGraph excludes Control/Alt aliases and retains Meta/Shift; toggles, Fn and
+Symbol are not additional command requirements. Produced-character triggers can
+still work on nontext controls, including Slider +/-.
 
-`ReorderableGrid` is the same session over a `GridView`'s tiles, one module and one
-row type with the list. Its moves add the two arrows across its rows, and a row's width
-and order are read where they are decided: the grid wraps the app's delegate in one that
-records each layout it gives (tiles per row, and whether either axis runs against the
-screen), so the commands move by the rows on screen after a width change or in a
-right-to-left locale, and no column count is configured apart from the delegate. A tile's
-handle drags it any way (`MultiDragAxis::Free`), and `PanClaim::None` around it keeps the
-contact from the grid's scroll, which would otherwise take a free drag's motion along its
-axis (ADR-0208 rule 1). The default handle sits in a band above the tile's content. Rows
-`a_tile_dragged_by_its_handle_moves_onto_another_tile`,
-`the_grid_moves_go_along_a_row_and_by_a_row`,
-`the_row_moves_follow_the_rows_the_grid_lays_out` and the matrix row `reorderable_grid` pin
-these.
+An Active source composition leaves ordinary framework shortcuts and control or
+field keyboard edits/submission unclaimed for native defaults. A controller's
+composition guards remain independently authoritative. Without explicit AltGraph,
+the field's conservative Ctrl+Alt text fallback remains a documented cost; a
+real extra Control+AltGraph is likewise indistinguishable from aliases through
+ordinary activators. Raw observations and authored raw Focus handlers are intact.
+This does not complete native provenance or Web IME transport.
 
-### A drag's rows make room, and its item lands
+The public rows in `text_editing`, `focus_actions_and_shortcuts` and
+`controlled_slider_input_and_geometry` cover actual field text/selection,
+primary-focus actions, both shortcut forms, source composition, default refusal,
+glyph/Meta/Shift policy, word movement, locks and Slider proposals. The
+`keyboard_modifiers` module supplies these table rows through public runtime and
+mounted-consumer seams.
 
-While a drag runs, the list shows its rows in a second order: the order of the model
-with the first running drag's item moved to where a drop would put it. That item's row
-stays mounted and laid out as the gap, painted at zero opacity through a wrapper every
-row has, so a row keeps its element and state when it becomes the gap and when it lands.
-A row under the pointer puts the item at its own place in that order, and the rows
-between make room. The row that just moved is not heard again until another row reports,
-because it slides away under a pointer that stays still; a move over the space after the
-last row keeps the gap where it is, and a drop there takes it.
+### `RawButton` is a widgets-layer button whose press writes through `EventContext`
 
-Every slide is one FLIP placement (`flui_objects::Placement`, as `SliverAnimatedList`
-uses it): a placement record per item, kept by key across builds, one 250 ms clock for
-the list, and a generation the list advances whenever the order shown changes, a drop or
-command included. A row whose laid-out place changed is painted from where it was and
-slides to where it is. A drop or cancel adds one push to the dragged item's record
-(`PlacementSlot::displace`): the distance from the row's painted place to where the
-proxy was let go, read before the end is laid out, so the row lands from there on the
-same clock. The proxy is the drag's feedback, dressed by `proxy_decorator` with a 150 ms
-lift (elevation 6 and 102 % by default); it lifts from the row's box, not from the
-handle, because `Draggable`'s feedback frame adds the handle's place in the row to the
-grab. `on_reorder` runs at once on a drop, before the landing, and the landing follows the
-item's key, so the app's rebuild carries the same row. Every clock binds to the
-presentation's frame registry, so under reduced motion the lift, the room, the landing
-and a command's slide land on their next frame. A list that unmounts disposes its clocks,
-and the drag's own unmount takes the proxy with it in the same frame. Rows
-`a_dragged_row_lifts_and_the_rows_make_room`,
-`a_dropped_row_lands_from_where_it_was_let_go`,
-`a_cancelled_drag_returns_the_row_to_its_place`, `a_move_command_slides_the_rows`,
-`reduced_motion_moves_the_rows_at_once`, `a_drag_that_does_not_drop_moves_nothing` and
-`a_dragged_tile_makes_room_across_the_rows` pin these.
+**Choice:** `RawButton` is a theme-free press target, so an application that
+uses no design system has a button, and its `on_pressed` takes
+`Fn(&mut EventContext<'_>)`, the typed write capability of ADR-0086. It is
+stateless and builds one `InteractiveNode` (`interaction/node.rs`,
+`#[doc(hidden)]` for the official catalogs, outside every prelude; ADR-0322 §1): one element and one `RenderInteractive` that carry what the
+wrappers `Semantics`, `GestureDetector`, `Actions`, `Focus` and `FocusRing`
+carry, on the hosts those wrappers run on (`FocusHost`, `RecognizerHost`). The
+node is hit opaquely and mounts the tap recognizer a `GestureDetector` would;
+its semantics are
+`Semantics::new().container(true).role(SemanticsRole::Button).enabled(on_pressed.is_some())`,
+then the click its tap gives, then the focus state. The gesture arena's
+lower-level callback aliases do not change (ADR-0086 §4). Without `on_pressed`
+the node is disabled and advertises no click, and a tap does nothing. A press
+may return a write's `Result`; a refused write is logged on `flui.signals`.
+The node binds `ActivateIntent` and `ButtonActivateIntent` to the press and
+consumes `ActivationPressIntent` (Space's key-down); its focus node records
+those bindings, can take focus only with `on_pressed`, and the node paints the
+focus ring while focus is visible. Without `on_pressed` the bindings are
+declared but disabled, so an activation key stops there and bubbles unconsumed
+instead of pressing an enclosing control. The button draws no pressed or hovered look:
+it writes its interaction states to the `WidgetStatesController` of `states_controller`, which a design system draws from. **Tests:**
+`tests/raw_button.rs` (`raw_button_press_is_reachable_through_a_platform_click`,
+`a_refused_write_in_a_press_is_reported_not_panicked`,
+`raw_button_activates_from_the_keyboard`, which also pins that a button without
+`on_pressed` is no Tab stop; `raw_button_a11y_tree_matches_wrappers`, which pins
+the tree against the wrappers enabled and disabled, so a button without
+`on_pressed` advertises no click;
+`raw_button_in_scrollable_contests_like_gesture_detector` and
+`nested_raw_button_contests_like_gesture_detector`) and
+`perf_raw_button_over_text` in `tests/perf.rs` for what a button adds to its
+child.
 
-### Scroll views scroll themselves
+### A focus edge updates the focus state's readers, not the subtree under it
 
-`ListView`, `GridView`, `CustomScrollView`, `SingleChildScrollView`, `AnimatedList` and
-`AnimatedGrid` each hold one `ScrollViewConfig` and implement `ScrollView`, whose provided methods
-are the scroll builders; a scroll widget a package writes does the same. Each builds a
-`Scrollable` over a passive viewport: `Scrollable::new` takes the closure that builds the viewport
-from its shared `ScrollPosition`, and `Viewport::new` takes that position, so the gestures, the
-controller and the viewport's committed extents meet in one position. A viewport never owns an
-offset of its own; one that never moves is given `ScrollPosition::fixed`. The axis direction is
-resolved once from the configured axis, `reverse` and the ambient `Directionality`, and the
-scrollable orients its gestures by the same value. `standard_scroll_views_scroll_themselves`
-drags and wheels each of them, forward and reversed, with no `Scrollable` of the caller's.
+**Choice:** `Focus` and `FocusScope` still rebuild on every edge of their node (the
+provider's revision is how readers of `Focus::of(ctx).has_focus()` stay current), and
+that rebuild touches nothing it does not own, in two ways. `Focus` always puts its child
+under one `Semantics` and changes only its configuration with whether the node can take
+focus, so a page that becomes unfocusable (a popup route over it) keeps every element
+under each `Focus`, and a gesture in flight under it, such as a long-press drag handed off
+from a context menu. And the child a rebuilt `Focus`/`FocusScope` hands back is the view
+it was given, which an element holding it does not build again (ADR-0245), so the first
+focus gain of an app, which a `Scrollable`'s drag start causes, does not rebuild the app
+root under the contact: a root making a `ScrollController` in `build` keeps its drag.
 
-### A scroll view asks its `ScrollBehavior` what its configuration leaves open
+**Why:** the alternatives were notifying readers through a listenable outside the
+widget, which still leaves the `Semantics` wrapper rebuilding its child with the
+focused flag, or giving `Focus` a bespoke skip; the reconciler's identity check fixes
+every wrapper that rebuilds for its own reasons (`Navigator`, `Theme`, animations), not
+just this one. **Tests:** `a_focus_keeps_its_subtree_when_it_stops_being_focusable`,
+`the_first_focus_gain_does_not_rebuild_the_app_under_a_drag`,
+`a_held_press_moved_past_the_slop_closes_the_menu_and_drags` (a real `ContextMenuArea`
+around a long-press `Draggable`).
 
-`ScrollViewConfig` holds only what the author said: `physics` and `devices` are `None` until a
-builder sets them. `Scrollable` resolves each open setting by asking the `ScrollBehavior` of the
-nearest `ScrollConfiguration`, or `DefaultScrollBehavior` where there is none, with a
-`ScrollBehaviorDetails` of the `PlatformConvention` it is built under and its axis. The default
-behavior answers `BouncingScrollPhysics` on macOS and iOS, `ClampingScrollPhysics` elsewhere, and
-every pointer kind but the mouse for drags: the mouse scrolls by its wheel and the scrollbar and
-leaves a drag to selection (`the_default_scroll_behavior_leaves_a_mouse_drag_to_selection`). A
-widget with a drag of its own, an `AnchoredDrag` (a sheet, a swipe row), names every device on
-its scrollable. A `ScrollConfiguration` notifies its dependents only when its
-behavior is another `Rc`, and a scrollable keeps the physics it was answered until the behavior,
-the platform or the axis changes, so a rebuild keeps one physics and its owner
-(`a_scroll_view_asks_its_behavior_again_only_when_it_changes`). What the view names wins over the
-behavior (`a_scroll_configuration_answers_what_a_scroll_view_leaves_open`).
+### Shown focus is revealed through the scopes above it
 
-Whether a release flings is the drag gesture's question: `DragEndDetails::fling_velocity` is zero
-below `GestureSettings::min_fling_velocity`, and the standard physics fling on any other finite
-velocity, with no threshold of their own. Their coefficients are private and checked by
-`try_new`, which refuses a value outside the open range `(0, 1)` with `ScrollPhysicsError`.
+**Choice:** a `Focus` whose node takes the primary focus while focus is shown
+(`FocusNode::has_visible_focus`: traversal, assistive focus, or a key since the last pointer
+press) hands its measured rectangle to the nearest crate-private `FocusRevealScope`
+(`interaction/focus_reveal.rs`) on that edge; a node not laid out yet reveals nothing. A
+`Scrollable` is such a scope: it moves by the semantic mover with `ScrollCause::Programmatic`
+(so the move is a step of the channel, and a snap policy still rests it on a page), then hands
+the rectangle, shifted by what actually moved and clipped to its viewport (its own focus
+node's rectangle), to the scope above; a `CollapsingHeader` expands for content it clips and
+hands on the same way. The handed-on rectangle is the target's visible part rather than
+ADR-0168's whole inner viewport, so an inner viewport taller than the outer one does not pull
+the outer one off the focused row. All rectangles come from the last layout, which each
+scope's own move does not change for the scopes above. Each scope's move is a programmatic
+sequence of its own through its own chain, never a remainder of the move below it (ADR-0209
+§3). **Tests:** `collapsing_header_reveals_focused_row_from_tab_and_assistive_request`,
+`a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own`.
 
-### Programmatic scroll replacement preserves the published velocity
+## Text and editing
 
-`ScrollController::animate_to` services its command through the existing owning
-scroll driver and `AnimationController::retarget`. A controller already tracking
-the pixel position keeps its sample, velocity and frame origin; only an external
-position write requires synchronization. A target equal to the current position
-short-circuits only at rest. While moving, the driver brakes continuously and
-then settles exactly at that target. Scroll and page controllers accept the same
-`SharedCurve` handle used by `MotionSpec`.
+### Editable text separates its document from the visible viewport
 
-`scrollable_retarget_preserves_the_position_velocity` and
-`scrollable_retarget_at_the_current_position_brakes_continuously` compare mounted
-pixel-position intervals across replacement, then assert the exact final
-position and ended scrolling activity.
-
-### Implicit widgets are named types over one motion builder
-
-Each implicit widget is its own thin public struct (`AnimatedOpacity`,
-`AnimatedScale`, `AnimatedPositioned`, …), not an instance of one generic
-`Implicit<P>`: rustdoc and compiler errors name the widget the author wrote.
-What they share is the `MotionBuilder` trait (`duration`, `curve`, `spring`,
-`motion` over one `MotionSpec`), which the controls in `flui-material`
-(`Switch`, `NavigationBar`, `DefaultTabController`) implement too, and the
-lifecycle of a single animated value, `ImplicitMotion<T>`, which stays
-`pub(crate)`: a public owner type would freeze the SDK surface for no caller
-that needs it. `AnimatedAlign` and `AnimatedContainer` keep their per-property
-motion and take only the builder.
-
-`AnimatedSize` moves during layout, so its owner lives in the view state, not
-the render object (ADR-0013 D2/D3): the state binds the `SizeMotion` to the
-ambient `VsyncScope` in `did_change_dependencies`, and the render object holds
-a non-owning `SizeMotionHandle` it retargets from `perform_layout`. It moves on
-a critically damped spring unless told otherwise.
-
-`changing_only_the_duration_preserves_motion_and_sets_a_new_deadline` pins the
-builder merge, `new_implicit_widgets_keep_velocity_across_a_spring_retarget`
-the spring path on every new widget,
-`animated_size_defaults_to_a_critically_damped_spring` the default and
-`an_active_size_run_migrates_between_registries` the owner staying with the
-state.
-
-### Implicit retarget captures the displayed sample before changing easing
-
-When a target changes, implicit animations read their current value or eased
-progress before configuring the new curve. The replacement tween starts at that
-sample. Container and alignment properties share an optional restart progress,
-so unchanged properties are re-anchored at the same instant as changed ones.
-A curve-only update keeps the existing run timeline.
-
-The public rows `opacity_retarget_with_a_new_curve_keeps_the_displayed_sample`,
-`padding_retarget_with_a_new_curve_keeps_the_displayed_sample`,
-`container_retarget_with_a_new_curve_keeps_the_displayed_sample`,
-`align_retarget_with_a_new_curve_keeps_the_displayed_sample` and
-`rotation_retarget_with_a_new_curve_keeps_the_displayed_sample` pin continuity
-through rendered opacity, layout and a transform layer. The container row also
-keeps an unchanged height continuous. The separate row
-`changing_only_the_curve_keeps_the_existing_deadline` pins the original completion
-deadline. It does not prove position or velocity continuity for curve-only
-changes. Container and alignment still use the shared progress path described above.
-
-Opacity, padding and rotation own `AnimatedValue` motion rather than reconstructing
-a tween over normalized progress. Target and curve changes are admitted together;
-each component inherits its last published velocity. Opacity keeps the same
-render proxy; padding's builder keeps a stable observed stream and reads its
-component sample for layout. Rotation's stable proxy observes angular motion in
-turns. All three expose curve and spring configuration, and
-retain the owning registration until state disposal. Non-finite initial values
-use transparent opacity or zero insets; invalid later targets retain the admitted
-run. Padding clamps sampled insets to non-negative values at the layout boundary.
-`opacity_retarget_preserves_the_painted_velocity` and
-`padding_retarget_preserves_the_laid_out_velocity` compare the actual producer's
-position intervals on either side of interruption;
-`rotation_retarget_preserves_the_painted_velocity` does the same through the
-transform layer. Changing to the shorter rotation path retains the incoming
-velocity, brakes and settles at the nearest equivalent; the public
-`animated_rotation_retargets_on_a_path_change` row pins that behavior.
-
-### One effect primitive, two compositions
-
-`Effect` (fade, slide, scale, rotate, shimmer) is the one primitive, composed
-two ways. A `Transition` is reversible: an entry and an exit slot per effect
-kind, so appearing and disappearing play the same effects backwards;
-`a + b` keeps `b`'s effect in every slot both fill, and `asymmetric` takes the
-two sides from different transitions. `Effects` is a timeline: entries run in
-sequence (`then`) or together, each over its own span, which a reversible
-value cannot express. One algebra for both would lose either reversal or
-sequencing. `AnimatedSwitcher`, the animated lists and `Animate::transition`
-play a `Transition`; `Animate` with a trigger plays `Effects`.
-
-`transition_merge_keeps_the_right_operand_per_slot` pins the merge;
-`motion::on_mount_plays_the_timeline_in_order` pins the timeline.
-
-### A shimmer publishes its phase; each skeleton paints its share
-
-`Shimmer` owns one sweep and publishes its phase to the subtree; a `Skeleton`
-paints its own slice of the one band, offset by its position under the
-shimmer's paint anchor, so every placeholder in a shimmer shares a band
-without an offscreen group. The shimmer effect over arbitrary content is a
-`ShaderMask` layer instead, which the engine already applies. The render-side choice is recorded in
-`flui-objects`' `ARCHITECTURE.md` ("Skeletons paint their own share of one
-shimmer band"). `skeletons_share_one_band` and
-`a_shimmer_effect_masks_the_child_mid_sweep` pin the two.
-
-### Effect progress is linear in time and a transition's side latches at rest
-
-`Animate` drives its progress with an `AnimationController`, not an
-`AnimatedValue`: a value owner starts and arrives at rest, so a timeline read
-through it would bend every entry's timing, while a controller's `animate_to`
-runs linearly and scales a partial run by the distance it covers. Each
-`Effects` entry eases its own span; a `Transition` reads progress through its
-curve. Interrupting a run reverses from the displayed progress, and the side of
-a `Transition` (entry or exit effects) is chosen only when a run leaves rest,
-so an interrupted exit plays its own effects back instead of switching to the
-entry's. Effects compose in a fixed order, rotation inside scale inside
-translation, and a scale about a non-centre alignment is a centre scale plus a
-translation, so no new render object is needed.
-
-`motion::on_mount_plays_the_timeline_in_order`,
-`motion::target_reverses_mid_flight_without_a_jump` and
-`motion::a_scale_effect_keeps_its_alignment_fixed` pin the three.
-
-### Particles step on the frame clock and stop when idle
-
-`ParticleEmitter` runs its system on an unbounded `AnimationController` whose simulation reads
-elapsed seconds, so time comes only from the frame scheduler and the virtual clock drives
-tests. Each tick integrates in fixed steps of 1/60 s, at most fifteen a tick: a pause of the
-ticker up to a quarter second is caught up exactly, a longer one removes the live particles,
-and the rate never makes up a pause. The simulation's `is_done` reads an idle flag the clock's
-listener sets once nothing is alive and the rate has finished, so the clock ends its own run
-rather than being stopped from inside its listener; a burst starts a new run. Every quantity
-that reaches the atlas is checked when a particle is placed, and a particle whose sprite is not
-finite, leaves the engine's `f32` range or lies farther than its size outside the box is
-removed in that step. A `ParticleController` holds a weak link to at most one mounted emitter:
-a second emitter built with it runs without it until the first unmounts. The particles cases
-of `animation_and_visibility` pin each rule (`a_paused_ticker_catches_up_in_fixed_steps`,
-`non_finite_particles_never_reach_the_atlas`, `a_controller_drives_one_emitter`,
-`presets_never_flash`, …).
-
-### Animated icon data is constant key frames, checked once
-
-`AnimatedIconData` is key frames: one time line, and per path an opacity and a point list per
-command for every frame, with an optional cubic per gap. Constant data borrows `'static`
-slices (`from_static`, no allocation, usable in a `const`), run-time data is checked by
-`try_new` and shared behind an `Arc`; both are one type, so a pack's constants and an imported
-icon draw the same way. The check refuses mismatched frame counts, unordered times, values
-that are not finite, opacities outside `[0, 1]`, and a gap whose curve overshoots out of the
-finite range. Interpolation weighs the two ends (`a·(1−t) + b·t`), never their difference, so
-two finite extremes stay finite through the middle. `AnimatedIcon` takes the caller's
-animation, clamps its progress and keeps the last finite one, so an icon never vanishes and
-never publishes geometry that is not finite; mirroring under right-to-left text is the data's
-flag, because only the icon's author knows whether it points somewhere. The pictures come in
-as constants generated ahead of time from SVG key frames (`flui-material`'s
-`tests/animated_icon_data.rs` writes its pairs), not through a runtime parser.
-
-`animated_icon::icon_data_is_checked`, `animated_icon::the_frame_follows_the_progress` and
-`animated_icon::theme_and_direction_shape_the_icon` pin the three.
-
-### A symbol effect moves the painted box, never the layout or the label
-
-`SymbolEffect` wraps an icon's built content in a crate-private host that owns one controller
-and turns its progress into scale, turn and opacity tracks (`Keyframes` over a one-second
-cycle, stretched to the effect's duration and `Speed`), so an effect is a transform and an
-opacity on the icon's own box and layout never changes. What plays it is part of the type: a
-one-shot effect needs `on_change(u64)` and a repeating one `active(bool)`, so a bounce with no
-trigger does not compile. A one-shot or repeating effect ends at rest, which is where an
-inactive repeating effect stops: it runs the cycle in progress to its end. Transitions play
-when first applied, which keeps them declarative: an app toggles by switching `appear` and
-`disappear`. A replace keeps the outgoing content under an `ExcludeSemantics` until the fade
-ends, so assistive technology hears one label. A trim belongs to paths, so `PathEffect` is a
-method of `AnimatedIcon` only and a glyph icon cannot be handed one. `IconThemeData` carries
-an ambient effect for icons a container did not build itself, the way `NavigationBar` bounces
-whatever icon view a destination holds.
-
-`symbol_effect::each_effect_peaks_where_its_timing_says`,
-`symbol_effect::a_replace_cross_fades_and_only_the_new_label_is_heard` and
-`symbol_effect::reduced_motion_keeps_the_icon_still_or_at_its_end` pin the three.
-
-### A carousel is a `Scrollable` over keylines, and every move goes through its position
-
-`Carousel` is a horizontal `Scrollable` whose viewport holds one `SliverCarousel`; the
-geometry both read is `CarouselGeometry` (keylines measured against the viewport, spacing and
-count), so the sliver, the snap policy and the controller agree on where every item rests by
-one computation. A `CarouselController` move and an autoplay step are programmatic scrolls of
-that position, so any user input takes over from them; `KeylineSnap` is a `SnapPolicy`, and
-`SingleAdvance` counts its one item from the item at the start of the drag
-(`SnapPolicy::target_from`, which `ScrollOwner` passes the contact's starting offset), so a
-long drag still moves one item. The active item is recomputed from the scroll listener and
-delivered after the frame, as `PageView` delivers pages (decision 37), with no borrow held, so
-`on_index_changed` may move or unmount the carousel. A wrap from the last item to the first
-scrolls back over the items between, and each is active on the way.
-
-Autoplay is a timer bound to the frame clock only while it may run (a `TickerMode` that moves,
-motion not reduced); a pause stops it without releasing it. A timer with no frame clock settles
-at once, so a step checks that the timer is still bound before it restarts it; otherwise reduced
-motion would step every frame. The pause control is drawn by the carousel, theme-free like the
-gesture menu, as the first item of its column, and pressing it, focus within the carousel, a
-press, a hover or the app leaving the front pause it until the control or
-`CarouselController::resume`. No assistive-technology focus signal exists to pause on
-([Accessibility bridge fidelity](../../docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)). `carousel::reduced_motion_stops_autoplay_and_moves_at_once`,
-`carousel::single_advance_moves_one_item_from_where_the_drag_began` and
-`carousel::index_changes_are_heard_once_each` pin the three.
+Single-line editing retains full document measurement while horizontal
+displacement reveals the caret. Pointer queries add that displacement; IME
+rectangles subtract it and intersect the actual allocated viewport. Exact
+queries outside it return `PointOutside`. Glyphs, selection, composition and
+caret paint share the viewport clip. The `text_editing` rows
+`long_input_reveals_the_caret_and_maps_visible_pointer_positions` and
+`editable_paint_places_long_text_under_the_viewport_clip` pin the producer and
+paint commands, including RTL and obscured cases.
 
 ### Focused document selection uses the normal action chain
 
@@ -1282,6 +1360,32 @@ Disabled fields cannot retain focus. The `text_editing` family pins this with
 `select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit`,
 `select_all_without_a_focused_text_field_leaves_the_key_unconsumed`, and
 `select_all_defers_to_an_active_composition_and_recovers_after_commit`.
+
+### Clipboard bindings come from `DefaultFocusTraversal`
+
+**Choice:** `DefaultFocusTraversal`, which `app_root` installs above every
+application root, binds the three chords (Cmd on macOS and iOS, Control
+elsewhere — a pure table resolved in each build from
+`PlatformConvention::of`). The chord resolves at the
+primary focus like the traversal keys: an `EditableText` answers it on its own
+node, and with no text field focused nothing does, so the chord keeps
+bubbling. **Tests:** `tests/editable_text_clipboard.rs`
+(`copy_then_paste_round_trips_text_in_an_editable_text`). The platform table
+for every target, and a chord left unconsumed with no text field focused:
+**Unasserted:** no test pins this.
+
+### `EditableText`'s clipboard actions win over ancestor bindings
+
+**Choice:** `EditableText` layers its actions over the chain at its position
+and records the result on its node, so they are the nearest declaration of
+the two intent types and an ancestor mapping never replaces them.
+**Unasserted:** no test pins this.
+
+### Paste drops `\r` as well as `\n`
+
+**Choice:** a paste into the single-line field removes both, since a stray
+carriage return is never text the user meant (denying only `\n` would leave a
+`\r` behind from a Windows `\r\n`). **Unasserted:** no test pins this.
 
 ### An obscured field copies nothing
 
@@ -1357,1243 +1461,7 @@ runs owner code (`on_changed`): the transition's later steps run in the same
 rows (push and pull) and
 `a_pointer_down_and_a_paste_commit_the_composition_first`.
 
-### Navigation commits precede observer effects
-
-Router mutations commit the navigator history and typed route stack before
-delivering observer callbacks. A reentrant pop therefore sees the admitted
-route. `go` recomputes its shared prefix after popup dismissal, which can itself
-reenter navigation. Outgoing and temporary route values retire outside stack
-borrows; after a failure the remaining owners are still destroyed, each under
-containment, and the first failure is the one raised (ADR-0281). This implements
-ADR-0330's single navigation authority.
-`router_and_widgets_app` covers reentrant push/replace/go, popup-prefix changes,
-observer failure and next navigation; `router_observer_failure_and_terminal_retirement`
-covers an observer failure followed by route-value and terminal retirement.
-
-### Route locations preserve segment identity
-
-`RoutePath` percent-encodes each segment with a context-specific ASCII set and
-decodes exactly once after splitting, so an escaped slash stays inside one route
-value. Malformed percent escapes and invalid decoded UTF-8 are rejected. Plus and
-dot segments are literal path data, not form decoding or relative-URL operations.
-A query is a list of pairs kept in order with repeats, each key and value encoded
-with its own set; in the query `+` is a space, an empty value prints as the bare
-key, and a pair with neither key nor value is no pair. Only the full location
-carries the query, so `back_stack` opens the pages below a deep link without it.
-`route_locations_preserve_encoded_segment_identity` pins canonical spellings and
-rejection through the public routing API.
-
-### A scrollbar observes the scroll view nearest below it
-
-`Scrollbar` installs a scroll observer scope over its child; the `Scrollable` at depth zero
-below it (no other scroll view between them, found by comparing the nearest
-`ScrollPositionScope` each side sees) attaches its position and axis direction, re-attaches
-when its controller changes and detaches on unmount. The bar paints as a `CustomPaint`
-foreground whose repaint source is the position and the fade, so a scroll frame repaints and
-builds no element. Its painter takes the hit over the thumb and track, which keeps the scroll
-view's own drag out of the arena there; the bar takes every device, moves the position by
-`jump_to` (cancelling a running animation first), pages the track by 0.8 of the viewport and
-hands a wheel tick that reaches it to the scrollable's own wheel handling (through the
-controller's hooks), so a tick over the bar moves as far, through the same nested chain, as
-one over the content. A `ScrollBehavior` adds a bar through
-`build_scrollbar`, except over a scroll view an explicit bar above already follows. The
-`scrollbar` contract rows (`tests/scrollbar.rs`) pin geometry on both axes, RTL, reverse and
-overscroll, zero rebuilds per scroll frame, thumb drag by mouse and touch, paging, the fade
-under full and reduced motion, the nesting rule and the behavior's bar.
-
-### Editable text separates its document from the visible viewport
-
-Single-line editing retains full document measurement while horizontal
-displacement reveals the caret. Pointer queries add that displacement; IME
-rectangles subtract it and intersect the actual allocated viewport. Exact
-queries outside it return `PointOutside`. Glyphs, selection, composition and
-caret paint share the viewport clip. The `text_editing` rows
-`long_input_reveals_the_caret_and_maps_visible_pointer_positions` and
-`editable_paint_places_long_text_under_the_viewport_clip` pin the producer and
-paint commands, including RTL and obscured cases.
-
-### Asset and network images load through their UI runtime's cache
-
-Each UI runtime keeps one `flui_assets::ImageCache`, which `Image` acquires in
-`init_state` as `ImageCacheCapability` beside its lanes and HTTP client and
-hands its provider in `ImageServices` (ADR-0387). The cache keeps the decoded
-images and the loads in flight (ADR-0250), so every `AssetImage` and
-`NetworkImage` of one source in one runtime shares a decode, another runtime
-keeps its own, and the runtime trims its cache under memory pressure. On a host
-without the capability a load answers `ImageProviderError::ImageCacheUnavailable` and
-reads nothing. An `AssetImage` reads through the asset bundle `Image` acquires as
-`AssetBundleCapability` (ADR-0384 §6). Their `ImageCacheKey` holds the asset key or the URL
-alone: the cache, the bundle and the client an `Image` acquired do not change while it is
-mounted, so the key need not name them. Two HTTP clients can be answered different images at one
-URL, so the cache keeps a network image under its client's `HttpAuthority` as
-well (ADR-0280 §6), and `NetworkImage::cached` probes with the client its
-`Image` acquired. A custom provider keys by a typed value
-(`ImageCacheKey::custom`), never equal to a built-in key or to a value of
-another type.
-**Test:** `asset_images_share_their_runtimes_cache_until_memory_pressure`,
-`network_images_scope_cached_and_pending_responses_to_their_cache`,
-`an_image_missing_a_service_answers_which_one`,
-`one_cache_keeps_two_clients_images_of_one_url_apart` (`flui-assets`).
-
-### 1. `DropTarget` registers one `DropReceiver` for its whole life
-
-**Choice:** the target's state owns one `Rc` receiver (implementing
-`flui_interaction::drag::DropReceiver`) that holds the current build's
-callbacks, the hover standing of every drag over it, and the element's
-`RebuildHandle` and `WriterSource`. Its anchor registers that receiver in the
-owner's interaction lane once, as a `DropReceiverSlot`, and tags its render
-node with the lane's `LocalPayloadTarget` ticket; a build refreshes the
-callbacks inside the receiver and never registers another.
-
-**Why one receiver:** the drag machinery identifies a receiver by its ticket
-holding the same receiver (ADR-0211 §5). A target that registered a fresh
-receiver per build would be a new receiver to every drag over it: one leave,
-one enter, a lost spring-loading clock and a dropped acceptance on each
-rebuild, and a rebuild is exactly what its builder's `DropHover` causes.
-
-**Consequences:** the payload a hit test carries is only the ticket, so the
-render data stays `Send + Sync` while the callbacks stay owner-local and take
-`&mut EventContext` (ADR-0086 §3). `accept` is a query asked at every enter and
-move and takes no `EventContext`; `on_drop` and the spring-loading callback run
-inside the drag's dispatch, so a drop lands before the source's
-`on_drag_end`. Unmounting the target unregisters the ticket, which the drag
-machinery treats as the receiver leaving: one leave at the next move or tick,
-never a drop. The anchor tags itself `HitTestBehavior::Translucent` so
-targets beneath it are found too. **Tests:** `spring_loading_fires_once_per_hover`,
-`a_target_removed_mid_drag_takes_no_drop`,
-`unmounting_a_target_releases_its_receiver`,
-`a_drag_drops_on_the_target_that_accepted_its_last_move`.
-
-### 2. A paste drops at the target's reading-start top corner
-
-**Choice:** the cut, copy and paste that reach a drop from the keyboard and
-assistive technology drop at the target's top-left, or its top-right in a
-right-to-left locale, in both its own space and the window's.
-
-**Why:** a paste has no pointer. A receiver that turns the drop point into an
-insertion position (a list, a canvas) then inserts at the start in reading
-order, which is where a keyboard user expects pasted content, and does so
-alike in both directions; the centre would land in the middle of a list. The
-target learns its node from a payload-free probe mounted under its anchor,
-whose `find_render_object()` is the anchor's, and maps the corner through
-`PipelineOwner::local_to_global`, so the corner is right under ancestor
-transforms. **Test:** `a_paste_drops_at_the_targets_reading_start_corner`.
-
-### 3. `Draggable`'s feedback follows the pointer's window position
-
-**Choice:** the feedback is an overlay entry positioned at the drag's window
-position, read from the session's `moved` reports, minus the overlay's own
-window origin and the grab offset of the anchor (`DragAnchor::Child` keeps
-where the child was pressed, `DragAnchor::Pointer` puts the pointer at the
-feedback's corner). The entry learns the overlay's node the way the paste
-probe does, and the origin is mapped through `PipelineOwner::local_to_global`.
-
-**Why:** the session's positions are window positions (the recognizer reports
-the platform's root-space position, issue #908), and the feedback must sit
-under the pointer wherever the overlay is. Every session has its own entry,
-removed when the session ends or when the operating system takes the drag and
-draws its own image. The feedback takes no pointer input, so the targets
-beneath it are found. **Test:** `a_drag_drops_on_the_target_that_accepted_its_last_move`.
-
-### 4. A caller's result that reaches no route is reported outside any guard
-
-**Rule:** [ADR-0019](../../docs/adr/ADR-0019-navigator-routing-seam.md) §3 as
-[ADR-0330](../../docs/adr/ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md) §3
-narrows it: a pop result is typed and stays on the owner thread. There are no
-named routes (ADR-0330 §4): a page an application navigates to is a value of
-its `Router`'s route type, and a value the page needs travels in that value.
-
-**Choice:** every caller-supplied result is either delivered to a route or
-reported exactly once, and dropped outside any guard. Its `Drop` is user code,
-and user code that runs under the history borrow and re-enters the navigator
-panics on a second borrow. `warn` when there was no route to deliver to; `error`
-when a route received it and the type did not match its `Output`.
-
-The undelivered paths are not the edge cases a reader expects: an empty stack,
-a top mid-exit-transition, a target already completed, an id belonging to
-another navigator, an unmounted handle, a user `Route::did_pop` returning
-`false`, `maybe_pop_with` under a `PopScope` veto (which reports *handled*
-while discarding), and `maybe_pop` on a lone route. That last one is the
-commonest stack shape: `Route::pop_disposition` is `isFirst ? bubble : pop`, so
-the bottom-most route bubbles by design. A result displaced from an entry that
-already carried one is armed for in `arm_pop` and believed unreachable, because
-every arming site flushes inside the same locked section.
-
-**Ordering.** An operation's own observations reach observers before anything
-a re-entrant *drop* triggers: a `pop_with` whose payload's `Drop` pops again is
-observed as `didPop(target)` then `didPop(middle)`. So every flush driver
-applies the outcome first and reports second. It does not cover a navigation
-issued from a `PopScope` callback, which §13 records.
-
-**Tests:** `every_operation_that_cannot_deliver_a_result_reports_it` and
-`a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock`
-(`tests/navigator_public.rs`).
-
-### 13. A `PopScope` callback runs before the observers, and may navigate, so an effect can be observed before its cause
-
-**Rule:** ADR-0019 §1 (the history flush).
-
-**Choice:** `apply` runs step 0 — everything the flush owes user
-code, including deferred `PopScope` effects — before step 1 delivers to observers.
-So a `PopScope` callback runs **before** `NavigatorObserver.didPop`.
-
-**Re-entrancy is permitted.** Refusing a synchronous navigation from inside the
-callback would mean never having to sequence the interleaving; FLUI permits it,
-deliberately, and the permission exists because refusing re-entrancy is what
-produced a fan-out deadlock here. **The inversion is the price of that.** A
-`PopScope` callback that navigates is observed before the pop that invoked it:
-
-```
-["push(RouteId(3), prev=Some(RouteId(1)))",
- "pop(RouteId(2),  prev=Some(RouteId(1)))"]
-```
-
-**Why not restore the refusal.** A debug-lock equivalent would revert a
-restriction removed on purpose; refusing re-entrancy is the easier prohibition,
-and this design sequences the interleaving instead.
-
-**Replacement test:** a `PopScope` callback that navigates, permitted and observed
-before the pop that caused it; swapping step 0 and step 1 would yield `[pop, push]`.
-**Unasserted:** no test pins this.
-
-### 14. `ParentDataView` ancestry is checked at attach, with catalog diagnostic labels
-
-**Rule:** framework-user
-composition errors must not surface as internal render-protocol panics.
-
-**Choice:** misuse (e.g. `Expanded` under `Stack`) is rejected early with a
-diagnostic naming the widget, its typical ancestor and the ownership chain, and
-debug and release agree on the contract. It is expressed in Rust
-as:
-
-- `ParentDataView::{debug_type_name, typical_ancestor_description}` — catalog
-  widgets (`Expanded`/`Flexible`/`Positioned`/`TableCell`/`LayoutId`) override
-  with short labels and ancestor families;
-- `RenderObject::child_parent_data_type_id` — the render parent declares the
-  `ParentData` `TypeId` it expects on children;
-- `ElementTree::apply_ancestor_parent_data` validates provider `TypeId` against
-  that expectation **before** `set_parent_data` / `apply_parent_data_config`, and
-  panics with the same semantic message in debug and release.
-
-**Why not wait for layout.** Leaving the mismatch to
-`RawBoxLayoutContext::from_erased`'s `debug_assert!` made release/profile diverge, hid
-the offending widget behind `TypeId` text, and let secondary bootstrap
-`InvalidGeometry` panics mask the primary failure in harnesses.
-
-**Tests:** `parent_data_ancestry.rs` (`expanded_under_stack_…`,
-`positioned_under_row_…`) — assert the attach-seam diagnostic and that the
-message is not `RawBoxLayoutContext::from_erased`. Happy paths remain in
-`flex_parent_data.rs` / `stack_positioned.rs`.
-
-### 15. `Container` is one render object, not a conditional widget stack
-
-**Rule:** a convenience widget's implementation shape must
-not make the caller's unkeyed child state depend on which cosmetic options are
-set.
-
-**Problem:** a `Container` built as a conditional stack of `Align` / `Padding` /
-`ColoredBox` / `DecoratedBox` / `ConstrainedBox` / margin `Padding` / `Transform`,
-one level per set field, inserts or removes a level between the parent and the
-child whenever a field is toggled, so reconciliation diverges there and an
-unkeyed stateful child below is rebuilt from scratch. Alternatives (keyed
-reparenting, a "compressed element" holding the intermediate widgets, a local
-deactivated-element map) each duplicate an existing mechanism or add a new one.
-
-**Choice:** render-level composition. `Container` is a `RenderView`
-over one `RenderContainer` (`flui-objects`) that carries margin, additional
-constraints, padding, alignment, color, decoration and transform as *fields*.
-The child's slot is therefore structurally fixed and no option can move it.
-
-**What it costs.** One alternative keeps composition in the render layer, with a
-composed box building a real render-object subtree
-(`RenderPadding` → `RenderDecoratedBox` → …) behind one widget/element. FLUI's
-is a single render object that *re-derives* that subtree's geometry, paint,
-hit-test and intrinsics as its own code. The upside is one node and no
-composition machinery to build. The cost is that every contract the levels
-would have inherited has to be re-proved here, and that is where this object's
-defects have actually come from: an absent level and a zero-inset level are
-not the same thing for hit-testing (which is why `padding` is `Option` and the
-child-recursion gate is conditional — see **Hit-testing** below), and the
-layered-range predicate now exists in two places (issue #1143). A composed
-shape would make those classes unrepresentable rather than tested-for. It is a
-legitimate future reshape, not a defect in this one; tracked in issue #1144.
-Render-level composition fixes `Container` and not the general class, so any
-other conditional-layer widget in this catalog keeps the same hazard.
-
-Three properties follow:
-
-* **State survives every toggle** with no `GlobalKey`, no retake, and no
-  lifecycle churn — nothing for the caller to opt into, and no reparenting
-  semantics leaking into an unmoved subtree.
-* **The element tree is where the win is, not the render tree.** A conditional
-  stack inflates and deflates an *element* per toggled option, and elements are
-  not free: an upstream report on the equivalent widget-stack `Container`
-  (2026-04-12) measures element inflation/deflation as a bottleneck during fast
-  scrolling — "a thousand cuts problem" — and names constraining `Container` to
-  a single element as a direct improvement. That is the load-bearing argument
-  for this shape. The render-node accounting below is a cost statement, not
-  the justification; read it as "what this costs", not "why we did it". FLUI has
-  no equivalent measurement of its own yet, so this rests on an upstream
-  maintainer's profiling, not ours.
-* **Node count depends on whether there is a child.** With a child, identity
-  (no options at all) in a widget stack passes the child straight through —
-  zero extra nodes — so the stack is cheaper there. At exactly one option,
-  the stack is also exactly one extra node (a single `padding` builds
-  one `RenderPadding`), so node count ties. `RenderContainer` only wins on
-  count from two options up, where the stack would otherwise add one level
-  per option (up to seven if every option is set). **Childless, the stack is
-  never free**: it reaches for a two-node placeholder (`LimitedBox` +
-  `ConstrainedBox`) even with no option set at all (`Container()`), so
-  `RenderContainer` already wins there. The only childless tie is a *tight*
-  effective constraint — both `width` and `height` set, or an explicit tight
-  `constraints` — which suppresses the placeholder and leaves the stack a
-  single `ConstrainedBox` against one node here; a lone `width` does not
-  qualify, since `BoxConstraints::is_tight` requires both axes, so that case
-  still takes the placeholder and costs three. Every
-  other childless option (color, padding, decoration, an alignment paired
-  with a fixed size) only grows the stack's node count further, never brings
-  it back below one. **What node count never buys, in either regime, is
-  node weight**: `RenderContainer` carries every field — alignment, padding,
-  margin, color, decoration, additional constraints, transform, plus the
-  committed child offset/size/baselines — whether or not that option is
-  set, so it is heavier than whichever single-purpose object the stack
-  would have used, in every configuration including identity. The reason
-  for this shape is the stable slot, not a cheaper or lighter
-  `Container`.
-
-**Intrinsics:** a tight additional width or height answers before the child
-is queried, matching `RenderConstrainedBox`. Without that short-circuit a
-`LayoutBuilder` (or any child that rejects speculative intrinsic queries)
-would be asked even though the result is discarded.
-
-**Parent-data transparency:** a widget-stack identity `Container` (every option
-absent) would build to the child itself, so `Row → Container → Expanded` and
-`Stack → Container → Positioned` attach the parent-data widget directly to
-Flex/Stack. A `RenderView` always inserts `RenderContainer`
-(`ParentData = BoxParentData`) between them, so those trees panic at
-`apply_ancestor_parent_data`. That is a named consequence of the stable-slot
-choice, not an accidental drop: restoring identity passthrough would rebuild
-the unkeyed child's state the moment any option is toggled on. The supported
-shape is `Row → Expanded → Container` / `Stack → Positioned → Container`.
-**Unasserted:** no test pins this.
-
-Parent data is not the only consequence of that always-a-node choice.
-Hit-testing has the same shape one level up: `RenderContainer` always bounds
-the incoming position against its own box before doing anything else, while
-an identity widget-stack `Container` is not a node at all and so bounds nothing. A
-child whose own `hit_test` deliberately does not bound itself — `RenderTransform`
-is the documented case — is therefore reachable outside the container's box in
-that stack and not here, whenever *no* margin and *none* of the five gated
-properties are set. Measured under a shared `RenderPadding` parent with a
-scaled child, three of four probe points outside the box hit in the stack's tree
-and miss here. Unlike the margin-band gate below, this one is **not** closed:
-the gated-level reasoning that fixes that case does not extend to the outer
-gate, because at identity there is no level to reason about — the node itself
-is the difference. Tracked in issue #1143.
-
-**Collapsed branch:** the stack's three childless shapes — the placeholder
-`LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
-inner widget at all — all resolve to the same box, so `RenderContainer` has no
-childless branch. `harness_container_childless_fills_bounded_and_collapses_unbounded`
-pins the box it resolves to against hand-computed sizes (a bounded axis fills,
-an unbounded one collapses, each axis independently); the equality with each of
-the three shapes, diffed against `RenderContainer` and against each other:
-**Unasserted:** no test pins this.
-
-**Not carried over:** `foregroundDecoration`, `clipBehavior`, `isAntiAlias` and
-`transformAlignment` have no FLUI `Container` setter. These are four
-different kinds of gap, not one undifferentiated "not yet":
-
-- **`clipBehavior` does not fit this shape at all.** [`PaintEffects`] gives a
-  node exactly one clip slot, wrapping everything the node's `paint` records
-  as one fragment. A stacked `ClipPath` (the `clipBehavior != Clip.none`
-  branch) sits between `ColoredBox` and `DecoratedBox`:
-  it clips the padding, color and child, and explicitly does **not** clip
-  the decoration (`DecoratedBox` wraps the already-clipped `current`
-  afterward, unclipped). `RenderContainer::paint` records decoration, color
-  and child as one fragment, so a `PaintEffects.clip` here would clip the
-  decoration too — wrong. Adding this needs a paint-level re-split (a second
-  recorded fragment, or a clip scoped to a sub-range of one), not a new
-  `Option` field.
-- **`foregroundDecoration` is additive.** A second decoration field, a
-  `BoxDecoration::paint` call after the child (painted on top rather than
-  behind), and a hit arm —
-  `DecoratedBox`'s own doc states a foreground decoration participates in
-  `hitTestSelf` exactly like the background one does.
-- **`transformAlignment` is additive but not local.** It needs an
-  `alignment: Option<Alignment>` field folded into the pivot the way
-  [`RenderTransform::effective_transform`] already combines one with its own
-  base matrix, and that combined value would have to move together through
-  `apply_paint_transform`, `hit_test`'s inverse, `paint_translation`,
-  `skip_paint` and `owns_effect_layer` — every site that reads `self.transform`
-  today.
-- **`isAntiAlias` is additive and narrow.** In the stack it is a
-  `ColoredBox`-only flag; nothing else in the stack reads it. FLUI's own color fill
-  (`ctx.canvas().draw_rect(rect, &Paint::fill(color))`) always anti-aliases
-  (`Paint::fill`'s default), with `Paint::with_anti_alias` already available
-  to turn it off — adding the setter is one field plus one call-site change,
-  not a structural gap.
-
-A `BoxDecoration` border's thickness is separately still not folded into the
-effective padding (`_paddingIncludingDecoration`) because
-`flui_painting::styling::BoxDecoration` exposes no border insets. `color`
-and `decoration` are not mutually exclusive: FLUI accepts both and paints color
-over the decoration — the order the widget stack would have produced
-(`DecoratedBox` enclosing `ColoredBox`) — rather than panicking.
-
-**Tests:** the geometry the collapsed stack owes is pinned against
-the stack itself by `harness_container_matches_the_widget_stack_it_collapses`
-(size, child size, absolute child position and hit path, over eight
-configurations spanning both wet layout and hit-testing, each making a
-different level decide). Chrome self-hit uses the same half-open gate as the
-stacked `DecoratedBox`: the same differential probes the exclusive max edges of
-the chrome. The decorated box's own paint rect inside the margin — the level a
-stacked `DecoratedBox` exposes and the one a single node no longer exposes as a
-separate render object — state stability of an unkeyed child as each optional
-property toggles (on `Container` and `AnimatedContainer`), tight additional
-constraints answering an intrinsic without querying a `LayoutBuilder` child, and
-baselines adding the child's offset: **Unasserted:** no test pins this.
-
-**Hit-testing gates the child behind the SAME boxes the stack does — only
-when a level exists to gate on, and none always does.** `RenderContainer::
-hit_test` tests the child before the decoration/color path (a child hittable
-in a cut-out the decoration's rounded corners exclude must stay reachable),
-but ordering is not the only thing that has to match the stack: the stack
-inserts `Padding`/`ColoredBox`/`DecoratedBox`/`ConstrainedBox`/`Align`
-between `Padding(margin)` and the child only when `padding`/`color`/
-`decoration`/`additional_constraints`/`alignment` (respectively) is set —
-`_paddingIncludingDecoration` is null, and so no `Padding` level exists,
-precisely when `padding` is unset (FLUI's `BoxDecoration` never contributes
-a padding of its own, so a decoration alone can't supply one either). With
-NONE of those five set, the composed shape is `Padding(margin) → child`
-with nothing between them, and nothing gates a hit-test there either — a
-`RenderContainer` that always applied the `inner_size` gate regardless would
-reject a tap the real stack accepts. `padding` is therefore `Option
-<EdgeInsets>` on `RenderContainer`, not a plain `EdgeInsets` defaulting to
-zero: `None` (unset) and `Some(EdgeInsets::ZERO)` (explicitly zero) are
-geometrically identical but hit-test differently, since an explicit zero
-inset still gets a real (zero-inset) level.
-
-Once at least one of those five IS set, every level that exists reports the
-same margin-offset `inner_size` box and rejects a position outside it
-(`is_within_own_size`) before ever reaching the child, and when an alignment
-is set specifically, the stack additionally inserts an `Align` level gating
-on the narrower CONTENT box (inside the margin AND the padding) — a gate
-whose OWN condition needs nothing else, since an `Align` level exists
-whenever alignment does, independent of whichever of the other four are
-also set. A collapsed node that let a child overflow past either gate, once
-its condition holds, would expose a child whose own `hit_test` does not
-bound itself to its laid-out box — `RenderTransform` deliberately does not,
-so a scaled child stays hittable across its whole visually-overflowing
-area — to a tap the real stack rejects.
-
-Pinned in both directions by two cases of
-`harness_container_matches_the_widget_stack_it_collapses`: a non-zero margin
-with nothing else set (the overflowing child's tap in the margin band DOES hit)
-against the same margin with a real padding level added (the identical tap does
-NOT). `padding` is `Option<EdgeInsets>` on `ContainerStackCase` for the same
-reason it is on `RenderContainer` — a composed tree that always inserted a
-zero-inset `Padding` level would silently endorse the difference instead of
-detecting it. The narrower content-box gate (padding with alignment set does not
-expose an overflowing child, and the same padding without alignment does not
-narrow the gate): **Unasserted:** no test pins this.
-
-### 16. A push's entrance-transition future is awaited outside the flush that installed it
-
-**Rule:** a flush-timing constraint governs the local placement, so the decision
-belongs here; [ADR-0064](../../docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)
-records the cross-crate design this decision consumes.
-
-**Choice:** `PushCompletion::Animating(AnimationRunFuture)` carries the future
-`AnimationController::forward()` (or an equivalent run-starting call) returns,
-but the continuation that awaits it is registered from `NavigatorShared::apply`
-— after the flush that produced the entry has released the history borrow —
-never from inside `RouteEntry::handle_push` itself. `RouteHistory::flush()`
-re-drains any `RouteCommand`s a route raised between its own passes, so a
-continuation registered mid-flush on an already-resolved future (a
-zero-duration push, or one canceled before the flush even returns) would
-settle within that same flush rather than on the next one. The continuation itself may only
-push `RouteCommand::PushCompleted(id)` onto the `Send` route-command queue and
-schedule the Navigator's rebuild through `NavigatorShared::settle_wake`, read
-at the moment the continuation fires rather than captured at registration:
-`NavigatorHandle::push` flushes immediately, so a route pushed before the
-Navigator mounts registers its continuation while that slot is still empty,
-and only a later mount fills it. Cancellation settles the entry exactly like
-completion — there is no separate "the push was canceled" state at this
-layer, only whichever lifecycle state the entry has moved to by the time the
-queued command is drained.
-
-### 17. `Semantics` action handlers are owner-local `EventContext` callbacks behind one `Send + Sync` ticket handler per node
-
-**Rule:** the lane mechanism is ADR-0086 §3 (amended 2026-09-30); how this
-widget uses it is local to this crate, so it is recorded here rather than in an
-ADR.
-
-**Choice:** the builders are named after the actions they register
-(ADR-0203). The payload-free ones — `on_click`, `on_show_context_menu`,
-`on_increment`, `on_decrement`, `on_focus`,
-`on_blur`, and `expandable`'s pair — take `Fn(&mut EventContext<'_>) -> R`; the
-others take their payload typed: `on_set_value` a `&str`,
-`on_set_numeric_value` an `f64`, `on_set_scroll_offset` an `Offset<f64>`,
-`on_scroll_{left,right,up,down}` the request's `ScrollUnit`,
-`on_scroll_into_view` an `Option<Reveal>`. `on_action` takes any
-`SemanticsAction` with `Fn(&mut EventContext<'_>, ActionCall)` for what the typed
-set does not cover. None needs `Send + Sync`: the closures never reach the
-configuration.
-
-**Why the handlers stay owner-local, and where they are stored.**
-`SemanticsActionHandler` is the owner-local `Rc<dyn Fn(ActionCall)>`
-(`crates/flui-semantics/src/action.rs`), stored in a `SemanticsConfiguration`
-that rides in the annotation render object. The handler is never invoked
-across a thread — resolution is owner-local
-(`PipelineOwner::resolve_semantics_action`) and the UI runtime drains it at a
-frame boundary, inside its entry; an accessibility adapter sends a
-`SemanticsActionRequest`, not the handler. The widget keeps its closures and its
-`WriterSource` in the interaction lane as one table per node, stores only the
-lane's ticket on the render object (`SemanticsActionRoute`), and advertises
-every action through one handler that holds the ticket and resolves it when
-invoked. A rebuild replaces the table under the same ticket and reuses the same
-handler, so the configuration compares equal and raises no semantics update. This is the shape the surveyed frameworks
-point at — none puts `Send` on the handler; Bevy, Iced, Slint and Dioxus/Blitz
-put it on something the widget owns — reached through ADR-0086's lane payload.
-
-**Consequences, named rather than left to be discovered:**
-
-- **The ordinary "activation toggles this control's own state" closure is a
-  signal write.** `on_increment(move |ctx| value.update(ctx, |v| *v += 1))`
-  (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
-  write is reported, not panicked
-  (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
-- **An action invoked outside its UI runtime is dropped with a warning.** A caller
-  that holds a `SemanticsActionInvocation` and invokes it with no UI runtime entered
-  has no owner to run the closure in
-  (`an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning`). A node
-  mounted in a detached render-object context advertises none of these
-  actions, so no platform sees a control nothing can run
-  (`a_detached_mount_advertises_no_actions`). Unmount releases the node's
-  table from the lane, closures and their captures with it
-  (`unmounting_a_node_releases_its_action_table`; a `DropTarget`'s receiver the
-  same way, `unmounting_a_target_releases_its_receiver`).
-- **This publishes actions; it does not make any shipped control
-  activatable by itself.** No Material or Cupertino widget gains a semantics
-  action here; `Button`, `Checkbox` and `ListTile` publish no tap semantics of
-  their own, so that wiring belongs at `InkResponse`'s layer when it lands.
-  `GestureDetector` advertises its own `on_tap`/`on_long_press` through these
-  handlers, so they run synchronously in the drain, like a raw `Semantics`
-  handler.
-
-**A rebuild with a fresh closure costs no semantics update.** The
-configuration compares handlers with `Arc::ptr_eq`
-(`crates/flui-semantics/src/configuration.rs`). The per-node ticket handler is
-minted once, at mount, and reused by every update, which replaces only the
-lane's table under the same ticket; so a closure literal in `build` leaves the
-mounted configuration equal and `set_configuration` answers `NONE`, and the
-action runs the rebuilt closure
-(`rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one`).
-
-**Builder inventory, and what has no builder.** Every `SemanticsAction` has a
-platform route (ADR-0203; `every_action_round_trips_through_accesskit` in
-`flui-semantics`). `SetTextSelection`, `ReplaceSelectedText`,
-`ShowTooltip`, `HideTooltip` and `CustomAction` have no typed builder yet and
-are reachable through `on_action`; they get one with the first widget that
-handles them.
-
-**A payload that did not cross the seam never reaches a handler.** A handler
-receives an `ActionCall`, which carries exactly its action's payload; a
-platform request without one is refused while it is decoded. `""` and the
-origin are both legitimate values a platform can mean, so substituting either
-would turn a lost payload into a silent edit or a scroll to the origin — a
-wrong result that reads as a right one.
-
-**Tests** (`tests/semantics.rs`), each with what it can fail on:
-
-- `a_covered_retained_form_stays_absent_after_a_late_controller_update`
-  observes both assembled semantics and actual owner-flush packets. Queries
-  follow the current root's child links, so disconnected historical payloads
-  cannot count as exposed controls. A focused retained form disappears under
-  an opaque entry, remains absent after a real controller notification without
-  forcing the root dirty, refuses its old action and returns with its draft and
-  action intact. This is a headless overlay contract; it does not establish
-  native adapter behavior or elapsed route-transition completion.
-- `a_tap_handler_round_trips_from_a_platform_click_to_the_callback` — the
-  acceptance test, and it asserts both halves: the node *tells* the platform the
-  action exists (`supports_action(Action::Click)`) and pressing it *runs* the
-  callback exactly once. A node passing only the first half is the dead control
-  this surface exists to rule out.
-- The negative control — a node with no tap handler advertises no click — so
-  the advertise half is not satisfied by a node that advertises everything.
-  **Unasserted:** no test pins this.
-- The payload path — a set-value request carries its text into the handler —
-  which no payload-free test reaches. **Unasserted:** no test pins this.
-- `a_set_value_request_without_its_text_is_refused_rather_than_emptied` — a
-  request that lost its payload is refused while it is decoded, and the
-  handler does not run.
-- That every action routes back from the platform, and that a new upstream
-  AccessKit action stops `semantics_action_for` compiling, is pinned in
-  `flui-semantics` (`every_action_round_trips_through_accesskit`).
-- `block_user_actions` refusing a click the node still holds a handler for, in
-  both halves. The refusal half: the request errors *and* the handler does not
-  run. The advertise half: the blocked node does **not** advertise the click —
-  `blocks_user_actions` narrows the effective action set that snapshot export and
-  input dispatch both consult, so the node is invisible to assistive technology
-  instead of a control it can see and press to no effect.
-  **Unasserted:** no test pins this.
-
-**Red→green, measured rather than asserted.** Both halves of the acceptance test
-were shown to fail against a mutated builder and then pass against the restored
-one: replacing the handler invocation with a discarded binding turns
-`a_tap_handler_round_trips_…` red on *its own* delivery assertion
-(`left: 0, right: 1` — the advertise assertion above it stays green, so the two
-halves are independently pinned).
-
-### 18. Replacing a `HeroController` retires its in-flight flights, restoring both heroes
-
-**Rule:** FLUI names the rule, justifies it, and pins it with a test. This entry
-is local to the crate, so it lives here rather than in an ADR.
-
-**Choice:** when a `HeroController` is detached — replaced by
-`NavigatorHandle::add_observer` (which takes the auto-installed default),
-removed by `remove_observer`, or its navigator unmounts —
-`HeroController::did_detach` calls `FlightManager::finish_all`, which **aborts**
-every flight still in the air: it removes each overlay entry and calls
-`end_flight(false)` on **both** heroes. Distinguishing an abort from the
-ordinary `finish` is load-bearing: a normal `finish` ends one hero hidden and
-the other revealed, chosen by the terminal animation status, whereas an abort has no status to choose with
-and must leave both pages — which stay alive and in the stack — showing their
-real children rather than a blank placeholder.
-
-**Why abort rather than leave the flight.** The controller is a swappable
-observer, so a detach does not tear down the tree and frozen placeholders would
-stay visible. The flight it
-launched is retired through a `Weak<FlightManager>` held by the overlay entry's
-shuttle (`FlightManager::finish`'s `manager.upgrade()`). A detached controller
-drops its `FlightManager`, so that upgrade returns `None` from then on: the
-flight can never be retired, its overlay entry leaks, and the shuttle paints at
-its end rect forever. Finishing/cancelling (not transferring to the replacement)
-is the rule because a flight is owned by the controller that launched it — its
-`from`/`to` route animation values and its gesture wiring all belong to that
-controller's measurement pass, and re-parenting them onto a replacement would
-mean guessing a flight plan the replacement never measured.
-
-**Consequences, named rather than left to be discovered:**
-
-- **The auto observer's flight is gone the moment a manual controller is
-  installed.** `NavigatorHandle::add_observer` calls `did_detach` on the
-  auto-installed default before attaching the new observer, so installing a
-  `HeroController` mid-flight retires the auto observer's flight immediately —
-  the overlay count returns to its pre-flight value in the same call. The
-  fixture `gesture_fixture_with`'s doc documents this rather than the previous
-  "survives `install`" leak.
-- **`finish`'s retired-then-drain discipline is preserved.** An abort goes
-  through the same `retire` (drop the flight from the registry, park it in
-  `retired`, schedule the coalesced end-of-frame drain) as a normal `finish`,
-  because `did_detach` runs owner-local (from `add_observer`/`remove_observer`/
-  dispose) and never inside an animation status listener — but the park still
-  costs nothing and keeps the drop outside the animation listener family, the
-  one invariant the type docs rest on.
-
-Detachment withdraws the navigator and replaces the manager's admission identity
-before cancellation calls out. A queued measurement holds its original identity
-and cannot launch after replacement. A pending flight is registered before its
-placeholder wakes or shuttle builder runs; cancellation can therefore restore it
-before it publishes an overlay entry. A divert commits its new hero pair before
-freezing that pair or invoking its builder, so cancellation restores the selected
-destination. Retirement compares the flight identity as well as its tag, so a
-stale terminal delivery cannot remove a replacement using the same tag.
-
-Matched launches share failure custody. A failed builder restores its selected
-heroes, and the remaining matched launches are attempted before the first failure
-propagates. Detachment refuses that remaining tail. This does not promise recovery
-from arbitrary failures inside user-owned aggregate destructors.
-
-**Tests:** `replacing_the_hero_observer_inside_its_builder_cancels_the_flight`
-checks initial creation and diversion through a mounted Navigator, verifies the
-destination accepts taps after cancellation and then launches a fresh flight.
-`replacing_the_hero_observer_cancels_queued_measurement` pins queued cancellation.
-`a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight` checks builder
-failure on initial creation and diversion, real hit testing and fresh admission.
-`hero_builder_cancellation_and_failure_account_for_the_matched_tail` checks
-cancellation, a healthy tail and competing builder failures.
-`hero_flight_terminal_retirement` pins stale retirement through the private
-terminal-delivery seam, along with opaque ownership cleanup.
-
-### 19. Word and grapheme movement use ICU4X (UAX #29), not dictionary segmentation
-
-**Rule:** Design stance ("Look around before settling") — search the market/existing dependency graph
-before adding one, and cite what an unmatched reference actually needs.
-
-**Choice:** the controller's grapheme steps (arrow keys, Backspace, Delete,
-the selection setters' snap) and keyboard word jumps walk the boundaries in
-`flui_painting::text_boundaries`: ICU4X's grapheme segmenter and its word
-segmenter for non-complex scripts, the data Parley already brings and clusters
-the painted text by (ADR-0092 §6). The obscuring mask and the text store's
-obscured ranges count the same clusters. Double-tap word selection
-(`TextPainter::get_word_boundary`, flui-painting mapping decision 15) picks
-from the same word segments with its own tie-break. So a caret an arrow key
-places is one a tap can place, and a Backspace removes what was drawn as one
-character. `flui-widgets` has no `unicode-segmentation` dependency, and
-`deny.toml` bans it for every FLUI crate.
-
-A query segments from the start of the line that holds its offset (a break
-after LF is mandatory for graphemes and words), so a step costs the length of
-its line, not of the buffer; the backward word jump walks forward one line at
-a time and allocates nothing.
-
-**Background:** ICU's word-mode break iterator (the usual backing for Ctrl+Arrow
-word-jump and double-tap word selection) is **dictionary-based**
-for two distinct groups: Thai, Lao, Khmer, and Myanmar (scripts with no
-spaces between words at all, where the Unicode Standard Annex #29
-default algorithm — rule-based, no lexicon — cannot find a linguistically
-correct boundary on its own), and separately Chinese/Japanese, via ICU's
-`cjdict` word-frequency dictionary (these scripts DO have UAX
-#29-recognized character-class boundaries, so the rule-based default
-does not fail outright the way it does for the first group — it just
-segments per character/script-run rather than per linguistic word).
-
-**Why no dictionary.** The dictionary and LSTM data — both the
-Thai/Lao/Khmer/Myanmar lexicons and `cjdict` — are the expensive part,
-megabytes of data, not an algorithm, and Parley's `complex-scripts` feature,
-which would bring them, stays off (ADR-0092 gate 4). Every script with
-UAX #29-recognized boundaries (Latin, Cyrillic, Greek, Arabic, Hebrew,
-Hangul, and more) already works without it.
-
-**Tests:** `the_editor_steps_the_graphemes_the_painter_snaps_to`
-(`tests/editable_text.rs`, the `text_editing` table) steps the arrow keys and
-Backspace through a ZWJ family, two flags, stacked combining marks, CR LF and
-the conjunct "क्षि", and compares the stops with
-`flui_painting::text_boundaries::graphemes`. `unicode-segmentation` 1.13.3
-clusters every one of those cases the same way, so the row passes on the
-earlier controller too: it pins the shared contract, and the `deny.toml` ban
-is what fails if the second segmenter comes back.
-
-**Consequences, named rather than left to be discovered:**
-
-- **Thai/Lao/Khmer/Myanmar word-jump and word-select do not find any
-  linguistically meaningful boundary** — no whitespace and no
-  UAX #29-recognized word-class transition to key on means the segmenter
-  falls back to its rule-based default (effectively per-cluster stops).
-- **Chinese/Japanese word-jump and word-select segment per
-  character/script-run, not per linguistic word** — `"東京"` ("Tokyo",
-  one word to ICU's `cjdict`) splits into `"東"` and `"京"` here, because
-  Han characters have no special UAX #29 word-class merging rule by
-  default (unlike consecutive Katakana, which UAX #29's own `WB13` rule
-  does merge — a script-specific rule already correct here, no dictionary
-  needed for it). A known limitation, not a silent bug.
-  **Unasserted:** no test pins this.
-- **Every other script named here — Arabic (clusters-only, see the caveat
-  below), Latin with apostrophes, emoji clusters — segments correctly** per
-  UAX #29's own rules, which is the ceiling this crate claims for them; no
-  claim is made about Hebrew.
-- **Grapheme-cluster correctness is unaffected.** The dictionary gap is
-  specific to WORD boundaries; cluster boundaries (caret, Backspace,
-  Delete) come from ICU4X's grapheme segmenter, a different UAX #29 mode
-  with no dictionary dependency, and are correct for
-  every script including all the ones named above.
-- **The word-jump modifier follows the tree's `PlatformConvention`.**
-  `is_word_jump_modifier` takes the platform the field or area read from
-  `PlatformConvention::of` at its last build, which the runtime installs
-  from the platform its runner names. `word_jump_modifier` stays a pure
-  `(platform) -> Modifiers` table. A `wasm32` build is named `Unknown`
-  (Control) until the web runner reports the browser's OS: a Safari tab on
-  macOS needs Alt, since Ctrl+Arrow switches Spaces there (`docs/gaps.md`).
-
-**Replacement tests:**
-`two_space_run_word_boundary`, a row of flui-painting's `caret_contract`
-(`crates/flui-painting/tests/caret_contract.rs`), pins a specific boundary rather than a loose "some boundary was found" check:
-`"foo  bar"` at 3/4/5, where an offset inside the two-space run selects the
-whole run. The controller's word-jump stops (skipping trailing whitespace, a
-whitespace run as one stop, an apostrophe inside a word, the CJK per-character
-split), the word-jump modifier's platform table, and the rest of the
-`get_word_boundary` tie-break matrices (`"foo bar"` at 0/3/4/7; `"(foo"` at 1;
-`"日本語"` at 3; `"foo, bar"` at 3/4; leading/trailing whitespace at a buffer's
-own edges; ZWJ emoji clusters): **Unasserted:** no test pins this. For Arabic
-the claim is only that a word jump never lands inside a char and always makes
-progress, not any cluster-vs-word segmentation for that script.
-
-### 20. `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
-
-**Rule:** Design stance ("Look around before settling") — reuse tested framework machinery
-(`flui_interaction::gesture::DoubleTapGestureRecognizer` via
-`flui_widgets::GestureDetector`) rather than hand-rolling tap-count/slop/
-timeout tracking a second time inside `EditableText`'s own pointer
-handlers.
-
-**Choice:** `EditableTextState::wrap_double_tap_word_select` composes the
-existing, generic `flui_widgets::GestureDetector` as the OUTER parent of
-`install_pointer_handlers`'s `Listener`-based field, not the reverse.
-`Listener` stays exactly as it already was — arena-free (its own
-established, tested contract) — so plain tap-to-place-caret and
-drag-to-select are byte-for-byte unaffected by the double-tap
-recognizer's presence next to them. `GestureDetector`'s
-`DoubleTapGestureRecognizer` watches the SAME pointer stream in parallel
-(both layers use `HitTestBehavior::Opaque`, so both receive every
-contact) and its `on_double_tap_down` callback — a genuine new capability
-this change adds to `GestureDetector`/`DoubleTapGestureRecognizer`, not
-previously exposed — widens the caret `Listener` just placed into the
-enclosing word, via
-[`TextPainter::get_word_boundary`](#19-word-and-grapheme-movement-use-icu4x-uax-29-not-dictionary-segmentation)
-— ICU4X word segmentation, over the same segments Ctrl/Alt+Arrow word-jump
-walks, and NOT the same function: the keyboard
-path's `next_word_start`/`previous_word_start`
-(`flui_painting::text_boundaries`, the stops a field also publishes) answer a directional
-"next/previous stop" query with their own asymmetric tie-break, while
-`get_word_boundary` answers "which segment is under this exact
-position" with a different one — see decision #19's own tie-break note.
-A double-tap and a keyboard word-jump can therefore disagree at the
-exact boundary between two segments; unifying them behind one primitive
-would need a dependency edge `flui-widgets` does not currently have
-(`flui-painting` is a dev-dependency only) and is not attempted here.
-`drag_anchor.set(None)` in the same callback stops the plain tap/drag
-handling this composition wraps from clobbering the word selection on
-the second contact's next move before it lifts — near-guaranteed on
-touch, where a finger is essentially never perfectly still between down
-and up.
-
-**Why not a text-specific detector.** A specialized gesture-detector subtype
-would also own triple-tap and drag-selection-handle gestures that do not exist
-yet; building one for a single callback would be premature machinery for what
-`GestureDetector`'s existing generic API, widened by one method, already covers.
-
-**Consequences, named rather than left to be discovered:**
-
-- **`on_double_tap` itself is deliberately left unset** on this detector
-  — word selection only needs the earlier `on_double_tap_down` signal, not
-  confirmation that the second contact also lifted cleanly.
-- **`on_double_tap_down` alone mounts the double-tap recognizer.** The
-  detector's press group counts either double-tap callback as the double
-  tap's presence, so a detector configured with only `on_double_tap_down`
-  joins the arena and its callback fires.
-
-**Replacement tests:**
-`flui-widgets::tests::editable_text::a_double_tap_selects_the_word_under_it`
-is the end-to-end proof that a double-tap on a mounted `EditableText` actually
-selects the word, not just that the underlying callback fires. Red-check: skip
-wrapping `install_pointer_handlers`'s return value in
-`wrap_double_tap_word_select` — the selection stays collapsed after the second
-tap. It also pins the DOWN-not-UP timing, since it asserts the word selection
-on the second contact's DOWN before that contact lifts, and the
-participation-gating fix, since this detector sets `on_double_tap_down` alone
-and would otherwise never join the arena.
-
-### 21. The `Router` is derived from the route type, and reached from the build context
-
-**Choice:** `Router<R>` (`src/router/`, ADR-0330) needs only `R: Routable` —
-`to_path`, `from_path`, and a provided `back_stack` — and keeps its stack
-of `R` itself; the parser and delegate are the route type. The page per value
-is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
-builds, so transitions, heroes and `PopScope` are unchanged. The router's build
-places a private inherited `RouterScope<R>` above that navigator, and
-`Router::<R>::of(&dyn BuildContext)` resolves the **nearest** `Router<R>` through
-it with a dependency, Flutter's `GoRouter.of(context)`; a lifecycle context
-upcasts to a build context, so a state resolves it the same way. A handle
-mutation made while the UI runtime builds answers `RouterError::DuringBuild`
-and changes nothing (ADR-0086 §7). The page builder and transitions are shared
-with every page, so a parent rebuild reaches the pages already on the stack; a
-transition duration is fixed when a page is placed, because the page's
-animation controller is made with it.
-
-**Pinned by:** `router_of_resolves_the_nearest_router_from_build` and
-`a_mutation_from_build_is_refused`. A parent rebuild reaching the pages already
-on the stack, a handle with no `Router` above it answering `NoRouter`, and a
-hand-written `Routable` round trip: **Unasserted:** no test pins this.
-
-The outermost Router of a presentation owns its URL (ADR-0330 §5). In
-`create_state` it registers a `UrlOwner` into the presentation's slot, which
-it reads with `LifecycleContext::url_owner`, unless `PageHandle::of` finds a
-page around it: a Router nested in a page registers nothing, and no scope of
-its own marks the pages. `UiRuntime::navigate` reaches it through
-the slot: `Push` and `Replace` parse with `from_path`, `Go` opens
-`back_stack` as `go` does, and a path that does not parse is reported to the
-`on_unknown` hook, cloned out of its cell and called with nothing borrowed,
-then refused as `NoMatch`; the Router lets go of the hook when it unmounts. A
-`Pop` goes through the navigator's `maybe_pop`, so a `PopScope` veto keeps the
-page. Every handle edit holds an `Editing` count on the
-shared state for its whole commit, observers and route clones included, so an
-intent that arrives inside one is `Busy`, as is one during a build; an intent
-holds its own count from before it parses its path to its commit. A URL the
-platform opens reaches it the same way: `UiRuntime::open_url` hands it an
-admitted URL's path as a `Go`. A URL opened before the first frame is
-held in the slot, and the Router that registers first takes it in
-`create_state` and opens on its `back_stack`; a location no route matches
-keeps the initial stack and reaches `on_unknown` from a post-frame callback,
-where the hook may navigate. The first frame that builds a tree drops a
-location nobody took.
-
-**Pinned by:** the `url_owner::` rows of `router_and_widgets_app`
-(`tests/url_owner.rs`), through `HeadlessHost::navigate` and
-`HeadlessHost::open_url`.
-
-### 22. A page reaches its own route through `PageHandle`, and pushes only pageless popups
-
-**Choice:** every page on a Router's stack has a path (ADR-0330 §2), and only
-the Router places, replaces or seeds pages. Every modal route's overlay entry
-places a crate-private inherited `PageScope` above its barrier and page, so
-`PageHandle::of(ctx)` in the page, its builders or anything below them names
-that route, Flutter's `ModalRoute.of(context)`. The handle is bound to its
-route id, not to the top of the stack: `maybe_pop`, `pop` and `pop_with` act
-only while their route is current, so a callback that fires after a popup
-covered its page does not pop the popup. `can_pop` is whether a present route
-sits below the handle's and popping would not take a Router's last page.
-`push_popup` pushes a `PopupRoute` on the route's navigator; while the UI
-runtime builds, and once the route has left its navigator, it disposes the
-popup unpushed and answers `PageError`.
-
-A `PageHandle` and a `RouterHandle` hold the navigator weakly; the `Router`'s
-state is the one strong owner beside the `Navigator` view it builds. The
-navigator's history holds each popup route, and a popup's builder that
-captures the handle of the page under it is the form ADR-0330 §3 teaches, so
-a strong handle would make a cycle that outlives the unmount. Once the
-navigator is gone, the page handle answers `PageError::Gone` and the router
-handle `RouterError::Disposed`.
-
-The navigator a Router builds is *addressed*: a plain `push` admits only routes
-whose binding slot a framework `TransitionRoute` marked
-`TransitionGroup::Default` — `PopupRoute` — and refuses `PageRoute`,
-`SimpleRoute` and every third-party route. The doors that replace, sweep or
-seed (`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`)
-refuse every route, a popup included, because what they remove or place
-beneath belongs to the Router. They cannot return a `Result` without a public
-signature change, so a refusal disposes the route unpushed, returns a
-`RouteResult` already complete with `Ok(None)`, logs `tracing::error!` with the
-reason, and fails a `debug_assert!`. Every pop the navigator makes — a
-`PageHandle`'s, a back gesture's, a barrier's — reaches the Router's stack
-through an internal `NavigatorObserver`, so the location follows it.
-
-**Pinned by:** `popup_routes_are_admitted_and_leave_the_location_alone`,
-`page_handle_pops_only_its_own_route`, `page_handle_can_pop_follows_the_route_below`,
-`a_popup_pushed_from_a_page_resolves_to_its_value` and
-`an_app_dropped_with_a_popup_open_frees_its_builder`. A `PageRoute` pushed
-through the facade refused as not addressable, and the doors that remove or
-seed refusing even a popup: **Unasserted:** no test pins this.
-
-### 23. A Router never pops or removes its last page
-
-**Choice:** a Router always has a location. The navigator records the pages
-the Router places, and no pop or removal takes the last present one, whether
-it is on top or beneath a popup: `RouterHandle::pop` answers `Ok(false)`, the
-facade's `pop`, `pop_with` and `remove_route[_with]` answer `false`,
-`maybe_pop` bubbles (as a lone route does), and `pop_until` stops
-there, all with the stack unchanged. A top page that handles the pop itself
-(a local-history entry) still pops, since that removes no page.
-
-**Pinned by:** `router_never_pops_its_last_page` (the handle's `pop`, and the
-facade's `pop` and `pop_with`). `pop_until` stopping at the last page, and the
-last page beneath a popup surviving removal and pops: **Unasserted:** no test
-pins this.
-
-### 24. `go` reconciles by common prefix
-
-**Choice:** `RouterHandle::go(location)` derives the new stack with
-`Routable::back_stack` — every prefix of the path that parses, the full path
-required — and keeps the longest common prefix with the current stack
-(compared with `PartialEq`). A new stack that is a prefix of the current one
-pops back to it with exit transitions; otherwise the pages above the common
-prefix are removed and the new pages are placed in one flush, the ones
-beneath the new top entering quietly (`RouteLifecycle::Add`) and only the new
-top running its entrance. The pages that stay keep their state; a page above
-the divergence point is rebuilt. When the full path does not match, `go` and
-`Router::from_location` report `RouteParseError::NoMatch` and change nothing,
-rather than falling back to a default route.
-
-**Pinned by:** `router_opens_at_a_location_with_its_back_stack` (the matching
-prefix chain beneath an opened location, across the gap `/note`, and
-`Router::from_location` reporting `RouteParseError::NoMatch` for a path that
-does not match in full). `go` reconciling only the diverging tail, adding the
-new back stack beneath the new top, and leaving the stack alone for an unknown
-location: **Unasserted:** no test pins this.
-
-### 25. Every Router page scopes a semantics route, and a labelled route names it
-
-**Choice:** a Router page is an addressable screen, so the
-Router wraps each one in `Semantics::scopes_route(true)
-.explicit_child_nodes(true)`, and adds `names_route(true)` with the label when
-`Routable::semantics_label` returns one. An assistive technology then hears a
-route change on every navigation, with no app bar required.
-
-**Unasserted:** no test pins this.
-
-### A Router page's result is typed, owner-local and always delivered
-
-**Choice:** `RouterHandle::push_for_result::<T>` returns the page's
-`RouteResult<T>`, a future of `Result<Option<T>, RouteResultError>` over an
-`Rc`/`RefCell` channel, and `RouterHandle::pop_with` delivers the value as a
-`Box<dyn Any>`: neither `T`, the value nor the result is `Send` (ADR-0330 §3).
-A value of another type pops the page and resolves to
-`RouteResultError::TypeMismatch`; the value is dropped and reported outside the
-history borrow. Every exit resolves the result: a value, `Ok(None)` for a page
-that leaves without one (a pop, a replace, a `go` that drops it), and
-`Ok(None)` for every result still pending when the navigator unmounts. Those
-last completions are prepared under the history borrow and run, waking their
-tasks, after it is released, each contained so that a panicking waker or
-observer leaves the rest to complete. Completion does not pop a route: a pop
-through a handle that outlived the navigator still runs the route's `did_pop`,
-so local history severs what it owes, and a value it carries comes back as
-undelivered.
-
-**Pinned by:** `push_for_result_resolves_to_the_value_the_page_is_popped_with`,
-`a_router_result_of_another_type_is_a_type_mismatch`,
-`a_page_left_without_a_value_resolves_to_none`,
-`an_unmounted_router_resolves_its_pending_results_to_none` and the
-`terminal-result-waker` row of `router_observer_failure_and_terminal_retirement`
-(`crates/flui-widgets/tests/router.rs`), `an_unmounted_navigators_owed_removal_is_severed`
-(`crates/flui-widgets/tests/navigator.rs`), and the `compile_fail` doctest on
-`RouteResult`.
-
-### 26. Global widgets localizations live in the catalog, not in a separate package
-
-**Choice:** `GlobalWidgetsLocalizations`, `GlobalWidgetsLocalizationsDelegate`
-and `RTL_LANGUAGES` live in `flui_widgets::localization`, next to the
-`WidgetsLocalizations` contract they implement.
-
-**Why not a separate package.** A separate package pays off when it carries
-translated strings. Here there are none: every string
-forwards to `DefaultWidgetsLocalizations`, and the only behavior is the RTL
-language table and the delegate. A separate crate held that one table in a
-layer of its own, which ADR-0081 deleted; the table moved down into the
-crate whose contract it implements.
-
-**Consequences:**
-
-- The delegate's `is_supported` is always `true`: a gate on "this locale has
-  translated strings" would, with no translations for any locale, only
-  produce false negatives.
-- Translated string catalogs, when they arrive, are a separate decision
-  about where FLUI sources translations; they do not reopen a crate here.
-
-**Tests:**
-`flui-widgets::tests::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl`
-mounts `Localizations` with the global delegate for `ar` and reads
-`Directionality::of` from inside the subtree; the unit tests in
-`localization/global_widgets_localizations.rs` pin the table, the `iw`
-alias, and `is_supported`.
-
-### 22. A form field validates at the event, not in `build`
-
-**Choice:** `build(&self)` cannot mutate, so the autovalidate switch runs at the
-moments that would schedule a build: `did_change` (a user edit),
-`init_state` (mount), `did_update_view` (reconfiguration), a field joining an
-`Always` form, the field's focus wrapper losing focus, and the form's
-`validate()`/`reset()`. A field whose shown error changed schedules its own
-rebuild through the `RebuildHandle` it took in `init_state`. A form `reset()`
-defers the form-level autovalidation to the end of its loop, so it runs once
-after `reset`. A field is always wrapped in its unfocus
-`Focus` (not focusable, so
-never a traversal stop, and no semantics) and checks the modes at focus loss, so a
-mode change never remounts the field's content. Tab order between form fields
-and `OnUnfocus` validating as Tab leaves a field: **Unasserted:** no test pins
-this.
-
-**Tests** (`tests/form.rs`): `validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it`,
-`reset_restores_initial_values_and_clears_errors_and_interaction` (an edit
-after a reset validates again under `OnUserInteraction`). Frames are driven with
-`tick`, which does not dirty the root, so a field that stored its error
-without scheduling a rebuild fails the first one. The remaining autovalidate
-modes — `OnUserInteraction` validating only after the first edit, the same
-mode set on the form validating every field after any edit,
-`OnUserInteractionIfError`, and `Always` at mount and on every change:
-**Unasserted:** no test pins this.
-
-### 23. `FormHandle` and `FormFieldHandle` replace `GlobalKey<FormState>`
-
-The event methods `FormHandle::save`/`reset` and
-`FormFieldHandle::did_change`/`reset` forward the caller's `EventContext` to their
-callbacks (ADR-0086). Validators remain queries with no writer. Form reset
-restores its validation-suppression flag on unwind, so a panicking user callback
-cannot disable validation for later edits; the partial field mutations are not
-rolled back. A field schedules its rebuild immediately after committing its
-reset state, before the controller sink and `on_reset`, so an unwind cannot hide
-that partial commit behind stale UI. `a_panicking_reset_callback_does_not_disable_later_form_validation`
-pins recovery and visibility. Context forwarding: **Unasserted:** no test pins
-this.
-
-**Choice:** The caller creates a `FormHandle`/`FormFieldHandle` and passes it
-to the widget (`Form::handle`, `FormField::handle`), or reads `Form::of`. A
-handle is a cheap `Rc` clone that owns the state, so it outlives the build
-that created it and needs no key registry. A mounted field rebuilt with a
-different handle moves onto it: the new handle takes the field's value,
-error, interaction and registration slot, and the old handle is detached.
-Each mounted form or field holds an exclusive generation-stamped attachment
-lease. A simultaneous duplicate is reported and isolated behind a fresh
-internal handle before configuration mutates the requested handle; conditional
-lease cleanup prevents a refused or stale owner from detaching the live one.
-Acquiring a replacement precedes releasing the current lease, so a busy target
-cannot leave a mounted state detached. This is a local recovery contract rather
-than a panic because duplicate attachment is caller-triggerable and lifecycle
-admission is infallible. The tracing error is paired with the typed
-`take_attachment_error` drain on the requested handle, matching the framework's
-duplicate-`GlobalKey` diagnostic shape instead of making a mount-time error look
-like an event-time `Result`.
-A handle is not the element's identity, so a field rebuilt with a different
-handle keeps its element and state. A text form field rebuilt without the
-caller's controller moves its text into a controller it owns.
-**Tests:** every `tests/form.rs` case drives the form through a handle;
-`a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`.
-A new handle on rebuild taking the mounted field over, a dropped caller's
-controller moving its text into a field-owned one, the same duplicate-mount
-refusal for a `FormFieldHandle`, a rebind onto a busy handle, and unmounting a
-text form field releasing its callbacks and controller binding:
-**Unasserted:** no test pins this.
-
-### 24. A field registers with its form in lifecycle hooks
-
-**Choice:** `init_state` registers, `did_change_dependencies` moves the
-registration when the enclosing form changed, and `dispose` unregisters.
-Registration order is kept; the
-form holds each field strongly and each field holds the form weakly, so a
-`FormHandle` captured in a field callback is a cycle only until that field's
-`dispose`. **Unasserted:** no test pins this.
-
-### 25. A text field's error line is a live region instead of an announcement
-
-**Choice:** there is no widget-facing announce API, so `RawTextFormField`'s
-error line is a `Semantics(live_region: true)` container, which assistive
-technology reads when it appears. **Unasserted:** no test pins this.
-
-### 26. `Form` carries the form semantics role
-
-**Choice:** `Form` is a semantics container with `SemanticsRole::Form`
-(AccessKit `Role::Form`), so a screen reader can name the group.
-**Unasserted:** no test pins this.
-
-### 27. Clipboard bindings come from `DefaultFocusTraversal`
-
-**Choice:** `DefaultFocusTraversal`, which `app_root` installs above every
-application root, binds the three chords (Cmd on macOS and iOS, Control
-elsewhere — a pure table resolved in each build from
-`PlatformConvention::of`). The chord resolves at the
-primary focus like the traversal keys: an `EditableText` answers it on its own
-node, and with no text field focused nothing does, so the chord keeps
-bubbling. **Tests:** `tests/editable_text_clipboard.rs`
-(`copy_then_paste_round_trips_text_in_an_editable_text`). The platform table
-for every target, and a chord left unconsumed with no text field focused:
-**Unasserted:** no test pins this.
-
-### 28. `EditableText`'s clipboard actions win over ancestor bindings
-
-**Choice:** `EditableText` layers its actions over the chain at its position
-and records the result on its node, so they are the nearest declaration of
-the two intent types and an ancestor mapping never replaces them.
-**Unasserted:** no test pins this.
-
-### 29. Paste drops `\r` as well as `\n`
-
-**Choice:** a paste into the single-line field removes both, since a stray
-carriage return is never text the user meant (denying only `\n` would leave a
-`\r` behind from a Windows `\r\n`). **Unasserted:** no test pins this.
-
-### 30. `RawTextFormField`, not `TextFormField`
-
-**Choice:** the theme-free form field is named `RawTextFormField` for the
-facade-additivity reason `RawTextField` is: with the `material` feature on,
-`flui::prelude::TextFormField` means exactly the Material type, and enabling a
-feature never changes what an existing name resolves to.
-`flui_material::TextFormField` is the Material type.
-
-### 31. `SingleActivator` compares ASCII letters without case
-
-**Choice:** `Key::Character` carries what the key produced, so Caps
-Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
-matches either case; the exact Shift comparison still tells Ctrl+Shift+C
-apart. `character_ignoring_shift` is a separate character-only constructor:
-Shift may be held or released, while interpreted Control, Alt and Meta remain exact. A
-named key cannot acquire that policy. `Slider` consumes logical `+` and `-`
-through this constructor, including characters produced by native Shift key
-translation. ADR-0156 supersedes the old exact-Shift contract for this constructor.
-**Asserted:** `a_shift_produced_character_matches_when_shift_is_ignored` and
-`slider_focus_keys_and_semantic_actions_share_controlled_proposals`.
-
-### Observed modifiers are distinct from keyboard command dimensions
-
-ADR-0201 preserves raw input while one private widget projection supplies the
-command dimensions used by SingleActivator, EditableText and Slider. Explicit
-AltGraph excludes Control/Alt aliases and retains Meta/Shift; toggles, Fn and
-Symbol are not additional command requirements. Produced-character triggers can
-still work on nontext controls, including Slider +/-.
-
-An Active source composition leaves ordinary framework shortcuts and control or
-field keyboard edits/submission unclaimed for native defaults. A controller's
-composition guards remain independently authoritative. Without explicit AltGraph,
-the field's conservative Ctrl+Alt text fallback remains a documented cost; a
-real extra Control+AltGraph is likewise indistinguishable from aliases through
-ordinary activators. Raw observations and authored raw Focus handlers are intact.
-This does not complete native provenance or Web IME transport.
-
-The public rows in `text_editing`, `focus_actions_and_shortcuts` and
-`controlled_slider_input_and_geometry` cover actual field text/selection,
-primary-focus actions, both shortcut forms, source composition, default refusal,
-glyph/Meta/Shift policy, word movement, locks and Slider proposals. The
-`keyboard_modifiers` module supplies these table rows through public runtime and
-mounted-consumer seams.
-
-### 32. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
-
-Platform accessibility Focus and SetValue requests use the current field's
-lifecycle-acquired writer, controller and exact generation-checked focus
-attachment. SetValue reports a user edit through the same observer as keyboard
-input and drains accepted IME grants first. Delivery revalidates ownership after
-that drain because callbacks may adopt the node into a later attachment. An
-enabled but unfocusable document remains writable; Focus separately checks
-eligibility and is advertised only while eligible. Disposal withdraws authority
-before cleanup, so queued work cannot edit or detach a later owner.
-
-The `native_actions` rows in `tests/editable_text.rs`, registered in
-`text_editing`, exercise queued Focus and SetValue through the headless host,
-current controller replacement, Unicode and empty edits, disabled and retired
-targets, deferred grant ordering and same-parent attachment takeover before and
-during delivery. These are producer and UI runtime-routing contracts; native UIA
-TextPattern, selection, password handling and screen-reader execution require
-separate verification.
-
-**Choice:** controller listeners are `Send + Sync` and cannot reach
-owner-thread form state, so a text form field takes the user's edits from
-`EditableText::on_changed` (typing, deletion, IME commit, cut, paste — not
-`set_text`, and not the edit an `on_submitted` callback makes), and reads the
-controller's text before it validates or saves. A caller's own controller
-edit is therefore validated and saved but does not mark the field interacted,
-and a reset's write-back needs no equality guard. Because the controller is
-the value, `FormFieldHandle::set_value` on a text form field writes the text
-into the controller too, so the field's value and its controller never
-disagree. **Tests:**
-`reset_restores_initial_values_and_clears_errors_and_interaction` (the reset's
-write-back does not mark the field interacted). `on_changed` reporting the user's
-edits but not the caller's own, and `set_value` on a text form field seen by
-`value`, `validate` and `save`: **Unasserted:** no test pins this.
-
-### 33. `RawButton` is a widgets-layer button whose press writes through `EventContext`
-
-**Choice:** `RawButton` is a theme-free press target, so an application that
-uses no design system has a button, and its `on_pressed` takes
-`Fn(&mut EventContext<'_>)`, the typed write capability of ADR-0086. It is
-stateless and builds one `InteractiveNode` (`interaction/node.rs`,
-`#[doc(hidden)]` for the official catalogs, outside every prelude; ADR-0322 §1): one element and one `RenderInteractive` that carry what the
-wrappers `Semantics`, `GestureDetector`, `Actions`, `Focus` and `FocusRing`
-carry, on the hosts those wrappers run on (`FocusHost`, `RecognizerHost`). The
-node is hit opaquely and mounts the tap recognizer a `GestureDetector` would;
-its semantics are
-`Semantics::new().container(true).role(SemanticsRole::Button).enabled(on_pressed.is_some())`,
-then the click its tap gives, then the focus state. The gesture arena's
-lower-level callback aliases do not change (ADR-0086 §4). Without `on_pressed`
-the node is disabled and advertises no click, and a tap does nothing. A press
-may return a write's `Result`; a refused write is logged on `flui.signals`.
-The node binds `ActivateIntent` and `ButtonActivateIntent` to the press and
-consumes `ActivationPressIntent` (Space's key-down); its focus node records
-those bindings, can take focus only with `on_pressed`, and the node paints the
-focus ring while focus is visible. Without `on_pressed` the bindings are
-declared but disabled, so an activation key stops there and bubbles unconsumed
-instead of pressing an enclosing control. Pressed and hovered looks are not
-implemented. **Tests:**
-`tests/raw_button.rs` (`raw_button_press_is_reachable_through_a_platform_click`,
-`a_refused_write_in_a_press_is_reported_not_panicked`,
-`raw_button_activates_from_the_keyboard`, which also pins that a button without
-`on_pressed` is no Tab stop; `raw_button_a11y_tree_matches_wrappers`, which pins
-the tree against the wrappers enabled and disabled, so a button without
-`on_pressed` advertises no click;
-`raw_button_in_scrollable_contests_like_gesture_detector` and
-`nested_raw_button_contests_like_gesture_detector`) and
-`perf_raw_button_over_text` in `tests/perf.rs` for what a button adds to its
-child.
-
-### 34. `EditableText` answers an input method's pulls; one platform session is one change
+### `EditableText` answers an input method's pulls; one platform session is one change
 
 **Choice:** `EditableText` is a `flui_platform::text::store::TextStore` (ADR-0090). The
 input method reads the text, selection, composition and geometry in UTF-16
@@ -2637,7 +1505,7 @@ defers a lock asked for inside the frame transaction to the next frame),
 requested from a post-frame callback specifically: **Unasserted:** no test pins
 this.
 
-### 35. Platform selection is exact; user selection snaps
+### Platform selection is exact; user selection snaps
 
 **Choice:** a selection set through the text store
 is kept at any scalar boundary, including inside a grapheme cluster (offset 4
@@ -2646,151 +1514,428 @@ AppKit address scalars and a snapped answer would disagree with what they set.
 A tap, a drag and the arrow keys keep snapping to extended grapheme clusters
 through the controller (its "Character unit"); a tap and a drag land where
 `TextPainter::get_position_for_offset` answers, which snaps to an ICU4X
-grapheme boundary while a caret query stays per scalar (flui-painting mapping
-decision 15). The arrow keys step the same ICU4X graphemes a hit snaps to
-(decision 19), so an arrow key lands only on offsets a hit can answer.
+grapheme boundary while a caret query stays per scalar (flui-painting's
+`ARCHITECTURE.md`, "Carets, selection and hit-testing read the layout that
+measured"). The arrow keys step the same ICU4X graphemes a hit snaps to
+("A ligature is one glyph and one caret stop per scalar" there), so an arrow key
+lands only on offsets a hit can answer.
 **Tests:** the kit's
 `selection_inside_a_grapheme_is_kept_exactly`, for the platform half; for the
 tap half, the painter's `a_combining_mark_is_one_hit_target` and
 `a_zwj_family_is_one_hit_target` rows of flui-painting's `caret_contract`;
 for the arrow keys, `the_editor_steps_the_graphemes_the_painter_snaps_to`.
 
-### 36. `WidgetsApp`: one page or a bare Router as the routing subtree
+### Text-store exact points use source scalar intervals in either direction
 
-**Choice:** `WidgetsApp::router(Router<R>)` keeps the Router as a
-`BoxedView` and mounts it bare, under the same `builder`, `DefaultTextStyle`
-and `Localizations` bands; each of its pages has its route's focus scope. The
-app has no navigator of its own: the Router's is its root navigator, and its
-facade refuses a stray page pushed through `NavigatorHandle::maybe_of_root`.
-`WidgetsApp::new(home)` makes a navigator holding the one home page, a
-`PageRoute` with its `PageScope`, on which popups open. No shell takes a
-navigator handle or observers (ADR-0330 §4), so there is no configuration
-that one form would ignore and no form type parameter. The shell is one view
-type: a rebuilt app updates the boxed Router in place, so the stack and page
-state survive, and an update between the home and router forms lets go of
-the home page's navigator or makes a fresh one. Its Router owns the
-presentation's URL as any outermost Router does (§21). **Tests:**
-`tests/widgets_app_router.rs`
-(`switching_widgets_app_from_home_to_router_releases_the_navigator`,
-`widgets_app_router_navigates_by_handle_and_the_url_follows`) and
-`tests/widgets_app.rs` (`home_is_seeded_once_as_the_root_route`). The
-Router's navigator as the app's root navigator, refusing a stray page; no
-focus scope above the Router; and a rebuilt app keeping its stack:
+`TextStoreRead::index_at_point(Exact)` tests the interval between consecutive
+source-scalar carets using its minimum and maximum x coordinate. An RTL pair
+therefore names its source scalar rather than being treated as outside the text.
+This retains the per-scalar caret contract; it does not introduce a visual-run
+hit topology for discontinuous mixed-bidi ranges. `Nearest` remains a boundary
+query. **Test:** `rtl_scalar_rect_midpoints_resolve_to_the_source_scalar`.
+
+### Selection dragging belongs to the mounted field and its contact
+
+`EditableText` retains the source anchor and typed contact in its state. A
+same-controller configuration rebuild preserves that drag; only the first active
+contact can move or terminate it. Disablement, actual controller replacement and
+disposal retire it. Double-tap word selection deliberately takes over and clears
+ordinary drag tracking. Admission precedes focus callbacks; a callback that
+retires the contact prevents the subsequent caret write.
+**Tests:** `selection_drag_survives_a_same_controller_rebuild`,
+`foreign_release_preserves_the_selection_contact`,
+`foreign_cancel_preserves_the_selection_contact`,
+`disabling_the_field_retires_its_selection_contact`,
+`replacing_the_controller_retires_the_old_selection_contact`.
+
+### Non-IME splices collapse after the resulting grapheme
+
+`TextEditingController::insert_str` moves its collapsed caret forward to the
+next ICU extended-grapheme boundary of the resulting document. Inserted bytes
+can join a following combining mark, and deleting a selected separator can join
+regional indicators; neither leaves Backspace starting inside the new cluster.
+Raw text-store/IME scalar selection remains exact under ADR-0090.
+**Tests:** `insertion_keeps_the_caret_after_the_joined_combining_cluster`,
+`deleting_a_separator_keeps_the_caret_after_the_joined_flag`.
+
+### Word and grapheme movement use ICU4X (UAX #29), not dictionary segmentation
+
+**Rule:** one Unicode source (ADR-0092 §6): graphemes and words are segmented
+by ICU4X, the data Parley shapes with, and no second segmenter is a dependency.
+
+**Choice:** the controller's grapheme steps (arrow keys, Backspace, Delete,
+the selection setters' snap) and keyboard word jumps walk the boundaries in
+`flui_painting::text_boundaries`: ICU4X's grapheme segmenter and its word
+segmenter for non-complex scripts, the data Parley already brings and clusters
+the painted text by (ADR-0092 §6). The obscuring mask and the text store's
+obscured ranges count the same clusters. Double-tap word selection
+(`TextPainter::get_word_boundary`; flui-painting's `ARCHITECTURE.md`, "Carets,
+selection and hit-testing read the layout that measured") picks
+from the same word segments with its own tie-break. So a caret an arrow key
+places is one a tap can place, and a Backspace removes what was drawn as one
+character. `flui-widgets` has no `unicode-segmentation` dependency, and
+`deny.toml` bans it except for the third-party crates that bring it.
+
+A query segments from the start of the line that holds its offset (a break
+after LF is mandatory for graphemes and words), so a step costs the length of
+its line, not of the buffer; the backward word jump walks forward one line at
+a time and allocates nothing.
+
+**Background:** ICU's word-mode break iterator (the usual backing for Ctrl+Arrow
+word-jump and double-tap word selection) is **dictionary-based**
+for two distinct groups: Thai, Lao, Khmer, and Myanmar (scripts with no
+spaces between words at all, where the Unicode Standard Annex #29
+default algorithm — rule-based, no lexicon — cannot find a linguistically
+correct boundary on its own), and separately Chinese/Japanese, via ICU's
+`cjdict` word-frequency dictionary (these scripts DO have UAX
+#29-recognized character-class boundaries, so the rule-based default
+does not fail outright the way it does for the first group — it just
+segments per character/script-run rather than per linguistic word).
+
+**Why no dictionary.** The dictionary and LSTM data — both the
+Thai/Lao/Khmer/Myanmar lexicons and `cjdict` — are the expensive part,
+megabytes of data, not an algorithm, and Parley's `complex-scripts` feature,
+which would bring them, stays off (ADR-0092 gate 4). Every script with
+UAX #29-recognized boundaries (Latin, Cyrillic, Greek, Arabic, Hebrew,
+Hangul, and more) already works without it.
+
+**Tests:** `the_editor_steps_the_graphemes_the_painter_snaps_to`
+(`tests/editable_text.rs`, the `text_editing` table) steps the arrow keys and
+Backspace through a ZWJ family, two flags, stacked combining marks, CR LF and
+the conjunct "क्षि", and compares the stops with
+`flui_painting::text_boundaries::graphemes`. The row pins the shared contract; the
+`deny.toml` ban on `unicode-segmentation` is what fails if a second segmenter
+returns.
+
+**Consequences, named rather than left to be discovered:**
+
+- **Thai/Lao/Khmer/Myanmar word-jump and word-select do not find any
+  linguistically meaningful boundary** — no whitespace and no
+  UAX #29-recognized word-class transition to key on means the segmenter
+  falls back to its rule-based default (effectively per-cluster stops).
+- **Chinese/Japanese word-jump and word-select segment per
+  character/script-run, not per linguistic word** — `"東京"` ("Tokyo",
+  one word to ICU's `cjdict`) splits into `"東"` and `"京"` here, because
+  Han characters have no special UAX #29 word-class merging rule by
+  default (unlike consecutive Katakana, which UAX #29's own `WB13` rule
+  does merge — a script-specific rule already correct here, no dictionary
+  needed for it). A known limitation, not a silent bug.
+  **Unasserted:** no test pins this.
+- **Every other script named here — Arabic (clusters-only, see the caveat
+  below), Latin with apostrophes, emoji clusters — segments correctly** per
+  UAX #29's own rules, which is the ceiling this crate claims for them; no
+  claim is made about Hebrew.
+- **Grapheme-cluster correctness is unaffected.** The dictionary gap is
+  specific to WORD boundaries; cluster boundaries (caret, Backspace,
+  Delete) come from ICU4X's grapheme segmenter, a different UAX #29 mode
+  with no dictionary dependency, and are correct for
+  every script including all the ones named above.
+- **The word-jump modifier follows the tree's `PlatformConvention`.**
+  `is_word_jump_modifier` takes the platform the field or area read from
+  `PlatformConvention::of` at its last build, which the runtime installs
+  from the platform its runner names. `word_jump_modifier` stays a pure
+  `(platform) -> Modifiers` table. A `wasm32` build is named `Unknown`
+  (Control jumps by word) until the web runner reports the browser's OS
+  ([gaps](../../docs/gaps.md)).
+
+**Boundary tests:**
+`two_space_run_word_boundary`, a row of flui-painting's `caret_contract`
+(`crates/flui-painting/tests/caret_contract.rs`), pins a specific boundary rather than a loose "some boundary was found" check:
+`"foo  bar"` at 3/4/5, where an offset inside the two-space run selects the
+whole run. The controller's word-jump stops (skipping trailing whitespace, a
+whitespace run as one stop, an apostrophe inside a word, the CJK per-character
+split), the word-jump modifier's platform table, and the rest of the
+`get_word_boundary` tie-break matrices (`"foo bar"` at 0/3/4/7; `"(foo"` at 1;
+`"日本語"` at 3; `"foo, bar"` at 3/4; leading/trailing whitespace at a buffer's
+own edges; ZWJ emoji clusters): **Unasserted:** no test pins this. For Arabic
+the claim is only that a word jump never lands inside a char and always makes
+progress, not any cluster-vs-word segmentation for that script.
+
+### `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
+
+**Rule:** reuse tested framework machinery
+(`flui_interaction::gesture::DoubleTapGestureRecognizer` via
+`flui_widgets::GestureDetector`) rather than hand-rolling tap-count/slop/
+timeout tracking a second time inside `EditableText`'s own pointer
+handlers.
+
+**Choice:** `EditableTextState::wrap_double_tap_word_select` composes the
+generic `flui_widgets::GestureDetector` as the OUTER parent of
+`install_pointer_handlers`'s `Listener`-based field, not the reverse.
+`Listener` stays arena-free, so plain tap-to-place-caret and
+drag-to-select are unaffected by the double-tap
+recognizer's presence next to them. `GestureDetector`'s
+`DoubleTapGestureRecognizer` watches the SAME pointer stream in parallel
+(both layers use `HitTestBehavior::Opaque`, so both receive every
+contact) and its `on_double_tap_down` callback widens the caret `Listener`
+just placed into the enclosing word through
+`RenderEditable::word_range_at_local_offset`, which asks
+`TextPainter::get_word_boundary` (see "Word and grapheme movement use ICU4X (UAX
+#29), not dictionary segmentation"). That is ICU4X word segmentation over the
+same segments Ctrl/Alt+Arrow word-jump walks, and NOT the same function: the
+keyboard path's `next_word_start`/`previous_word_start`
+(`flui_painting::text_boundaries`, the stops a field also publishes) answer a directional
+"next/previous stop" query with their own asymmetric tie-break, while
+`get_word_boundary` answers "which segment is under this exact
+position" with a different one. A double-tap and a keyboard word-jump can
+therefore disagree at the exact boundary between two segments; they are not
+unified behind one primitive.
+`drag_anchor.set(None)` in the same callback stops the plain tap/drag
+handling this composition wraps from clobbering the word selection on
+the second contact's next move before it lifts — near-guaranteed on
+touch, where a finger is essentially never perfectly still between down
+and up.
+
+**Why not a text-specific detector.** A specialized gesture-detector subtype
+would also own triple-tap and drag-selection-handle gestures that do not exist;
+building one for a single callback would be premature machinery for what
+`GestureDetector`'s generic API already covers.
+
+**Consequences, named rather than left to be discovered:**
+
+- **`on_double_tap` itself is deliberately left unset** on this detector
+  — word selection only needs the earlier `on_double_tap_down` signal, not
+  confirmation that the second contact also lifted cleanly.
+- **`on_double_tap_down` alone mounts the double-tap recognizer.** The
+  detector's press group counts either double-tap callback as the double
+  tap's presence, so a detector configured with only `on_double_tap_down`
+  joins the arena and its callback fires.
+
+**Tests:**
+`a_double_tap_selects_the_word_under_it` (`tests/editable_text.rs`)
+is the end-to-end proof that a double-tap on a mounted `EditableText` actually
+selects the word, not just that the underlying callback fires. It also pins the
+DOWN-not-UP timing, since it asserts the word selection on the second contact's
+DOWN before that contact lifts, and that a detector with `on_double_tap_down` and
+no `on_double_tap` joins the arena.
+
+### `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
+
+Platform accessibility Focus and SetValue requests use the current field's
+lifecycle-acquired writer, controller and exact generation-checked focus
+attachment. SetValue reports a user edit through the same observer as keyboard
+input and drains accepted IME grants first. Delivery revalidates ownership after
+that drain because callbacks may adopt the node into a later attachment. An
+enabled but unfocusable document remains writable; Focus separately checks
+eligibility and is advertised only while eligible. Disposal withdraws authority
+before cleanup, so queued work cannot edit or detach a later owner.
+
+The `native_actions` rows in `tests/editable_text.rs`, registered in
+`text_editing`, exercise queued Focus and SetValue through the headless host,
+current controller replacement, Unicode and empty edits, disabled and retired
+targets, deferred grant ordering and same-parent attachment takeover before and
+during delivery. These are producer and UI runtime-routing contracts; native UIA
+TextPattern, selection, password handling and screen-reader execution require
+separate verification.
+
+**Choice:** controller listeners are `Send + Sync` and cannot reach
+owner-thread form state, so a text form field takes the user's edits from
+`EditableText::on_changed` (typing, deletion, IME commit, cut, paste — not
+`set_text`, and not the edit an `on_submitted` callback makes), and reads the
+controller's text before it validates or saves. A caller's own controller
+edit is therefore validated and saved but does not mark the field interacted,
+and a reset's write-back needs no equality guard. Because the controller is
+the value, `FormFieldHandle::set_value` on a text form field writes the text
+into the controller too, so the field's value and its controller never
+disagree. **Tests:**
+`reset_restores_initial_values_and_clears_errors_and_interaction` (the reset's
+write-back does not mark the field interacted). `on_changed` reporting the user's
+edits but not the caller's own, and `set_value` on a text form field seen by
+`value`, `validate` and `save`: **Unasserted:** no test pins this.
+
+### A paragraph's links are focus stops of their own
+
+**Choice:** `RichText` with `on_link` lays its paragraph in a `Stack` (constraints passed
+through) beside one zero-size focus stop per link. Each stop hosts a node whose rect is the
+link's glyph bounds from the committed layout, kept within the paragraph's box
+(`Focus::rect_provider`, `RenderParagraph::link_bounds`; a last line's box can end a
+rounding error past the paragraph, which would put the link in one row with whatever
+touches it). Tab therefore reaches links in reading order among every other control, at any
+text scale, and the reveal on focus scrolls the link, not the paragraph, into view.
+
+A link is one link across rebuilds by what it links to and which occurrence of that target
+it is, not by its place in the text. Its slot keeps the tap recognizer, the focus node, the
+lane registrations and a `TextLinkKey` for its accessible node, and its stop is keyed by
+that slot. So a link added or removed before the focused one leaves the focus, a press in
+flight and the node with their link.
+
+Enter and Select open the focused link through a `Shortcuts` around the paragraph that binds
+them to `ActivateLinkIntent` (ADR-0079, amendment for links). The link declares
+`ActivateIntent` and `ActivationPressIntent` disabled, because the default bindings send
+`ActivateIntent` for Space's release too: Space neither opens a link nor activates a control
+around it, and keeps bubbling.
+
+While the focus is visible the paragraph draws the `FocusRingStyle` bands just outside each
+line of the link's glyphs, so a wrapped link gets a ring per line and the letters stay
+uncovered. The link nodes are focusable and focused with the link, and their `Focus` action
+requests assistive focus; the stops publish no semantics of their own. A link that
+`max_lines` or an ellipsis cut takes no focus: after each layout that changes it, the
+paragraph tells a `ShownLinksListener` which links have glyphs, and the paragraph's state
+rebuilds its stops.
+
+**Why:** one paragraph stop roving between its links would need to re-run outer traversal
+at its first and last link (resolution stops at the nearest `Actions`) and map entry
+direction and assistive focus by hand; a real node per link gets traversal groups,
+directional focus, reveal and modality from the focus system. Nesting one `Focus` per link
+around the paragraph would tie each `Focus` element to a place in the text, so a link added
+before the focused one would move the focused node to another element. **Tests:**
+`tab_stops_on_each_link_and_enter_opens_it`, `a_focused_link_rings_each_line_of_its_glyphs`,
+`assistive_technology_focuses_a_link`, `tab_to_a_link_below_the_view_scrolls_it_into_view`,
+`a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read`,
+`select_opens_a_link_and_space_activates_nothing_around_it`,
+`a_link_the_layout_cut_takes_no_focus`,
+`links_keep_their_focus_and_presses_when_links_before_them_change`,
+`unmounting_a_linked_paragraph_releases_its_links`.
+
+## Forms
+
+### A form field validates at the event, not in `build`
+
+**Choice:** `build(&self)` cannot mutate, so the autovalidate switch runs at the
+moments that would schedule a build: `did_change` (a user edit),
+`init_state` (mount), `did_update_view` (reconfiguration), a field joining an
+`Always` form, the field's focus wrapper losing focus, and the form's
+`validate()`/`reset()`. A field whose shown error changed schedules its own
+rebuild through the `RebuildHandle` it took in `init_state`. A form `reset()`
+defers the form-level autovalidation to the end of its loop, so it runs once
+after `reset`. A field is always wrapped in its unfocus
+`Focus` (not focusable, so
+never a traversal stop, and no semantics) and checks the modes at focus loss, so a
+mode change never remounts the field's content. Tab order between form fields
+and `OnUnfocus` validating as Tab leaves a field: **Unasserted:** no test pins
+this.
+
+**Tests** (`tests/form.rs`): `validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it`,
+`reset_restores_initial_values_and_clears_errors_and_interaction` (an edit
+after a reset validates again under `OnUserInteraction`). Frames are driven with
+`tick`, which does not dirty the root, so a field that stored its error
+without scheduling a rebuild fails the first one. The remaining autovalidate
+modes — `OnUserInteraction` validating only after the first edit, the same
+mode set on the form validating every field after any edit,
+`OnUserInteractionIfError`, and `Always` at mount and on every change:
 **Unasserted:** no test pins this.
 
-### 37. `PageView` reports page changes after the frame, in order
+### A form is driven through `FormHandle` and `FormFieldHandle`, not a key
 
-**Choice:** the controller's listener is `Send + Sync` (a foundation
-`ListenerCallback`) and cannot hold the owner-local callback or its writer. It
-keeps the synchronous `round(page)` dedupe, records the page (when a callback is
-installed) and schedules the page view's rebuild. `build` hands every recorded page to the local post-frame
-lane, one entry per page. Each entry holds only a weak reference to the
-state's delivery target and runs the callback current at that moment inside
-a write the state's `WriterSource` opens. So the callback runs after the
-frame that next rebuilds the page view (one frame later for a
-change seen during input; two for one seen during layout, whose rebuild
-lands in the next frame), never inside a build, with every page a frame
-recorded in order. A page recorded before a rebuild reaches the rebuilt
-callback. A page view unmounted before its rebuild records nothing to the
-lane, and one unmounted after its rebuild queued a page fails the upgrade,
-because `finalize_tree` drops the state before the lane runs; either way it
-delivers nothing. Without a post-frame lane the pages are dropped with a
-warning. A callback that panics loses only its own page, and the panic
-leaves the frame on the post-frame lane rather than from inside a scroll
-listener; the pages after it run on the next frame. The
-same accepted latency as `AnimatedSize` and `Dismissible`. **Tests:**
-`tests/page_view_events.rs`.
+The event methods `FormHandle::save`/`reset` and
+`FormFieldHandle::did_change`/`reset` forward the caller's `EventContext` to their
+callbacks (ADR-0086). Validators remain queries with no writer. Form reset
+restores its validation-suppression flag on unwind, so a panicking user callback
+cannot disable validation for later edits; the partial field mutations are not
+rolled back. A field schedules its rebuild immediately after committing its
+reset state, before the controller sink and `on_reset`, so an unwind cannot hide
+that partial commit behind stale UI. `a_panicking_reset_callback_does_not_disable_later_form_validation`
+pins recovery and visibility. Context forwarding: **Unasserted:** no test pins
+this.
 
-### 38. A drag reports to the `on_drag_end` it started with
+**Choice:** The caller creates a `FormHandle`/`FormFieldHandle` and passes it
+to the widget (`Form::handle`, `FormField::handle`), or reads `Form::of`. A
+handle is a cheap `Rc` clone that owns the state, so it outlives the build
+that created it and needs no key registry. A mounted field rebuilt with a
+different handle moves onto it: the new handle takes the field's value,
+error, interaction and registration slot, and the old handle is detached.
+Each mounted form or field holds an exclusive generation-stamped attachment
+lease. A simultaneous duplicate is reported and isolated behind a fresh
+internal handle before configuration mutates the requested handle; conditional
+lease cleanup prevents a refused or stale owner from detaching the live one.
+Acquiring a replacement precedes releasing the current lease, so a busy target
+cannot leave a mounted state detached. This is a local recovery contract rather
+than a panic because duplicate attachment is caller-triggerable and lifecycle
+admission is infallible. The tracing error is paired with the typed
+`take_attachment_error` drain on the requested handle, matching the framework's
+duplicate-`GlobalKey` diagnostic shape instead of making a mount-time error look
+like an event-time `Result`.
+A handle is not the element's identity, so a field rebuilt with a different
+handle keeps its element and state. A text form field rebuilt without the
+caller's controller moves its text into a controller it owns.
+**Tests:** every `tests/form.rs` case drives the form through a handle;
+`a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`.
+A new handle on rebuild taking the mounted field over, a dropped caller's
+controller moving its text into a field-owned one, the same duplicate-mount
+refusal for a `FormFieldHandle`, a rebind onto a busy handle, and unmounting a
+text form field releasing its callbacks and controller binding:
+**Unasserted:** no test pins this.
 
-**Choice:** each session of a `Draggable` keeps the `on_drag_end` of the
-build that started it, and its end, a drop with the action a target took or a
-cancel, goes to that callback; the items are also made once, at the start.
+### A field registers with its form in lifecycle hooks
 
-**Why:** an unkeyed list that loses an item mid-drag hands the dragged item's
-mounted draggable to the next item. Reading the live callback at the end would
-tell the next item that it was moved, and a source that removes a moved item
-would delete the wrong one. The callback takes one `DragOutcome`, the shape
-`callback_with` fixes for a `let`-bound closure.
-**Test:** `a_drag_reports_to_the_callbacks_it_started_with`.
+**Choice:** `init_state` registers, `did_change_dependencies` moves the
+registration when the enclosing form changed, and `dispose` unregisters.
+Registration order is kept; the
+form holds each field strongly and each field holds the form weakly, so a
+`FormHandle` captured in a field callback is a cycle only until that field's
+`dispose`. **Unasserted:** no test pins this.
 
-### 39. Actions are invoked with the key event's `EventContext`; `maybe_invoke` has no counterpart
+### A text field's error line is a live region instead of an announcement
 
-**Choice:** `Action::invoke(&self, ctx: &mut EventContext<'_>, intent: &T)`; the
-`Shortcuts` key handler passes its own `ctx`, as `CallbackShortcuts` passes it
-to its bindings (ADR-0086, amending ADR-0023). `Actions::maybe_invoke` is
-removed: its only caller could hold a `BuildContext` only in `build`, which
-has no event context, and a write there is refused. The one invoker resolved
-at build time and called from an event is a gesture's
-`CommandHandle` ("Gesture alternatives perform one intent on every path"
-below). `is_enabled` and `to_key_event_result` stay
-queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
-`tests/shortcuts.rs`'s `event_context_tests`.
+**Choice:** `validate()` makes no announcement; `RawTextFormField`'s error line
+is a `Semantics` container with `live_region(LiveSetting::Polite)`, which
+assistive technology reads when it appears. **Unasserted:** no test pins this.
 
-### Pull to refresh is a participant of the scroll channel
+### `Form` carries the form semantics role
 
-`RefreshIndicator` scrolls nothing itself. It wraps its child in a
-`NestedScroll` whose connection takes the remainder a scroll leaf leaves past
-its leading edge (ADR-0209): the scrollables in the child keep their own
-physics, fling, keys and semantics, and the indicator only decides what the
-remainder means. `post_scroll` pulls with `ScrollCause::UserInput` toward the
-start; taking the first delta latches the contact to the indicator, so
-`pre_scroll` gives a reversing finger its pull back before the list could
-move, and the list moves again on the next contact. A list scrolled away
-from its top latches itself, so its drag reaches the top and stops there
-under the default remainder rule, and pulls on within the contact under the
-preset that hands the remainder on at the edge. A fling ends on the extent
-and offers its residual through `post_fling`, which the indicator declines;
-a wheel, a trackpad pan, keys and assistive steps move a scrollable to a
-target clamped to its extents, so they leave no remainder; a bouncing leaf
-keeps its own overscroll. The cause check is the contract's (participants
-decide by cause, ADR-0209 §2): no leaf offers a non-drag remainder past its
-start today, so it guards a future source rather than a present one.
-`released` decides once per contact: at least the threshold refreshes,
-anything less settles back over 200 ms on the ambient `VsyncScope` (at once
-without a clock); a sequence that ends without a
-release — cancelled, given to another gesture, preempted — settles back and
-refreshes nothing.
+**Choice:** `Form` is a semantics container with `SemanticsRole::Form`
+(AccessKit `Role::Form`), so a screen reader can name the group.
+**Tests:** `a_covered_retained_form_stays_absent_after_a_late_controller_update`
+(`tests/semantics.rs`) finds the published `Role::Form` node.
 
-The reveal is not built on `AnchoredDrag`. An anchored drag as an ancestor
-takes every `UserInput` remainder on its axis, wheel and keys included, and
-starts a settle from a fling residual it is offered, so a fling into the top
-would reveal the indicator; its release snaps by velocity, so a fast release
-short of the threshold could land on the refreshing anchor; and while a
-refresh runs the reveal must hold still against pulls. The indicator needs a
-threshold on the contact's travel, a release decision independent of
-velocity, and a refusal while refreshing, which a participant states
-directly.
+### `RawTextField` and `RawTextFormField`, not `TextField` and `TextFormField`
 
-A refresh is `RefreshIntent`, which the indicator binds with its own
-`Actions` above its `GestureAlternatives`; the pull performs the
-alternatives' first command through `CommandHandle` like every other path
-(ADR-0216), after the frame, outside the scroll chain, so the refresh may
-scroll the content it refreshes. `RefreshIntent::command` builds that
-command with F5 and the platform's reload chord, and a first command with
-another intent is reported. Starting commits the refreshing phase before
-`on_refresh` runs, so a reentrant request, a pull, the custom action, a key
-or the control while it runs is refused. The future `on_refresh` returns
-runs on the owner's `AsyncDriver`; the driver polls it at the start of a
-frame, so its completion reaches the next frame and the frame path never
-waits. One refresh runs at a time, as one task. Unmounting drops the task,
-which drops the future unfinished, and leaves the controller idle.
+**Choice:** the theme-free text field and form field are named `RawTextField`
+and `RawTextFormField` so that, with the `material` feature on,
+`flui::prelude::TextField` and `flui::prelude::TextFormField` mean exactly the
+Material types (`flui_material::TextField`, `flui_material::TextFormField`):
+enabling a feature never changes what an existing name resolves to.
 
-`RefreshController` is the caller's view of the phase and the pull; a
-rebuild with another controller hands it the running refresh and the pull
-and leaves the outgoing one idle, and a rebuild with none keeps the current
-one. The overlay is the only part of the indicator that rebuilds while a
-contact pulls; the content rebuilds for its own reasons (a drag gives the
-list the focus). **Tests:** the `refresh_indicator::*` rows of
-`nested_scroll_channel` (release past and short of the threshold, the
-give-back, wheel, trackpad momentum, a fling into the top on both remainder
-rules, cancellation, refresh during refresh by pull, custom action and key,
-completion on the next frame, unmount mid-refresh, the horizontal axis from its reading
-start in both text directions, a
-replaced configuration and the misplaced-command diagnostic);
-the input-path matrix row `refresh_indicator_with_a_visible_control` in
-`gesture_alternatives`;
-`refresh_indicator_spins_while_refreshing` in `activity_indicator`.
+## Scrolling
+
+### Scroll views scroll themselves
+
+`ListView`, `GridView`, `CustomScrollView`, `SingleChildScrollView`, `AnimatedList` and
+`AnimatedGrid` each hold one `ScrollViewConfig` and implement `ScrollView`, whose provided methods
+are the scroll builders; a scroll widget a package writes does the same. Each builds a
+`Scrollable` over a passive viewport: `Scrollable::new` takes the closure that builds the viewport
+from its shared `ScrollPosition`, and `Viewport::new` takes that position, so the gestures, the
+controller and the viewport's committed extents meet in one position. A viewport never owns an
+offset of its own; one that never moves is given `ScrollPosition::fixed`. The axis direction is
+resolved once from the configured axis, `reverse` and the ambient `Directionality`, and the
+scrollable orients its gestures by the same value. `standard_scroll_views_scroll_themselves`
+drags and wheels each of them, forward and reversed, with no `Scrollable` of the caller's.
+
+### A scroll view asks its `ScrollBehavior` what its configuration leaves open
+
+`ScrollViewConfig` holds only what the author said: `physics` and `devices` are `None` until a
+builder sets them. `Scrollable` resolves each open setting by asking the `ScrollBehavior` of the
+nearest `ScrollConfiguration`, or `DefaultScrollBehavior` where there is none, with a
+`ScrollBehaviorDetails` of the `PlatformConvention` it is built under and its axis. The default
+behavior answers `BouncingScrollPhysics` on macOS and iOS, `ClampingScrollPhysics` elsewhere, and
+every pointer kind but the mouse for drags: the mouse scrolls by its wheel and the scrollbar and
+leaves a drag to selection (`the_default_scroll_behavior_leaves_a_mouse_drag_to_selection`). A
+widget with a drag of its own, an `AnchoredDrag` (a sheet, a swipe row), names every device on
+its scrollable. A `ScrollConfiguration` notifies its dependents only when its
+behavior is another `Rc`, and a scrollable keeps the physics it was answered until the behavior,
+the platform or the axis changes, so a rebuild keeps one physics and its owner
+(`a_scroll_view_asks_its_behavior_again_only_when_it_changes`). What the view names wins over the
+behavior (`a_scroll_configuration_answers_what_a_scroll_view_leaves_open`).
+
+Whether a release flings is the drag gesture's question: `DragEndDetails::fling_velocity` is zero
+below `GestureSettings::min_fling_velocity`, and the standard physics fling on any other finite
+velocity, with no threshold of their own. Their coefficients are private and checked by
+`try_new`, which refuses a value outside the open range `(0, 1)` with `ScrollPhysicsError`.
+
+### Programmatic scroll replacement preserves the published velocity
+
+`ScrollController::animate_to` services its command through the existing owning
+scroll driver and `AnimationController::retarget`. A controller already tracking
+the pixel position keeps its sample, velocity and frame origin; only an external
+position write requires synchronization. A target equal to the current position
+short-circuits only at rest. While moving, the driver brakes continuously and
+then settles exactly at that target. Scroll and page controllers accept the same
+`SharedCurve` handle used by `MotionSpec`.
+
+`scrollable_retarget_preserves_the_position_velocity` and
+`scrollable_retarget_at_the_current_position_brakes_continuously` compare mounted
+pixel-position intervals across replacement, then assert the exact final
+position and ended scrolling activity.
 
 ### Scroll resistance and controller attachment ownership
 
@@ -2887,7 +2032,6 @@ then publishes the driver's actual binding state for retained callbacks.
 `viewer_focal_fling_advances_then_stops_on_new_input` covers initial detachment,
 detachment during coast, frame-work drainage and fresh motion after reattachment.
 
-
 ### Wheel precision selects local animation policy
 
 `Scrollable` applies `Precise` and `Unknown` wheel packets immediately, stopping
@@ -2927,6 +2071,71 @@ release or fling. The final release uses that surviving contact's measured
 motion. Other `GestureDetector` consumers keep their selected policy. The public
 row `a_remaining_touch_continues_scroll_without_an_intermediate_fling` observes
 continued pixels before final release and subsequent ballistic progress.
+
+### Terminal inertia uses admitted gesture policy
+
+`Scrollable` and `Dismissible` consume the admitted terminal
+impulse from `DragEndDetails::fling_velocity()` (ADR-0172). Axis selection and
+scroll reversal preserve its sign. The recognizer applies the contact's captured
+minimum and maximum before release; these consumers do not replace that policy
+with a framework default. Scroll physics and dismissal direction/threshold
+rules remain independently authored. Raw measured velocity remains available to
+application callbacks.
+
+`terminal_scroll_motion_uses_the_admitted_fling_profile` observes bounded coast,
+below-minimum rest and fresh-contact recovery after a live profile change.
+They also admit a maximum above the framework baseline and observe the larger
+coasting distance; no second default ceiling constrains the resolved impulse.
+`dismissal_release_uses_its_captured_fling_profile` and
+`vertical_dismissal_release_uses_its_captured_fling_profile` preserve dismissal
+thresholds and the active contact's impulse on both axes.
+
+`InteractiveViewer` seeds focal friction from
+`ScaleEndDetails::focal_fling_velocity()`. Contact Down and native Begin capture
+the release policy; replacing the source before End affects the next sequence.
+Its public interaction callback retains the raw focal measurement in logical
+pixels per second and the separate dimensionless scale velocity.
+`viewer_touch_focal_inertia_uses_the_admitted_profile` and
+`viewer_native_focal_inertia_uses_the_admitted_profile` observe below-minimum
+rest, the captured maximum and fresh-sequence recovery through actual frame
+motion.
+
+### Accepted gesture cancellation does not commit a release action
+
+Accepted drag cancellation still reaches `on_end`, carrying
+`GestureEndReason::Cancelled`; normal release carries `Completed` (ADR-0112).
+Pre-acceptance rejection remains `on_cancel`. Recognizers clear their contact
+before either terminal callback and invoke it without a state lock.
+`horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector`
+observes both reasons and a subsequent contact.
+
+`Scrollable` excludes measured velocity on cancellation. In-range cancellation
+ends activity and resets direction to idle; overscroll uses zero-impulse physics
+recovery, with the existing ambient-vsync requirement. Public rows
+`cancelling_an_in_range_scroll_ends_activity_without_coasting` and
+`cancelling_bouncing_overscroll_settles_without_release_velocity` advance virtual
+frames and then perform a new gesture.
+
+`Dismissible` returns a cancelled drag to its original location, including a
+drag at its full extent: the return replaces the settle the cancellation started,
+and a rest out is acted on only after the frame, when the return already moved
+the card. It applies no dismissal threshold or release velocity. Public horizontal
+and vertical rows `a_cancelled_horizontal_dismiss_restores_the_card` and
+`a_cancelled_vertical_dismiss_restores_the_card` check no dismissal, restored
+hit location and the next completed dismissal in `animation_and_visibility`.
+The row `cancelling_a_fully_slid_card_restores_it_without_dismissal` covers the
+completed-bound bypass through an actual out-of-bounds pointer move.
+A cancelled back swipe restores the still-current route regardless of its
+position or velocity; a route already navigated away retains the existing
+active-route settling policy. The public PageRoute row
+`cancelling_a_back_swipe_past_halfway_keeps_the_route` checks the route, gesture
+counter and next completed swipe.
+
+`InteractiveViewer` clears pan bookkeeping and forwards the reason to
+`InteractionEndDetails`. Discrete wheel and panzoom updates synthesize
+`Completed`, without claiming a physical pointer release.
+`viewer_reports_cancelled_then_completed_interactions` checks what the public
+callback observes. Cancellation stops focal inertia without a release impulse.
 
 ### Every offset change is a step of the nested scroll channel
 
@@ -3076,7 +2285,6 @@ of its own refuses the settle and is settled by that contact's release. Rows: th
 `nested_scroll::caught::*` rows and the caught-pager cases of
 `participant_panic_consumes_all_and_next_sequence_recovers`.
 
-
 A connection that two snapshots of one contact share (a press holding a moving list and
 the list moving it) hears the sequence start once and end once: the chain node counts the
 snapshots holding each live sequence. A fling whose steps participants took part of still
@@ -3156,7 +2364,7 @@ Under reduced motion a tap or a step jumps the pager rather than animating it. T
 `tests/page_indicator.rs`.
 
 The `nested_scroll_channel` table holds the channel's rows, each scripted for touch
-and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,
+and mouse, and the `nested_fling_*` and `show_on_screen_*` rows ADR-0209 keeps (both axes, reversal,
 local bounce, nearest willing parent, same-controller rebuild, replacement,
 equal-edge cancellation, custom physics failure and fresh gesture recovery).
 `steady_state_dispatch_through_several_links_allocates_nothing` pins allocation-free
@@ -3165,6 +2373,157 @@ leaf takes the step and while its remainder climbs to the outer scrollable. It i
 test because the chain and the scroll owner are private; a mounted tree's pointer path
 allocates for reasons of its own, so a test through the widgets would not isolate the
 channel.
+
+### A scrollbar observes the scroll view nearest below it
+
+`Scrollbar` installs a scroll observer scope over its child; the `Scrollable` at depth zero
+below it (no other scroll view between them, found by comparing the nearest
+`ScrollPositionScope` each side sees) attaches its position and axis direction, re-attaches
+when its controller changes and detaches on unmount. The bar paints as a `CustomPaint`
+foreground whose repaint source is the position and the fade, so a scroll frame repaints and
+builds no element. Its painter takes the hit over the thumb and track, which keeps the scroll
+view's own drag out of the arena there; the bar takes every device, moves the position by
+`jump_to` (cancelling a running animation first), pages the track by 0.8 of the viewport and
+hands a wheel tick that reaches it to the scrollable's own wheel handling (through the
+controller's hooks), so a tick over the bar moves as far, through the same nested chain, as
+one over the content. A `ScrollBehavior` adds a bar through
+`build_scrollbar`, except over a scroll view an explicit bar above already follows. The
+`scrollbar` contract rows (`tests/scrollbar.rs`) pin geometry on both axes, RTL, reverse and
+overscroll, zero rebuilds per scroll frame, thumb drag by mouse and touch, paging, the fade
+under full and reduced motion, the nesting rule and the behavior's bar.
+
+### Pull to refresh is a participant of the scroll channel
+
+`RefreshIndicator` scrolls nothing itself. It wraps its child in a
+`NestedScroll` whose connection takes the remainder a scroll leaf leaves past
+its leading edge (ADR-0209): the scrollables in the child keep their own
+physics, fling, keys and semantics, and the indicator only decides what the
+remainder means. `post_scroll` pulls with `ScrollCause::UserInput` toward the
+start; taking the first delta latches the contact to the indicator, so
+`pre_scroll` gives a reversing finger its pull back before the list could
+move, and the list moves again on the next contact. A list scrolled away
+from its top latches itself, so its drag reaches the top and stops there
+under the default remainder rule, and pulls on within the contact under the
+preset that hands the remainder on at the edge. A fling ends on the extent
+and offers its residual through `post_fling`, which the indicator declines;
+a wheel, a trackpad pan, keys and assistive steps move a scrollable to a
+target clamped to its extents, so they leave no remainder; a bouncing leaf
+keeps its own overscroll. The cause check is the contract's (participants
+decide by cause, ADR-0209 §2): no leaf offers a non-drag remainder past its
+start today, so it guards a future source rather than a present one.
+`released` decides once per contact: at least the threshold refreshes,
+anything less settles back over 200 ms on the ambient `VsyncScope` (at once
+without a clock); a sequence that ends without a
+release — cancelled, given to another gesture, preempted — settles back and
+refreshes nothing.
+
+The reveal is not built on `AnchoredDrag`. An anchored drag as an ancestor
+takes every `UserInput` remainder on its axis, wheel and keys included, and
+starts a settle from a fling residual it is offered, so a fling into the top
+would reveal the indicator; its release snaps by velocity, so a fast release
+short of the threshold could land on the refreshing anchor; and while a
+refresh runs the reveal must hold still against pulls. The indicator needs a
+threshold on the contact's travel, a release decision independent of
+velocity, and a refusal while refreshing, which a participant states
+directly.
+
+A refresh is `RefreshIntent`, which the indicator binds with its own
+`Actions` above its `GestureAlternatives`; the pull performs the
+alternatives' first command through `CommandHandle` like every other path
+(ADR-0216), after the frame, outside the scroll chain, so the refresh may
+scroll the content it refreshes. `RefreshIntent::command` builds that
+command with F5 and the platform's reload chord, and a first command with
+another intent is reported. Starting commits the refreshing phase before
+`on_refresh` runs, so a reentrant request, a pull, the custom action, a key
+or the control while it runs is refused. The future `on_refresh` returns
+runs on the owner's `AsyncDriver`; the driver polls it at the start of a
+frame, so its completion reaches the next frame and the frame path never
+waits. One refresh runs at a time, as one task. Unmounting drops the task,
+which drops the future unfinished, and leaves the controller idle.
+
+`RefreshController` is the caller's view of the phase and the pull; a
+rebuild with another controller hands it the running refresh and the pull
+and leaves the outgoing one idle, and a rebuild with none keeps the current
+one. The overlay is the only part of the indicator that rebuilds while a
+contact pulls; the content rebuilds for its own reasons (a drag gives the
+list the focus). **Tests:** the `refresh_indicator::*` rows of
+`nested_scroll_channel` (release past and short of the threshold, the
+give-back, wheel, trackpad momentum, a fling into the top on both remainder
+rules, cancellation, refresh during refresh by pull, custom action and key,
+completion on the next frame, unmount mid-refresh, the horizontal axis from its reading
+start in both text directions, a
+replaced configuration and the misplaced-command diagnostic);
+the input-path matrix row `refresh_indicator_with_a_visible_control` in
+`gesture_alternatives`;
+`refresh_indicator_spins_while_refreshing` in `activity_indicator`.
+
+### `CollapsingHeader` sits above its body and moves through the channel
+
+**Choice:** the header is a `Column` of the header box and the body, not an overlay: the
+body is laid out in what the header leaves, so the header can never cover a row, and a row
+that keyboard or assistive focus moves onto is revealed by the body's own scrollable (WCAG
+2.4.11 holds by construction rather than by an obscured-inset every reveal must subtract).
+The header box lays its content out at the expanded extent from the top and clips it to the
+current one. Its collapse is a `NestedScrollConnection` (`HeaderModel`) put above the body
+with `NestedScroll`: a positive vertical step collapses it, a negative one expands it, each
+in `pre_scroll` (`HeaderOrder::BeforeContent`) or `post_scroll` (`AfterContent`, so the
+channel's latch decides whether the remainder at the content's edge reaches it within the
+sequence or only on the next one). It takes `UserInput`, `Momentum` and `SideEffect` steps,
+so a fling collapses it with the run's own deltas under the releasing sequence, and never a
+`Programmatic` one, so a reveal or a controller jump moves the content alone. A fling
+residual the content leaves at its edge is accepted only where the header takes that
+direction after the content; it coasts under `ClampingScrollPhysics`, or settles through the
+snap policy. With a `SnapPolicy` the header settles once no sequence that reached it is still
+live, at the velocity of the release that ended the last one, unless that one ended
+`Preempted`; the policy sees the collapse as a scroll over `0..expanded - collapsed` with a
+viewport of that length, so `PageSnap::new(ViewportFraction::FULL)` rests on either end. Settles share the
+scroll owner's snap spring (`settle_spring`, `snap_target`) and run on an unbounded
+controller whose value is the collapse offset; user input stops them; without a
+`VsyncScope` a settle jumps to where it would rest.
+
+For assistive technology the header is a labelled `Banner` landmark. ARIA admits
+`aria-expanded` on controls only, so the banner has no expanded state: its `ScrollUp`
+expands and its `ScrollDown` collapses (the Android app bar's precedent), each offered only
+where it moves the header. A `ScrollIntoView` reaching the banner for content it clips in
+part expands it; content it clips entirely is not published. Equal extents give a header that
+takes nothing and offers no scroll action; `HeaderExtents::try_new` refuses extents that are not
+finite, negative, past `HeaderExtents::MAX` or inverted. Vertical only: a horizontal header
+(and its RTL reading) is not built. The header takes no `GestureAlternatives`: its collapse is
+what scrolling the body does, never an operation, and what it clips stays reachable by the
+banner's scroll actions, the focus reveal and the body's scroll keys, which these rows pin
+(ADR-0216 §1). **Tests:** the `collapsing_header_*` rows of `nested_scroll_channel`.
+
+### Floating header snap ownership
+
+Floating headers share scroll-edge state between their activity listener and
+build through an owner-local cell. The listener commits the latest command
+before requesting a rebuild; neither a borrow nor a lock spans that request.
+Command epochs refuse permanently at exhaustion and retain the last admitted
+command, verified by `exhausted_snap_epochs_never_reissue_a_command` with a
+private counter seed.
+
+The host owns its snap controller and rebinds it through lifecycle dependency
+changes. `an_active_floating_snap_migrates_and_unmounts` exercises floating and
+pinned-floating headers through real pointer release, checks continuous reveal
+across a registry replacement, advances the unfinished snap from the new registry,
+and removes the subtree while it is active. Removal withdraws frame registration
+and prevents later delegate builds.
+`unmounting_a_floating_header_mid_snap_cancels_the_snap` retains the original
+future through the host's actual disposal method and checks immediate cancellation,
+withdrawal before the continuation, reentrant registration and repeated disposal.
+This private seam is necessary because the renderer discards the future returned
+when starting the snap; the public mounted case separately proves the gesture and
+unmount entry points.
+
+### Sliver fade owns a stable animation proxy
+
+`SliverFadeTransition` connects `RenderSliverAnimatedOpacity` to a sliver view.
+Its existing `ProxySlot` retargets source identity without replacing the render
+object or its listener. The caller owns the animation run; render subscriptions
+end at detach or owner release. Opacity changes leave scroll geometry unchanged.
+`sliver_fade_keeps_geometry_and_retargets_paint_and_semantics` observes submitted
+layer alpha, zero-opacity semantics, retained identity, replacement, stale source
+silence and source retirement after unmount through a real viewport.
 
 ### `AnchoredDrag` is a `Scrollable` whose pixels are the drag's offset
 
@@ -3188,7 +2547,7 @@ moves it (`UserInput` only), their release (or, without one, the end of their se
 settles it with `ScrollOwner::settle_from_inside` under the same sequence id in its own chain,
 and a fling residual it was not already settling for starts that settle; each call is a pass on
 its owner, which is no link of the inner chain, so a request made from it waits for the call to
-return. The channel's own settle of the scrollables a sequence moved (above) does not replace
+return. The channel's own settle of the scrollables a sequence moved does not replace
 this: the drag as an ancestor is a connection with rules of its own (user input only, a fling
 settles it). Replacing the anchors commits the set, hands the new
 policy to the owner in place and, unless a contact holds the child, animates it onto the
@@ -3214,39 +2573,6 @@ listenable, which hears each move as the drag publishes it, before the frame tha
 `anchored_drag_is_a_tab_stop_and_a_named_slider` and
 `anchored_drag_offset_listenable_follows_every_move`; `dismissible_slides_without_rebuilding_per_frame`
 pins the rebuild-free motion.
-
-### `Dismissible` and `SwipeActions` are swiped rows over one `AnchoredDrag`
-
-**Choice:** both live in the `swipe` module, in a layer of its own above `context_menu`,
-`scroll` and `navigator`. They compose `AnchoredDrag` (in `scroll`), so they could not stay in
-`interaction` below it; above `context_menu`, a swipe row composes the theme-free menu as a
-`ContextMenuArea` around itself (`SwipeAlternative::ContextMenu`), while a design package
-passes its own presenter (`SwipeAlternative::PresentedMenu`, as a `MenuSpec` takes one). No
-presenter is injected downward and `interaction` names no menu.
-
-A row's stops are an `AnchoredDragController` over a closed set: closed, the leading and the
-trailing actions (`SwipeActions`, `ACTION_EXTENT` per action), and out at the row's committed
-extent (a full swipe, or a `Dismissible`'s dismissal, which settles through a threshold
-policy instead of the nearest anchor: out past the side's threshold or on a fling toward it).
-The extent is read when a contact goes down, through a `SubtreeAnchor` around the row. A rest
-out is acted on after the frame that shows it and checked again then: a full swipe returns the
-row to closed before its command runs (a command that panics or removes the row leaves no row
-open), a dismissal collapses; a fling toward a side whose threshold is `1.0` settles back,
-however far its spring carries the card. A
-cancelled drag returns the row to the stop its contact found it on, replacing the settle the
-cancellation started, so a cancel never dismisses or performs. What lies behind the content
-(a dismissal's background, the uncovered edge's action buttons, fixed at the edge) is mounted
-while that edge is uncovered and rebuilt only when the uncovered edge changes. The commands
-are the row's `GestureAlternatives`: one custom action each, their keys while focus is in the
-row (a Tab stop), and the single-pointer alternative; the drag's own slider is withheld. A
-touch that goes down in the window's system-gesture strip (`swipe_edge_width` at either end
-of the axis, from `MediaQuery`'s size) is refused by the drag's admission and left to the
-operating system's edge swipe and a navigator's swipe back; a row never publishes a system
-gesture exclusion. **Tests:** the `swipe_actions_*` rows of `nested_scroll_channel`, the
-`dismissible::*` rows of `animation_and_visibility`, the matrix rows
-`swipe_actions_with_visible_controls`, `swipe_actions_with_a_presented_menu` and
-`swipe_actions_with_the_plain_context_menu`, and the anchored-leaf rows of flui-testing's
-ownership table.
 
 ### `InteractiveViewer` is a channel leaf that is no scrollable
 
@@ -3299,233 +2625,427 @@ the `interactive_viewer::viewer_*` rows of `pointer_and_gesture_recognition`; an
 `interactive_viewer_with_zoom_controls` and `interactive_viewer_with_pan_controls` in
 `gesture_alternatives`.
 
-### `CollapsingHeader` sits above its body and moves through the channel
+### A carousel is a `Scrollable` over keylines, and every move goes through its position
 
-**Choice:** the header is a `Column` of the header box and the body, not an overlay: the
-body is laid out in what the header leaves, so the header can never cover a row, and a row
-that keyboard or assistive focus moves onto is revealed by the body's own scrollable (WCAG
-2.4.11 holds by construction rather than by an obscured-inset every reveal must subtract).
-The header box lays its content out at the expanded extent from the top and clips it to the
-current one. Its collapse is a `NestedScrollConnection` (`HeaderModel`) put above the body
-with `NestedScroll`: a positive vertical step collapses it, a negative one expands it, each
-in `pre_scroll` (`HeaderOrder::BeforeContent`) or `post_scroll` (`AfterContent`, so the
-channel's latch decides whether the remainder at the content's edge reaches it within the
-sequence or only on the next one). It takes `UserInput`, `Momentum` and `SideEffect` steps,
-so a fling collapses it with the run's own deltas under the releasing sequence, and never a
-`Programmatic` one, so a reveal or a controller jump moves the content alone. A fling
-residual the content leaves at its edge is accepted only where the header takes that
-direction after the content; it coasts under `ClampingScrollPhysics`, or settles through the
-snap policy. With a `SnapPolicy` the header settles once no sequence that reached it is still
-live, at the velocity of the release that ended the last one, unless that one ended
-`Preempted`; the policy sees the collapse as a scroll over `0..expanded - collapsed` with a
-viewport of that length, so `PageSnap::new(ViewportFraction::FULL)` rests on either end. Settles share the
-scroll owner's snap spring (`settle_spring`, `snap_target`) and run on an unbounded
-controller whose value is the collapse offset; user input stops them; without a
-`VsyncScope` a settle jumps to where it would rest.
+`Carousel` is a horizontal `Scrollable` whose viewport holds one `SliverCarousel`; the
+geometry both read is `CarouselGeometry` (keylines measured against the viewport, spacing and
+count), so the sliver, the snap policy and the controller agree on where every item rests by
+one computation. A `CarouselController` move and an autoplay step are programmatic scrolls of
+that position, so any user input takes over from them; `KeylineSnap` selects the
+`SnapPolicy` the carousel installs, and `SingleAdvance` counts its one item from the item at
+the start of the drag (`SnapPolicy::target_from`, which `ScrollOwner` passes the contact's
+starting offset), so a long drag still moves one item. The active item is recomputed from
+the scroll listener and delivered after the frame, as `PageView` delivers pages ("`PageView`
+reports page changes after the frame, in order"), with no borrow held, so
+`on_index_changed` may move or unmount the carousel. A wrap from the last item to the first
+scrolls back over the items between, and each is active on the way.
 
-For assistive technology the header is a labelled `Banner` landmark. ARIA admits
-`aria-expanded` on controls only, so the banner has no expanded state: its `ScrollUp`
-expands and its `ScrollDown` collapses (the Android app bar's precedent), each offered only
-where it moves the header. A `ScrollIntoView` reaching the banner for content it clips in
-part expands it; content it clips entirely is not published. Equal extents give a header that
-takes nothing and offers no scroll action; `HeaderExtents::try_new` refuses extents that are not
-finite, negative, past `HeaderExtents::MAX` or inverted. Vertical only: a horizontal header
-(and its RTL reading) is not built. The header takes no `GestureAlternatives`: its collapse is
-what scrolling the body does, never an operation, and what it clips stays reachable by the
-banner's scroll actions, the focus reveal and the body's scroll keys, which these rows pin
-(ADR-0216 §1). **Tests:** the `collapsing_header_*` rows of `nested_scroll_channel`.
+Autoplay is a timer bound to the frame clock only while it may run (a `TickerMode` that moves,
+motion not reduced); a pause stops it without releasing it. A timer with no frame clock settles
+at once, so a step checks that the timer is still bound before it restarts it; otherwise reduced
+motion would step every frame. The pause control is drawn by the carousel, theme-free like the
+gesture menu, as the first item of its column, and pressing it, focus within the carousel, a
+press, a hover or the app leaving the front pause it until the control or
+`CarouselController::resume`, as does a screen reader's cursor entering an item
+(`Semantics::on_assistive_focus_within`) on a platform that reports the cursor
+([Accessibility bridge fidelity](../../docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)
+says which do). `carousel::reduced_motion_stops_autoplay_and_moves_at_once`,
+`carousel::single_advance_moves_one_item_from_where_the_drag_began` and
+`carousel::index_changes_are_heard_once_each` pin the three.
 
-### Shown focus is revealed through the scopes above it
+### `PageView` reports page changes after the frame, in order
 
-**Choice:** a `Focus` whose node takes the primary focus while focus is shown
-(`FocusNode::has_visible_focus`: traversal, assistive focus, or a key since the last pointer
-press) hands its measured rectangle to the nearest crate-private `FocusRevealScope`
-(`interaction/focus_reveal.rs`) on that edge; a node not laid out yet reveals nothing. A
-`Scrollable` is such a scope: it moves by the semantic mover with `ScrollCause::Programmatic`
-(so the move is a step of the channel, and a snap policy still rests it on a page), then hands
-the rectangle, shifted by what actually moved and clipped to its viewport (its own focus
-node's rectangle), to the scope above; a `CollapsingHeader` expands for content it clips and
-hands on the same way. The handed-on rectangle is the target's visible part rather than
-ADR-0168's whole inner viewport, so an inner viewport taller than the outer one does not pull
-the outer one off the focused row. All rectangles come from the last layout, which each
-scope's own move does not change for the scopes above. Each scope's move is a programmatic
-sequence of its own through its own chain, never a remainder of the move below it (ADR-0209
-§3). **Tests:** `collapsing_header_reveals_focused_row_from_tab_and_assistive_request`,
-`a_nested_reveal_moves_each_ancestor_in_a_sequence_of_its_own`.
+**Choice:** the controller's listener is `Send + Sync` (a foundation
+`ListenerCallback`) and cannot hold the owner-local callback or its writer. It
+keeps the synchronous `round(page)` dedupe, records the page (when a callback is
+installed) and schedules the page view's rebuild. `build` hands every recorded page to the local post-frame
+lane, one entry per page. Each entry holds only a weak reference to the
+state's delivery target and runs the callback current at that moment inside
+a write the state's `WriterSource` opens. So the callback runs after the
+frame that next rebuilds the page view (one frame later for a
+change seen during input; two for one seen during layout, whose rebuild
+lands in the next frame), never inside a build, with every page a frame
+recorded in order. A page recorded before a rebuild reaches the rebuilt
+callback. A page view unmounted before its rebuild records nothing to the
+lane, and one unmounted after its rebuild queued a page fails the upgrade,
+because `finalize_tree` drops the state before the lane runs; either way it
+delivers nothing. Without a post-frame lane the pages are dropped with a
+warning. A callback that panics loses only its own page, and the panic
+leaves the frame on the post-frame lane rather than from inside a scroll
+listener; the pages after it run on the next frame. The
+same accepted latency as `AnimatedSize` and `Dismissible`. **Tests:**
+`tests/page_view_events.rs`.
 
-### Terminal inertia uses admitted gesture policy
+### Animated lists diff by key and keep leaving items in place
 
-`Scrollable` and `Dismissible` consume the admitted terminal
-impulse from `DragEndDetails::fling_velocity()` (ADR-0172). Axis selection and
-scroll reversal preserve its sign. The recognizer applies the contact's captured
-minimum and maximum before release; these consumers do not replace that policy
-with a framework default. Scroll physics and dismissal direction/threshold
-rules remain independently authored. Raw measured velocity remains available to
-application callbacks.
+`AnimatedList`, `AnimatedGrid` and `SliverAnimatedList` share one stateful
+sliver and one keyed diff (`scroll/animated_list/roster.rs`). Keys are computed
+once, when the view is constructed, and a duplicate panics there with a `BUG:`
+message naming it. The merge keeps every new item in its new order and files
+each dropped key right after the key that preceded it, so a leaving item holds
+an index slot beside its old neighbour; the lazy builder and the key lookup
+both count it. Each entry owns a driver for its presence (`Trigger::Controller`
+of an `Animate::transition`), so a key returning mid-exit reverses the same run
+along the exit's effects, and its keyed element (the salted repaint boundary
+over a keyed wrapper) is reclaimed wherever it now sits. Only the item builder
+captured when the item was last present renders a leaving entry: the caller
+rebuilds nothing. An exit that cannot run (already absent, or refused) is
+dismissed at once rather than left in the roster. The dismissal callback only
+sets a flag and schedules a rebuild; `build` sweeps dismissed entries and drops
+them after the roster borrow ends, each withdrawing its driver even during an
+unwind. Placement is the sliver's FLIP (`flui-objects`, "Lazy slivers slide a
+moved child only across a roster change"); the state advances its generation
+whenever order or membership changes, a sweep included, so the followers of a
+dropped item slide up.
 
-`terminal_scroll_motion_uses_the_admitted_fling_profile` observes bounded coast,
-below-minimum rest and fresh-contact recovery after a live profile change.
-They also admit a maximum above the framework baseline and observe the larger
-coasting distance; no second default ceiling constrains the resolved impulse.
-`dismissal_release_uses_its_captured_fling_profile` and
-`vertical_dismissal_release_uses_its_captured_fling_profile` preserve dismissal
-thresholds and the active contact's impulse on both axes.
+A staggered entrance (`stagger(effects, stagger)`) plays for the items the list
+mounts with, while the mount frame's window is open; a post-frame callback
+closes it, so an item first scrolled in later rests rather than waiting out a
+stagger delay for its index. Rows `a_removed_item_plays_its_exit_and_then_drops`,
+`a_key_returning_mid_exit_reclaims_its_element`,
+`swapped_items_slide_between_their_places`, `a_duplicate_key_panics_naming_it`,
+`an_item_entering_the_band_takes_its_place_without_sliding`,
+`a_resized_item_moves_its_followers_at_once`,
+`reduced_motion_lands_every_change_on_the_next_frame`,
+`grid_tiles_slide_between_cells`,
+`a_staggered_list_mounts_its_items_one_after_another` and
+`a_panicking_item_drop_leaves_the_list_working` pin these through mounted trees.
 
-`InteractiveViewer` seeds focal friction from
-`ScaleEndDetails::focal_fling_velocity()`. Contact Down and native Begin capture
-the release policy; replacing the source before End affects the next sequence.
-Its public interaction callback retains the raw focal measurement in logical
-pixels per second and the separate dimensionless scale velocity.
-`viewer_touch_focal_inertia_uses_the_admitted_profile` and
-`viewer_native_focal_inertia_uses_the_admitted_profile` observe below-minimum
-rest, the captured maximum and fresh-sequence recovery through actual frame
-motion.
+## Reorderable lists and swipe rows
 
-### Accepted gesture cancellation does not commit a release action
+### A reorderable row is a drag session over its own list's rows
 
-Accepted drag cancellation still reaches `on_end`, carrying
-`GestureEndReason::Cancelled`; normal release carries `Completed` (ADR-0112).
-Pre-acceptance rejection remains `on_cancel`. Recognizers clear their contact
-before either terminal callback and invoke it without a state lock.
-`horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector`
-observes both reasons and a subsequent contact.
+`ReorderableList` moves nothing itself. A row's move is a drag-and-drop session
+that stays in the window (`DragReach::Window`), carrying the row's list and its
+model key. Every row is a `DropTarget` that accepts only drags of its own list,
+so the row under the pointer says where a drop lands. The drop reports one
+`Reorder` with `to` counted after the item leaves `from`, and the app moves the
+item and rebuilds. Rows are keyed by the model key, so the element, the state
+and the focus follow the item.
 
-`Scrollable` excludes measured velocity on cancellation. In-range cancellation
-ends activity and resets direction to idle; overscroll uses zero-impulse physics
-recovery, with the existing ambient-vsync requirement. Public rows
-`cancelling_an_in_range_scroll_ends_activity_without_coasting` and
-`cancelling_bouncing_overscroll_settles_without_release_velocity` advance virtual
-frames and then perform a new gesture.
+The handle drags on the list's axis (`MultiDragAxis`), which makes it the
+innermost same-axis member over the list's scroll, so it wins the contact
+(ADR-0208 §2). The drag then follows the pointer freely. Its whole box takes
+the press. On touch and pen a long press on the row drags it too; the row's
+menu hold hands the contact to the drag, and anything deeper that wants the
+long press (a `SelectionArea`) wins it. The default handle sits at the reading
+start, because keyboard focus reveals the row's menu control at the trailing
+edge. A drag shows the row's label, a plate of the row's size when it has
+none, or what `feedback` builds, never the row's content built again: that
+would mount a second copy of what the row owns alone.
 
-`Dismissible` returns a cancelled drag to its original location, including a
-drag at its full extent: the return replaces the settle the cancellation started,
-and a rest out is acted on only after the frame, when the return already moved
-the card. It applies no dismissal threshold or release velocity. Public horizontal
-and vertical rows `a_cancelled_horizontal_dismiss_restores_the_card` and
-`a_cancelled_vertical_dismiss_restores_the_card` check no dismissal, restored
-hit location and the next completed dismissal in `animation_and_visibility`.
-The row `cancelling_a_fully_slid_card_restores_it_without_dismissal` covers the
-completed-bound bypass through an actual out-of-bounds pointer move.
-A cancelled back swipe restores the still-current route regardless of its
-position or velocity; a route already navigated away retains the existing
-active-route settling policy. The public PageRoute row
-`cancelling_a_back_swipe_past_halfway_keeps_the_route` checks the route, gesture
-counter and next completed swipe.
+The moves are commands on the row (ADR-0216 §2): a context menu that the
+handle's tap and every menu trigger open, or visible controls when the list
+asks for them. The row's own `Shortcuts` bind Alt with the arrows, Home and
+End. Every move, dropped or commanded, is announced with the row's name and new
+position. The list has roving focus (`ListView::focusable`), whose row marker
+pins the focused row, so a row moved far down a lazy list keeps its focus.
+Rows `a_handle_drag_reports_one_move_counted_after_removal`,
+`a_touch_long_press_drags_a_row_and_a_mouse_needs_the_handle`,
+`a_drag_that_does_not_drop_moves_nothing`,
+`the_preview_follows_the_drag_over_the_rows`,
+`the_move_commands_move_a_row_and_announce_it`,
+`a_dragged_row_scrolled_out_of_the_band_still_drops`,
+`a_long_press_on_selectable_text_selects_and_the_handle_still_drags`,
+`moving_a_row_to_the_end_of_a_long_list_keeps_its_focus` and the matrix row
+`reorderable_list` pin these.
 
-`InteractiveViewer` clears pan bookkeeping and forwards the reason to
-`InteractionEndDetails`. Discrete wheel and panzoom updates synthesize
-`Completed`, without claiming a physical pointer release.
-`viewer_reports_cancelled_then_completed_interactions` checks what the public
-callback observes. Cancellation stops focal inertia without a release impulse.
+`ReorderableGrid` is the same session over a `GridView`'s tiles, one module and one
+row type with the list. Its moves add the two arrows across its rows, and a row's width
+and order are read where they are decided: the grid wraps the app's delegate in one that
+records each layout it gives (tiles per row, and whether either axis runs against the
+screen), so the commands move by the rows on screen after a width change or in a
+right-to-left locale, and no column count is configured apart from the delegate. A tile's
+handle drags it any way (`MultiDragAxis::Free`), and `PanClaim::None` around it keeps the
+contact from the grid's scroll, which would otherwise take a free drag's motion along its
+axis (ADR-0208 rule 1). The default handle sits in a band above the tile's content. Rows
+`a_tile_dragged_by_its_handle_moves_onto_another_tile`,
+`the_grid_moves_go_along_a_row_and_by_a_row`,
+`the_row_moves_follow_the_rows_the_grid_lays_out` and the matrix row `reorderable_grid` pin
+these.
 
+### A drag's rows make room, and its item lands
 
-### Text-store exact points use source scalar intervals in either direction
+While a drag runs, the list shows its rows in a second order: the order of the model
+with the first running drag's item moved to where a drop would put it. That item's row
+stays mounted and laid out as the gap, painted at zero opacity through a wrapper every
+row has, so a row keeps its element and state when it becomes the gap and when it lands.
+A row under the pointer puts the item at its own place in that order, and the rows
+between make room. The row that just moved is not heard again until another row reports,
+because it slides away under a pointer that stays still; a move over the space after the
+last row keeps the gap where it is, and a drop there takes it.
 
-`TextStoreRead::index_at_point(Exact)` tests the interval between consecutive
-source-scalar carets using its minimum and maximum x coordinate. An RTL pair
-therefore names its source scalar rather than being treated as outside the text.
-This retains the per-scalar caret contract; it does not introduce a visual-run
-hit topology for discontinuous mixed-bidi ranges. `Nearest` remains a boundary
-query. **Test:** `rtl_scalar_rect_midpoints_resolve_to_the_source_scalar`.
+Every slide is one FLIP placement (`flui_objects::Placement`, as `SliverAnimatedList`
+uses it): a placement record per item, kept by key across builds, one 250 ms clock for
+the list, and a generation the list advances whenever the order shown changes, a drop or
+command included. A row whose laid-out place changed is painted from where it was and
+slides to where it is. A drop or cancel adds one push to the dragged item's record
+(`PlacementSlot::displace`): the distance from the row's painted place to where the
+proxy was let go, read before the end is laid out, so the row lands from there on the
+same clock. The proxy is the drag's feedback, dressed by `proxy_decorator` with a 150 ms
+lift (elevation 6 and 102 % by default); it lifts from the row's box, not from the
+handle, because `Draggable`'s feedback frame adds the handle's place in the row to the
+grab. `on_reorder` runs at once on a drop, before the landing, and the landing follows the
+item's key, so the app's rebuild carries the same row. Every clock binds to the
+presentation's frame registry, so under reduced motion the lift, the room, the landing
+and a command's slide land on their next frame. A list that unmounts disposes its clocks,
+and the drag's own unmount takes the proxy with it in the same frame. Rows
+`a_dragged_row_lifts_and_the_rows_make_room`,
+`a_dropped_row_lands_from_where_it_was_let_go`,
+`a_cancelled_drag_returns_the_row_to_its_place`, `a_move_command_slides_the_rows`,
+`reduced_motion_moves_the_rows_at_once`, `a_drag_that_does_not_drop_moves_nothing` and
+`a_dragged_tile_makes_room_across_the_rows` pin these.
 
-### Selection dragging belongs to the mounted field and its contact
+### `Dismissible` and `SwipeActions` are swiped rows over one `AnchoredDrag`
 
-`EditableText` retains the source anchor and typed contact in its state. A
-same-controller configuration rebuild preserves that drag; only the first active
-contact can move or terminate it. Disablement, actual controller replacement and
-disposal retire it. Double-tap word selection deliberately takes over and clears
-ordinary drag tracking. Admission precedes focus callbacks; a callback that
-retires the contact prevents the subsequent caret write.
-**Tests:** `selection_drag_survives_a_same_controller_rebuild`,
-`foreign_release_preserves_the_selection_contact`,
-`foreign_cancel_preserves_the_selection_contact`,
-`disabling_the_field_retires_its_selection_contact`,
-`replacing_the_controller_retires_the_old_selection_contact`.
+**Choice:** both live in the `swipe` module, in a layer of its own above `context_menu`,
+`scroll` and `navigator`. They compose `AnchoredDrag` (in `scroll`), so they could not stay in
+`interaction` below it; above `context_menu`, a swipe row composes the theme-free menu as a
+`ContextMenuArea` around itself (`SwipeAlternative::ContextMenu`), while a design package
+passes its own presenter (`SwipeAlternative::PresentedMenu`, as a `MenuSpec` takes one). No
+presenter is injected downward and `interaction` names no menu.
 
-### Non-IME splices collapse after the resulting grapheme
+A row's stops are an `AnchoredDragController` over a closed set: closed, the leading and the
+trailing actions (`SwipeActions`, `ACTION_EXTENT` per action), and out at the row's committed
+extent (a full swipe, or a `Dismissible`'s dismissal, which settles through a threshold
+policy instead of the nearest anchor: out past the side's threshold or on a fling toward it).
+The extent is read when a contact goes down, through a `SubtreeAnchor` around the row. A rest
+out is acted on after the frame that shows it and checked again then: a full swipe returns the
+row to closed before its command runs (a command that panics or removes the row leaves no row
+open), a dismissal collapses; a fling toward a side whose threshold is `1.0` settles back,
+however far its spring carries the card. A
+cancelled drag returns the row to the stop its contact found it on, replacing the settle the
+cancellation started, so a cancel never dismisses or performs. What lies behind the content
+(a dismissal's background, the uncovered edge's action buttons, fixed at the edge) is mounted
+while that edge is uncovered and rebuilt only when the uncovered edge changes. The commands
+are the row's `GestureAlternatives`: one custom action each, their keys while focus is in the
+row (a Tab stop), and the single-pointer alternative; the drag's own slider is withheld. A
+touch that goes down in the window's system-gesture strip (`swipe_edge_width` at either end
+of the axis, from `MediaQuery`'s size) is refused by the drag's admission and left to the
+operating system's edge swipe and a navigator's swipe back; a row never publishes a system
+gesture exclusion. **Tests:** the `swipe_actions_*` rows of `nested_scroll_channel`, the
+`dismissible::*` rows of `animation_and_visibility`, the matrix rows
+`swipe_actions_with_visible_controls`, `swipe_actions_with_a_presented_menu` and
+`swipe_actions_with_the_plain_context_menu`, and the anchored-leaf rows of flui-testing's
+ownership table.
 
-`TextEditingController::insert_str` moves its collapsed caret forward to the
-next ICU extended-grapheme boundary of the resulting document. Inserted bytes
-can join a following combining mark, and deleting a selected separator can join
-regional indicators; neither leaves Backspace starting inside the new cluster.
-Raw text-store/IME scalar selection remains exact under ADR-0090.
-**Tests:** `insertion_keeps_the_caret_after_the_joined_combining_cluster`,
-`deleting_a_separator_keeps_the_caret_after_the_joined_flag`.
+### Gesture release retains the painted position
 
-### Async images probe their provider and let the image cache keep the images
+Dismissible moves content through its `AnchoredDrag`'s layer-patched
+translation; an offset listener rebuilds only when the uncovered side, and so
+the background, changes. An owner-local event source snapshots `on_update`
+payloads independently of build and delivers them through the existing
+post-frame lane using the latest callback. Its configuration contains only
+direction, threshold and extent data, and the offset listener retains a weak
+route to that source; updates are accepted as the drag publishes its moves, so
+a callback accepted before those moves runs first. Collapse remains a layout
+phase with its own rebuilds. `dismissible_slides_without_rebuilding_per_frame`
+uses public frame reports for drag and return frames on both axes and signs,
+and verifies that update events continue on each moving frame.
+`dismissal_updates_follow_owner_lifetime` queues several pointer updates before
+one frame and verifies ordered delivery through writable event contexts,
+callback replacement, cancellation on unmount, and accepted tail delivery
+after a callback panic. Capture retirement during configuration replacement
+follows lifecycle substitution; retirement by the last queued event follows
+post-frame propagation. Neither path delivers updates to the removed actor.
+The same table verifies the original failure, competing post-frame failures,
+healthy tail delivery and fresh drag input after recovery.
 
-`Image` probes `ImageProvider::cached` before it starts a load, so an image the
-provider already holds renders in the same frame. For `AssetImage` and
-`NetworkImage` that probe and the load both go to their UI runtime's `flui_assets::ImageCache`, which
-keeps decoded images within a byte budget, coalesces loads and cancels a load
-when its last waiter is dropped (`flui-assets`' ARCHITECTURE.md). Eviction
-cannot invalidate a pixel handle held by an already displayed image.
+Dismissible preserves the dragged side while a reverse release moves back
+toward the origin: the drag stops at the card's extent, and the release
+velocity seeds the scrollable's settle spring. `a_dismissible_release_keeps_finger_speed_on_any_width` measures
+painted coordinates before and after release and the first frame velocity for
+both axes and release directions under tight, loose and unbounded incoming
+constraints. A contact going down reads the card's committed size through a
+`SubtreeAnchor` before the drag moves, and the collapse starts from that size
+after the frame the card came to rest out in. Build never queries the pipeline.
+`a_dismissible_collapses_its_laid_out_size` verifies the initial painted collapse
+extent and single completion delivery.
 
-**Test:**
-`asset_image_async_reuses_completed_decodes_after_cold_failure_recovery`
-removes the actual source after decoding and repeats async resolution, including
-cold failure followed by recovery.
+Resize samples enter that same owner post-frame lane directly from the collapse
+controller listener. Build retains only completion debt; it cannot erase accepted
+resize samples when completion arrives before the next build. Weak listener routes
+avoid retaining the widget after disposal, and delivery resolves current callbacks.
+`resize_delivery_keeps_accepted_ticks_before_completion` admits two samples and
+completion without an intervening build, verifies their order with a healthy or
+panicking resize callback, checks replacement and unmount before delivery, and
+checks that recovery does not repeat delivery.
 
-## Controlled catalog inputs
+## Overlay
 
-`Slider` and `Disclosure` implement ADR-0124. Input proposes values through
-`EventContext`; only parent configuration commits them. The slider paints and maps
-pointers against allocated bounds, honors inherited or explicit direction, and
-keeps extreme interpolation finite. Disclosure unmounts its collapsed body and
-keeps a real focusable header. Both recheck mounted writer and focus authority
-after reentry, and guard independently owned callback and view retirement tails.
-`controlled_slider_input_and_geometry` and
-`controlled_disclosure_state_and_geometry` pin these mapping decisions through
-actual input, frame geometry, semantics and retirement producers.
+### Overlay entry identity admission
 
-Captured gesture groups share their owning state's mounted admission. Disposal
-revokes admission before recognizer retirement, and delivery checks it between
-recognizers so an earlier callback can unmount the group safely. A retained
-Listener route still receives its terminal event; its disposed composite
-recognizers are no longer invoked. The controlled slider retirement row pins
-mid-contact disablement, stale Move/Up delivery and a fresh mounted contact.
-Disclosure explicitly merges its named Focus/action header semantics while its
-body remains a separate subtree; indicator direction uses the header allocation.
+Overlay entry identities come from one process `AtomicIdMint` (ADR-0313): it
+admits the final nonzero identity once and then refuses construction
+permanently, so an entry's removal authority and its consumer view key are
+never shared with a later entry. `OverlayEntry::try_new` reports the refusal as
+`IdExhausted` and drops the rejected builder before it returns;
+`OverlayEntry::new` panics on it, naming `try_new`.
 
-## Mounted gesture policy ownership
+## Navigator and routes
 
-`RawGestureDetector` (and through it every `GestureDetector`), `Draggable` and
-the navigator's edge-swipe detector acquire the resolved
-`GestureSettingsProvider` in lifecycle hooks. Live host publication
-updates that same provider; recognizers snapshot policy at admission and retain
-it through the contact or candidate's terminal event. An authored fixed profile
-or a different source identity replaces the owning recognizers instead. Equal
-profiles and the same live source preserve active work.
+### The navigator owns its frame clock, route identities and retirement order
 
-Mounted listeners retain private weak attachments. Replacement commits every
-incoming owner and target before cancelling outgoing owners, so cached routes
-cannot reach a retired actor. Disposal revokes admission before cleanup.
-`authored_settings_replace_active_owners_and_preserve_equal_profiles`,
-`authored_settings_retire_tap_candidates_and_deadlines` and
-`authored_settings_retire_native_scale_session_before_fresh_admission` pin the
-six detector families. `draggable_reads_admission_profiles_and_retires_authored_owners`
-and `replacing_authored_back_swipe_policy_cancels_the_outgoing_contact` cover
-the direct consumers and their next healthy operation.
+The mounted navigator acquires its frame registry through `VsyncScope::maybe_of`
+during lifecycle initialization and dependency changes. Each transition peer
+publishes a weak callback to its route-owned `DrivenController`. The navigator
+commits the clock and snapshots those callbacks before invoking them, outside
+registry guards. A route withdraws its handle before rebinding and restores it
+only if disposal has not superseded it. Unmount clears the clock even when an
+external navigator handle retains the route state. Registry replacement keeps
+the last sampled elapsed time, rather than restarting the transition.
+`scope_replacement_moves_an_existing_route_without_restarting_it` pins progress
+and withdrawal through a mounted navigator.
 
-The back-swipe settle converts the admitted fling vector's signed horizontal
-component to route widths per second, then applies directionality. Raw measured
-velocity remains available for reporting; `Draggable` reports it without an
-internal inertial animation. `mounted_back_swipe_settle_uses_the_admitted_fling_bound`
-pins retained policy and the subsequent contact's fresh bound against actual
-mounted route transitions.
+The same two hooks read the ambient `PageTransitions` slots into the navigator's
+registry (ADR-0221). A modal route adopts the slot of its kind in `install`,
+before its controller is built from the durations, with the builder's page chrome
+(`back_gesture`, `barrier_color`), and only for what its
+author left unset: an explicit `.transitions(…)` keeps the route out entirely,
+an explicit duration, back gesture or barrier colour keeps its value. A
+barrier colour fades in along the route's entrance and out along its exit, and
+under an opaque page that has entered it paints nothing, as Flutter's overlay
+skips a barrier entry beneath an opaque page. The adoption happens once, so a replaced
+hook reaches routes installed later and never a running transition
+(`a_replaced_hook_does_not_swap_a_running_transition`). `PageTransitions`
+publishes its own slots merged over the enclosing scope's, so each kind
+resolves to its nearest builder
+(`each_route_kind_adopts_the_nearest_builder_of_its_kind`).
 
-Native scale Begin stages the actor's immutable profile without claiming the
-stream or delivering recognized callbacks. The actor's typed disposition
-distinguishes dormant admission from refusal and recognized handling. A Begin
-refused while touch contacts are active remains refused until its terminal
-event; a later Update cannot revive that session after touch release. Admitted
-dormant End and cancellation retire the actor before an independent Update can
-start. `mounted_native_begin_retains_estimator_before_first_claim` pins the
-estimator at Begin, identity updates and unclaimed terminal cleanup;
-`mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal` pins
-refusal, standalone updates and fresh-session recovery.
+Navigation bindings hold the navigator's registry weakly. The navigator closes
+the registry before retiring its history, so a closure installed by a modal
+route or overlay entry cannot keep its route alive through the registry or
+enqueue work for a navigator that is gone. A lookup through a closed registry
+returns nothing and a mutation does nothing. Modal, transition and hero handles
+that outlive the navigator keep only their own state; a transition handle does
+not keep a modal page alive.
 
-### 40. Route keyboard focus belongs to `ModalRoute`; `SimpleRoute` has none
+Route identities come from one process `AtomicIdMint` (ADR-0313) and never
+wrap: once the integer maximum has been issued, allocation is refused
+permanently, so a caught capacity failure cannot reissue an identity held by
+history. A rejected route and its replacement result are destroyed by the
+refusal's unwind (ADR-0281).
+
+An admission reserves every identity it spends, route and overlay entry alike,
+before its first observable side effect: a recorded Router page, a filled
+binding slot, an inserted entry, a hero frozen as a placeholder. Batch
+replacement reserves for every member before preparing any. Exhaustion
+therefore fails the whole operation with nothing changed, and caller-owned
+values carried across the reservation (a result, a predicate, a Router's
+unseeded initial values) are destroyed on refusal. Spent reservations
+are not returned.
+
+Route, router, overlay, modal and hero owners withdraw each owned value from
+shared state before dropping it, so no destructor runs under an internal borrow
+or lock.
+After the first destructor failure in a retirement the remaining values are
+still destroyed, each under containment, and the first failure propagates; a
+retirement during an incoming unwind destroys them too, and a destructor that
+panics while the thread is already unwinding aborts, as in std
+([ADR-0281](../../docs/adr/ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md)).
+Router parser inputs and partially built router clones are owned before any
+user code runs, so a failure there destroys them under the same rule. A route result and the waker waiting for it are retired
+separately. Tested by `delivered_route_results_remain_completed` and
+`terminal_binding_authority_is_closed_before_route_retirement`.
+
+### Route animation crossing
+
+Route replacement preserves the displayed secondary animation until its current
+and replacement sources actually cross. Only exactly equal values or an idle
+replacement permit an immediate handoff; an absolute floating-point tolerance
+would discard representable progress. The mounted Navigator case
+`replacement_retains_near_zero_secondary_progress_until_crossing` observes the
+old value, crossing and new source through the secondary animation handle.
+
+### A caller's result that reaches no route is reported outside any guard
+
+**Rule:** [ADR-0019](../../docs/adr/ADR-0019-navigator-routing-seam.md) §3 as
+[ADR-0330](../../docs/adr/ADR-0330-navigation-is-a-typed-router-reached-from-the-context.md) §3
+narrows it: a pop result is typed and stays on the owner thread. There are no
+named routes (ADR-0330 §4): a page an application navigates to is a value of
+its `Router`'s route type, and a value the page needs travels in that value.
+
+**Choice:** every caller-supplied result is either delivered to a route or
+reported exactly once, and dropped outside any guard. Its `Drop` is user code,
+and user code that runs under the history borrow and re-enters the navigator
+panics on a second borrow. `warn` when there was no route to deliver to; `error`
+when a route received it and the type did not match its `Output`.
+
+The undelivered paths are not the edge cases a reader expects: an empty stack,
+a top mid-exit-transition, a target already completed, an id belonging to
+another navigator, an unmounted handle, a user `Route::did_pop` returning
+`false`, `maybe_pop_with` under a `PopScope` veto (which reports *handled*
+while discarding), and `maybe_pop` on a lone route. That last one is the
+commonest stack shape: a lone present route's disposition is `Bubble`
+(`RoutePopDisposition`, from `pop_disposition_of_top`), so the bottom-most route
+bubbles by design. A result displaced from an entry that
+already carried one is armed for in `arm_pop` and believed unreachable, because
+every arming site flushes inside the same locked section.
+
+**Ordering.** An operation's own observations reach observers before anything
+a re-entrant *drop* triggers: a `pop_with` whose payload's `Drop` pops again is
+observed as `didPop(target)` then `didPop(middle)`. So every flush driver
+applies the outcome first and reports second. It does not cover a navigation
+issued from a `PopScope` callback, which "A `PopScope` callback runs before the
+observers" records.
+
+**Tests:** `every_operation_that_cannot_deliver_a_result_reports_it` and
+`a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock`
+(`tests/navigator_public.rs`).
+
+### A `PopScope` callback runs before the observers, and may navigate, so an effect can be observed before its cause
+
+**Rule:** ADR-0019 §1 (the history flush).
+
+**Choice:** `apply` runs step 0 — everything the flush owes user
+code, including deferred `PopScope` effects — before step 1 delivers to observers.
+So a `PopScope` callback runs **before** `NavigatorObserver.didPop`.
+
+**Re-entrancy is permitted.** Refusing a synchronous navigation from inside the
+callback would mean never having to sequence the interleaving; FLUI permits it,
+deliberately, and the permission exists because refusing re-entrancy is what
+produced a fan-out deadlock here. **The inversion is the price of that.** A
+`PopScope` callback that navigates is observed before the pop that invoked it:
+
+```
+["push(RouteId(3), prev=Some(RouteId(1)))",
+ "pop(RouteId(2),  prev=Some(RouteId(1)))"]
+```
+
+**Why not restore the refusal.** A debug-lock equivalent would revert a
+restriction removed on purpose; refusing re-entrancy is the easier prohibition,
+and this design sequences the interleaving instead.
+
+**Replacement test:** a `PopScope` callback that navigates, permitted and observed
+before the pop that caused it; swapping step 0 and step 1 would yield `[pop, push]`.
+**Unasserted:** no test pins this.
+
+### A push's entrance-transition future is awaited outside the flush that installed it
+
+**Rule:** a flush-timing constraint governs the local placement, so the decision
+belongs here; [ADR-0064](../../docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)
+records the cross-crate design this decision consumes.
+
+**Choice:** `PushCompletion::Animating(AnimationRunFuture)` carries the future
+`AnimationController::forward()` (or an equivalent run-starting call) returns,
+but the continuation that awaits it is registered from `NavigatorShared::apply`
+— after the flush that produced the entry has released the history borrow —
+never from inside `RouteEntry::handle_push` itself. `RouteHistory::flush()`
+re-drains any `RouteCommand`s a route raised between its own passes, so a
+continuation registered mid-flush on an already-resolved future (a
+zero-duration push, or one canceled before the flush even returns) would
+settle within that same flush rather than on the next one. The continuation itself may only
+push `RouteCommand::PushCompleted(id)` onto the `Send` route-command queue and
+schedule the Navigator's rebuild through `NavigatorShared::settle_wake`, read
+at the moment the continuation fires rather than captured at registration:
+`NavigatorHandle::push` flushes immediately, so a route pushed before the
+Navigator mounts registers its continuation while that slot is still empty,
+and only a later mount fills it. Cancellation settles the entry exactly like
+completion — there is no separate "the push was canceled" state at this
+layer, only whichever lifecycle state the entry has moved to by the time the
+queued command is drained.
+
+### Route keyboard focus belongs to `ModalRoute`; `SimpleRoute` has none
 
 **Choice:** the focus rules of a navigator live on `ModalRoute` (`PageRoute`, `PopupRoute`),
 whose page sits in a `FocusScope`. Only the current route's scope admits focus: on a top
@@ -3550,83 +3070,614 @@ page gives the focus back to the element that opened it
 `late_autofocus_does_not_override_the_restored_focus`,
 `keys_during_transition_reach_only_the_top_route`, `back_keys_pop_only_the_current_page`).
 
-### 41. A dragged row keeps itself alive while its drag runs
+## Router
 
-**Choice:** a `Draggable` acquires a `KeepAliveHandle` in its lifecycle hooks
-and holds one lease from the start of its first live drag (a held cut or copy
-included) to the end of its last. A lazy list that scrolls the row out of its
-cache band, by the drag's own autoscroll or otherwise, skips it in band
-eviction, so the row keeps its state and its sessions, and the drag still
-drops. Disposal, which cancels the drags, now comes only from removing the row
-or its list.
+### The `Router` is derived from the route type, and reached from the build context
 
-**Why:** the drag's feedback is drawn in the overlay, so the row needs its
-state, not a layout: the plain keep-alive hold is enough, and the pinned slot
-that lays a focused row out beyond the band is not needed for it.
-**Test:** `a_dragged_row_scrolled_out_of_a_lazy_list_keeps_its_drag`.
+**Choice:** `Router<R>` (`src/router/`, ADR-0330) needs only `R: Routable` —
+`to_path`, `from_path`, and a provided `back_stack` — and keeps its stack
+of `R` itself; the parser and delegate are the route type. The page per value
+is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
+builds, so transitions, heroes and `PopScope` are unchanged. The router's build
+places a private inherited `RouterScope<R>` above that navigator, and
+`Router::<R>::of(&dyn BuildContext)` resolves the **nearest** `Router<R>` through
+it with a dependency, Flutter's `GoRouter.of(context)`; a lifecycle context
+upcasts to a build context, so a state resolves it the same way. A handle
+mutation made while the UI runtime builds answers `RouterError::DuringBuild`
+and changes nothing (ADR-0074 §5.2). The page builder and transitions are shared
+with every page, so a parent rebuild reaches the pages already on the stack; a
+transition duration is fixed when a page is placed, because the page's
+animation controller is made with it.
 
-### 42. A focus edge updates the focus state's readers, not the subtree under it
+**Pinned by:** `router_of_resolves_the_nearest_router_from_build` and
+`a_mutation_from_build_is_refused`. A parent rebuild reaching the pages already
+on the stack, a handle with no `Router` above it answering `NoRouter`, and a
+hand-written `Routable` round trip: **Unasserted:** no test pins this.
 
-**Choice:** `Focus` and `FocusScope` still rebuild on every edge of their node (the
-provider's revision is how readers of `Focus::of(ctx).has_focus()` stay current), and
-that rebuild touches nothing it does not own, in two ways. `Focus` always puts its child
-under one `Semantics` and changes only its configuration with whether the node can take
-focus, so a page that becomes unfocusable (a popup route over it) keeps every element
-under each `Focus`, and a gesture in flight under it, such as a long-press drag handed off
-from a context menu. And the child a rebuilt `Focus`/`FocusScope` hands back is the view
-it was given, which an element holding it does not build again (ADR-0245), so the first
-focus gain of an app, which a `Scrollable`'s drag start causes, no longer rebuilds the app
-root under the contact: a root making a `ScrollController` in `build` keeps its drag.
+The outermost Router of a presentation owns its URL (ADR-0330 §5). In
+`create_state` it registers a `UrlOwner` into the presentation's slot, which
+it reads with `LifecycleContext::url_owner`, unless `PageHandle::of` finds a
+page around it: a Router nested in a page registers nothing, and no scope of
+its own marks the pages. `UiRuntime::navigate` reaches it through
+the slot: `Push` and `Replace` parse with `from_path`, `Go` opens
+`back_stack` as `go` does, and a path that does not parse is reported to the
+`on_unknown` hook, cloned out of its cell and called with nothing borrowed,
+then refused as `NoMatch`; the Router lets go of the hook when it unmounts. A
+`Pop` goes through the navigator's `maybe_pop`, so a `PopScope` veto keeps the
+page. Every handle edit holds an `Editing` count on the
+shared state for its whole commit, observers and route clones included, so an
+intent that arrives inside one is `Busy`, as is one during a build; an intent
+holds its own count from before it parses its path to its commit. A URL the
+platform opens reaches it the same way: `UiRuntime::open_url` hands it an
+admitted URL's path as a `Go`. A URL opened before the first frame is
+held in the slot, and the Router that registers first takes it in
+`create_state` and opens on its `back_stack`; a location no route matches
+keeps the initial stack and reaches `on_unknown` from a post-frame callback,
+where the hook may navigate. The first frame that builds a tree drops a
+location nobody took.
 
-**Why:** the alternatives were notifying readers through a listenable outside the
-widget, which still leaves the `Semantics` wrapper rebuilding its child with the
-focused flag, or giving `Focus` a bespoke skip; the reconciler's identity check fixes
-every wrapper that rebuilds for its own reasons (`Navigator`, `Theme`, animations), not
-just this one. **Tests:** `a_focus_keeps_its_subtree_when_it_stops_being_focusable`,
-`the_first_focus_gain_does_not_rebuild_the_app_under_a_drag`,
-`a_held_press_moved_past_the_slop_closes_the_menu_and_drags` (a real `ContextMenuArea`
-around a long-press `Draggable`).
+**Pinned by:** the `url_owner::` rows of `router_and_widgets_app`
+(`tests/url_owner.rs`), through `HeadlessHost::navigate` and
+`HeadlessHost::open_url`.
 
-### A paragraph's links are focus stops of their own
+### A page reaches its own route through `PageHandle`, and pushes only pageless popups
 
-**Choice:** `RichText` with `on_link` lays its paragraph in a `Stack` (constraints passed
-through) beside one zero-size focus stop per link. Each stop hosts a node whose rect is the
-link's glyph bounds from the committed layout, kept within the paragraph's box
-(`Focus::rect_provider`, `RenderParagraph::link_bounds`; a last line's box can end a
-rounding error past the paragraph, which would put the link in one row with whatever
-touches it). Tab therefore reaches links in reading order among every other control, at any
-text scale, and the reveal on focus scrolls the link, not the paragraph, into view.
+**Choice:** every page on a Router's stack has a path (ADR-0330 §2), and only
+the Router places, replaces or seeds pages. Every modal route's overlay entry
+places a crate-private inherited `PageScope` above its barrier and page, so
+`PageHandle::of(ctx)` in the page, its builders or anything below them names
+that route, Flutter's `ModalRoute.of(context)`. The handle is bound to its
+route id, not to the top of the stack: `maybe_pop`, `pop` and `pop_with` act
+only while their route is current, so a callback that fires after a popup
+covered its page does not pop the popup. `can_pop` is whether a present route
+sits below the handle's and popping would not take a Router's last page.
+`push_popup` pushes a `PopupRoute` on the route's navigator; while the UI
+runtime builds, and once the route has left its navigator, it disposes the
+popup unpushed and answers `PageError`.
 
-A link is one link across rebuilds by what it links to and which occurrence of that target
-it is, not by its place in the text. Its slot keeps the tap recognizer, the focus node, the
-lane registrations and a `TextLinkKey` for its accessible node, and its stop is keyed by
-that slot. So a link added or removed before the focused one leaves the focus, a press in
-flight and the node with their link.
+A `PageHandle` and a `RouterHandle` hold the navigator weakly; the `Router`'s
+state is the one strong owner beside the `Navigator` view it builds. The
+navigator's history holds each popup route, and a popup's builder that
+captures the handle of the page under it is the form ADR-0330 §3 teaches, so
+a strong handle would make a cycle that outlives the unmount. Once the
+navigator is gone, the page handle answers `PageError::Gone` and the router
+handle `RouterError::Disposed`.
 
-Enter and Select open the focused link through a `Shortcuts` around the paragraph that binds
-them to `ActivateLinkIntent` (ADR-0079, amendment for links). The link declares
-`ActivateIntent` and `ActivationPressIntent` disabled, because the default bindings send
-`ActivateIntent` for Space's release too: Space neither opens a link nor activates a control
-around it, and keeps bubbling.
+The navigator a Router builds is *addressed*: a plain `push` admits only routes
+whose binding slot a framework `TransitionRoute` marked
+`TransitionGroup::Default` — `PopupRoute` — and refuses `PageRoute`,
+`SimpleRoute` and every third-party route. The doors that replace, sweep or
+seed (`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`)
+refuse every route, a popup included, because what they remove or place
+beneath belongs to the Router. They cannot return a `Result` without a public
+signature change, so a refusal disposes the route unpushed, returns a
+`RouteResult` already complete with `Ok(None)`, logs `tracing::error!` with the
+reason, and fails a `debug_assert!`. Every pop the navigator makes — a
+`PageHandle`'s, a back gesture's, a barrier's — reaches the Router's stack
+through an internal `NavigatorObserver`, so the location follows it.
 
-While the focus is visible the paragraph draws the `FocusRingStyle` bands just outside each
-line of the link's glyphs, so a wrapped link gets a ring per line and the letters stay
-uncovered. The link nodes are focusable and focused with the link, and their `Focus` action
-requests assistive focus; the stops publish no semantics of their own. A link that
-`max_lines` or an ellipsis cut takes no focus: after each layout that changes it, the
-paragraph tells a `ShownLinksListener` which links have glyphs, and the paragraph's state
-rebuilds its stops.
+**Pinned by:** `popup_routes_are_admitted_and_leave_the_location_alone`,
+`page_handle_pops_only_its_own_route`, `page_handle_can_pop_follows_the_route_below`,
+`a_popup_pushed_from_a_page_resolves_to_its_value` and
+`an_app_dropped_with_a_popup_open_frees_its_builder`. A `PageRoute` pushed
+through the facade refused as not addressable, and the doors that remove or
+seed refusing even a popup: **Unasserted:** no test pins this.
 
-**Why:** one paragraph stop roving between its links would need to re-run outer traversal
-at its first and last link (resolution stops at the nearest `Actions`) and map entry
-direction and assistive focus by hand; a real node per link gets traversal groups,
-directional focus, reveal and modality from the focus system. Nesting one `Focus` per link
-around the paragraph would tie each `Focus` element to a place in the text, so a link added
-before the focused one would move the focused node to another element. **Tests:**
-`tab_stops_on_each_link_and_enter_opens_it`, `a_focused_link_rings_each_line_of_its_glyphs`,
-`assistive_technology_focuses_a_link`, `tab_to_a_link_below_the_view_scrolls_it_into_view`,
-`a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read`,
-`select_opens_a_link_and_space_activates_nothing_around_it`,
-`a_link_the_layout_cut_takes_no_focus`,
-`links_keep_their_focus_and_presses_when_links_before_them_change`,
-`unmounting_a_linked_paragraph_releases_its_links`.
+### A Router never pops or removes its last page
+
+**Choice:** a Router always has a location. The navigator records the pages
+the Router places, and no pop or removal takes the last present one, whether
+it is on top or beneath a popup: `RouterHandle::pop` answers `Ok(false)`, the
+facade's `pop`, `pop_with` and `remove_route[_with]` answer `false`,
+`maybe_pop` bubbles (as a lone route does), and `pop_until` stops
+there, all with the stack unchanged. A top page that handles the pop itself
+(a local-history entry) still pops, since that removes no page.
+
+**Pinned by:** `router_never_pops_its_last_page` (the handle's `pop`, and the
+facade's `pop` and `pop_with`). `pop_until` stopping at the last page, and the
+last page beneath a popup surviving removal and pops: **Unasserted:** no test
+pins this.
+
+### `go` reconciles by common prefix
+
+**Choice:** `RouterHandle::go(location)` derives the new stack with
+`Routable::back_stack` — every prefix of the path that parses, the full path
+required — and keeps the longest common prefix with the current stack
+(compared with `PartialEq`). A new stack that is a prefix of the current one
+pops back to it with exit transitions; otherwise the pages above the common
+prefix are removed and the new pages are placed in one flush, the ones
+beneath the new top entering quietly (`RouteLifecycle::Add`) and only the new
+top running its entrance. The pages that stay keep their state; a page above
+the divergence point is rebuilt. When the full path does not match, `go` and
+`Router::from_location` report `RouteParseError::NoMatch` and change nothing,
+rather than falling back to a default route.
+
+**Pinned by:** `router_opens_at_a_location_with_its_back_stack` (the matching
+prefix chain beneath an opened location, across the gap `/note`, and
+`Router::from_location` reporting `RouteParseError::NoMatch` for a path that
+does not match in full). `go` reconciling only the diverging tail, adding the
+new back stack beneath the new top, and leaving the stack alone for an unknown
+location: **Unasserted:** no test pins this.
+
+### Every Router page scopes a semantics route, and a labelled route names it
+
+**Choice:** a Router page is an addressable screen, so the
+Router wraps each one in `Semantics::scopes_route(true)
+.explicit_child_nodes(true)`, and adds `names_route(true)` with the label when
+`Routable::semantics_label` returns one. An assistive technology then hears a
+route change on every navigation, with no app bar required.
+
+**Unasserted:** no test pins this.
+
+### A Router page's result is typed, owner-local and always delivered
+
+**Choice:** `RouterHandle::push_for_result::<T>` returns the page's
+`RouteResult<T>`, a future of `Result<Option<T>, RouteResultError>` over an
+`Rc`/`RefCell` channel, and `RouterHandle::pop_with` delivers the value as a
+`Box<dyn Any>`: neither `T`, the value nor the result is `Send` (ADR-0330 §3).
+A value of another type pops the page and resolves to
+`RouteResultError::TypeMismatch`; the value is dropped and reported outside the
+history borrow. Every exit resolves the result: a value, `Ok(None)` for a page
+that leaves without one (a pop, a replace, a `go` that drops it), and
+`Ok(None)` for every result still pending when the navigator unmounts. Those
+last completions are prepared under the history borrow and run, waking their
+tasks, after it is released, each contained so that a panicking waker or
+observer leaves the rest to complete. Completion does not pop a route: a pop
+through a handle that outlived the navigator still runs the route's `did_pop`,
+so local history severs what it owes, and a value it carries comes back as
+undelivered.
+
+**Pinned by:** `push_for_result_resolves_to_the_value_the_page_is_popped_with`,
+`a_router_result_of_another_type_is_a_type_mismatch`,
+`a_page_left_without_a_value_resolves_to_none`,
+`an_unmounted_router_resolves_its_pending_results_to_none` and the
+`terminal-result-waker` row of `router_observer_failure_and_terminal_retirement`
+(`crates/flui-widgets/tests/router.rs`), `an_unmounted_navigators_owed_removal_is_severed`
+(`crates/flui-widgets/tests/navigator.rs`), and the `compile_fail` doctest on
+`RouteResult`.
+
+### Navigation commits precede observer effects
+
+Router mutations commit the navigator history and typed route stack before
+delivering observer callbacks. A reentrant pop therefore sees the admitted
+route. `go` recomputes its shared prefix after popup dismissal, which can itself
+reenter navigation. Outgoing and temporary route values retire outside stack
+borrows; after a failure the remaining owners are still destroyed, each under
+containment, and the first failure is the one raised (ADR-0281). This implements
+ADR-0330's single navigation authority.
+`router_and_widgets_app` covers reentrant push/replace/go, popup-prefix changes,
+observer failure and next navigation; `router_observer_failure_and_terminal_retirement`
+covers an observer failure followed by route-value and terminal retirement.
+
+### Route locations preserve segment identity
+
+`RoutePath` percent-encodes each segment with a context-specific ASCII set and
+decodes exactly once after splitting, so an escaped slash stays inside one route
+value. Malformed percent escapes and invalid decoded UTF-8 are rejected. Plus and
+dot segments are literal path data, not form decoding or relative-URL operations.
+A query is a list of pairs kept in order with repeats, each key and value encoded
+with its own set; in the query `+` is a space, an empty value prints as the bare
+key, and a pair with neither key nor value is no pair. Only the full location
+carries the query, so `back_stack` opens the pages below a deep link without it.
+`route_locations_preserve_encoded_segment_identity` pins canonical spellings and
+rejection through the public routing API.
+
+## Heroes
+
+### Hero handles observe the presentation without owning it
+
+A mounted Hero shares owner-local state through `Rc`, `Cell` and `RefCell`
+(ADR-0175). Its render capability is a `WeakPipelineCell`: a retained flight or
+handle cannot keep a closed presentation alive. Immutable `Hero` configuration
+is prepared outside the slot borrow and committed as one `Rc` snapshot. Readers
+snapshot it before authored child cloning; replacement retires it after the
+borrow ends. Rebuild requests likewise snapshot their capability before scheduling.
+
+Disposal withdraws configuration, rebuild capability, render access and the
+placeholder before retiring captures. Registry removal and outgoing retirement
+complete under one per-Hero first-failure context. A completed pop keeps its source
+frozen while mounted; unmount removes that authority even from retained handles.
+
+`a_retained_hero_handle_does_not_keep_its_presentation_alive` mounts a real Hero,
+unmounts it, mounts a replacement with the same tag and closes the presentation.
+It checks stale refusal, independent replacement identity and weak render-owner
+release. `unmount_releases_hero_configuration_despite_a_retained_handle` verifies
+capture destruction and reentry observe the withdrawn registration and inert
+handle. These cases use the existing ADR-0083 test-access registry seam, which
+is not exported to applications. The gesture completion case also measures the
+destination's real child after the source disappears.
+
+### A flight seat is shared; a flight is not
+
+`navigator/flight_seat.rs` holds what any widget that hands its content to a
+flying copy must leave behind: the render anchor it publishes, its measurement
+(in an ancestor's or another seat's coordinates, asked again every time, never
+cached) and the frozen placeholder with the `SeatHold` allowed to release it.
+`Hero` sits on it, and so does Material's `OpenContainer`, through `__private`.
+What a flight is (tag matching and divert for `Hero`, a route morph for
+`OpenContainer`) stays with the flight.
+
+### Hero registration follows mounted identity
+
+A Hero's match tag belongs to its current immutable configuration; its mounted
+identity is the shared handle. Tag updates move registration without recreating
+the state. The registration record retains its current tag, registry and passive
+release authority. Rejected duplicates have no release authority, and an old
+authority cannot remove a replacement. Scope dependencies notify on registry replacement and refresh after
+GlobalKey reparenting. Old registration is withdrawn before new admission and
+outgoing captures retire outside storage borrows under first-failure recovery.
+
+`changing_a_mounted_hero_tag_moves_its_registration` measures the updated child
+through the same handle. `retagging_to_a_duplicate_preserves_the_existing_winner`
+checks first-wins matching and harmless rejected cleanup.
+`replacing_a_hero_scope_moves_the_existing_hero` and
+`reparenting_a_hero_moves_registration_without_recreating_it` verify scope adoption
+and preserved mounted state through the existing test-access registry seam.
+`reparenting_an_unscoped_hero_adopts_its_first_route` also starts with no scope:
+the inherited lookup miss remains an ancestry dependency until reactivation.
+
+### Hero matching runs outside storage borrows
+
+Route registries and flight registries share private owner-local tag storage.
+Authored hashing precedes borrowing; equality runs against owning bucket pins.
+The result revalidates the complete ordered bucket by allocation identity before
+admission or lookup. One fresh comparison is permitted after mutation; a second
+invalidation refuses the requested operation while independently accepted changes
+remain authoritative. This follows the bounded comparison policy of ADR-0126.
+Removal uses cached hash and a typed weak allocation identity, without key callbacks.
+Admission rollback exists before outgoing comparison pins retire. Removed flights
+enter the deferred retirement queue before scheduling or key retirement calls out.
+
+`registry_key_callbacks_can_read_their_registry` mounts real Heroes and drives
+PageRoute flights with authored hashing and equality reading the same route or
+flight registry through the existing test-access seam. It observes a real shuttle
+and subsequent landing. `hero_registry_matching_preserves_authority_under_reentry`
+uses the private registration seam for same-length replacement, repeated mutation,
+hash/equality failure, passive release, formatting reentry and snapshot retirement.
+Its physical last-release cases cover aliases, healthy destruction, an incoming
+unwind and a first key failure, destroying every key once (ADR-0281).
+
+Nested visibility snapshots sources before resolving them. Traversal retains
+owning registry identities and visits each once, preserving local-first matching
+without recurring through a cycle. The private resolver case
+`nested_hero_resolution_preserves_local_identity_through_cycles` pins this graph
+contract; ordinary application trees do not expose the resolver constructor.
+
+### Hero controller attachment and recording ownership
+
+The controller's attachment and diagnostic counter are owner-local cells. One
+`Rc` recording owner shares measurements and manifests with queued post-frame
+callbacks. `HeroTag` cloning retains its `Arc` identity and invokes no authored
+key code. Physical recording retirement withdraws both collections before
+destroying manifests; the existing terminal policy preserves an opaque tail
+after the first failure.
+
+Attachment commits its replacement before releasing outgoing navigator handles.
+`replacing_a_hero_navigator_retires_routes_after_attachment` seeds an ordinary
+`SimpleRoute` whose capture destructor reads the same controller, installs a
+third attachment or fails. It verifies the committed replacement, independent
+handle lifetime and the next healthy detach/attach. The private
+`hero_controller_terminal_retirement` matrix additionally covers recording
+aliases, healthy destruction, a first failure and an incoming unwind, with
+every manifest and capture destroyed once (ADR-0281).
+
+### Hero placeholders belong to logical flights
+
+A placeholder carries the allocation identity of its logical flight alongside
+its geometry and child-preservation role. Mounted Hero identity alone cannot
+authorize cleanup: the same mounted Hero can already belong to a replacement
+flight when an old subscription's cancellation returns. Flight completion and
+abort compare the captured flight identity before changing the placeholder.
+Diversion retains the identity; a new flight allocates a fresh one. A completed
+source keeps a settled placeholder. Unmount clears either state. Gesture
+filtering separately restores an excluded Hero's placeholder, including before
+the previous flight's deferred completion drain. The mounted
+`an_excluding_gesture_restores_pending_programmatic_placeholders` checks this
+ordering and verifies the subsequent drain cannot refreeze the restored Hero.
+
+`hero_flight_terminal_retirement` launches actual replacement flights through
+the private subscription-cancellation seam, both during cleanup and before it.
+It verifies abort, both terminal statuses, first and later failures, and a
+fresh flight after recovery. Moving cleanup before callouts alone cannot protect
+the replacement already admitted before cleanup; allocation identity also avoids
+a wrapping generation counter. Placeholder borrows contain only framework-owned
+geometry and identity markers and end before rebuild scheduling.
+
+### Hero rect mappings execute outside flight guards
+
+The shuttle publishes only finite coordinates and representable non-negative
+sizes. Invalid mapping output preserves the last accepted rect; finite inverted
+axes collapse at their original origin, including a negative difference that
+underflows. Manifest admission applies the same domain before seeding the cache.
+Each read reserves publication authority before sampling. A nested read,
+redirection or re-aim invalidates older authority, and cancellation makes retained
+flight readers inert. Mapping and factory retirement finish before publication
+because their destructors can reenter too. The final frame samples before logical
+completion so retained readers preserve the accepted landing geometry.
+
+A missing destination fades over the remaining uneased route progress, reversed
+for a pop. Spatial easing and rect remapping cannot become fade interval bounds:
+overshoot remains valid for geometry, while opacity has its own bounded domain.
+Diversion replaces the fade clock with the new manifest's route and resets its
+anchor. `disappearing_hero_destination_keeps_a_finite_fade` unmounts a destination
+through its lifecycle rebuild handle, checks gradual fading after curve recovery
+and final zero opacity, and covers push, pop and both direction-changing diversions
+with linear, overshoot, undershoot, NaN and both infinite curve samples.
+Its visible-redirection row restores the destination, diverts the same faded
+shuttle to a new page and checks full opacity followed by normal landing.
+
+`hero_geometry_samples_preserve_the_last_finite_shuttle` drives mounted PageRoute
+flights through NaN, infinity, positive extent overflow, inverted axes and recovery
+on the same flight, then checks its retained landing rect.
+`hero_geometry_reentry_preserves_the_newer_authority` exercises factory,
+evaluation and mapping destruction: a nested accepted read wins; public observer
+detachment rejects the outgoing sample and a subsequent flight lands normally.
+Both use the existing ADR-0083 flight probe shared with the actual shuttle producer.
+The private `measured_hero_rectangles_must_fit_the_shuttle_domain` pins defensive
+manifest admission; ordinary measured boxes do not produce the overflowing fixture.
+`hero_geometry_capacity_refuses_without_reissuing_authority` seeds the private
+terminal counter, verifies one final accepted read and permanent refusal, including
+a nested refusal that revokes the last pending publication.
+
+Hero snapshots its owner-local rect factory before invoking user code. The
+factory, its returned mapping and that mapping's destructor can read the same
+flight without holding a flight storage borrow. `Animatable<Value = Rect>` allows
+custom mappings to retain owner-local state without worker-thread bounds.
+`hero_rect_mappings_are_owner_local_and_reentrant` drives a mounted navigator
+flight through all three reentry points, verifies the committed shuttle rect,
+and checks that the flight subsequently lands.
+
+The flight's rect, opacity, fade anchor and lifecycle flags use owner-local
+`Cell` storage. Terminal status is `Cell<Option<AnimationStatus>>`, shared with
+the relays that report it. Coherent manifest facts and owning slots use short
+`RefCell` borrows. The shuttle configuration has an `Rc` snapshot; cloning a
+`BoxedView` shares it, so no authored `Clone` runs under the slot borrow, and
+retiring that configuration happens after the borrow ends.
+
+Diversion rechecks cancellation after rect mapping returns, before freezing its
+selected heroes. `cancelling_a_hero_mapping_does_not_refreeze_the_previous_page`
+cancels through factory, transform and mapping destruction, then returns to the
+previous page and verifies actual taps reach its restored child.
+
+Teardown withdraws its cancellation rights and snapshots both heroes before
+calling out. Subscription cancellation, overlay removal and each placeholder
+restoration share one first-failure context with registry retirement. Controller
+detachment completes the remaining flights before resuming a cancellation
+failure. `hero_flight_terminal_retirement` uses the private cancellation seam
+to pin first and later contained failures, peer restoration and fresh admission.
+Physical last
+release withdraws owned fields before the same cleanup protocol; an incoming unwind
+destroys them under the same containment (ADR-0281). ADR-0178 governs
+the cancellation bridge to the animation and foundation layers.
+
+Reversing a flight between the same heroes retains its rect factory and evaluates
+the original endpoint order at mirrored progress. Swapping endpoints alone
+does not reverse an arbitrary mapping. A different destination selects a new
+forward mapping. `a_nonlinear_hero_pop_retraces_the_airborne_push` checks several
+points on an asymmetric path, a conflicting return-side factory, redirection to
+a third hero and subsequent landing through a mounted navigator.
+
+The factory snapshot and its returned mapping use the navigator's terminal
+ownership policy. Healthy reads retire both normally; after evaluation fails,
+the mapping is destroyed by the unwind and the evaluation failure is the one
+raised (ADR-0281). `hero_rect_mapping_failures_preserve_recovery` covers
+factory, evaluation and destruction failures, healthy destruction, and a fresh
+read and landing through the same flight.
+
+### Replacing a `HeroController` retires its in-flight flights, restoring both heroes
+
+**Rule:** FLUI names the rule, justifies it, and pins it with a test. This entry
+is local to the crate, so it lives here rather than in an ADR.
+
+**Choice:** when a `HeroController` is detached — replaced by
+`NavigatorHandle::add_observer` (which takes the auto-installed default),
+removed by `remove_observer`, or its navigator unmounts —
+`HeroController::did_detach` calls `FlightManager::finish_all`, which **aborts**
+every flight still in the air: it removes each overlay entry and calls
+`end_flight(false)` on **both** heroes. Distinguishing an abort from the
+ordinary `finish` is load-bearing: a normal `finish` ends one hero hidden and
+the other revealed, chosen by the terminal animation status, whereas an abort has no status to choose with
+and must leave both pages — which stay alive and in the stack — showing their
+real children rather than a blank placeholder.
+
+**Why abort rather than leave the flight.** The controller is a swappable
+observer, so a detach does not tear down the tree and frozen placeholders would
+stay visible. The flight it
+launched is retired through a `Weak<FlightManager>` held by the overlay entry's
+shuttle (`FlightManager::finish`'s `manager.upgrade()`). A detached controller
+drops its `FlightManager`, so that upgrade returns `None` from then on: the
+flight can never be retired, its overlay entry leaks, and the shuttle paints at
+its end rect forever. Finishing/cancelling (not transferring to the replacement)
+is the rule because a flight is owned by the controller that launched it — its
+`from`/`to` route animation values and its gesture wiring all belong to that
+controller's measurement pass, and re-parenting them onto a replacement would
+mean guessing a flight plan the replacement never measured.
+
+**Consequences, named rather than left to be discovered:**
+
+- **The auto observer's flight is gone the moment a manual controller is
+  installed.** `NavigatorHandle::add_observer` calls `did_detach` on the
+  auto-installed default before attaching the new observer, so installing a
+  `HeroController` mid-flight retires the auto observer's flight immediately —
+  the overlay count returns to its pre-flight value in the same call. The
+  fixture `gesture_fixture_with`'s doc documents this rather than the previous
+  "survives `install`" leak.
+- **`finish`'s retired-then-drain discipline is preserved.** An abort goes
+  through the same `retire` (drop the flight from the registry, park it in
+  `retired`, schedule the coalesced end-of-frame drain) as a normal `finish`,
+  because `did_detach` runs owner-local (from `add_observer`/`remove_observer`/
+  dispose) and never inside an animation status listener — but the park still
+  costs nothing and keeps the drop outside the animation listener family, the
+  one invariant the type docs rest on.
+
+Detachment withdraws the navigator and replaces the manager's admission identity
+before cancellation calls out. A queued measurement holds its original identity
+and cannot launch after replacement. A pending flight is registered before its
+placeholder wakes or shuttle builder runs; cancellation can therefore restore it
+before it publishes an overlay entry. A divert commits its new hero pair before
+freezing that pair or invoking its builder, so cancellation restores the selected
+destination. Retirement compares the flight identity as well as its tag, so a
+stale terminal delivery cannot remove a replacement using the same tag.
+
+Matched launches share failure custody. A failed builder restores its selected
+heroes, and the remaining matched launches are attempted before the first failure
+propagates. Detachment refuses that remaining tail. This does not promise recovery
+from arbitrary failures inside user-owned aggregate destructors.
+
+**Tests:** `replacing_the_hero_observer_inside_its_builder_cancels_the_flight`
+checks initial creation and diversion through a mounted Navigator, verifies the
+destination accepts taps after cancellation and then launches a fresh flight.
+`replacing_the_hero_observer_cancels_queued_measurement` pins queued cancellation.
+`a_failed_hero_builder_restores_its_child_and_allows_a_fresh_flight` checks builder
+failure on initial creation and diversion, real hit testing and fresh admission.
+`hero_builder_cancellation_and_failure_account_for_the_matched_tail` checks
+cancellation, a healthy tail and competing builder failures.
+`hero_flight_terminal_retirement` pins stale retirement through the private
+terminal-delivery seam, along with opaque ownership cleanup.
+
+## App and localization
+
+### Inherited presentation data
+
+Focus traversal's lazy rectangle provider reads only published complete layout.
+An incomplete paragraph or competing checkout leaves the node's explicit fallback
+rectangle available; replacement completion restores its live render geometry.
+The runtime's `parked_text_preparation_does_not_publish_partial_ime_geometry`
+also pins the focus and lifecycle hit-test paths through an actual editable.
+
+`MediaQuery` and `MediaQueryData` live in `flui_view::environment`; this crate
+and its tests import the types from there, and package authors reach them as
+the SDK's `flui_sdk::view::environment`. `flui_widgets` owns no presentation-data
+module: the `app` module provides the shell and `SafeArea`, not the source of
+inherited presentation data. The gesture arena and the shared frame registry
+(`GestureArenaScope`, `VsyncScope`) live there too, for the same reason: they
+are views the presentation installs, not catalog widgets. Field-specific
+dependency behavior is pinned by `a_size_only_change_rebuilds_size_and_whole_readers_only`.
+
+`MediaQuery::motion_of` observes the presentation's resolved policy, while
+controllers obey the clock rather than an inherited subtree override. Physical
+scroll and viewer inertia explicitly use Preserve; ordinary transitions remain
+Normal (ADR-0195). Loading indicators use Normal and visible static feedback under
+Reduce (ADR-0192). `TickerMode::is_enabled` exposes effective configured permission
+for representation; registry topology still owns delivery. The private inherited
+wrapper remains present across permission and binding changes, retaining descendants.
+`keyed_indicator_moves_between_configured_permissions_without_restarting` pins
+that continuity. Runtime publication is pinned by
+`system_motion_change_reaches_media_query_and_the_clock`.
+
+`WidgetsApp` resolves supported resources from ordered `preferred_locales`,
+subscribing only to that media field when no explicit locale is authored.
+Complete locale identity determines exact matches before the established
+script/region/language fallback (ADR-0173). A nested `MediaQuery` remains a whole
+replacement; it does not fall through to an ancestor for an unavailable field.
+`locale_override_removal_uses_the_nearest_current_preferences` pins override
+removal and nested-provider precedence. The runtime's
+`preferred_locales_select_resources_and_direction` exercises loaded resources.
+
+`RichText` reads inherited text sizing and weight adjustment during its stateless
+build, and the ambient `Directionality` when it names no direction of its own (a
+run that names one takes no dependency), and passes them, the resolved direction
+included, with its unchanged authored spans to a private render view
+(`a_text_run_reads_the_ambient_direction_unless_it_names_one`).
+It reads them in `build` rather than through `RenderObjectContext::depend_on`,
+and native settings never enter `RenderObjectContext`. The paragraph update reports layout and semantics invalidation when sizing changes, so the same
+render object produces updated geometry. Weight changes likewise invalidate layout
+and semantics; EditableText forwards the same inherited adjustment to its painter.
+The common shaping policy runs after authored span inheritance (ADR-0174).
+`Text` composes this path after merging its ambient style. `MediaQueryData`
+carries one validated numeric sizing policy rather than a writable scalar.
+The nearest provider replaces the outer policy, including fixed sizing;
+copying parent data preserves its policy while changing another field.
+Without a provider, the render pipeline supplies the policy. Removing a provider
+restores the current outer authority. Raw system text-scale observations retain
+their separate admitted range `1/64..=64`. Initial sizing is pinned by
+`media_text_scaling_changes_the_laid_out_text`; live updates, restoration from
+authored size and nested override retention by
+`a_text_scale_change_relayouts_a_preserved_text_subtree`. Each span resolves
+once, from its own authored size: unstyled text from the default, ambient
+styles after `Text` merges them, and fixed spans not at all. The paragraph's
+intrinsics measure the same resolved sizes as its layout.
+`the_system_text_scale_grows_each_span_once` pins this under the runtime's root
+policy, with no provider of the test's own.
+
+`Icon` resolves its square and glyph from one logical size. Its default stays
+fixed; `IconThemeData::apply_text_scaling` opts both into the nearest inherited
+policy, including an explicit icon-size override. `RenderIcon` resolves during
+measurement and shapes the glyph at that admitted size with fixed sizing,
+without applying inheritance again. Ordinary text retains
+its inherited sizing and weight preferences. The public producer row
+`icon_text_sizing_keeps_box_and_glyph_together` checks raster glyph keys and the
+allocated square across live changes, exact answers, fractional sizes and theme
+policy; tight constraints can allocate a rectangle without changing glyph size.
+The widget's canonical Semantics wrapper publishes an explicitly authored label
+with no role of its own, including a labelled absent glyph, so inside a button
+or another control the label names the control's node, as Flutter's `Icon` does;
+alone it is a text node. Decorative icons publish no font
+codepoint label. `icon_labels_reach_the_assembled_accessibility_tree` checks the
+assembled tree across label replacement and removal.
+
+`EditableText` subscribes during its own build and carries sizing through its
+appearance value to `RenderEditable`. The editor retains authored styles and
+document offsets; selection and caret position use the newly laid-out paragraph.
+The default caret follows the laid-out line height, including empty text and
+authored font sizes, through `RenderEditable`'s automatic-height policy.
+`RawTextField` preserves that default. An explicitly configured caret height
+remains a logical length; removing the override restores automatic height. Mount/update
+equivalence and restoration of glyph/caret geometry are pinned by
+`inherited_text_sizing_updates_editable_glyphs_and_caret`. The field's
+intrinsics and a tap both resolve against the glyphs of the current scale,
+after a live change in either direction:
+`a_field_measures_and_hit_tests_the_current_text_scale`.
+
+### Global widgets localizations live in the catalog, not in a separate package
+
+**Choice:** `GlobalWidgetsLocalizations`, `GlobalWidgetsLocalizationsDelegate`
+and `RTL_LANGUAGES` live in `flui-widgets`' `localization` module, next to the
+`WidgetsLocalizations` contract they implement.
+
+**Why not a separate package.** A separate package pays off when it carries
+translated strings. Here there are none: every string
+forwards to `DefaultWidgetsLocalizations`, and the only behavior is the RTL
+language table and the delegate. A separate crate held that one table in a
+layer of its own, which ADR-0081 deleted; the table moved down into the
+crate whose contract it implements.
+
+**Consequences:**
+
+- The delegate's `is_supported` is always `true`: a gate on "this locale has
+  translated strings" would, with no translations for any locale, only
+  produce false negatives.
+- Translated string catalogs, when they arrive, are a separate decision
+  about where FLUI sources translations; they do not reopen a crate here.
+
+**Tests:**
+`flui-widgets::tests::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl`
+mounts `Localizations` with the global delegate for `ar` and reads
+`Directionality::of` from inside the subtree; the unit tests in
+`localization/global_widgets_localizations.rs` pin the table, the `iw`
+alias, and `is_supported`.
+
+### `WidgetsApp`: one page or a bare Router as the routing subtree
+
+**Choice:** `WidgetsApp::router(Router<R>)` keeps the Router as a
+`BoxedView` and mounts it bare, under the same `builder`, `DefaultTextStyle`
+and `Localizations` bands; each of its pages has its route's focus scope. The
+app has no navigator of its own: the Router's is its root navigator, and its
+facade refuses a stray page pushed through `NavigatorHandle::maybe_of_root`.
+`WidgetsApp::new(home)` makes a navigator holding the one home page, a
+`PageRoute` with its `PageScope`, on which popups open. No shell takes a
+navigator handle or observers (ADR-0330 §4), so there is no configuration
+that one form would ignore and no form type parameter. The shell is one view
+type: a rebuilt app updates the boxed Router in place, so the stack and page
+state survive, and an update between the home and router forms lets go of
+the home page's navigator or makes a fresh one. Its Router owns the
+presentation's URL as any outermost Router does ("The `Router` is derived from
+the route type"). **Tests:**
+`tests/widgets_app_router.rs`
+(`switching_widgets_app_from_home_to_router_releases_the_navigator`,
+`widgets_app_router_navigates_by_handle_and_the_url_follows`) and
+`tests/widgets_app.rs` (`home_is_seeded_once_as_the_root_route`). The
+Router's navigator as the app's root navigator, refusing a stray page; no
+focus scope above the Router; and a rebuilt app keeping its stack:
+**Unasserted:** no test pins this.
+

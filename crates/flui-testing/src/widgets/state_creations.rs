@@ -15,6 +15,7 @@ use flui_widgets::SizedBox;
 /// created. Clones share the counter.
 #[derive(Clone, Debug, Default)]
 pub struct StateCreations {
+    // `Arc<AtomicUsize>`: the public `counting` signature shares the counter with tests that read it.
     creations: Arc<AtomicUsize>,
 }
 

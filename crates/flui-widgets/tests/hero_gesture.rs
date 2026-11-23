@@ -24,8 +24,8 @@ use flui_widgets::__test_access::{
     BackGestureController, HeroControllerProbe as _, HeroTag, NavigatorProbe as _, RouteProbe as _,
 };
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
-use flui_widgets::navigator::{Hero, HeroController, PageRoute, RouteId};
 use flui_widgets::{Center, SizedBox};
+use flui_widgets::{Hero, HeroController, PageRoute, RouteId};
 
 use crate::common::harness::{Harness, mount};
 

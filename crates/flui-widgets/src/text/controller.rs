@@ -264,8 +264,8 @@ pub(super) struct ComposingState {
 /// becoming its own stop. Clusters-only, not dictionary-based — CJK
 /// (segments per character/script-run, not per linguistic word) and
 /// Thai/Lao/Khmer/Myanmar (no boundary at all without a lexicon) are
-/// known limitations; see `flui-widgets/ARCHITECTURE.md`'s Mapping
-/// decision #19.
+/// known limitations; see `flui-widgets/ARCHITECTURE.md`, "Word and grapheme
+/// movement use ICU4X (UAX #29), not dictionary segmentation".
 ///
 /// Forward and backward are deliberately NOT mirror images of each other,
 /// matching the convention most editors already use: forward always
@@ -322,6 +322,7 @@ impl TextEditingController {
     /// A shipped build has no caller: the integration tests read it through
     /// `crate::__test_access::TextEditingControllerProbe` (ADR-0083 §4), and it
     /// leaves with that module.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub(crate) fn listener_count(&self) -> usize {
         self.notifier.len()

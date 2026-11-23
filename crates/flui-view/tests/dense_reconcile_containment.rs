@@ -15,10 +15,8 @@ use flui_objects::{RenderFlex, RenderSizedBox};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{
-    BoxedView, BuildOwner, ElementTree, ErrorView, LifecycleHook, RebuildReason, RecoveredAt,
-    RenderView, View, ViewExt,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
+use flui_view::{BoxedView, ErrorView, RebuildReason, RenderView, View, ViewExt};
 
 pub(super) const DENSE_CHILD_COUNT: usize = 10;
 pub(super) const PANICKING_SLOT: usize = 7;
@@ -51,7 +49,7 @@ impl RenderView for DenseRow {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -482,7 +480,7 @@ pub(super) fn mount_dense_root(
     );
     let mut tree = ElementTree::new();
     let root_id = tree.mount_root_with_pipeline_owner(
-        &root,
+        &root.boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );

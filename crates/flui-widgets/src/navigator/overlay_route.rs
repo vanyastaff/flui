@@ -1,4 +1,4 @@
-//! [`NavigatorRoute`] and [`SimpleRoute`] — the bridge from the pure route stack
+//! [`NavigatorRoute`] and `SimpleRoute` — the bridge from the pure route stack
 //! to the overlay.
 //!
 //! Private; nothing here is exported.
@@ -20,11 +20,12 @@
 //!
 //! # `SimpleRoute` is the floor, not the ceiling
 //!
-//! [`SimpleRoute`] pushes and pops instantly: no animation, no barrier, no
+//! `SimpleRoute` pushes and pops instantly: no animation, no barrier, no
 //! `offstage`. `PageRoute` and `PopupRoute` add on top of the
 //! private `TransitionRoute` / `ModalRoute`; they reach their navigator through
 //! [`NavigatorRoute::binding_slot`].
 
+#[cfg(any(test, feature = "testing"))]
 use std::fmt;
 use std::rc::Rc;
 
@@ -32,7 +33,9 @@ use flui_animation::Animation;
 use flui_view::{BoxedView, BuildContext};
 
 use super::binding::RouteBindingSlot;
-use super::route::{Route, RouteSettings};
+use super::route::Route;
+#[cfg(any(test, feature = "testing"))]
+use super::route::RouteSettings;
 
 /// Builds a route's subtree, on demand and possibly many times.
 ///
@@ -72,7 +75,7 @@ pub trait NavigatorRoute: Route {
     /// by `NavigatorHandle::push` / `seed_initial` **before** [`Route::install`].
     ///
     /// A route that neither animates nor drives its own lifecycle returns `None`
-    /// — the default, and what [`SimpleRoute`] does. `PageRoute` and `PopupRoute`
+    /// — the default, and what `SimpleRoute` does. `PageRoute` and `PopupRoute`
     /// return `Some`, because a transition finishing has to tell the navigator to
     /// settle the route, and a pop's exit animation has to finalize it.
     ///
@@ -96,6 +99,7 @@ pub trait NavigatorRoute: Route {
 /// The floor: a route with content, an instant transition, and a typed result.
 ///
 /// There is no transition, so a pop finalizes synchronously.
+#[cfg(any(test, feature = "testing"))]
 pub struct SimpleRoute<T> {
     settings: RouteSettings,
     builder: super::lifecycle::Terminal<RouteContentBuilder>,
@@ -108,6 +112,7 @@ pub struct SimpleRoute<T> {
     consents_to_pop: bool,
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl<T> Drop for SimpleRoute<T> {
     fn drop(&mut self) {
         let settings = super::lifecycle::Terminal::new(std::mem::take(&mut self.settings));
@@ -117,6 +122,7 @@ impl<T> Drop for SimpleRoute<T> {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl<T> fmt::Debug for SimpleRoute<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SimpleRoute")
@@ -125,6 +131,7 @@ impl<T> fmt::Debug for SimpleRoute<T> {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl<T> SimpleRoute<T> {
     /// A route showing whatever `builder` builds.
     pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
@@ -170,6 +177,7 @@ impl<T> SimpleRoute<T> {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl<T: 'static> Route for SimpleRoute<T> {
     type Output = T;
 
@@ -190,6 +198,7 @@ impl<T: 'static> Route for SimpleRoute<T> {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 impl<T: 'static> NavigatorRoute for SimpleRoute<T> {
     fn content_builder(&self) -> RouteContentBuilder {
         Rc::clone(&self.builder)

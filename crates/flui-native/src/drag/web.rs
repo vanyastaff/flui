@@ -282,10 +282,12 @@ mod mapping {
 #[cfg(target_arch = "wasm32")]
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
     sync::Arc,
 };
+
+#[cfg(target_arch = "wasm32")]
+use rustc_hash::FxHashMap;
 
 #[cfg(target_arch = "wasm32")]
 use flui_foundation::{DataTransferId, geometry::Point};
@@ -344,9 +346,9 @@ enum Held {
 struct Offers {
     table: OfferTable,
     /// The answer each live offer's target last cached.
-    feedback: HashMap<DataTransferId, DropFeedback>,
+    feedback: FxHashMap<DataTransferId, DropFeedback>,
     /// What each live offer holds, by representation index.
-    held: HashMap<DataTransferId, Vec<Held>>,
+    held: FxHashMap<DataTransferId, Vec<Held>>,
 }
 
 /// The platform's HTML drag-and-drop transport (see the module doc).

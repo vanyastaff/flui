@@ -5,8 +5,8 @@ use super::owner_dispatch::{PresentationDispatcher, close_this_window};
 use crate::app::hot_reload::WorkerWatcherGuard;
 use flui_native::HostWindow;
 use flui_native::WindowInstallation;
+use rustc_hash::FxHashMap;
 use std::{
-    collections::HashMap,
     hash::Hash,
     rc::{Rc, Weak},
 };
@@ -60,7 +60,7 @@ fn retire_session(state: SessionState) {
 
 pub(in crate::app) struct SessionController<K: Eq + Hash> {
     installer: Option<SessionInstaller>,
-    sessions: HashMap<K, SessionState>,
+    sessions: FxHashMap<K, SessionState>,
     watcher: Option<WorkerWatcherGuard>,
 }
 impl<K: Eq + Hash + Clone> SessionController<K> {
@@ -70,7 +70,7 @@ impl<K: Eq + Hash + Clone> SessionController<K> {
     ) -> Self {
         Self {
             installer: Some(Box::new(installer)),
-            sessions: HashMap::new(),
+            sessions: FxHashMap::default(),
             watcher,
         }
     }
@@ -360,7 +360,7 @@ mod tests {
         );
         let saved = Rc::new(RefCell::new(None));
         let installed = Rc::clone(&saved);
-        Box::new(flui_native::HeadlessPlatform::new())
+        Box::new(flui_native::testing::HeadlessPlatform::new())
             .run(crate::app::runner::app_handler(move |owner| {
                 *installed.borrow_mut() = Some(owner);
                 Ok(())
@@ -462,7 +462,7 @@ mod tests {
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
         let _clear = super::super::host::OwnerHostClearGuard::arm();
-        Box::new(flui_native::HeadlessPlatform::new()).run(crate::app::runner::app_handler(move |owner| {
+        Box::new(flui_native::testing::HeadlessPlatform::new()).run(crate::app::runner::app_handler(move |owner| {
             let window = owner.open_routed(flui_platform::WindowOptions::default())?.try_ready()?;
             let retained_window = Rc::clone(&window);
             let outer = install_platform_ui_runtime(crate::app::ui_runtime::UiRuntime::for_test(), &crate::app::window_test_support::headless_test_window());
@@ -486,7 +486,7 @@ mod tests {
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
         };
         let _clear = super::super::host::OwnerHostClearGuard::arm();
-        Box::new(flui_native::HeadlessPlatform::new())
+        Box::new(flui_native::testing::HeadlessPlatform::new())
             .run(crate::app::runner::app_handler(move |owner| {
                 let window = owner
                     .open_routed(flui_platform::WindowOptions::default())?

@@ -3,18 +3,16 @@
 //!
 //! # The production reconciler
 //!
-//! This is the reconciler the production build path runs after the E3
-//! atomic box→arena swap: [`BuildOwner::build_scope`](crate::BuildOwner)
+//! This is the reconciler the production build path runs:
+//! [`BuildOwner::build_scope`](crate::owner::BuildOwner)
 //! feeds each dirty element's freshly-built child views to
 //! [`reconcile_children_by_id`], which permutes the parent's
 //! [`ElementNode::child_ids`](super::ElementNode) list, reusing /
 //! inserting / removing real slab nodes through the [`ElementTree`]
-//! accessors. The single element graph is the slab. (It replaced an
-//! earlier box-vec reconciler that permuted a caller-owned
-//! `Vec<Box<dyn ElementBase>>`; that one has been removed.)
+//! accessors. The single element graph is the slab.
 //!
 //! It also emits one typed [`ReconcileEvent`] per child disposition on
-//! the live path, so the `flui.tree.reconcile` (FR-035) stability boundary
+//! the live path, so the `flui.tree.reconcile` stability boundary
 //! is meaningful for normal reconciliation, not just a reference impl.
 //!
 //! # Emitted dispositions
@@ -232,7 +230,7 @@ pub(crate) fn reconcile_children_by_id(
     //
     // The bucket holds OLD-SLOT INDICES (a `Vec<usize>`, not a single
     // index) so two old children with DISTINCT keys that collide on `u64`
-    // hash both stay claim candidates — the symmetric FR-024(c) collision
+    // hash both stay claim candidates — the symmetric collision
     // defense. Phase 4 disambiguates via the semantic `key_eq` inside
     // `can_update_by_id`, and clears a claim by index in O(1) (indexing
     // the bucket by slot, not id, is what keeps phase 4 linear rather than
@@ -402,9 +400,8 @@ pub(crate) fn reconcile_children_by_id(
     // refresh it here; after a reorder that would leave `node.slot()`
     // disagreeing with the child's actual index in `child_ids`.
     //
-    // Scheduling (E3 — atomic box→arena swap): in the slab/drain model
-    // each child rebuilds as its OWN `build_scope` drain entry, not via a
-    // recursive `perform_build` call from this parent. So every child that
+    // Scheduling: each child rebuilds as its OWN `build_scope` drain entry,
+    // not via a recursive build call from this parent. So every child that
     // still needs a build is pushed onto the dirty heap here — a freshly
     // inserted child (dirty by construction) and a reused child whose
     // `update` re-set its dirty flag both qualify; a reused child left
@@ -627,7 +624,7 @@ fn update_child(
 
 /// Remove the slab child `id` AND its whole subtree.
 ///
-/// E3 (atomic box→arena swap): the slab is the single element graph, so
+/// The slab is the single element graph, so
 /// [`ElementTree::remove`] frees ONLY `id`'s own slot — it does not
 /// recurse children. A bare `tree.remove(id)` would therefore orphan
 /// every descendant: leaked in the slab with its `on_unmount` (GlobalKey
@@ -638,7 +635,7 @@ fn update_child(
 /// `registered_global_key_hash` BEFORE touching anything:
 /// - **Keyed top** → soft-removes via `remove` into the inactive queue and
 ///   returns immediately, leaving the subtree intact in the slab.
-///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) later
+///   [`BuildOwner::finalize_tree`](crate::owner::BuildOwner::finalize_tree) later
 ///   re-collects that subtree and tears it down deepest-first, preserving
 ///   the same-frame GlobalKey retake window. The subtree snapshot below is
 ///   never needed for this branch, so checking keyed-ness first avoids
@@ -652,7 +649,7 @@ fn update_child(
 /// A keyed *descendant* of an unkeyed top is freed (not soft-removed) — it
 /// loses its retake window because its ancestor is already gone. The active
 /// GlobalKey move path only applies while the keyed element itself remains
-/// active and registered; E3's contract here is that every descendant unmounts
+/// active and registered; the contract here is that every descendant unmounts
 /// exactly once.
 ///
 /// Order for an unkeyed top: descendants unmount deepest-first BEFORE the
@@ -683,11 +680,9 @@ fn remove_child(
     // duplicate against a claim nobody is making.
     owner.forget_global_key_reservation(parent_id, id);
 
-    // One implementation, two callers. This used to carry its own copy of
-    // the subtree walk, and the copies drifted: `remove_subtree` learned to
-    // stop at a `GlobalKey`'d descendant (issue #838) while this one — the
-    // path an ORDINARY dense parent takes — kept freeing them, so the fix was
-    // described as tree-wide while covering only the sparse and root cases.
+    // One implementation, two callers: `remove_subtree` stops at a `GlobalKey`'d
+    // descendant, and an ORDINARY dense parent must stop there too, so it does
+    // not keep its own copy of the subtree walk.
     //
     // `remove_subtree` handles the keyed-top case identically (it soft-removes
     // and returns without walking), so delegating loses nothing.
@@ -712,7 +707,7 @@ mod tests;
 
 /// The new view at `index`; every index the reconciler reads stays below
 /// `new_views.len()`.
-fn view_at(new_views: &crate::view::ChildViews, index: usize) -> &dyn View {
+fn view_at(new_views: &crate::view::ChildViews, index: usize) -> &crate::BoxedView {
     new_views
         .get(index)
         .expect("BUG: a reconcile index stays below the new view count")

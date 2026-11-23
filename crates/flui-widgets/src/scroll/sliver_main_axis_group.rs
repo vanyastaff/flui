@@ -6,7 +6,7 @@ use std::fmt;
 use flui_objects::RenderSliverMainAxisGroup;
 use flui_rendering::protocol::SliverProtocol;
 use flui_view::BoxedView;
-use flui_view::seq::ViewSeq;
+use flui_view::ViewSeq;
 
 use crate::__private::generic_render_view_element;
 
@@ -68,7 +68,7 @@ where
         !self.slivers.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&flui_view::BoxedView)) {
         self.slivers.for_each(|_index, child| visitor(child));
     }
 }

@@ -22,12 +22,13 @@
 //!   available to a delegate as `shrink_offset`; the `FlexibleSpaceBar`
 //!   treatment of it is its own widget.
 
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::view::element::SliverPersistentHeaderDelegate;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::StatelessView;
 use flui_sdk::view::{BoxedView, BuildContext, IntoView, ViewExt};
-use flui_sdk::widgets::layout::PreferredSizeView;
-use flui_sdk::widgets::{SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate};
+use flui_sdk::widgets::PreferredSizeView;
+use flui_sdk::widgets::{SizedBox, SliverPersistentHeader};
 
 use crate::AppBar;
 
@@ -359,12 +360,14 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
         self.max_extent
     }
 
-    fn snap_configuration(&self) -> Option<flui_sdk::widgets::FloatingHeaderSnapConfiguration> {
+    fn snap_configuration(
+        &self,
+    ) -> Option<flui_sdk::rendering::objects::FloatingHeaderSnapConfiguration> {
         // The oracle's own defaults (`FloatingHeaderSnapConfiguration`,
         // `rendering/sliver_persistent_header.dart:488-491`): curves.ease
         // over 300ms.
         self.snap.then(|| {
-            flui_sdk::widgets::FloatingHeaderSnapConfiguration::new(
+            flui_sdk::rendering::objects::FloatingHeaderSnapConfiguration::new(
                 flui_sdk::animation::SharedCurve::new(flui_sdk::animation::curves::EASE),
                 std::time::Duration::from_millis(300),
             )

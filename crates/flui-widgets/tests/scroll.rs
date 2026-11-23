@@ -18,10 +18,11 @@ use crate::common::{LaidOut, lay_out, tight};
 use flui_animation::{SharedCurve, Vsync, curves};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
+use flui_semantics::SemanticsRole;
 use flui_view::environment::VsyncScope;
 use flui_view::{IntoView, SignalWriteExt, ViewExt};
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, ScrollView, SemanticsRole,
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, ScrollView,
     SharedScrollPhysics, SingleChildScrollView, SizedBox,
 };
 
@@ -574,7 +575,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
             PointerPress, PointerRelease, PointerSample, PointerSource,
         },
     };
-    use flui_testing::PointerPhase;
+    use flui_testing::replay::PointerPhase;
 
     let controller = ScrollController::new();
     controller
@@ -2326,7 +2327,7 @@ pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it
                 .controller(scroll.clone())
                 .child(
                     GestureDetector::new()
-                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                         .on_tap(move |_| tapped.set(tapped.get() + 1))
                         .child(SizedBox::new(300.0, 5000.0)),
                 ),
@@ -2374,7 +2375,7 @@ pub(crate) fn a_click_during_wheel_easing_taps_and_a_press_on_a_fling_catches_it
 pub(crate) fn resting_fingers_catch_a_fling_and_leave_wheel_easing() {
     use flui_foundation::geometry::Offset;
     use flui_platform::input::pointer::ScrollPrecision::Notched;
-    use flui_testing::TrackpadScript;
+    use flui_testing::replay::TrackpadScript;
     let scroll = ScrollController::new();
     let vsync = Vsync::new();
     let mut laid = crate::common::lay_out_animated(
@@ -3488,7 +3489,7 @@ pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
                 .physics(physics)
                 .child(
                     GestureDetector::new()
-                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
                         .on_tap(move |_| taps.set(taps.get() + 1))
                         .child(SizedBox::new(300.0, 800.0)),
                 ),
@@ -3657,7 +3658,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
         },
     };
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use flui_widgets::{ScrollMetrics, ScrollPhysics};
 
     #[derive(Debug)]
@@ -5016,7 +5017,7 @@ impl flui_view::ViewState<ScrollInBuild> for ScrollInBuildState {
 
 /// `jump_to` and `animate_to` called from `build` are refused with a typed
 /// error and move nothing; the same calls from outside a build land
-/// (ADR-0086 §7).
+/// (ADR-0074 §5.2).
 pub(crate) fn controller_mutation_during_build_is_refused() {
     let scroll = ScrollController::new();
     let vsync = Vsync::new();

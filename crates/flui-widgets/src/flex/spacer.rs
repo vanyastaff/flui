@@ -2,8 +2,9 @@
 
 use std::fmt;
 
+use flui_foundation::CreationSite;
 use flui_view::prelude::StatelessView;
-use flui_view::{BuildContext, CreationSite, IntoView};
+use flui_view::{BuildContext, IntoView};
 
 use crate::flex::Expanded;
 use crate::layout::SizedBox;

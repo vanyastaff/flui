@@ -3,7 +3,7 @@
 //! registered `ErrorView` in its place.
 //!
 //! [`ChildHookPanic`] is the typed-error handoff between the fallible cores
-//! in `element_tree.rs` (`ElementTree::try_insert_with_provisional_order`,
+//! in the `element_tree` module (`ElementTree::try_insert_with_provisional_order`,
 //! `ElementTree::try_update`, and the two `GlobalKey` retakes) and the two
 //! substituting primitives defined here —
 //! [`ElementTree::mount_or_substitute`] / [`ElementTree::update_or_substitute`].
@@ -111,7 +111,7 @@ impl ElementTree {
     #[must_use = "a substitute mount re-points whatever id the caller was tracking"]
     pub(crate) fn mount_or_substitute(
         &mut self,
-        view: &dyn View,
+        view: &crate::BoxedView,
         parent: ElementId,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,

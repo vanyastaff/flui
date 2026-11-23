@@ -1,8 +1,9 @@
 //! [`RotatedBox`] — rotates its child by a whole number of quarter turns.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderRotatedBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Rotates its child by a whole number of clockwise 90° turns.
 ///

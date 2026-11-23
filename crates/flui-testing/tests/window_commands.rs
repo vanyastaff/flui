@@ -5,7 +5,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
-use flui_native::{HeadlessPlatform, HostWindow, Platform as _};
+use flui_native::testing::HeadlessPlatform;
+use flui_native::{HostWindow, Platform as _};
 use flui_platform::{WindowCapabilities, WindowOptions};
 use flui_testing::window_commands::AdmitAndApply as _;
 

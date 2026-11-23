@@ -76,6 +76,8 @@ mod rescale;
 mod sent_messages;
 #[cfg(windows)]
 mod set;
+#[cfg(any(windows, test))]
+mod show_requests;
 pub(crate) mod sizing;
 #[cfg(windows)]
 mod window;

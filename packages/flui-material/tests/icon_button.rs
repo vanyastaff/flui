@@ -22,7 +22,7 @@ use common::{lay_out, tight};
 use flui_material::{
     ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{IconTheme, IconThemeData, SizedBox, WidgetStateProperty};
 
@@ -157,7 +157,7 @@ pub fn a_toggle_cross_fades_to_its_selected_icon() {
     use flui_sdk::animation::Vsync;
     use flui_sdk::view::environment::VsyncScope;
     use flui_sdk::widgets::Icon;
-    use flui_sdk::widgets::icon::IconData;
+    use flui_sdk::widgets::IconData;
 
     let button = |vsync: &Vsync, selected| {
         VsyncScope::new(
@@ -259,7 +259,7 @@ pub fn a_selected_icon_button_hovers_in_primary() {
 pub fn a_labelled_icon_names_the_button_it_sits_in() {
     use flui_material::{ElevatedButton, FloatingActionButton};
     use flui_sdk::widgets::Icon;
-    use flui_sdk::widgets::icon::IconData;
+    use flui_sdk::widgets::IconData;
     use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
     use std::cell::Cell;
 

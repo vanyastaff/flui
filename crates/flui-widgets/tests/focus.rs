@@ -9,8 +9,8 @@ use flui_interaction::focus::{FocusNode, FocusScopeNode};
 use flui_view::ViewExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_widgets::interaction::{Focus, FocusChangeHandler, FocusScope};
 use flui_widgets::{Directionality, Positioned, SizedBox, Stack};
+use flui_widgets::{Focus, FocusChangeHandler, FocusScope};
 
 use crate::common::harness::mount;
 
@@ -29,7 +29,7 @@ pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
     use flui_interaction::focus::{
         FocusTraversalPolicy, ReadingOrderPolicy, TraversalEdgeBehavior,
     };
-    use flui_widgets::interaction::FocusTraversalGroup;
+    use flui_widgets::FocusTraversalGroup;
     #[derive(Debug)]
     struct Reverse;
     impl FocusTraversalPolicy for Reverse {
@@ -81,7 +81,7 @@ pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_ord
     use flui_interaction::focus::{
         FocusTraversalPolicy, KeyEventResult, ReadingOrderPolicy, TraversalEdgeBehavior,
     };
-    use flui_widgets::interaction::FocusTraversalGroup;
+    use flui_widgets::FocusTraversalGroup;
     use std::cell::Cell;
     #[derive(Debug)]
     struct CountingPolicy(Rc<Cell<usize>>);
@@ -199,7 +199,7 @@ pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
         EventTime,
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
-    use flui_widgets::interaction::FocusTraversalGroup;
+    use flui_widgets::FocusTraversalGroup;
     let origin = FocusNode::new();
     let diagonal = FocusNode::new();
     let beam = FocusNode::new();
@@ -284,7 +284,7 @@ pub(crate) fn widget_scope_edge_configuration_reaches_the_tab_path() {
     }
 }
 
-/// A root that can drop the focus subtree without changing its own type â€”
+/// A root that can drop the focus subtree without changing its own type —
 /// `swap_root` dispatches by `TypeId`.
 #[derive(Clone)]
 struct Host {
@@ -325,7 +325,7 @@ impl StatelessView for Host {
 ///
 /// Also covers autofocus on mount.
 ///
-/// Red-check: make `enclosing_scope` always answer the root scope â€” the
+/// Red-check: make `enclosing_scope` always answer the root scope — the
 /// node parents to the root and the first assertion fails.
 pub(crate) fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases() {
     let scope = FocusScopeNode::with_debug_label("host-scope");
@@ -598,7 +598,7 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
 // Traversal order
 // ------------------------------------------------------------------------
 
-/// Widget-mounted nodes traverse in **reading order**, not attach order â€”
+/// Widget-mounted nodes traverse in **reading order**, not attach order —
 /// the ADR-0026 traversal-geometry gap, closed: every `Focus` anchors
 /// its child and installs a rect provider, so `ReadingOrderPolicy` sorts
 /// real committed geometry. The attach order (`a`, `b`, `c`) is chosen so
@@ -606,7 +606,7 @@ pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
 /// from `a`, geometry says `c` next, attach order would say `b`.
 ///
 /// Red-check (the pre-fix behavior): skip `install_rect_provider` in
-/// `init_state` â€” every rect reads zero, the sort degenerates to attach
+/// `init_state` — every rect reads zero, the sort degenerates to attach
 /// order, and the first assertion gets `b`.
 pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
     let scope = FocusScopeNode::with_debug_label("traversal-scope");
@@ -645,7 +645,7 @@ pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
     manager.focus_next();
     assert!(
         c.has_primary_focus(),
-        "after the middle node comes the bottom one â€” reading order, not attach order"
+        "after the middle node comes the bottom one — reading order, not attach order"
     );
     manager.focus_next();
     assert!(b.has_primary_focus(), "wraparound lands on the top node");
@@ -901,8 +901,8 @@ pub(crate) mod event_context {
 
     use flui_interaction::focus::FocusNode;
     use flui_view::prelude::*;
+    use flui_widgets::Focus;
     use flui_widgets::SizedBox;
-    use flui_widgets::interaction::Focus;
 
     use crate::common::harness::mount;
     use crate::common::{ProbeSignals, SignalProbe};
@@ -965,7 +965,7 @@ pub(crate) mod event_context {
 /// An assistive focus request uses the actual mounted focus node, then publishes it.
 pub(crate) fn platform_focus_requests_the_mounted_node_and_rejects_disabled_focus() {
     use crate::common::{lay_out, loose};
-    use flui_testing::{Action, ActionRequest, TreeId};
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
     use flui_widgets::Semantics;
 
     let node = FocusNode::with_debug_label("assistive-target");
@@ -1142,7 +1142,7 @@ pub(crate) fn a_refused_node_replacement_is_made_by_the_next_rebuild() {
 /// longer owns the attachment.
 pub(crate) fn an_adopted_external_node_ignores_the_old_elements_focus_action() {
     use crate::common::{lay_out, loose};
-    use flui_testing::{Action, ActionRequest, TreeId};
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
     use flui_widgets::Semantics;
 
     let node = FocusNode::with_debug_label("adopted-target");
@@ -1198,7 +1198,7 @@ pub(crate) fn a_superseded_focus_takes_its_record_and_callbacks_when_disposed() 
         EventTime,
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
-    use flui_widgets::interaction::{Actions, CallbackAction, Intent, Shortcuts, SingleActivator};
+    use flui_widgets::{Actions, CallbackAction, Intent, Shortcuts, SingleActivator};
 
     struct SaveIntent;
     impl Intent for SaveIntent {}
@@ -1329,7 +1329,7 @@ impl ViewState<MountProbe> for MountProbeState {
 /// (which cancels a gesture in flight under it).
 ///
 /// Red-check: wrap the child in `Semantics` only while the node can take
-/// focus â€” the probe mounts a second time on every row.
+/// focus — the probe mounts a second time on every row.
 pub(crate) fn a_focus_keeps_its_subtree_when_it_stops_being_focusable() {
     let own = FocusNode::with_debug_label("own flag");
     let page = FocusScopeNode::new();
@@ -1405,7 +1405,7 @@ impl StatelessView for ControllerInBuild {
 /// contact moves and every step of a held drag paints new content.
 ///
 /// Red-check: have an element's update rebuild its child whether or not the
-/// child's view is the one it already holds â€” the frames freeze after the
+/// child's view is the one it already holds — the frames freeze after the
 /// first step.
 pub(crate) fn the_first_focus_gain_does_not_rebuild_the_app_under_a_drag() {
     use crate::common::{lay_out, tight};

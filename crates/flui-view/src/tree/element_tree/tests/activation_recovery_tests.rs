@@ -7,7 +7,7 @@ use flui_foundation::panic::payload_text;
 use super::*;
 use crate::view::FrameworkError;
 
-fn recovery_factory_panics(_error: &FrameworkError) -> Box<dyn View> {
+fn recovery_factory_panics(_error: &FrameworkError) -> BoxedView {
     panic!("activation recovery factory panic");
 }
 
@@ -24,12 +24,22 @@ fn active_retake_fixture() -> (
         flui_rendering::TextContextHandle::standalone(),
     ));
     let root = tree.mount_root_with_pipeline_owner(
-        &UnitRenderHost,
+        &UnitRenderHost.boxed(),
         Some(pipeline),
         &mut owner.element_owner_mut(),
     );
-    let donor = tree.insert(&UnitRenderHost, root, 0, &mut owner.element_owner_mut());
-    let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+    let donor = tree.insert(
+        &UnitRenderHost.boxed(),
+        root,
+        0,
+        &mut owner.element_owner_mut(),
+    );
+    let destination = tree.insert(
+        &UnitRenderHost.boxed(),
+        root,
+        1,
+        &mut owner.element_owner_mut(),
+    );
     tree.get_mut(root)
         .expect("root remains live")
         .set_child_ids(&[donor, destination]);
@@ -39,7 +49,12 @@ fn active_retake_fixture() -> (
         key: GlobalKey::new(),
         armed: std::rc::Rc::clone(&armed),
     };
-    let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
+    let candidate = tree.insert(
+        &keyed.clone().boxed(),
+        donor,
+        0,
+        &mut owner.element_owner_mut(),
+    );
     tree.get_mut(donor)
         .expect("donor remains live")
         .set_child_ids(&[candidate]);
@@ -92,7 +107,7 @@ fn activation_factory_panic_drops_staged_record_and_preserves_prior_record() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = tree.begin_reconcile(destination);
             let _ = tree.mount_or_substitute(
-                &keyed,
+                &keyed.clone().boxed(),
                 destination,
                 0,
                 &mut owner.element_owner_mut(),

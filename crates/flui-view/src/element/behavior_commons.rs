@@ -17,8 +17,8 @@
 //!   per-behavior overrides we need to keep (mounting a `RenderObject`,
 //!   subscribing to a `Listenable`, etc.).
 //!
-//! Per *Rust for Rustaceans* §"Composition and Helpers" and Constitution
-//! Principle 4 (no `dyn` by default), free functions taking the minimal
+//! Per *Rust for Rustaceans* §"Composition and Helpers" and the crate's
+//! rule of no `dyn` by default, free functions taking the minimal
 //! slice of state composes cleanly with the existing trait surface.
 //!
 //! ## Recovery ownership
@@ -36,7 +36,7 @@ use flui_foundation::panic::FirstPanic;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
-    view::{BoxedView, FrameworkError, IntoView, View},
+    view::{BoxedView, FrameworkError, IntoView},
 };
 
 // ============================================================================
@@ -134,7 +134,7 @@ pub(crate) fn stamp_sliver_slot(
 ///
 /// # Recovery on a caught panic
 ///
-/// E3 (atomic box→arena swap): the element no longer owns a child graph,
+/// The element does not own a child graph,
 /// so there is no half-built child subtree to tear down here. On a caught
 /// panic this returns the substituted `ErrorView` box; the caller
 /// (`build_into_views`) returns it as the single child view, and the slab
@@ -215,10 +215,10 @@ where
                          (no element id to record)"
                     );
                 });
-                return BoxedView::from(crate::view::ErrorView::build_error_view(
+                return crate::view::ErrorView::build_error_view(
                     &error,
                     owner.capabilities.error_view_builder,
-                ));
+                );
             };
             let panic = RecoveredPanic::from_payload(
                 RecoveredAt::Element {
@@ -235,10 +235,10 @@ where
             owner.reactive.end_element_build(element, false);
             // A recovery factory failure retains its existing authority. No
             // successful recovery record is published until it returns a view.
-            let error_view = BoxedView::from(crate::view::ErrorView::build_error_view(
+            let error_view = crate::view::ErrorView::build_error_view(
                 &panic.error,
                 owner.capabilities.error_view_builder,
-            ));
+            );
             if let Some(flag) = owner.build_recovered {
                 flag.set(true);
             }
@@ -288,13 +288,12 @@ where
 /// body inline so the tracing strings can interpolate the active
 /// `RenderId`.
 ///
-/// E3 (atomic box→arena swap): this no longer reconciles a child into box
-/// storage — it just hands the owned child view back. The reconcile
-/// against the slab runs in `BuildOwner::build_scope`. `core` is cleared
-/// of its dirty flag here because the build half is complete (the seam
-/// that used to clear it after `update_or_create_child`).
+/// The element does not reconcile a child into storage: it just hands the
+/// owned child view back. The reconcile against the slab runs in
+/// `BuildOwner::build_scope`. `core` is cleared of its dirty flag here
+/// because the build half is complete.
 //
-// FR-007: accepts `impl IntoView` from authoring-side callers and
+// Accepts `impl IntoView` from authoring-side callers and
 // normalizes via `IntoView::into_view` inside the helper. The generic
 // `R` parameter keeps the child type static rather than a `Box<dyn View>`.
 #[must_use]
@@ -318,12 +317,12 @@ where
 /// accessor on the view — i.e. `ProxyBehavior` and `InheritedBehavior`.
 ///
 /// `get_child` abstracts over `ProxyView::child` vs
-/// `InheritedView::child`: both return `&dyn View` but the trait names
+/// `InheritedView::child`: both return `&BoxedView` but the trait names
 /// differ, so each behavior passes its own closure. The body is
 /// identical otherwise:
 ///
 /// ```text
-///   guard → view.child() → share or clone → clear dirty → one child
+///   guard → view.child() → share → clear dirty → one child
 /// ```
 ///
 /// Returns `ChildViews::none()` when the guard short-circuits (clean element /
@@ -339,13 +338,13 @@ pub(crate) fn proxy_style_views<V, A, F>(
 where
     V: Clone + 'static,
     A: ElementArity,
-    F: FnOnce(&V) -> &dyn View,
+    F: FnOnce(&V) -> &crate::BoxedView,
 {
     if !should_build_with_trace(core, behavior_name) {
         return crate::view::ChildViews::none();
     }
     let child_view = get_child(core.view());
-    let child = crate::view::ChildViews::copy_of(child_view);
+    let child = crate::view::ChildViews::shared(child_view);
     core.clear_dirty();
     tracing::debug!("{}::build_into_views completed", behavior_name);
     child

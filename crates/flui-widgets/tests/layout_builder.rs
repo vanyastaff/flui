@@ -22,12 +22,10 @@ use parking_lot::Mutex;
 
 // Exercise the public prelude import path: if `LayoutBuilder` were not exported
 // from `flui_widgets::prelude`, this file would not compile.
+use flui_rendering::delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate};
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::prelude::*;
-use flui_widgets::{
-    ConstrainedBox, CustomMultiChildLayout, LayoutId, MultiChildLayoutContext,
-    MultiChildLayoutDelegate, Padding, SizedBox,
-};
+use flui_widgets::{ConstrainedBox, CustomMultiChildLayout, LayoutId, Padding, SizedBox};
 
 /// A builder that records the constraints it was handed.
 fn recorder(

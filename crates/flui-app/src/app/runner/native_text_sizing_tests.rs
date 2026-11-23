@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::app::runner::window_routes::OwnerOpenRouted as _;
-use flui_native::{HeadlessPlatform, Platform};
+use flui_native::Platform;
+use flui_native::testing::HeadlessPlatform;
 use flui_runtime::ui_runtime::UiRuntime;
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ fn installed_capture(
     run: impl FnOnce(
         Rc<NativeTextSizing>,
         Rc<Cell<usize>>,
-        flui_native::HeadlessOwnerTurns,
+        flui_native::testing::HeadlessOwnerTurns,
         super::super::frame_driver::FrameBinding,
     ),
 ) {
@@ -31,7 +32,9 @@ fn installed_capture(
                     Rc::clone(&window) as Rc<dyn flui_platform::PlatformWindow>,
                     None,
                 )
-                .with_text_store_host(Some(flui_testing::RecordingTextStoreHost::new())),
+                .with_text_store_host(Some(
+                    flui_testing::text_store_host::RecordingTextStoreHost::new(),
+                )),
                 1.0,
                 flui_runtime::ui_runtime::RuntimeHostServices::new(
                     Arc::new(|| {}),

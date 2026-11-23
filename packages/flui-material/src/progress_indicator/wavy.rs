@@ -16,12 +16,16 @@ use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, RepeatMode, Vsync,
 };
 use flui_sdk::foundation::Listenable;
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::{Point, Rect, Size};
-use flui_sdk::painting::{Canvas, Color, Paint, Path, StrokeCap, TextDirection};
+use flui_sdk::painting::Canvas;
+use flui_sdk::painting::CustomPainter;
+use flui_sdk::painting::paint::{Paint, Path, StrokeCap};
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{ActivityArc, CustomPaint, CustomPainter, Directionality};
+use flui_sdk::widgets::{ActivityArc, CustomPaint, Directionality};
 
 use super::circular::determinate_arcs;
 use super::linear::{self, Bars, STILL_SPAN};

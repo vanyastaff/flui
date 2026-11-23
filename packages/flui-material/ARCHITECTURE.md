@@ -15,7 +15,7 @@ recorded so far.
 ### `InkWell` owns its ripple; no ink-feature registry
 
 `InkWell` mounts the catalogs' interactive node (ADR-0322 §1,
-`flui_widgets::interaction::node`, doc-hidden): one element and one render
+`flui_widgets::__private::node`, doc-hidden): one element and one render
 object carry its tap (`ControlTap`, the tap family of `GestureDetector` and the
 raw contact ends), its focus node and ring, its activation bindings and the
 five interaction states, where it nested a `GestureDetector`, a `Listener`, a
@@ -420,8 +420,8 @@ because FLUI's controller listeners are `Send + Sync` and cannot reach the
 owner-thread field state; the controller is read before the field validates or
 saves (`flui_sdk::widgets::__private::TextFormFieldCore`, shared with
 `RawTextFormField`; this type supplies only the Material input), so a caller's own controller edit is still validated and
-saved but does not count as the user's interaction — see `flui-widgets`
-mapping decision 31. `initialValue` and `controller` are two constructors
+saved but does not count as the user's interaction — see `flui-widgets`'s
+[`ARCHITECTURE.md`](../../crates/flui-widgets/ARCHITECTURE.md#editabletexton_changed-reports-only-the-users-edits-and-a-text-form-field-reads-its-controller). `initialValue` and `controller` are two constructors
 (`new`, `with_initial_value`) rather than an assert.
 
 **Tests** (`tests/text_form_field.rs`):

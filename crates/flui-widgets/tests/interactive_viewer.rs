@@ -17,7 +17,7 @@ use flui_platform::input::pointer::{
 };
 use flui_platform::{EventTime, input::keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
-use flui_testing::{MouseScript, PenScript, PointerScript, TouchScript, TrackpadScript};
+use flui_testing::replay::{MouseScript, PenScript, PointerScript, TouchScript, TrackpadScript};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, Signal, SignalWriteExt, View, ViewExt};
@@ -1190,7 +1190,7 @@ pub(crate) fn viewer_key_sequence_ends_when_focus_moves_before_the_release() {
                 photo(&transform).boundary_margin(EdgeInsets::all(100.0)),
             ))
             .boxed(),
-        flui_widgets::interaction::Focus::new(SizedBox::new(40.0, 40.0))
+        flui_widgets::Focus::new(SizedBox::new(40.0, 40.0))
             .focus_node(Rc::clone(&elsewhere))
             .boxed(),
     ]);

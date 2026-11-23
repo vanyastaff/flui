@@ -80,20 +80,20 @@ use crate::close::{CloseMode, CloseTombstone};
 /// whose focused ancestry changed, then publish `(previous, new)` to every
 /// [`FocusChangeCallback`] registered via [`Self::listen`]. A
 /// listener that itself calls `request_focus`/`unfocus` from inside that
-/// publication â€” a reentrant request â€” is never applied inline: it is
+/// publication — a reentrant request — is never applied inline: it is
 /// queued, then re-validated (attached, focusable, still owned by this
-/// manager â€” see the private `is_eligible` predicate) immediately before
+/// manager — see the private `is_eligible` predicate) immediately before
 /// its turn, and applied only once every currently in-flight notification
 /// has finished publishing, in the order it was requested (FIFO). A
-/// target that lost eligibility while it waited â€” a later listener in the
+/// target that lost eligibility while it waited — a later listener in the
 /// same chain detached it, revoked its focusability, or reparented it
-/// elsewhere â€” is skipped rather than committed stale. By the time the
+/// elsewhere — is skipped rather than committed stale. By the time the
 /// outermost `request_focus`/`unfocus` call returns,
 /// [`Self::primary_focus`] and the last edge any listener observed always
-/// agree â€” no listener can observe a stale destination (issue #1040). The
+/// agree — no listener can observe a stale destination (issue #1040). The
 /// crate-internal node-replacement completion publishes its own outer
 /// edge under this same guard; [`Self::close`] does not participate in it
-/// at all â€” see its own doc for the distinct contract it keeps instead. A
+/// at all — see its own doc for the distinct contract it keeps instead. A
 /// reentrant chain that never settles (two listeners that keep
 /// re-requesting each other) is bounded: past a fixed per-call budget of
 /// applications, the remaining queue is dropped with a single
@@ -151,7 +151,7 @@ pub struct FocusManager {
 /// RAII scope for one nested level of [`FocusManager::notification_depth`].
 ///
 /// `enter` increments on construction; `Drop` decrements unconditionally,
-/// including when the drop runs while unwinding â€” a listener that panics
+/// including when the drop runs while unwinding — a listener that panics
 /// mid-notification must not leave `notification_depth` stuck above zero,
 /// or every later `request_focus`/`unfocus` on that manager would queue
 /// forever instead of applying. Accepted requests remain delivery debt even
@@ -205,8 +205,8 @@ impl FocusManager {
     /// two listeners that keep redirecting focus to each other would
     /// otherwise spin the caller forever. Past the budget,
     /// [`Self::drain_pending_focus_transitions`] drops whatever is left
-    /// and warns once. The budget counts *applications* â€” queued
-    /// transitions that actually commit a change â€” not queue pops: a
+    /// and warns once. The budget counts *applications* — queued
+    /// transitions that actually commit a change — not queue pops: a
     /// queued entry that turns out to already name the current primary,
     /// or whose target lost eligibility while it waited (see
     /// [`Self::is_eligible`]), is skipped for free and never touches the
@@ -298,7 +298,7 @@ impl FocusManager {
         self.primary_focus.borrow().is_some()
     }
 
-    /// Accepted â€” applied immediately, or, when requested from inside a
+    /// Accepted — applied immediately, or, when requested from inside a
     /// focus-change listener, queued and applied after the in-flight
     /// notification completes (see the type-level ordering contract).
     /// Returns `true` whenever the request is accepted, regardless of
@@ -462,10 +462,10 @@ impl FocusManager {
     ///
     /// The single source of truth for that question: [`Self::request_focus`]
     /// calls it directly (after its own `owns` check, evaluated first only
-    /// so a foreign-manager rejection gets its own distinct warning â€” see
+    /// so a foreign-manager rejection gets its own distinct warning — see
     /// that method), and [`Self::drain_pending_focus_transitions`] calls it
     /// again immediately before a queued transition is applied, since the
-    /// world can change while a request waits in the queue â€” a reentrant
+    /// world can change while a request waits in the queue — a reentrant
     /// listener earlier in the same chain can detach `node`, flip its
     /// [`FocusNode::can_request_focus`], or reparent it under a different
     /// manager before its turn comes, and a stale queued target must be
@@ -478,7 +478,7 @@ impl FocusManager {
     /// committed primary focus.
     ///
     /// Queues the request instead of applying it when a notification is
-    /// already in flight â€” see the type-level ordering contract.
+    /// already in flight — see the type-level ordering contract.
     fn set_primary_focus(&self, node: Option<Rc<FocusNode>>, cause: FocusCause) {
         if self.notification_depth.get() > 0 {
             self.pending_focus_transitions
@@ -570,8 +570,8 @@ impl FocusManager {
     /// closes, or [`Self::REENTRANT_FOCUS_DRAIN_BUDGET`] is exhausted.
     ///
     /// Each dequeued `Some(node)` is re-validated with [`Self::is_eligible`]
-    /// before it is applied â€” the world can change between when a
-    /// reentrant listener queued it and when its turn comes â€” and skipped
+    /// before it is applied — the world can change between when a
+    /// reentrant listener queued it and when its turn comes — and skipped
     /// with a `tracing::trace!` if the target is no longer eligible. A
     /// dequeued `None` ([`Self::unfocus`]) is always eligible. Neither an
     /// eligibility skip nor a same-identity no-op counts against the drain
@@ -615,7 +615,7 @@ impl FocusManager {
             applied += 1;
             if applied > Self::REENTRANT_FOCUS_DRAIN_BUDGET {
                 // `node` (the one that tripped the budget) plus whatever is
-                // still queued behind it are both dropped below â€” count
+                // still queued behind it are both dropped below — count
                 // both, so the warning is the one piece of evidence a
                 // ping-pong author will ever see for this drop.
                 let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
@@ -657,14 +657,14 @@ impl FocusManager {
     ///
     /// Publishes `(previous_primary, current)` to manager listeners only
     /// when primary-focus identity actually changed across the
-    /// replacement â€” a replacement that leaves primary on the same node
+    /// replacement — a replacement that leaves primary on the same node
     /// (only its ancestry changed) is not a transition and publishes
     /// nothing; the affected ancestors' node-level listeners still fire
     /// via [`Self::notify_focus_path_change`]. Runs that node notification
     /// with `notification_depth` held above zero (via
     /// [`NotificationDepthGuard`]), so a reentrant `request_focus`/`unfocus`
     /// from one of those listeners is queued and applied after this
-    /// publication â€” see the type-level ordering contract.
+    /// publication — see the type-level ordering contract.
     ///
     /// Its only caller, `FocusAttachment::replace_node`, refuses with
     /// `FocusTreeError::NotificationInFlight` before mutating anything while
@@ -726,7 +726,7 @@ impl FocusManager {
     /// delivered by value. A reentrant `request_focus`/`unfocus` made from
     /// inside a callback is applied only after every currently in-flight
     /// notification finishes publishing, so `new` from one call this
-    /// listener observes is always `previous` on the next â€” no listener
+    /// listener observes is always `previous` on the next — no listener
     /// ever sees a destination that a later, already-applied transition
     /// has superseded. Dropping the subscription withdraws the listener.
     pub fn listen(
@@ -1239,7 +1239,7 @@ impl FocusManager {
     /// Ask for keys to start their walk at `node` while nothing is focused.
     ///
     /// The walk normally starts at the primary focus. A window opened with
-    /// nothing focused has none, so without a target every key is dropped â€”
+    /// nothing focused has none, so without a target every key is dropped —
     /// including the first Tab that would bring the focus in. FLUI's
     /// default bindings claim their own node here, so the walk
     /// reaches them and nothing about `primary_focus` changes.
@@ -1294,7 +1294,7 @@ impl FocusManager {
     /// aborts, as in std (ADR-0281).
     ///
     /// Primary focus is always cleared to `None`, even when `close` runs
-    /// reentrantly from inside a focus-change listener â€” unlike
+    /// reentrantly from inside a focus-change listener — unlike
     /// `request_focus`/[`Self::unfocus`], `close` never takes the private
     /// notification-depth guard itself, so its healthy node-level notifications
     /// run immediately, nested inside whatever notification is already in
@@ -1303,8 +1303,8 @@ impl FocusManager {
     /// *manager*-level publication is conditional: it fires `(previous,
     /// None)` to [`FocusChangeCallback`] listeners only when
     /// `notification_depth` reads zero (no outer notification is currently
-    /// publishing), and is skipped â€” rather than interleaved out of order
-    /// â€” otherwise. The net effect matches `request_focus`/`unfocus`'s
+    /// publishing), and is skipped — rather than interleaved out of order
+    /// — otherwise. The net effect matches `request_focus`/`unfocus`'s
     /// ordering goal, reached here by omission instead of participation.
     /// Any request a reentrant listener queues afterward is dropped, never
     /// applied, once closed.
@@ -1660,7 +1660,7 @@ mod tests {
     //
     // `tracing` capture for these tests goes through
     // `flui_testing::log_capture::capture`, race-free in a thread-parallel
-    // test binary for the reason documented there â€” this crate sits below
+    // test binary for the reason documented there — this crate sits below
     // `flui-testing` in the layer DAG for everything else, but keeps it as
     // a dev-dependency for exactly this.
 
@@ -1873,7 +1873,7 @@ mod tests {
                 "every capture sees the complete closed tree after {expected}"
             );
             // Every capture is destroyed once, after a callback failure and
-            // past a failing destructor alike (ADR-0281 Â§3).
+            // past a failing destructor alike (ADR-0281 §3).
             let mut destroyed = drops.borrow().clone();
             destroyed.sort_unstable();
             let mut all = [
@@ -2283,7 +2283,7 @@ mod tests {
 
         // The concrete node left focused after the drop must match the
         // last transition the drain actually committed, not a hardcoded
-        // parity assumption â€” read it back from the same trace-level
+        // parity assumption — read it back from the same trace-level
         // "focus changed" events `apply_focus_transition` emits.
         let last_committed = log
             .records()
@@ -2304,8 +2304,8 @@ mod tests {
 
         // The budget resets per outermost call rather than leaking state
         // across calls: with the ping-pong wiring removed, a plain request
-        // from outside now behaves like any other healthy transition â€”
-        // applied immediately, publishing exactly one edge â€” proving the
+        // from outside now behaves like any other healthy transition —
+        // applied immediately, publishing exactly one edge — proving the
         // manager was left fully functional after the bounded drop.
         listener_0.detach();
         listener_1.detach();
@@ -2330,8 +2330,8 @@ mod tests {
         );
     }
 
-    /// Once the manager closes â€” even reentrantly, from inside a
-    /// notification already in flight â€” no further manager-level
+    /// Once the manager closes — even reentrantly, from inside a
+    /// notification already in flight — no further manager-level
     /// publication happens and any request still queued by a reentrant
     /// listener is dropped rather than applied.
     fn queued_requests_are_dropped_when_the_manager_closes_mid_drain() {

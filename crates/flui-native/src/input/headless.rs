@@ -62,8 +62,8 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
     }
 }
 
-/// Attaches and removes simulated input devices on a [`HeadlessPlatform`](crate::HeadlessPlatform)
-/// ([`HeadlessPlatform::input_devices`](crate::HeadlessPlatform::input_devices)).
+/// Attaches and removes simulated input devices on a [`HeadlessPlatform`](crate::testing::HeadlessPlatform)
+/// ([`HeadlessPlatform::input_devices`](crate::testing::HeadlessPlatform::input_devices)).
 #[derive(Clone)]
 pub struct HeadlessInputDevices {
     state: std::rc::Weak<std::cell::RefCell<HeadlessState>>,

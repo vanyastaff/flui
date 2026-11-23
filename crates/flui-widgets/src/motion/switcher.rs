@@ -83,7 +83,7 @@ pub type AnimatedSwitcherLayoutBuilder = Rc<dyn Fn(Option<BoxedView>, Vec<BoxedV
 /// ```
 /// use std::time::Duration;
 /// use flui_objects::TranslationFraction;
-/// use flui_widgets::motion::Transition;
+/// use flui_widgets::Transition;
 /// use flui_widgets::prelude::*;
 /// use flui_widgets::AnimatedSwitcher;
 ///

@@ -8,9 +8,9 @@ use std::rc::Rc;
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Matrix4;
 use flui_rendering::view::{OffsetWriteCause, ScrollPosition};
-use flui_widgets::interaction::TransformationController;
-use flui_widgets::text::TextEditingController;
-use flui_widgets::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
+use flui_widgets::TextEditingController;
+use flui_widgets::TransformationController;
+use flui_widgets::{WidgetState, WidgetStates, WidgetStatesController};
 
 /// A listener that panics first, then a relay: the relay must observe the
 /// failure its enclosing delivery already holds, so outgoing captures it

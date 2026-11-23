@@ -24,9 +24,8 @@ use std::sync::{
 /// RAII handle that keeps semantics enabled on its owning [`SemanticsHost`]
 /// while held.
 ///
-/// Mirrors the retired `SemanticsBinding::SemanticsHandle`'s ref-counting
-/// shape, now scoped to one presentation instead of a process-wide
-/// singleton.
+/// Reference-counted: semantics stays enabled until the last handle drops,
+/// scoped to one presentation rather than a process-wide singleton.
 ///
 /// Constructed only by [`SemanticsHost::ensure_semantics`]; the UI runtime's
 /// semantics agent holds one while any clone of it is alive.
@@ -60,10 +59,10 @@ impl std::fmt::Debug for SemanticsHandle {
 
 /// Per-presentation semantics enablement gate.
 ///
-/// One instance lives on each `PresentationState` (in `flui-app`); there is
+/// One instance lives on each `PresentationState`; there is
 /// no process-wide instance and no `instance()`/`is_initialized()` accessor —
 /// a presentation always has one from construction.
-pub struct SemanticsHost {
+pub(crate) struct SemanticsHost {
     /// Number of active `SemanticsHandle`s.
     handle_count: Arc<AtomicUsize>,
 
@@ -122,14 +121,6 @@ impl SemanticsHost {
             || self.handle_count.load(Ordering::Relaxed) > 0
     }
 
-    /// Returns the number of outstanding semantics handles.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn outstanding_handles(&self) -> usize {
-        self.handle_count.load(Ordering::Relaxed)
-    }
-
     /// Creates a new `SemanticsHandle` and enables semantics collection.
     ///
     /// The returned handle keeps semantics enabled until it is dropped.
@@ -149,14 +140,6 @@ impl SemanticsHost {
         // Relaxed: the flag carries no payload -- see `semantics_enabled`.
         self.platform_semantics_enabled
             .store(enabled, Ordering::Relaxed);
-    }
-
-    /// Returns whether the platform has requested semantics.
-    #[cfg(any(test, feature = "testing"))]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn platform_semantics_enabled(&self) -> bool {
-        self.platform_semantics_enabled.load(Ordering::Relaxed)
     }
 
     /// A cheap clone of the platform-enablement flag, for wiring into the

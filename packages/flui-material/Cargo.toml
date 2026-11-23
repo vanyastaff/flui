@@ -40,6 +40,9 @@ flui-painting = { workspace = true }
 flui-testing = { workspace = true }
 # Committed scene inspection includes ancestor transform and opacity layers.
 flui-layer = { workspace = true }
+# The scaffold messenger's fault tests mount a probe on a bare build owner and
+# element tree, which only `flui_view::__runtime` names (ADR-0081 §4).
+flui-view = { workspace = true }
 # Key events (`events`, `testing::input::KeyEventBuilder`) and `FocusManager`,
 # which a few tests construct directly (`ink_well.rs`, `text_field.rs`).
 flui-interaction = { workspace = true, features = ["testing"] }

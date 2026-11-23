@@ -156,12 +156,12 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// `ViewState::build` returns `impl IntoView` (return-position
     /// `impl Trait` in trait, stabilized in Rust 1.75). This makes
     /// `ViewState` **non-object-safe** — no `dyn ViewState` use exists
-    /// or is needed (FR-008).
+    /// or is needed.
     ///
     /// The framework normalizes the opaque return via
     /// [`IntoView::into_view`] inside the build call site (see
     /// `element/behavior.rs`), boxing the concrete `'static` value
-    /// into `Box<dyn View>` before the closure / catch-unwind
+    /// into a `BoxedView` before the closure / catch-unwind
     /// boundary. See `StatelessView::build` for the rationale.
     fn build(&self, view: &V, ctx: &dyn BuildContext) -> impl IntoView;
 

@@ -49,7 +49,8 @@ use super::binding::PopPacing;
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 use crate::interaction::recognizer_attachment::RecognizerAttachment;
-use crate::{Directionality, Listener, Positioned, SizedBox, Stack, StackFit};
+use crate::{Directionality, Listener, Positioned, SizedBox, Stack};
+use flui_objects::StackFit;
 
 /// The width of the edge-anchored hit region that can start a drag.
 pub(crate) const BACK_GESTURE_WIDTH: f64 = 20.0;
@@ -286,6 +287,7 @@ impl BackGestureRuntime {
     }
 
     /// Whether a drag has started and not yet been released or disposed.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn has_gesture(&self) -> bool {
         self.gesture.borrow().is_some()
@@ -293,6 +295,7 @@ impl BackGestureRuntime {
 
     /// Whether a released drag's settle animation is still owed a
     /// `did_stop_user_gesture` report.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn awaiting_settle(&self) -> bool {
         self.awaiting_settle.get()

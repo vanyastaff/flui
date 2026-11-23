@@ -18,7 +18,7 @@
 
 use std::sync::OnceLock;
 
-use flui_view::tree::test_utils::{CollectedEvent, ReconcileEventCollector};
+use flui_view::testing::{CollectedEvent, ReconcileEventCollector};
 use tracing::dispatcher::Dispatch;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
 

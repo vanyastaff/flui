@@ -21,14 +21,14 @@ use flui_painting::styling::Color;
 use flui_painting::typography::{TextSpan, TextStyle};
 use flui_painting::{Canvas, TextPainter, paint::Paint};
 
-use crate::damage::FramePlan;
+use crate::frame::damage::FramePlan;
 use crate::headless::RetainedCapture;
 
 const SIDE: u32 = 128;
 
 #[test]
 fn retained_frame_submits_once_and_recovers_without_changing_committed_pixels() {
-    use crate::device_domain::PreparedIrLimits;
+    use crate::device::domain::PreparedIrLimits;
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
@@ -354,8 +354,8 @@ fn the_partial_clear_runs_before_content() {
 // Assertions observe rendered pixels and admission, never slot/texture identity.
 #[cfg(feature = "testing")]
 fn bounded_reused_targets_preserve_pixels() {
-    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
-    use crate::retained_target::RetainedTarget;
+    use crate::device::domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::frame::retained_target::RetainedTarget;
     use std::sync::Arc;
     let (device, queue) = crate::test_support::test_device_and_queue("Bounded retained reuse");
     let domain = DeviceDomain::with_limits(
@@ -440,9 +440,9 @@ fn missing_partial_source_preserves_both_targets(
     device: &std::sync::Arc<wgpu::Device>,
     queue: &std::sync::Arc<wgpu::Queue>,
 ) {
-    use crate::device_domain::{DeviceDomain, DomainError, PreparedCost, PreparedIrLimits};
+    use crate::device::domain::{DeviceDomain, DomainError, PreparedCost, PreparedIrLimits};
     use crate::error::{EngineError, Recoverability};
-    use crate::retained_target::RetainedTarget;
+    use crate::frame::retained_target::RetainedTarget;
     use std::sync::Arc;
     let limits = PreparedIrLimits {
         cost: PreparedCost {
@@ -732,7 +732,7 @@ fn an_invalid_target_promotes_to_full() {
 }
 
 /// A frame rendered outside the damage protocol (a hot-reload plugin's
-/// scene through `Renderer::render_scene`) is followed by a full frame, on
+/// scene lent to its window slot) is followed by a full frame, on
 /// a surface that renders every frame through the retained target: the
 /// producer diffs against the last scene IT submitted, which is no longer
 /// what the target and the screen hold.

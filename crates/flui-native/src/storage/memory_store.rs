@@ -1,7 +1,6 @@
 //! [`MemoryStore`]: the values of a [`DataStore`](super::DataStore) kept in
 //! memory, for a host with no disk of its own to write to.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use flui_platform::{
@@ -24,10 +23,18 @@ pub(crate) struct MemoryStore {
 
 #[derive(Default)]
 struct Values {
-    stored: HashMap<StorageName, Vec<u8>>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by storage names the application supplies"
+    )]
+    stored: std::collections::HashMap<StorageName, Vec<u8>>,
     /// The copies kept aside of each name, oldest first: copy `n` is kept
     /// as `<name>.corrupt-<n>`.
-    kept: HashMap<StorageName, Vec<Vec<u8>>>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by storage names the application supplies"
+    )]
+    kept: std::collections::HashMap<StorageName, Vec<Vec<u8>>>,
 }
 
 impl MemoryStore {

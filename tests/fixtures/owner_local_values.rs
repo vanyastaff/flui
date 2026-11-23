@@ -11,13 +11,15 @@ use std::time::Duration;
 
 use flui::animation::{Curve, MotionSpec, Simulation};
 use flui::geometry::{Offset, Size};
-use flui::painting::Canvas;
-use flui::rendering::{BoxConstraints, RenderResult};
+use flui::painting::{Canvas, CustomPainter};
+use flui::rendering::{
+    BoxConstraints, FlowDelegate, FlowPaintingContext, MultiChildLayoutContext,
+    MultiChildLayoutDelegate, RenderResult, SingleChildLayoutDelegate,
+};
 use flui::view::BoxedView;
 use flui::widgets::{
-    AnimatedSwitcher, CustomMultiChildLayout, CustomPaint, CustomPainter, CustomSingleChildLayout,
-    Flow, FlowDelegate, FlowPaintingContext, MetaData, MultiChildLayoutContext,
-    MultiChildLayoutDelegate, ScrollMetrics, ScrollPhysics, ScrollView, SingleChildLayoutDelegate, SingleChildScrollView,
+    AnimatedSwitcher, CustomMultiChildLayout, CustomPaint, CustomSingleChildLayout, Flow,
+    MetaData, ScrollMetrics, ScrollPhysics, ScrollView, SingleChildScrollView,
     WidgetStateProperty, WidgetStates,
 };
 

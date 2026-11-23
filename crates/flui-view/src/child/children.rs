@@ -91,14 +91,14 @@ impl Children {
         self.inner.clear();
     }
 
-    /// Get a reference to a child at the given index.
-    pub fn get(&self, index: usize) -> Option<&dyn View> {
-        self.inner.get(index).map(|b| b as &dyn View)
+    /// The child at `index`, shared as the `BoxedView` this holds.
+    pub fn get(&self, index: usize) -> Option<&BoxedView> {
+        self.inner.get(index)
     }
 
-    /// Iterate over children as View references.
-    pub fn iter(&self) -> impl Iterator<Item = &dyn View> {
-        self.inner.iter().map(|b| b as &dyn View)
+    /// Iterate over the children, shared as the `BoxedView`s this holds.
+    pub fn iter(&self) -> impl Iterator<Item = &BoxedView> {
+        self.inner.iter()
     }
 
     /// Take all children, leaving an empty collection.

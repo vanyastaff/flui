@@ -14,11 +14,12 @@ use flui_platform::{
     WindowCapabilities, WindowCommand, WindowControl, WindowFrame, WindowGeometry, WindowMode,
     WindowState,
 };
+use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::__runtime::{LifecycleSource, WindowSource};
+use flui_view::RebuildReason;
 use flui_view::prelude::*;
-use flui_view::tree::ElementTree;
-use flui_view::{BuildOwner, RebuildReason};
 use flui_view::{WindowClosed, WindowHandle};
 
 /// A control that records the commands it was handed.
@@ -127,7 +128,8 @@ fn mount(control: Option<StubControl>) -> (Option<WindowSource>, Option<WindowHa
     let root = tree.mount_root(
         &Asker {
             taken: Rc::clone(&taken),
-        },
+        }
+        .boxed(),
         &mut owner.element_owner_mut(),
     );
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);

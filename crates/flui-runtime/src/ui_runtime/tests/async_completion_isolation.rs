@@ -59,7 +59,7 @@ impl flui_view::View for AsyncCaptureProbeView {
 /// which routes through `ExternalBuildScheduler` — an
 /// `Arc<Mutex<HashMap<ElementId, _>>>` inbox minted fresh per
 /// `BuildOwner` at construction, never shared or reused across
-/// owners (`crates/flui-view/src/owner/build_owner.rs`'s
+/// owners (`crates/flui-view/src/owner/build_owner/external_scheduler.rs`'s
 /// `external_scheduler`). A stale completion's `schedule()` call
 /// therefore writes into ITS OWN (orphaned, since that `BuildOwner`
 /// already dropped) inbox — there is no shared table keyed only by

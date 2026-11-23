@@ -1,4 +1,4 @@
-﻿//! [`SelectionController`]: reads and moves a [`SelectionArea`]'s selection
+//! [`SelectionController`]: reads and moves a [`SelectionArea`]'s selection
 //! from outside the area, as an app or a driver does.
 //!
 //! [`SelectionArea`]: super::SelectionArea

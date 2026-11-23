@@ -35,7 +35,7 @@ pub(crate) fn command_modifiers(observed: Modifiers) -> Modifiers {
 }
 
 /// Generate the `View` impl for a multi-child render-object widget generic over
-/// a single [`ViewSeq`](flui_view::seq::ViewSeq) type parameter `C`.
+/// a single [`ViewSeq`](flui_view::ViewSeq) type parameter `C`.
 ///
 /// `flui_view::impl_render_view!` only handles concrete (non-generic) types, so
 /// generic multi-child widgets (`Flex`/`Row`/`Column`/`Stack`) hand off to this
@@ -48,7 +48,7 @@ macro_rules! __generic_render_view_element {
     ($ty:ident) => {
         impl<C> ::flui_view::View for $ty<C>
         where
-            C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
+            C: ::flui_view::ViewSeq + ::core::clone::Clone + 'static,
         {
             fn create_element(self: std::rc::Rc<Self>) -> ::flui_view::element::ElementKind {
                 ::flui_view::element::ElementKind::render_variable(self)
@@ -58,13 +58,13 @@ macro_rules! __generic_render_view_element {
     ($ty:ident, site = $field:ident) => {
         impl<C> ::flui_view::View for $ty<C>
         where
-            C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
+            C: ::flui_view::ViewSeq + ::core::clone::Clone + 'static,
         {
             fn create_element(self: std::rc::Rc<Self>) -> ::flui_view::element::ElementKind {
                 ::flui_view::element::ElementKind::render_variable(self)
             }
 
-            fn creation_site(&self) -> ::flui_view::CreationSite {
+            fn creation_site(&self) -> ::flui_foundation::CreationSite {
                 self.$field
             }
         }

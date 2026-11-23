@@ -1,4 +1,4 @@
-//! Renderer, vsync and frame clock; frame wake; first-frame deferral and frame accounting.
+//! Rendering binding, vsync and frame clock; frame wake; first-frame deferral and frame accounting.
 
 use super::UiRuntime;
 use crate::presentation::PresentationState;
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 impl UiRuntime {
     // ========================================================================
-    // Renderer, vsync, frame clock (moved from the retired `AppBinding`)
+    // Rendering binding, vsync, frame clock
     // ========================================================================
 
     /// The render tree, layout/paint pipeline coordination, and semantics
@@ -110,7 +110,7 @@ impl UiRuntime {
     }
 
     // ========================================================================
-    // Frame wake (moved from the retired `AppBinding`)
+    // Frame wake
     // ========================================================================
 
     /// Request a redraw (flag only — does not poke the platform window).
@@ -128,7 +128,7 @@ impl UiRuntime {
     }
 
     /// [`Self::request_redraw`], addressed to exactly `presentation` rather
-    /// than always the primary (issue #555's addressed-routing slice): still
+    /// than always the primary: still
     /// sets the UI runtime-wide coalesced flag (needed either way — it is what
     /// wakes an idle event loop at all) but marks the ADDRESSED
     /// presentation's own pump wake bit, never a sibling's, so an
@@ -152,11 +152,10 @@ impl UiRuntime {
         }
         presentation.mark_redraw_pending();
         // The flags alone are inert while the event loop is parked: nothing
-        // converts them into a frame until SOMETHING pokes the platform.
-        // An input-driven redraw request (a drag's scroll write) was
-        // exactly that case — the loop went straight back to waiting after
-        // the pointer event, the flags sat unread, and a live drag froze
-        // the screen while the position advanced invisibly. The wake sets
+        // converts them into a frame until SOMETHING pokes the platform: an
+        // input-driven redraw request (a drag's scroll write) would leave the
+        // loop waiting after the pointer event, the flags unread, and a live
+        // drag frozen on screen while the position advanced. The wake sets
         // `needs_redraw` (idempotent with the store above) AND requests a
         // platform redraw.
         // Use the ui_runtime's shared owner-turn delivery ledger. If the platform
@@ -175,16 +174,15 @@ impl UiRuntime {
     /// failure or recovery event it alone owns:
     ///
     /// - [`Self::mark_primary_needs_full_repaint`] (below), for the
-    ///   pre-frame GPU device path (`flui-app`'s `RasterSlot::pump`, after
+    ///   pre-frame GPU device path (`flui-app`'s raster host, after
     ///   the raster executor rebuilt a lost device or the window's display
     ///   changed), where the rebuilt device's backing store was invalidated
     ///   by the loss: the executor draws the next frame it is given in full,
-    ///   but nothing reaches it at all unless something forces one. That
-    ///   caller is still single-presentation shaped (see its own
-    ///   TODO(#559)), so `primary()` is the only presentation it has to
-    ///   address.
-    /// - [`Self::render_frame`]'s own `retry_needed` arm (issue
-    ///   #637), for a submit that failed with `SurfaceLost`, `DeviceLost`,
+    ///   but nothing reaches it at all unless something forces one. A UI
+    ///   runtime has content in its primary presentation only, so `primary()`
+    ///   is the only presentation that path has to address.
+    /// - [`Self::render_frame`]'s own `retry_needed` arm, for a submit that
+    ///   failed with `SurfaceLost`, `DeviceLost`,
     ///   or `SurfaceValidation` mid-frame: the frame that just failed had
     ///   already consumed the pipeline's dirty state producing the scene it
     ///   tried to send, so the eventual retry needs its own fresh reason to
@@ -285,19 +283,20 @@ impl UiRuntime {
     }
 
     /// `Self::mark_needs_full_repaint_for`, addressed to
-    /// `self.presentations.primary()` — the shape its one caller
-    /// (`flui-app`'s `RasterSlot::pump`) needs: it runs BEFORE
-    /// `render_frame`, driven by the raster executor's device health, with
-    /// no per-pump `producer` of its own to resolve which presentation
-    /// actually owns the lost device.
-    // TODO(#559): marks `self.presentations.primary()` unconditionally --
-    // a ui_runtime with a non-primary presentation hosting the device that just
-    // recovered would mark the WRONG presentation's tree. Latent today
-    // only because a secondary window carries no widget content yet
-    // (`open_secondary_window`'s own doc); #559's addressing slice is
-    // where this needs to become presentation-addressed. Its callers are
-    // `flui-app`'s `RasterSlot::pump` (every native window) and the web
-    // runner's device recovery.
+    /// `self.presentations.primary()`. Its callers are `flui-app`'s raster host
+    /// (every native window) and the web runner's device recovery. They run
+    /// BEFORE `render_frame`, driven by the raster executor's device health,
+    /// with no per-pump `producer` of their own to resolve which presentation
+    /// owns the lost device.
+    ///
+    /// The primary is the right address because a UI runtime has content in its
+    /// primary presentation only: `flui-app` admits content in a secondary
+    /// window only under `WindowPolicy::Isolated`, which gives the window its
+    /// own UI runtime, so a device is never shared with a content-bearing
+    /// non-primary presentation. A shared UI runtime that admits content in
+    /// several presentations would have to address the presentation that owns
+    /// the recovered device, and these primary-named methods would become
+    /// per-presentation.
     pub fn mark_primary_needs_full_repaint(&self) {
         self.mark_needs_full_repaint_for(self.presentations.primary());
     }
@@ -307,7 +306,7 @@ impl UiRuntime {
     /// this to learn that the application asked for a new device after a
     /// rebuild was given up ([`Self::retry_render_device`]).
     // Primary-addressed for the same reason as
-    // `mark_primary_needs_full_repaint` (#559).
+    // `mark_primary_needs_full_repaint`.
     #[must_use]
     pub fn primary_device_recovery(&self) -> Option<crate::frame_failure::DeviceRecovery> {
         self.presentations.primary().device_recovery()
@@ -420,11 +419,9 @@ impl UiRuntime {
     }
 
     // ========================================================================
-    // First-frame deferral and frame accounting (moved from the retired
-    // `AppBinding`; the deferral gate itself is re-homed from
-    // `RenderingBinding`'s own counter onto the primary presentation's
-    // `FrameClock` — see `render_frame`'s own doc for the submit-gate
-    // check that is the actual production consumer now)
+    // First-frame deferral and frame accounting. The deferral gate lives on the
+    // primary presentation's `FrameClock`; `render_frame` checks it at its
+    // submit point.
     // ========================================================================
 
     /// Defer this UI runtime's primary presentation from sending a produced
@@ -435,9 +432,9 @@ impl UiRuntime {
         not(test),
         expect(
             dead_code,
-            reason = "no production caller yet -- an app-author async-init \
-                      deferral has no wiring point: the ui_runtime is internal to \
-                      its host; the retired AppBinding had the same gap"
+            reason = "no production caller: an application's async-init \
+                      deferral has no wiring point, since the UI runtime is \
+                      internal to its host"
         )
     )]
     pub(crate) fn defer_first_frame(&self) {
@@ -501,8 +498,7 @@ impl UiRuntime {
             .record_compositor_tick(now);
     }
 
-    /// Turn this presentation's performance overlay on or off. See the
-    /// retired `AppBinding::set_performance_overlay`'s doc.
+    /// Turn the primary presentation's performance overlay on or off.
     pub fn set_performance_overlay(&self, enabled: bool) {
         self.presentations
             .primary()

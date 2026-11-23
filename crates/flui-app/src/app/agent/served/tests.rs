@@ -16,7 +16,7 @@ use flui_protocol::{
     act::ActParams, locator::Locator, locator::Target, session::AppDescription, tree::Node,
     tree::Tree, wait::Condition, wire::ActionName,
 };
-use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView, ViewState};
 use flui_widgets::{Column, RawButton, Text};

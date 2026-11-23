@@ -546,7 +546,7 @@ fn assert_capture_wake_failure(active_unwind: bool) {
     let binding = GestureBinding::new();
     // A wake that fails: the window counts the request, then panics.
     let window = Rc::new(
-        flui_testing::MockWindow::new()
+        flui_platform::testing::MockWindow::new()
             .with_size(80.0, 80.0)
             .focused(true)
             .with_redraw_hook(|| panic!("capture wake failure")),

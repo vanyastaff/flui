@@ -49,10 +49,10 @@ pub use keep_alive::{KeepAliveHandle, KeepAliveLease};
 pub use rebuild_handle::RebuildHandle;
 pub use unmount_hooks::UnmountHook;
 pub(crate) use unmount_hooks::UnmountHooks;
-// Moved to flui-foundation (ADR-0040: observation events carry typed
-// causes, and foundation is the only crate below every emitter); re-exported
-// here so no call site changes.
-pub use flui_foundation::{RebuildReason, RebuildReasons};
+// `RebuildReason` is flui-foundation's (ADR-0040: observation events carry
+// typed causes, and foundation is the only crate below every emitter); it is
+// named here beside the handle that takes it.
+pub use flui_foundation::RebuildReason;
 // Internal scheduling handle — `pub(crate)`: captured by `ElementCore` at mount,
 // no public consumer. See `ExternalBuildScheduler`.
 pub(crate) use build_owner::ExternalBuildScheduler;
@@ -60,10 +60,10 @@ pub use element_owner::ElementOwner;
 #[cfg(test)]
 pub(crate) use external_build_inbox::ExternalBuildInbox;
 // Build-time live-tree handle carried on `ElementOwner` during a
-// `build_scope` drain (PR-K). Crate-internal.
+// `build_scope` drain. Crate-internal.
 pub(crate) use element_owner::BuildHandle;
-// A per-child containment seam's caught-and-substituted panic (issue
-// #561), what it happened to, and the enum naming which lifecycle hook it
+// A per-child containment seam's caught-and-substituted panic,
+// what it happened to, and the enum naming which lifecycle hook it
 // was caught inside.
 pub use recovered_panic::{LifecycleHook, RecoveredAt, RecoveredPanic};
 pub(crate) use recovered_panic::{LifecyclePanicHandoff, StagedRecoveredPanic};

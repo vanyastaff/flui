@@ -8,8 +8,12 @@
 //! reaches the store, and what it lets through reaches the key's own
 //! delivery, in the order the stand-in answered.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "zbus's `interface` expansion names std's `HashMap` for the `a{sv}` dictionaries it serializes"
+)]
+
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
@@ -28,7 +32,7 @@ use x11rb::protocol::xproto::{self, FocusInEvent, NotifyDetail, NotifyMode};
 use zbus::object_server::SignalEmitter;
 use zbus::{ObjectServer, OwnedObjectPath, Variant, interface};
 
-use super::bus::{Bus, CREATE_TIMEOUT, MAX_HEARD, MAX_WAITING, Reach};
+use super::bus::{Bus, CREATE_TIMEOUT, DBusDict, MAX_HEARD, MAX_WAITING, Reach};
 use super::{WindowText, X11Ime};
 use crate::owner::linux::x11::{LoopText, WindowRef, WindowScale, X11Key};
 use crate::text::TextInput;
@@ -134,11 +138,11 @@ impl StandInService {
 fn ibus_text(text: &str) -> Variant<'static> {
     Variant::from((
         "IBusText",
-        HashMap::<String, Variant<'static>>::new(),
+        DBusDict::<String, Variant<'static>>::new(),
         text.to_owned(),
         Variant::from((
             "IBusAttrList",
-            HashMap::<String, Variant<'static>>::new(),
+            DBusDict::<String, Variant<'static>>::new(),
             Vec::<Variant<'static>>::new(),
         )),
     ))

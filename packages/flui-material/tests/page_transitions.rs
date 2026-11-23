@@ -20,7 +20,8 @@ use flui_material::{
 };
 use flui_sdk::animation::{Cubic, Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::Point;
-use flui_sdk::painting::{Color, DrawOp};
+use flui_sdk::painting::DrawOp;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::TargetPlatform;
 use flui_sdk::view::BuildContext;
 use flui_sdk::view::environment::{PlatformConvention, VsyncScope};

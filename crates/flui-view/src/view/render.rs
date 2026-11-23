@@ -11,7 +11,6 @@ use flui_foundation::ElementId;
 use crate::context::DependentRecord;
 use crate::reactive::{Reactive, WriterSource};
 use crate::tree::{ElementNode, ElementTree};
-use crate::view::View;
 use crate::{ElementBase, InheritedView};
 
 /// Owner-runtime capabilities available while a [`RenderView`] creates or
@@ -41,7 +40,7 @@ pub struct RenderObjectContext<'a> {
     depth: usize,
     /// The deferred dependent-record sink [`depend_on`](Self::depend_on)
     /// records into; drained by `build_scope`.
-    dep_sink: Option<&'a parking_lot::Mutex<Vec<DependentRecord>>>,
+    dep_sink: Option<&'a std::cell::RefCell<Vec<DependentRecord>>>,
     /// Whether the presentation collects its semantics tree.
     collects_semantics: bool,
 }
@@ -88,7 +87,7 @@ impl<'a> RenderObjectContext<'a> {
         tree: &'a ElementTree,
         element_id: ElementId,
         depth: usize,
-        dep_sink: &'a parking_lot::Mutex<Vec<DependentRecord>>,
+        dep_sink: &'a std::cell::RefCell<Vec<DependentRecord>>,
         collects_semantics: bool,
     ) -> Self {
         Self {
@@ -142,7 +141,7 @@ impl<'a> RenderObjectContext<'a> {
         // write is deferred to the `build_scope` drain. A missed provider records
         // the miss, so a later mount reschedules this element.
         if let Some(sink) = self.dep_sink {
-            sink.lock().push(DependentRecord {
+            sink.borrow_mut().push(DependentRecord {
                 provider: provider_id,
                 dependent: element_id,
                 depth: self.depth,
@@ -809,10 +808,12 @@ pub trait RenderView: Clone + 'static + Sized {
     /// Visit child views for mounting.
     ///
     /// Override for single/multi child variants to provide access to children.
-    /// The visitor is called once for each child View.
+    /// The visitor is called once for each child view, handed shared as the
+    /// `BoxedView` the view holds, so the reconciler mounts or updates the
+    /// child with that very allocation instead of a copy.
     ///
     /// Default implementation does nothing (leaf widgets have no children).
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&crate::BoxedView)) {
         // Default: no children
     }
 }
@@ -846,7 +847,7 @@ macro_rules! impl_render_view {
                 $crate::element::ElementKind::render_variable(self)
             }
 
-            fn creation_site(&self) -> $crate::CreationSite {
+            fn creation_site(&self) -> $crate::__private::CreationSite {
                 self.$field
             }
         }
@@ -854,7 +855,7 @@ macro_rules! impl_render_view {
 }
 
 /// Implements [`RenderView::has_children`] + [`RenderView::visit_child_views`]
-/// for the standard single-child widget shape (`child: Option<…>`), invoked
+/// for the standard single-child widget shape (`child: Option<BoxedView>`), invoked
 /// from *inside* the `impl RenderView for …` block:
 ///
 /// ```rust,ignore
@@ -876,7 +877,7 @@ macro_rules! single_child_view_children {
             self.$field.is_some()
         }
 
-        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn $crate::View)) {
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&$crate::BoxedView)) {
             if let Some(child) = self.$field.as_ref() {
                 visitor(child);
             }

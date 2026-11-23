@@ -17,7 +17,7 @@ use flui_material::{AppBar, Card, ListTile, MaterialApp, Scaffold, Theme, ThemeD
 use flui_painting::DrawOp;
 use flui_painting::glyphs::FontRegistry;
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::ViewExt;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::widgets::{Column, SizedBox, Text};
@@ -166,7 +166,7 @@ pub fn plain_body_text_takes_the_theme_body_style_and_components_keep_theirs() {
 /// safe-area inset: the right side left-to-right, the left side right-to-left.
 /// A direction change on the mounted scaffold moves it there without a remount.
 pub fn the_floating_action_button_sits_at_the_reading_end_clear_of_that_sides_inset() {
-    use flui_sdk::painting::TextDirection;
+    use flui_sdk::foundation::TextDirection;
     use flui_sdk::widgets::Directionality;
 
     // Left inset 24, right inset 40. The subtree below the `Directionality`

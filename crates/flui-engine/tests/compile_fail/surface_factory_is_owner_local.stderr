@@ -1,14 +1,14 @@
-error[E0277]: `Rc<flui_engine::surface_factory::FactoryParts>` cannot be sent between threads safely
+error[E0277]: `Rc<flui_engine::surface::factory::FactoryParts>` cannot be sent between threads safely
   --> tests/compile_fail/surface_factory_is_owner_local.rs:12:21
    |
 12 |     crosses_threads(factory);
-   |     --------------- ^^^^^^^ `Rc<flui_engine::surface_factory::FactoryParts>` cannot be sent between threads safely
+   |     --------------- ^^^^^^^ `Rc<flui_engine::surface::factory::FactoryParts>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
    |
-   = help: within `SurfaceFactory`, the trait `Send` is not implemented for `Rc<flui_engine::surface_factory::FactoryParts>`
+   = help: within `SurfaceFactory`, the trait `Send` is not implemented for `Rc<flui_engine::surface::factory::FactoryParts>`
 note: required because it appears within the type `SurfaceFactory`
-  --> src/surface_factory.rs
+  --> src/surface/factory.rs
    |
    | pub struct SurfaceFactory {
    |            ^^^^^^^^^^^^^^

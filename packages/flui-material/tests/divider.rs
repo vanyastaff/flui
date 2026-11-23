@@ -8,7 +8,7 @@ use crate::common;
 
 use common::{lay_out, loose};
 use flui_material::{Divider, DividerThemeData, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 
 /// A widget-level `.color(...)` override wins over a configured
 /// `divider_theme.color` — the standard widget → theme → default cascade.

@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_scheduler::PostFrameHandle;
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_widgets::SizedBox;
 
 /// Schedule one tick that increments `fire_count` and immediately reschedules
@@ -73,7 +73,7 @@ pub(crate) fn self_rescheduling_local_post_frame_callback_fires_exactly_once_per
 /// frame, which turns the loop into a frame on every vsync for as long as the
 /// field has the focus.
 pub(crate) fn a_focused_text_field_settles_after_typing() {
-    let mut t = flui_testing::Tester::mount(focused_field());
+    let mut t = flui_testing::tester::Tester::mount(focused_field());
     t.enter_text(&flui_testing::find::id("field"), "notes");
     t.expect(flui_testing::find::id("field"))
         .to_have_value("notes");
@@ -86,7 +86,7 @@ pub(crate) fn a_focused_text_field_settles_after_typing() {
 ///
 /// Fails when the cursor-area loop's re-registration asks for the next frame.
 pub(crate) fn a_focused_text_field_runs_no_frame_while_idle() {
-    let mut t = flui_testing::Tester::mount(focused_field());
+    let mut t = flui_testing::tester::Tester::mount(focused_field());
     t.enter_text(&flui_testing::find::id("field"), "notes");
     t.try_pump_and_settle(300)
         .expect("a focused field with nothing to animate settles");

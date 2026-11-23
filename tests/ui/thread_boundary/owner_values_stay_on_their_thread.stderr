@@ -1,12 +1,12 @@
-error[E0277]: `Rc<widget_state::SharedStates>` cannot be sent between threads safely
+error[E0277]: `Rc<widgets::widget_state::SharedStates>` cannot be sent between threads safely
   --> tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs:13:30
    |
 13 |     require_thread_spawnable(states);
-   |     ------------------------ ^^^^^^ `Rc<widget_state::SharedStates>` cannot be sent between threads safely
+   |     ------------------------ ^^^^^^ `Rc<widgets::widget_state::SharedStates>` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
    |
-   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<widget_state::SharedStates>`
+   = help: within `WidgetStatesController`, the trait `Send` is not implemented for `Rc<widgets::widget_state::SharedStates>`
 note: required because it appears within the type `WidgetStatesController`
   --> crates/flui-widgets/src/widget_state.rs
    |

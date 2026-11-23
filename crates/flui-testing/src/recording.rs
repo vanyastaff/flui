@@ -6,7 +6,7 @@
 //! thread (inline on wasm, into any [`Write`](std::io::Write)).
 //! [`RecordingReader`] reads the rows back, and [`ReplayableRecording`]
 //! checks a whole recording through its `End` row before
-//! [`HeadlessHost::replay`](crate::HeadlessHost::replay) applies any of it.
+//! [`HeadlessHost::replay`](crate::host::HeadlessHost::replay) applies any of it.
 //!
 //! Text is redacted by default ([`Privacy::Redact`]): key text, IME strings,
 //! assistive action text, window titles and device names never reach the

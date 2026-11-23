@@ -633,17 +633,6 @@ pub(crate) fn a_panicking_key_cancel_still_moves_window_focus() {
 /// resumes it; it is not reported against A as a sibling of B's pass
 /// (ADR-0345 §2).
 pub(crate) fn a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own() {
-    struct FailsWhenHidden;
-    impl flui_view::WidgetsBindingObserver for FailsWhenHidden {
-        fn did_change_app_lifecycle_state(&self, state: flui_scheduler::AppLifecycleState) {
-            assert_ne!(
-                state,
-                flui_scheduler::AppLifecycleState::Hidden,
-                "the hidden window's observer fails"
-            );
-        }
-    }
-
     let (mut ui_runtime, id, node, _log) = keyboard_ui_runtime();
     let sibling = ui_runtime.install_second_presentation_for_test();
     deliver(
@@ -655,12 +644,21 @@ pub(crate) fn a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own() {
             KeyState::Down(KeyPress::First),
         ),
     );
-    ui_runtime
+    let (_, _hidden_fails) = ui_runtime
         .presentations
         .get(id)
         .expect("installed")
         .widgets()
-        .add_observer(std::sync::Arc::new(FailsWhenHidden));
+        .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
+        .expect("presentation lifecycle handle")
+        .subscribe(|state| {
+            assert_ne!(
+                state,
+                flui_scheduler::AppLifecycleState::Hidden,
+                "the hidden window's observer fails"
+            );
+        })
+        .expect("lifecycle subscription while open");
     let reports = Rc::new(std::cell::RefCell::new(Vec::new()));
     let reported = Rc::clone(&reports);
     ui_runtime.set_frame_failure_handler(Some(crate::frame_failure::FrameFailureHandler::new(
@@ -700,17 +698,6 @@ pub(crate) fn a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own() {
 /// the focus from B, whose observer fails at `Inactive`. Both failures are
 /// reported against their own windows (ADR-0345 §2).
 pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
-    struct FailsWhenInactive;
-    impl flui_view::WidgetsBindingObserver for FailsWhenInactive {
-        fn did_change_app_lifecycle_state(&self, state: flui_scheduler::AppLifecycleState) {
-            assert_ne!(
-                state,
-                flui_scheduler::AppLifecycleState::Inactive,
-                "the window losing the focus fails"
-            );
-        }
-    }
-
     let (mut ui_runtime, a, node, _log) = keyboard_ui_runtime();
     let b = ui_runtime.install_second_presentation_for_test();
     let c = ui_runtime.install_second_presentation_for_test();
@@ -752,12 +739,21 @@ pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
         true,
     );
     // B is now focused and resumed; only then can it fail on losing focus.
-    ui_runtime
+    let (_, _inactive_fails) = ui_runtime
         .presentations
         .get(b)
         .expect("installed")
         .widgets()
-        .add_observer(std::sync::Arc::new(FailsWhenInactive));
+        .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
+        .expect("presentation lifecycle handle")
+        .subscribe(|state| {
+            assert_ne!(
+                state,
+                flui_scheduler::AppLifecycleState::Inactive,
+                "the window losing the focus fails"
+            );
+        })
+        .expect("lifecycle subscription while open");
     assert_eq!(*reports.borrow(), [a], "A's key-cancel failure is A's");
     reports.borrow_mut().clear();
 

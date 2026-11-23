@@ -211,7 +211,7 @@ impl UiRuntime {
                         };
                         let Some(number) = members.borrow_mut().number(member) else {
                             tracing::warn!(
-                                target: crate::INPUT_TAP_TARGET,
+                                target: crate::input_tap::INPUT_TAP_TARGET,
                                 "a recording numbered every arena member it can; this verdict is not recorded"
                             );
                             return;
@@ -227,7 +227,7 @@ impl UiRuntime {
             match registration {
                 Ok(handle) => recorder.observers.borrow_mut().push((id, handle)),
                 Err(error) => tracing::warn!(
-                    target: crate::INPUT_TAP_TARGET,
+                    target: crate::input_tap::INPUT_TAP_TARGET,
                     %error,
                     "a recording cannot observe this presentation's arena decisions"
                 ),

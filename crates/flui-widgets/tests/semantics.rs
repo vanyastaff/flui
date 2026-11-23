@@ -1,9 +1,10 @@
 //! Widget-level coverage for the accessibility semantics wrappers.
 
 use crate::common::{lay_out, loose};
+use flui_semantics::SemanticsRole;
 use flui_semantics::{ActionCall, ActionDecodeError, SemanticsAction};
 use flui_widgets::ScrollView;
-use flui_widgets::{MergeSemantics, Semantics, SemanticsRole, SizedBox};
+use flui_widgets::{MergeSemantics, Semantics, SizedBox};
 
 struct CollectionChanges;
 impl accesskit_consumer::TreeChangeHandler for CollectionChanges {
@@ -278,11 +279,11 @@ pub(crate) fn collection_consumer_uses_member_totals_for_separated_and_composed_
                     Rc::new(|index| index.is_multiple_of(2).then_some(index / 2)),
                     3,
                 )
-                .composed_at(0, flui_widgets::SetSize::Known(5)),
+                .composed_at(0, flui_semantics::SetSize::Known(5)),
             );
             second = second.semantics(
                 SemanticSetMapping::one_to_one(ItemCount::Exact(2))
-                    .composed_at(3, flui_widgets::SetSize::Known(5)),
+                    .composed_at(3, flui_semantics::SetSize::Known(5)),
             );
         }
         Viewport::new(
@@ -702,8 +703,9 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
 pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_size() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
+    use flui_rendering::delegates::CustomPainter;
     use flui_semantics::{SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey};
-    use flui_widgets::{CustomPaint, CustomPainter};
+    use flui_widgets::CustomPaint;
 
     #[derive(Debug)]
     struct Painter {
@@ -772,11 +774,12 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
 pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     use flui_foundation::geometry::{Point, Rect, Size};
     use flui_painting::Canvas;
+    use flui_rendering::delegates::CustomPainter;
     use flui_semantics::{
         SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey, TextContent, TextRun,
         TextRunParts, TextRunPosition, TextRunSelection,
     };
-    use flui_widgets::{CustomPaint, CustomPainter};
+    use flui_widgets::CustomPaint;
 
     /// A custom-drawn field: one run per line, each character ten wide.
     #[derive(Debug)]
@@ -1155,8 +1158,9 @@ pub(crate) fn a_fitted_child_moved_by_a_fit_change_moves_its_semantics() {
 /// it leaves that node visible. A container and its child both past the clip
 /// merge into one hidden node, as they merge in view.
 pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() {
+    use flui_rendering::view::ScrollPosition;
     use flui_view::{BoxedView, ViewExt as _};
-    use flui_widgets::{Column, ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    use flui_widgets::{Column, SliverToBoxAdapter, Transform, Viewport};
 
     let labelled = |text: &'static str| {
         Semantics::new()
@@ -1314,8 +1318,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_semantics::{AccessibilityNodeId, SemanticsActionRequest};
+use flui_testing::a11y::{Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_testing::widgets::LaidOut;
-use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_view::{SignalWriteExt as _, View};
 
 use crate::common::{ProbeSignals, SignalProbe};
@@ -1324,7 +1328,7 @@ use crate::common::{ProbeSignals, SignalProbe};
 /// from both assembled semantics and the actual delivered update stream.
 pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_update() {
     use flui_interaction::focus::FocusNode;
-    use flui_testing::A11yTree;
+    use flui_testing::a11y::A11yTree;
     use flui_testing::a11y::Role;
     use flui_view::ViewExt as _;
     use flui_widgets::{
@@ -1508,7 +1512,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
 ///
 /// The tree is returned alongside its own description so a failing assertion
 /// can show what was actually there, matching this file's other a11y tests.
-fn pump_labelled(root: impl View) -> (LaidOut, flui_testing::A11yTree, NodeId) {
+fn pump_labelled(root: impl View) -> (LaidOut, flui_testing::a11y::A11yTree, NodeId) {
     let mut laid = lay_out(root, loose(200.0));
     laid.enable_semantics();
     laid.pump();
@@ -1520,7 +1524,7 @@ fn pump_labelled(root: impl View) -> (LaidOut, flui_testing::A11yTree, NodeId) {
 }
 
 /// The node carrying [`LABEL`] in `tree`.
-fn labelled_node(tree: &flui_testing::A11yTree) -> NodeId {
+fn labelled_node(tree: &flui_testing::a11y::A11yTree) -> NodeId {
     tree.find_by_label(LABEL)
         .unwrap_or_else(|error| {
             panic!(
@@ -2404,7 +2408,10 @@ pub(crate) fn unrepresentable_projected_bounds_are_withdrawn_and_recover() {
 /// Where an AccessKit adapter places the labelled node: its bounds under
 /// its own transform and every ancestor's, which AccessKit defines as
 /// physical pixels relative to the window's client area.
-fn effective_bounds(tree: &flui_testing::A11yTree, label: &str) -> flui_testing::a11y::A11yRect {
+fn effective_bounds(
+    tree: &flui_testing::a11y::A11yTree,
+    label: &str,
+) -> flui_testing::a11y::A11yRect {
     let update = tree.raw();
     let parent_of = |id| {
         update
@@ -2480,7 +2487,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         crate::common::tight(200.0, 200.0),
     );
 
-    let delivered: Arc<Mutex<Option<flui_testing::A11yTree>>> = Arc::new(Mutex::new(None));
+    let delivered: Arc<Mutex<Option<flui_testing::a11y::A11yTree>>> = Arc::new(Mutex::new(None));
     let sink = Arc::clone(&delivered);
     laid.pipeline_owner().with_mut(|owner| {
         owner.set_device_pixel_ratio(
@@ -2489,7 +2496,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         owner.set_semantics_update_callback(Rc::new(move |update| {
             let mut mirror = sink.lock().expect("publication mirror lock");
             let Some(current) = mirror.as_ref() else {
-                *mirror = Some(flui_testing::A11yTree::new(update.clone()));
+                *mirror = Some(flui_testing::a11y::A11yTree::new(update.clone()));
                 return;
             };
             let mut merged = current.raw().clone();
@@ -2500,7 +2507,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
                     merged.nodes.push((*id, node.clone()));
                 }
             }
-            *mirror = Some(flui_testing::A11yTree::new(merged));
+            *mirror = Some(flui_testing::a11y::A11yTree::new(merged));
         }));
     });
     laid.enable_semantics();
@@ -2810,9 +2817,9 @@ pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
 
 /// The published node whose `author_id` is `identifier`, if exactly one is.
 fn identified_node<'a>(
-    tree: &'a flui_testing::A11yTree,
+    tree: &'a flui_testing::a11y::A11yTree,
     identifier: &str,
-) -> Option<flui_testing::A11yNode<'a>> {
+) -> Option<flui_testing::a11y::A11yNode<'a>> {
     let mut matches = tree
         .nodes()
         .filter(|node| node.raw().author_id() == Some(identifier));
@@ -2821,7 +2828,7 @@ fn identified_node<'a>(
 }
 
 /// `root` mounted alone, semantics on, one frame pumped.
-fn identifier_tree(root: impl View) -> flui_testing::A11yTree {
+fn identifier_tree(root: impl View) -> flui_testing::a11y::A11yTree {
     let mut laid = lay_out(root, loose(200.0));
     laid.enable_semantics();
     laid.pump();
@@ -3009,9 +3016,8 @@ pub(crate) fn controls_publish_their_identifier_on_the_node_they_form() {
 /// a slider's axis and large step, and the role words a screen reader says.
 pub(crate) fn authored_properties_and_relations_reach_the_published_node() {
     use flui_foundation::geometry::Axis;
-    use flui_widgets::{
-        AutoComplete, Column, Current, HasPopup, Invalid, NumericRange, SemanticsAnchor,
-    };
+    use flui_semantics::{AutoComplete, Current, HasPopup, Invalid, NumericRange, SemanticsAnchor};
+    use flui_widgets::Column;
 
     let help = SemanticsAnchor::new();
     let error = SemanticsAnchor::new();
@@ -3104,7 +3110,7 @@ pub(crate) fn authored_properties_and_relations_reach_the_published_node() {
 /// when the presentation starts collecting (the late tree loses its click
 /// action).
 pub(crate) fn semantics_turned_on_later_publish_the_tree_of_semantics_on_from_the_start() {
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
     use flui_widgets::{Column, RawButton, Text};
     use std::time::Duration;
 
@@ -3345,7 +3351,8 @@ fn a_clip_moved_past_its_holder_ends_its_clipping() {
 /// it hidden, and a hidden wrapper forms a node of its own. The label inside
 /// is moved back into view, so only the wrapper changes.
 fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
-    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    use flui_rendering::view::ScrollPosition;
+    use flui_widgets::{SliverToBoxAdapter, Transform, Viewport};
     let position = ScrollPosition::fixed(0.0);
     publishes_as_built_afresh(
         |dy| {
@@ -3367,7 +3374,8 @@ fn a_wrapper_moved_into_the_cache_extent_is_hidden_with_it() {
 /// the cache extent and back merges into the container, and the container is
 /// published as a rebuild publishes it.
 fn a_wrapper_moved_out_of_the_cache_extent_under_a_container() {
-    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    use flui_rendering::view::ScrollPosition;
+    use flui_widgets::{SliverToBoxAdapter, Transform, Viewport};
     let position = ScrollPosition::fixed(0.0);
     publishes_as_built_afresh(
         |dy| {
@@ -3769,9 +3777,8 @@ fn a_button_over_a_labelled_image_is_pressed_by_its_name() {
 /// flag of the previous behavior).
 pub(crate) fn a_clip_behavior_switch_republishes_what_the_clip_hides() {
     use flui_painting::paint::Clip;
-    use flui_widgets::{
-        ClipRect, ScrollPosition, ShrinkWrappingViewport, SliverToBoxAdapter, Transform, Viewport,
-    };
+    use flui_rendering::view::ScrollPosition;
+    use flui_widgets::{ClipRect, ShrinkWrappingViewport, SliverToBoxAdapter, Transform, Viewport};
 
     fn published(laid: &crate::common::LaidOut) -> Vec<(accesskit::NodeId, accesskit::Node)> {
         let mut nodes = laid
@@ -3836,7 +3843,8 @@ pub(crate) fn a_clip_behavior_switch_republishes_what_the_clip_hides() {
 /// rects alone. A reader and the agent's `visible` check reach the moved
 /// content.
 pub(crate) fn a_descendant_painted_past_its_holder_keeps_the_holder_unclipped() {
-    use flui_widgets::{ScrollPosition, SliverToBoxAdapter, Transform, Viewport};
+    use flui_rendering::view::ScrollPosition;
+    use flui_widgets::{SliverToBoxAdapter, Transform, Viewport};
     let view = SizedBox::new(100.0, 300.0).child(Viewport::new(
         ScrollPosition::fixed(0.0),
         (SliverToBoxAdapter::new().child(

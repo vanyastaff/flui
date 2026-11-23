@@ -133,16 +133,17 @@
 //!   resolved icon color.
 
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisSize};
+use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
-    MainAxisSize, Padding, Row, SafeArea, SemanticsRole, SizedBox,
+    Column, ConstrainedBox, DefaultTextStyle, Expanded, IconTheme, Padding, Row, SafeArea, SizedBox,
 };
 
-use flui_sdk::widgets::interaction::node::Description;
+use flui_sdk::widgets::__private::node::Description;
 
 use crate::ink_well::InkWell;
 use crate::material::Material;

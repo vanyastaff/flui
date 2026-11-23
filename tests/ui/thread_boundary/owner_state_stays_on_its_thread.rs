@@ -1,6 +1,6 @@
 use flui::animation::{AnimationController, AnimationRunFuture, Vsync};
 use flui::foundation::ChangeNotifier;
-use flui::view::PostFrameHandle;
+use flui::scheduler::PostFrameHandle;
 
 fn require_thread_spawnable<T: Send + 'static>(_: T) {}
 

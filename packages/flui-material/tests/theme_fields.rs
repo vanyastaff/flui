@@ -68,7 +68,7 @@ impl View for StaticChild {
 }
 
 impl ProxyView for StaticChild {
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.inner
     }
 }

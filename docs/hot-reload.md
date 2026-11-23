@@ -105,10 +105,16 @@ it ends. Every UI runtime polls it at its frame boundary, on the owner thread; a
 reload (or a worker's `request_rebuild`) is applied once to every UI runtime, as a
 reassemble that keeps `State`. A hook that panics is dropped and the app keeps
 running without reload. An idle window applies a reload when it next draws.
-The Android `--scene` host installs `flui_hot_reload::ScenePluginHook` the
-same way; the Android runner calls only its `scene_frame`, so a worker hook
-does nothing there, and it warns when a scene plugin is on the device but no
-hook is installed.
+A scene plugin's host installs `flui_hot_reload::ScenePluginHook` the same
+way. Every native runner (Windows, macOS, Linux, iOS and Android) asks the hook
+for each window's frame before the widget pipeline, at the window's physical
+size; when the plugin draws, its scene is shown in place of the widget tree for
+that frame (ADR-0391). A window whose frames are off is not drawn, and on the
+Wayland desktop host, whose raster executor turns on its own thread, the hook
+is not asked ([gaps](gaps.md#a-scene-plugin-draws-nothing-on-the-wayland-desktop-host)).
+The Android runner calls only `scene_frame`, so a worker hook does nothing
+there, and it warns when a scene plugin is on the device but no hook is
+installed.
 
 ### The host watches the artifact, not the clock
 
@@ -216,18 +222,15 @@ Terminal 1 — build plugin on change:
 cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
 ```
 
-Terminal 2 — run host with in-process reload:
+Terminal 2 — run the host, a FLUI application that installs `ScenePluginHook` through `AppConfig::dev_reload`:
 
 ```bash
-# Linux/macOS
-FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run -p flui-hot-reload --example scene_render
-
-# Windows
-set FLUI_SCENE_PLUGIN=target\debug\flui_scene.dll
-cargo run -p flui-hot-reload --example scene_render
+# Loads target/debug/libflui_scene.so (.dylib on macOS, flui_scene.dll on
+# Windows); FLUI_SCENE_PLUGIN names another path.
+cargo run -p flui-hot-reload --features host-hook --example scene_render
 ```
 
-The host calls `HotReloadDriver::poll()` in its frame loop; when the `.so` mtime changes, it reloads without restarting.
+The hook checks the library for an update each frame; when it changes, the host reloads it without restarting and draws the new plugin's scene in place of the widget tree. Until a plugin is loaded, the window shows a view that says what to build.
 
 > **Windows note:** stop the host before rebuilding if the linker cannot overwrite a locked DLL. On Unix, `RTLD_LOCAL` avoids symbol collisions across reloads.
 
@@ -269,7 +272,7 @@ if let Some(ref mut d) = driver {
 }
 ```
 
-For a full `flui-app` desktop runner, the same `HotReloadDriver` can wrap a plugin-backed root widget once `app-plugin` integration lands in the runner.
+A `flui-app` application writes no such loop: it installs `ScenePluginHook` with `AppConfig::dev_reload`, and every native runner draws the plugin's scene in its windows (ADR-0391).
 
 ## Design Constraints
 

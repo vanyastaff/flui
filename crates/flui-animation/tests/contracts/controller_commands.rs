@@ -570,7 +570,7 @@ fn velocity_is_zero_once_set_value_ends_the_run() {
 
 /// Every mutator of a controller whose registry's presentation is building
 /// refuses with `MutatedDuringBuild` and leaves value, status and listeners
-/// alone; once the build ends the same commands land (ADR-0086 §7). A
+/// alone; once the build ends the same commands land (ADR-0074 §5.2). A
 /// registry nested under the bound one reads the root's phase.
 fn controller_mutation_during_build_is_refused() {
     let driver = VsyncDriver::new();

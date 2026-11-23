@@ -9,14 +9,15 @@ use std::time::Duration;
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::PointerEvent;
 use flui_interaction::ids::PointerId;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_platform::input::pointer::DeviceId;
 use flui_platform::{GesturePreferences, SystemPreferences};
 use flui_runtime::HostInput;
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::replay::{
     MouseScript, PenScript, PointerScript, ScriptError, TouchScript, TrackpadScript, VirtualScript,
 };
-use flui_testing::{HeadlessHost, HeadlessWindow};
-use flui_widgets::{GestureDetector, HitTestBehavior, Listener};
+use flui_widgets::{GestureDetector, Listener};
 
 fn at(x: f64, y: f64) -> Offset<f64> {
     Offset::new(x, y)
@@ -350,8 +351,9 @@ fn an_event_between_vsyncs_keeps_its_own_time() {
 /// its frame limit when something never settles.
 #[test]
 fn a_script_finds_its_target_by_role_and_label_and_settles_within_a_limit() {
+    use flui_semantics::SemanticsRole;
     use flui_view::ViewExt as _;
-    use flui_widgets::{Column, Semantics, SemanticsRole, SizedBox};
+    use flui_widgets::{Column, Semantics, SizedBox};
 
     let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
     let window = host.primary_window();
@@ -388,7 +390,7 @@ fn a_script_finds_its_target_by_role_and_label_and_settles_within_a_limit() {
     assert_eq!(save, at(100.0, 90.0), "logical center of the second row");
     assert!(matches!(
         host.find_center(window, accesskit::Role::Button, "Delete"),
-        Err(flui_testing::A11yQueryError::NotFound { .. })
+        Err(flui_testing::a11y::A11yQueryError::NotFound { .. })
     ));
     host.run_script(
         &MouseScript::new("press save")
@@ -410,7 +412,7 @@ fn a_script_finds_its_target_by_role_and_label_and_settles_within_a_limit() {
         .expect("attach");
     assert_eq!(
         spinning.pump_until_settled(ms(16), 12),
-        Err(flui_testing::NotSettled { frames: 12 }),
+        Err(flui_testing::host::NotSettled { frames: 12 }),
         "a repeating animation never settles; the limit ends the run"
     );
 }

@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::{Rect, Size};
 use flui_objects::RenderImage;
 use flui_painting::paint::Image as PixelImage;
@@ -10,9 +11,7 @@ use flui_painting::paint::ImageRepeat;
 use flui_painting::{Alignment, BoxFit, ImagePlacement};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{LifecycleContext, StatefulView, ViewState};
-use flui_view::{
-    BoxedView, BuildContext, CreationSite, IntoView, RenderView, View, ViewExt, impl_render_view,
-};
+use flui_view::{BoxedView, BuildContext, IntoView, RenderView, ViewExt, impl_render_view};
 
 use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};
 
@@ -453,7 +452,7 @@ impl RenderView for RawImage {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&BoxedView)) {}
 }
 
 impl_render_view!(RawImage);

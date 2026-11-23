@@ -195,8 +195,7 @@ fn dpi_change_invalidates_the_snapshot() {
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("hidden window");
-    let hwnd = window
-        .as_any()
+    let hwnd = (&*window as &dyn std::any::Any)
         .downcast_ref::<WindowsWindow>()
         .expect("Win32 backend")
         .hwnd();

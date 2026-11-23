@@ -1,106 +1,13 @@
-error[E0432]: unresolved imports `flui_native::DisplayChange`, `flui_native::DisplayChangeError`, `flui_native::DisplaySpec`, `flui_native::FakeAccessibility`, `flui_native::FakeTextInput`, `flui_native::HeadlessDeferredWindowOpens`, `flui_native::HeadlessDisplayControls`, `flui_native::HeadlessDragAndDrop`, `flui_native::HeadlessExitReevaluation`, `flui_native::HeadlessHostEvents`, `flui_native::HeadlessHostWindow`, `flui_native::HeadlessInputDevices`, `flui_native::HeadlessOpenWindows`, `flui_native::HeadlessOwnerTurns`, `flui_native::HeadlessPlatform`, `flui_native::HeadlessPreferences`, `flui_native::HeadlessWindowPolicy`, `flui_native::HeadlessWindowSystem`, `flui_native::UnknownDisplay`
- --> tests/ui/native/headless_doubles_need_scripted.rs:4:5
+error[E0432]: unresolved import `flui_native::testing`
+ --> tests/ui/native/headless_doubles_need_scripted.rs:4:18
   |
-4 |     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeTextInput,
-  |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^ no `FakeTextInput` in the root
-  |     |              |                   |            |
-  |     |              |                   |            no `FakeAccessibility` in the root
-  |     |              |                   no `DisplaySpec` in the root
-  |     |              no `DisplayChangeError` in the root
-  |     no `DisplayChange` in the root
-5 |     HeadlessDeferredWindowOpens, HeadlessDisplayControls, HeadlessDragAndDrop,
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^ no `HeadlessDragAndDrop` in the root
-  |     |                            |
-  |     |                            no `HeadlessDisplayControls` in the root
-  |     no `HeadlessDeferredWindowOpens` in the root
-6 |     HeadlessExitReevaluation, HeadlessHostEvents, HeadlessHostWindow, HeadlessInputDevices,
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
-  |     |                         |
-  |     |                         no `HeadlessHostEvents` in the root
-  |     no `HeadlessExitReevaluation` in the root
-7 |     HeadlessOpenWindows, HeadlessOwnerTurns, HeadlessPlatform, HeadlessPreferences,
-  |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
-8 |     HeadlessWindowPolicy, HeadlessWindowSystem, UnknownDisplay,
-  |     ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+4 | use flui_native::testing::{
+  |                  ^^^^^^^ could not find `testing` in `flui_native`
   |
 note: found an item that was configured out
  --> crates/flui-native/src/lib.rs
   |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use display::headless::{
-  |     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
-  |     ^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use display::headless::{
-  |     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
-  |                    ^^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use display::headless::{
-  |     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
-  |                                        ^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use accessibility::headless::FakeAccessibility;
-  |                                  ^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use text::headless::FakeTextInput;
-  |                         ^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use owner::headless::{
-  |     HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use display::headless::{
-  |     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
-  |                                                     ^^^^^^^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use drag::headless::HeadlessDragAndDrop;
-  |                         ^^^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use owner::headless::{
-  |     HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
-  |                                  ^^^^^^^^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> crates/flui-native/src/lib.rs
-  |
-  | #[cfg(feature = "scripted")]
-  |       -------------------- the item is gated behind the `scripted` feature
-  | pub use lifecycle::headless::HeadlessHostEvents;
-  |                              ^^^^^^^^^^^^^^^^^^
-help: a similar name exists in the module
-  |
-4 -     DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeTextInput,
-4 +     DisplayChange, DisplayChangeError, DisplaySpec, accessibility, FakeTextInput,
-  |
+  | #[cfg(any(test, feature = "scripted"))]
+  |          ---------------------------- the item is gated here
+  | pub mod testing;
+  |         ^^^^^^^

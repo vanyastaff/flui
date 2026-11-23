@@ -12,8 +12,8 @@
 //! is published. Dropping the last clone lets collection stop on the next frame; a request still
 //! unanswered does not keep it on.
 
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -462,7 +462,7 @@ pub(super) fn issued_of(state: &PresentationState) -> Rc<RefCell<IssuedHandles>>
 /// Recent gaps stay exact, and the record stays bounded by the slots.
 #[derive(Debug, Default)]
 pub(super) struct IssuedHandles {
-    runs: HashMap<u32, Vec<(u32, u32)>>,
+    runs: FxHashMap<u32, Vec<(u32, u32)>>,
 }
 
 impl IssuedHandles {

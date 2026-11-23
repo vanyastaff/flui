@@ -351,8 +351,7 @@ fn open(
             handler.clone(),
         )
         .expect("window");
-    let hwnd = window
-        .as_any()
+    let hwnd = (&*window as &dyn std::any::Any)
         .downcast_ref::<WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
@@ -1773,9 +1772,7 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
     let first = open(&platform, "flui drag source a", |_| {});
     let second = open(&platform, "flui drag source b", |_| {});
     let identity = |window: &Window| {
-        window
-            .host
-            .as_any()
+        (&*window.host as &dyn std::any::Any)
             .downcast_ref::<WindowsWindow>()
             .expect("Win32 window")
             .identity

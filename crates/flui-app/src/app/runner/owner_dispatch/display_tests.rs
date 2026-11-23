@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_native::{
+use flui_native::Platform as _;
+use flui_native::testing::{
     DisplayChange, DisplaySpec, HeadlessDisplayControls, HeadlessHostWindow, HeadlessOwnerTurns,
-    HeadlessPlatform, Platform as _,
+    HeadlessPlatform,
 };
 use flui_platform::PlatformWindow;
 use flui_platform::{DisplayId, DisplaySnapshot, WindowDisplay};
@@ -126,8 +127,7 @@ fn install_window(
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
-    let native = host_window
-        .as_any()
+    let native = (&*host_window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("headless window")
         .clone();

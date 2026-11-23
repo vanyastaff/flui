@@ -17,8 +17,8 @@ use flui_platform::{SystemNotice, WindowCommand, WindowMode};
 use flui_rendering::{
     BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
 };
+use flui_testing::host::{HeadlessHost, HeadlessWindow, UnshownFrame};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{HeadlessHost, HeadlessWindow, UnshownFrame};
 use flui_view::prelude::*;
 use flui_view::{RenderView, StatefulView, View};
 
@@ -473,9 +473,9 @@ impl ViewState<SizedNumber> for SizedNumberState {
 /// frames submitted before the hold.
 fn held_owed_frame(
     host: &mut HeadlessHost,
-    window: flui_testing::HeadlessWindowId,
+    window: flui_testing::host::HeadlessWindowId,
     number: &SharedSignal<u32>,
-) -> (flui_testing::ScriptedTextSizing, u64) {
+) -> (flui_testing::host::ScriptedTextSizing, u64) {
     let sizing = parked_owed_frame(host, window, number);
     host.request_frame();
     host.pump_until_settled(FRAME, 200)
@@ -488,9 +488,9 @@ fn held_owed_frame(
 /// once something owes it, meets the waiting preparation.
 fn parked_owed_frame(
     host: &mut HeadlessHost,
-    window: flui_testing::HeadlessWindowId,
+    window: flui_testing::host::HeadlessWindowId,
     number: &SharedSignal<u32>,
-) -> flui_testing::ScriptedTextSizing {
+) -> flui_testing::host::ScriptedTextSizing {
     let sizing = host.script_text_sizing(window);
     host.attach_to(
         window,
@@ -649,7 +649,7 @@ fn a_moved_premise_asks_a_held_owed_frame_again() {
 /// The windows of a moved-premise row.
 struct Windows {
     /// The primary, covered, its text held on the provider; sampled first.
-    covered: flui_testing::HeadlessWindowId,
+    covered: flui_testing::host::HeadlessWindowId,
     /// What starts the shown window's animation, which writes the covered
     /// window's signal as it ticks.
     start: flui_foundation::ChangeNotifier,
@@ -804,7 +804,7 @@ fn a_covered_window_is_delivered_no_frame_it_did_not_ask_for() {
         RecordingReader::try_new(bytes.as_slice()).expect("the recording reads"),
     )
     .expect("a whole recording");
-    let frames_of = |window: flui_testing::HeadlessWindowId| {
+    let frames_of = |window: flui_testing::host::HeadlessWindowId| {
         let id = flui_platform::PlatformWindow::id(host.window_of(window));
         recorded
             .rows()
@@ -825,7 +825,7 @@ fn a_covered_window_is_delivered_no_frame_it_did_not_ask_for() {
 /// Every timed frame request `window` took, oldest first.
 fn host_requests(
     host: &HeadlessHost,
-    window: flui_testing::HeadlessWindowId,
+    window: flui_testing::host::HeadlessWindowId,
 ) -> Vec<Option<flui_platform::EventTime>> {
     host.window_of(window).timed_frame_requests()
 }

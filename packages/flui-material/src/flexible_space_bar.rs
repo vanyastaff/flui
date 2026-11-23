@@ -36,7 +36,7 @@
 use flui_sdk::view::BuildContextExt as _;
 use flui_sdk::view::prelude::StatelessView;
 use flui_sdk::view::{
-    BoxedView, BuildContext, InheritedView, IntoView, View, ViewExt, impl_inherited_view,
+    BoxedView, BuildContext, InheritedView, IntoView, ViewExt, impl_inherited_view,
 };
 use flui_sdk::widgets::{
     Align, DefaultTextStyle, Directionality, Opacity, Padding, Positioned, SizedBox, Stack,
@@ -92,7 +92,7 @@ impl InheritedView for FlexibleSpaceBarSettings {
         &self.data
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -239,7 +239,7 @@ impl StatelessView for FlexibleSpaceBar {
             // leading-aligned title sits at the RIGHT edge under RTL, and
             // its 72px leading inset moves with it.
             let rtl = Directionality::maybe_of(ctx)
-                .is_some_and(|direction| direction == flui_sdk::painting::TextDirection::Rtl);
+                .is_some_and(|direction| direction == flui_sdk::foundation::TextDirection::Rtl);
             let alignment = if self.center_title {
                 Alignment::BOTTOM_CENTER
             } else if rtl {

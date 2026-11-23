@@ -20,7 +20,7 @@ mod animated;
 mod error;
 mod inherited;
 mod into_view;
-pub(crate) use into_view::{create_element_of, shared_view_of};
+pub(crate) use into_view::shared_view_of;
 pub mod memo;
 mod parent_data;
 mod proxy;
@@ -44,7 +44,7 @@ pub(crate) use error::recovery_view_for;
 // together, as `Clone` or `serde::Serialize` do.
 pub use flui_macros::{InheritedData, StatefulView, StatelessView};
 pub use inherited::{FieldMask, FieldSet, InheritedData, InheritedView};
-pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
+pub use into_view::{BoxedElement, BoxedView, IntoElement, IntoView, ViewExt};
 pub use memo::Memo;
 pub use parent_data::{ParentDataConfig, ParentDataView};
 pub use proxy::ProxyView;
@@ -54,9 +54,3 @@ pub use stateful::{StatefulView, ViewState};
 pub use stateful_render::{RenderViewState, StatefulRenderView};
 pub use stateless::StatelessView;
 pub use view::{ChildViews, ElementBase, ElementDepth, View};
-
-// Re-export unified element types from element module
-pub use crate::element::{
-    AnimatedElement, InheritedElement, ParentDataElement, ProxyElement, RenderElement,
-    StatefulElement, StatelessElement,
-};

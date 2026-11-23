@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{EdgeInsets, Rect};
 use flui_platform::{EventTime, InsetCurve, KeyboardPlacement, SoftKeyboard, WindowInsets};
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_widgets::SizedBox;
 

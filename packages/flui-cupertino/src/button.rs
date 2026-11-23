@@ -49,17 +49,18 @@ use flui_sdk::animation::{
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
-use flui_sdk::painting::TextStyle;
-use flui_sdk::painting::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
+use flui_sdk::painting::styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::platform::Brightness;
+use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, StatefulView, ViewState};
-use flui_sdk::widgets::interaction::node::{ControlTap, Description, InteractiveNode};
+use flui_sdk::widgets::__private::node::{ControlTap, Description, InteractiveNode};
 use flui_sdk::widgets::prelude::BoxConstraints;
 use flui_sdk::widgets::{
-    Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, Padding, SemanticsRole,
+    Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, Padding,
 };
 
 use crate::colors::{CupertinoColor, CupertinoColors};

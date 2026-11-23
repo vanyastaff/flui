@@ -26,8 +26,9 @@ use flui_rendering::{
     BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
 };
 use flui_scheduler::SchedulerPhase;
+use flui_testing::a11y::{A11yTree, Action, ActionRequest, TreeId};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::widgets::{ProbeSignals, SignalProbe, lay_out, loose, tight};
-use flui_testing::{A11yTree, Action, ActionRequest, HeadlessHost, HeadlessWindow, TreeId};
 use flui_view::environment::{MediaQuery, MediaQueryData};
 use flui_view::prelude::*;
 use flui_view::{RenderView, View};
@@ -224,7 +225,7 @@ fn labelled(detector: GestureDetector) -> Semantics {
         .child(detector.child(Text::new("Tap")))
 }
 
-fn tap_node(tree: &A11yTree) -> flui_testing::NodeId {
+fn tap_node(tree: &A11yTree) -> flui_testing::a11y::NodeId {
     tree.find_by_label("Tap")
         .unwrap_or_else(|error| panic!("one node labelled \"Tap\": {error}\n{}", tree.describe()))
         .id()
@@ -737,8 +738,8 @@ fn a_frame_report_counts_only_the_frame_it_drove() {
 /// WAI-ARIA 1.2: the publication leaves it out and reports an author error.
 fn checked_link() -> flui_view::BoxedView {
     Semantics::new()
-        .role(flui_widgets::SemanticsRole::Link)
-        .toggled(flui_widgets::Toggled::On)
+        .role(flui_semantics::SemanticsRole::Link)
+        .toggled(flui_semantics::Toggled::On)
         .label("link")
         .child(SizedBox::new(40.0, 24.0))
         .boxed()
@@ -752,7 +753,7 @@ fn checked_link() -> flui_view::BoxedView {
 /// frame publishes the link without its state and the pump returns.
 #[test]
 fn a_bare_host_frame_fails_on_an_attribute_its_role_does_not_support() {
-    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_testing::host::{HeadlessHost, HeadlessWindow};
 
     let mut primary = HeadlessHost::new(HeadlessWindow::new(40, 24));
     primary

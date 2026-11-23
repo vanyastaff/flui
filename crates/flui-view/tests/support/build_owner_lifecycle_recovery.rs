@@ -79,7 +79,7 @@ impl View for InitPanicView {
 fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
-    let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&TestView.boxed(), &mut owner.element_owner_mut());
     settle_initial_builds(&mut tree, &mut owner);
     let hook_calls = Arc::new(AtomicUsize::new(0));
     let scope = tree.insert(
@@ -90,7 +90,7 @@ fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
                 }
                 .boxed(),
             ],
-        },
+        }.boxed(),
         root,
         0,
         &mut owner.element_owner_mut(),
@@ -173,7 +173,7 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
         children: vec![LayoutBuilder::new(move |_ctx, _constraints| child.clone()).boxed()],
     };
     let root = tree.mount_root_with_pipeline_owner(
-        &host,
+        &host.boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );
@@ -230,7 +230,7 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
 fn repartition_walks_each_ancestor_once() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
-    let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&TestView.boxed(), &mut owner.element_owner_mut());
     settle_initial_builds(&mut tree, &mut owner);
     let scope = insert_child(&mut tree, &mut owner, root, 0);
     let mut chain = vec![scope];

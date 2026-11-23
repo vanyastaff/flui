@@ -30,7 +30,7 @@ use super::effect::{Effect, Kind, Pose, Stages};
 ///
 /// ```
 /// use flui_objects::TranslationFraction;
-/// use flui_widgets::motion::Transition;
+/// use flui_widgets::Transition;
 /// use std::time::Duration;
 ///
 /// let enter = Transition::fade() + Transition::slide_in(TranslationFraction::new(0.0, 0.25));

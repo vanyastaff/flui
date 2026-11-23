@@ -6,6 +6,11 @@
 //! inhibitor the adapter holds is one end of a socket pair whose other end the
 //! stand-in watches, so "released" is observed as the socket closing.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "zbus's `interface` expansion names std's `HashMap` for the `a{sv}` dictionaries it serializes"
+)]
+
 use std::{
     collections::VecDeque,
     io::{BufRead, BufReader},

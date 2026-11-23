@@ -3,9 +3,9 @@
 // Separable morphological filter — dilate (max) or erode (min) — over a
 // premultiplied RGBA offscreen.
 //
-// ## Correctness contracts (PINNED)
+// ## Correctness contracts
 //
-// **PINNED #1 — Premultiplied-direct, NO unpremultiply.**
+// **Premultiplied-direct, NO unpremultiply.**
 // Morphology max/min operates directly on premultiplied RGBA channel values.
 // Unlike the color-matrix filter, morphology does NOT unpremultiply before the
 // operation.  This matches Impeller `morphology_filter.frag` semantics: the
@@ -175,6 +175,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         acc = select(max(acc, texel), min(acc, texel), u.op > 0.5);
     }
 
-    // Output is premultiplied RGBA — no repremultiplication needed (PINNED #1).
+    // Output is premultiplied RGBA — no repremultiplication needed.
     return acc;
 }

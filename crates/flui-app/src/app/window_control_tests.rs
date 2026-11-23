@@ -10,12 +10,12 @@ use crate::app::runner::window_routes::OpenRouted as _;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
-use flui_native::HeadlessPlatform;
+use flui_native::testing::HeadlessPlatform;
 use flui_platform::WindowId;
+use flui_platform::testing::{MockWindow, WindowCall};
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_platform::{WindowCapabilities, WindowFrame, WindowMode, WindowOptions};
 use flui_platform::{WindowExtent, WindowPosition};
-use flui_testing::{MockWindow, WindowCall};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
@@ -180,9 +180,8 @@ fn a_material_goes_through_the_window_queue() {
     let host = headless_host_window(WindowCapabilities::ALL);
     let window: Rc<dyn PlatformWindow> = host.clone();
     let rig_all = rig(&window, 21);
-    let mock = host
-        .as_any()
-        .downcast_ref::<flui_native::HeadlessHostWindow>()
+    let mock = (&*host as &dyn std::any::Any)
+        .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
         .expect("headless window");
     rig_all
         .handle
@@ -225,8 +224,8 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
     let mut revised = WindowCapabilities::ALL.into_parts();
     revised.maximizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     let revised = revised.into_capabilities();
-    host.as_any()
-        .downcast_ref::<flui_native::HeadlessHostWindow>()
+    (&*host as &dyn std::any::Any)
+        .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
         .expect("headless window")
         .simulate_capabilities(revised);
     let before = window.state();
@@ -597,9 +596,8 @@ fn subscribers_hear_a_new_state_in_order_and_what_they_ask_waits() {
         .expect("open window accepts subscriptions");
     assert!(log.borrow().is_empty(), "subscribing calls nothing");
 
-    let native = host
-        .as_any()
-        .downcast_ref::<flui_native::HeadlessHostWindow>()
+    let native = (&*host as &dyn std::any::Any)
+        .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
         .expect("headless window");
     native.simulate_move(Point::new(5.0, 6.0));
     rig.source.publish_current();

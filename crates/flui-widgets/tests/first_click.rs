@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_foundation::geometry::Point;
+use flui_interaction::pointer::HitTestBehavior;
 use flui_painting::styling::Color;
 use flui_platform::EventTime;
 use flui_platform::input::pointer::{
@@ -13,7 +14,6 @@ use flui_platform::input::pointer::{
     PointerPress, PointerRelease, PointerSample, PointerSource,
 };
 use flui_view::{IntoView, View};
-use flui_widgets::HitTestBehavior;
 use flui_widgets::{ColoredBox, FirstClick, GestureDetector, Positioned, SizedBox, Stack};
 
 use crate::common::{LaidOut, lay_out, tight};

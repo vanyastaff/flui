@@ -23,6 +23,14 @@ pub use flui_rendering::context::{
     BoxLayoutContext, FragmentRecorder, HitTestContext, LayoutContext, PaintAnchor, PaintContext,
     PaintFragment, SliverHitTestContext, SliverLayoutContext,
 };
+// The layout delegates the delegate-driven widgets (`CustomMultiChildLayout`,
+// `CustomSingleChildLayout`, `Flow`, `GridView`, `SliverGrid`) take.
+pub use flui_rendering::delegates::{
+    AspectRatioDelegate, CenterLayoutDelegate, FlowDelegate, FlowPaintingContext,
+    MultiChildLayoutContext, MultiChildLayoutDelegate, SingleChildLayoutDelegate,
+    SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
+    SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
+};
 pub use flui_rendering::input_regions::InputRegionSink;
 pub use flui_rendering::parent_data::{
     BoxParentData, FlexFit, FlexParentData, HorizontalInsets, MultiChildLayoutParentData,
@@ -40,10 +48,12 @@ pub use flui_rendering::protocol::{
     BoxChildSize, BoxProtocol, ChildLayout, ChildState, MainAxisPosition, Protocol,
     SliverChildState, SliverProtocol, UsageByParent,
 };
+// The scroll state a `ScrollController` hands out and a `Viewport` takes.
 pub use flui_rendering::traits::{
     HitTestOutcome, PaintClip, PaintEffects, PaintOpacity, RenderBox, RenderObject, RenderSliver,
     SemanticsClip, TextBaseline,
 };
+pub use flui_rendering::view::ScrollPosition;
 pub use flui_rendering::{
     PoisonPhase, RenderError, RenderResult, RenderUpdateImpact, SemanticsError,
 };

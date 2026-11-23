@@ -419,7 +419,8 @@ pub(crate) fn a_panicking_swipe_action_leaves_the_row_closed() {
 /// nothing and the row returns closed; from an open row it returns open.
 pub(crate) fn a_cancelled_swipe_returns_where_it_began() {
     let cancelled = |from: f64, to: f64| {
-        let mut script = flui_testing::TouchScript::new("cancelled").down(1, at(from, 30.0));
+        let mut script =
+            flui_testing::replay::TouchScript::new("cancelled").down(1, at(from, 30.0));
         for point in crate::nested_scroll::line(at(from, 30.0), at(to, 30.0), 8) {
             script = script.wait(Duration::from_millis(16)).move_to(1, point);
         }

@@ -15,7 +15,9 @@
 mod link;
 mod wire;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -24,6 +26,7 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _};
 
 use self::link::{Display, Link, Received};
 use self::wire::{AttrDecl, AttrValue, FORWARD_SYNCHRONOUS, KEY_PRESS, KEY_RELEASE, Message};
+use super::Fence;
 use super::bus::{
     CREATE_TIMEOUT, Command, ContextId, Heard, Inbox, KEY_CALL_TIMEOUT, MAX_WAITING, Request,
 };
@@ -275,7 +278,7 @@ enum Entry {
         forwarded_back: bool,
     },
     /// A focus told.
-    Fence(u64),
+    Fence(Fence),
 }
 
 /// One context as the session holds it.
@@ -302,8 +305,8 @@ struct Session {
     style: u32,
     root: xproto::Window,
     inbox: Arc<Inbox>,
-    contexts: HashMap<ContextId, Context>,
-    ics: HashMap<u16, ContextId>,
+    contexts: FxHashMap<ContextId, Context>,
+    ics: FxHashMap<u16, ContextId>,
     /// The contexts asked for, in the order the server answers them, each
     /// with its deadline; one closed meanwhile is destroyed once made.
     creating: VecDeque<(Instant, ContextId)>,
@@ -332,8 +335,8 @@ pub(super) async fn serve(
         style,
         root: link.root(),
         inbox: Arc::clone(inbox),
-        contexts: HashMap::new(),
-        ics: HashMap::new(),
+        contexts: FxHashMap::default(),
+        ics: FxHashMap::default(),
         creating: VecDeque::new(),
         forward: KEY_PRESS_MASK | KEY_RELEASE_MASK,
         serial: 0,
@@ -508,6 +511,7 @@ impl Session {
                 if !self.push(context, entry) {
                     return true;
                 }
+                // Wraps: the protocol carries the serial in 16 bits.
                 self.serial = self.serial.wrapping_add(1);
                 let event = key_event(
                     self.serial,

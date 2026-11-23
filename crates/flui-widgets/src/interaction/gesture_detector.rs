@@ -555,8 +555,8 @@ impl PressShape {
     }
 }
 
-/// The recognizer takes the same validated count the detector does.
-pub use flui_interaction::gesture::{MultiTapCount, MultiTapCountError};
+// The recognizer takes the same validated count the detector does.
+use flui_interaction::gesture::MultiTapCount;
 
 #[derive(Clone)]
 struct MultiTapSlot {

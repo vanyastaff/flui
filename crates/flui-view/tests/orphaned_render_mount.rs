@@ -20,9 +20,8 @@
 use flui_objects::RenderSizedBox;
 use flui_rendering::RenderUpdateImpact;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_view::{
-    BuildContext, BuildOwner, ElementTree, IntoView, RenderView, StatelessView, View, ViewExt,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 // ============================================================================
 // Fixtures
@@ -88,7 +87,7 @@ fn misuse_tree() -> (
     let mut tree = ElementTree::new();
     let mut build_owner = BuildOwner::new();
     let root_id = tree.mount_root_with_pipeline_owner(
-        &OrphanProbeRoot,
+        &OrphanProbeRoot.boxed(),
         Some(pipeline.clone()),
         &mut build_owner.element_owner_mut(),
     );
@@ -111,7 +110,7 @@ fn a_render_child_mounted_under_a_renderless_owner_carrying_parent_is_refused() 
     // here as this panic.
     let (_pipeline, mut tree, mut build_owner, root_id) = misuse_tree();
     tree.insert(
-        &OrphanProbeLeaf,
+        &OrphanProbeLeaf.boxed(),
         root_id,
         0,
         &mut build_owner.element_owner_mut(),

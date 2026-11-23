@@ -11,7 +11,8 @@ use flui_foundation::inspect::{
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, WidgetsBinding};
+use flui_view::__runtime::WidgetsBinding;
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View};
 
 type Answer = Result<SnapshotNode, SnapshotError>;
 

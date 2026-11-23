@@ -1,8 +1,9 @@
 //! Real async builders publish before retiring caller-owned values.
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::element::{AsyncSnapshot, ConnectionState};
 use flui_view::{
-    BuildOwner, ElementTree, ErrorView, RebuildReason, ViewExt,
+    ErrorView, RebuildReason, ViewExt,
     element::{FutureBuilder, FutureFactory, SnapshotBuilder, StreamBuilder, StreamFactory},
 };
 use futures_core::Stream;
@@ -268,7 +269,7 @@ fn eager_disposal() {
         _field: None,
     }));
     let mut tree = ElementTree::new();
-    let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&view.clone().boxed(), &mut owner.element_owner_mut());
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     let payload = catch_unwind(AssertUnwindSafe(|| owner.build_scope(&mut tree)))
         .expect_err("root eager init resumes its old retirement failure");
@@ -290,7 +291,7 @@ fn eager_disposal() {
             ErrorView::new("healthy eager leaf").boxed()
         }),
     );
-    let root = tree.mount_root(&healthy, &mut owner.element_owner_mut());
+    let root = tree.mount_root(&healthy.boxed(), &mut owner.element_owner_mut());
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     assert_eq!(seen.lock().last().copied(), Some(Some(4)));

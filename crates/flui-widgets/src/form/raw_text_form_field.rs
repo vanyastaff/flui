@@ -14,12 +14,12 @@ use flui_view::prelude::*;
 use super::AutovalidateMode;
 use super::form_field::FormFieldHandle;
 use super::text_form_field_core::{TextFormFieldConfig, TextFormFieldCore};
-use crate::LiveSetting;
 use crate::flex::Column;
 use crate::semantics::Semantics;
 use crate::support::{event_callback, ref_callback};
 use crate::text::{RawTextField, Text, TextEditingController};
 use flui_objects::{CrossAxisAlignment, MainAxisSize};
+use flui_semantics::LiveSetting;
 
 /// The error line's colour: Material's baseline error red, since this
 /// theme-free field has no theme to take one from.

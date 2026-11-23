@@ -16,7 +16,7 @@ use flui_system::grant::{
 };
 use flui_system::sandbox::{Sandbox, SandboxKind};
 use flui_system::testing::{GrantStore, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
-use flui_testing::HeadlessHost;
+use flui_testing::host::HeadlessHost;
 
 use crate::{acquire, outcome_slot, turn};
 

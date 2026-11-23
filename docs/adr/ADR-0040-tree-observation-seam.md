@@ -216,8 +216,8 @@ Callbacks run on the UI runtime's owner thread, inside frame phases, with the UI
 
 ### 7. A sanctioned `dyn` boundary
 
-`Arc<dyn TreeObserver>` is a framework `dyn` boundary in the observer-pattern family (alongside
-`WidgetsBindingObserver`). Dependency inversion requires the erasure: emitter crates cannot name a
+`Arc<dyn TreeObserver>` is a framework `dyn` boundary in the observer-pattern family. Dependency
+inversion requires the erasure: emitter crates cannot name a
 devtools type above them in the DAG.
 
 ### 8. The devtools half: `inspector` feature, seam-only surface
