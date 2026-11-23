@@ -216,8 +216,8 @@ pub enum RestartFailure<'a> {
 - **One record, in the loop.** Beside each event loop's hook instance the host keeps the version
   its application was composed from (`composed`, empty after a restart that failed), the last
   version the hook reported (`loaded`) and, per UI runtime, the revision it was composed from or
-  last reassembled to. `composed` is written when an application is composed and emptied when a
-  restart fails, and nowhere else. No tier is stored.
+  last reassembled to, removed when that UI runtime retires. `composed` is written when an
+  application is composed and emptied when a restart fails, and nowhere else. No tier is stored.
 - **The tier is derived, at the poll that reports a version.** A version equal to `loaded`
   changes nothing. Otherwise the loop records it as `loaded`, and:
   - when `composed` is empty or its layout differs, the loop restarts to it (§4) when the frame in
