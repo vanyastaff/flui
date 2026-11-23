@@ -8,51 +8,79 @@ use std::{any::Any, fmt::Debug};
 
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Offset, Size};
-use flui_painting::Canvas;
 use flui_semantics::SemanticsRegion;
+
+use super::CustomPaintContext;
 
 /// A delegate that provides custom painting behavior.
 ///
 /// Implement this trait to define custom painting on a canvas. The delegate
 /// is used by `RenderCustomPaint` to paint content before or after its child.
 ///
+/// Flutter's counterpart is `CustomPainter.paint(Canvas, Size)`, whose painter
+/// lays a `TextPainter` out in paint against the process's font system. FLUI
+/// has none: the UI runtime lends its text context per phase, as a layout
+/// context's `text()` does. So [`Self::paint`] receives a
+/// [`CustomPaintContext`], in the shape `RenderBox::paint` takes its
+/// `PaintContext`: the canvas, the size, and a text loan on demand. A painter
+/// that calls [`CustomPaintContext::text`] is recorded with its node, so
+/// registering a font paints it again; one that never asks is not recorded.
+///
 /// # Example
+///
+/// A bar with its label, shaped through the lent text context:
 ///
 /// ```
 /// use std::any::Any;
-/// use flui_rendering::delegates::CustomPainter;
-/// use flui_painting::Canvas;
-/// use flui_foundation::geometry::Size;
+/// use flui_foundation::TextDirection;
+/// use flui_foundation::geometry::{Offset, Point, Rect, Size};
+/// use flui_painting::{TextPainter, paint::Paint, styling::Color, typography::TextSpan};
+/// use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 ///
 /// #[derive(Debug)]
-/// struct CheckerboardPainter {
-///     cell_size: f64,
+/// struct BarPainter {
+///     fraction: f64,
+///     label: String,
 /// }
 ///
-/// impl CustomPainter for CheckerboardPainter {
-///     fn paint(&self, canvas: &mut Canvas, size: Size) {
-///         let cols = (size.width / self.cell_size).ceil() as i32;
-///         let rows = (size.height / self.cell_size).ceil() as i32;
-///         // Draw checkerboard pattern...
+/// impl CustomPainter for BarPainter {
+///     fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+///         let size = ctx.size();
+///         let bar = Size::new(size.width * self.fraction, size.height);
+///         ctx.canvas().draw_rect(
+///             Rect::from_origin_size(Point::ZERO, bar),
+///             &Paint::fill(Color::rgb(30, 90, 200)),
+///         );
+///         let mut label = TextPainter::new()
+///             .with_text(TextSpan::new(self.label.clone()))
+///             .with_text_direction(TextDirection::Ltr);
+///         // Shape while the context is lent, then draw once the loan ends.
+///         let shaped = ctx.text().is_ok_and(|mut text| {
+///             text.measurement().layout(&mut label, 0.0, size.width).is_ok()
+///         });
+///         if shaped {
+///             label.paint(ctx.canvas(), Offset::ZERO);
+///         }
 ///     }
 ///
 ///     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
-///         if let Some(old) = (old_delegate as &dyn Any).downcast_ref::<Self>() {
-///             self.cell_size != old.cell_size
-///         } else {
-///             true
-///         }
+///         (old_delegate as &dyn Any)
+///             .downcast_ref::<Self>()
+///             .is_none_or(|old| old.fraction != self.fraction || old.label != self.label)
 ///     }
 /// }
 /// ```
 pub trait CustomPainter: Any + Debug {
-    /// Paint custom content on the canvas.
+    /// Paint custom content through `ctx`.
     ///
     /// The canvas coordinate space is configured such that the origin is at
-    /// the top left of the box. The area of the box is the size argument.
+    /// the top left of the box. The area of the box is
+    /// [`ctx.size()`](CustomPaintContext::size).
     ///
-    /// Paint operations should remain inside the given area.
-    fn paint(&self, canvas: &mut Canvas, size: Size);
+    /// Paint operations should remain inside the given area. Text is shaped
+    /// through [`ctx.text()`](CustomPaintContext::text), which records the
+    /// node so that registering a font repaints it.
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>);
 
     /// Whether this painter should repaint when replaced with a new delegate.
     ///

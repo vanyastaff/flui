@@ -7,7 +7,6 @@ use std::rc::Rc;
 use flui_animation::{Animation, AnimationController, ConstantAnimation, DrivenController};
 use flui_foundation::geometry::{Matrix4, Size};
 use flui_foundation::{CreationSite, Listenable, TextDirection};
-use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
 use flui_view::ViewExt;
@@ -16,7 +15,7 @@ use flui_view::prelude::*;
 use super::symbol_effect::{ContentKey, SymbolEffectHost};
 use super::{AnimatedIconData, IconTheme, PathEffect, SymbolEffect};
 use crate::{AnimatedBuilder, CustomPaint, Directionality, Semantics, TickerMode};
-use flui_rendering::delegates::CustomPainter;
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_view::environment::VsyncScope;
 
 /// An icon whose vector paths move with an animation: a play button that turns into pause,
@@ -341,7 +340,9 @@ impl fmt::Debug for IconPainter {
     }
 }
 impl CustomPainter for IconPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let side = size.width.min(size.height);
         if !side.is_finite() || side <= 0.0 {
             return;

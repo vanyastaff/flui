@@ -1,4 +1,4 @@
-//! The UI runtime's text context, lent to layout (ADR-0092 §10 step 3).
+//! The UI runtime's text context, lent to layout and paint (ADR-0092 §10 step 3).
 //!
 //! A UI runtime owns one [`TextContext`] over the app's font collection and every
 //! presentation's [`PipelineOwner`](super::PipelineOwner) holds a
@@ -8,6 +8,9 @@
 //! receive the same complete mutable capability: a text loan cannot remain in
 //! use across a child query through that context. Drivers keep [`TextSource`]
 //! internally rather than exposing an independent source at those boundaries.
+//! Paint contexts lend it the same way, and a custom painter's context lends
+//! its node's; a paint hook holds no child query, so `paint_raw` receives the
+//! opaque source the blanket hands to the `PaintContext`.
 //!
 //! The one `RefCell` sits between the UI runtime and its pipelines, not on a
 //! render object: it is borrowed once per measurement, on the owner thread,
@@ -17,9 +20,9 @@
 //! for or automatically retries the competing loan.
 //!
 //! Every loan a pipeline's walk makes records the node it was made for
-//! ([`TextMeasurers`]): those are the nodes whose layout depends on the font
-//! collection, and the ones the pipeline lays out again when a face is
-//! registered on it (`PipelineOwner::apply_font_change`). A render object
+//! ([`TextMeasurers`]): those are the nodes whose layout or paint depends on the
+//! font collection, and the ones the pipeline lays out and paints again when a
+//! face is registered on it (`PipelineOwner::apply_font_change`). A render object
 //! needs no code for this; measuring through the context is the opt-in.
 
 use std::cell::{RefCell, RefMut};
@@ -178,8 +181,8 @@ impl fmt::Debug for TextMeasurers {
     }
 }
 
-/// A pipeline's text context and the record its loans go into, as a layout
-/// or query walk carries them: it mints a [`TextSource`] per node.
+/// A pipeline's text context and the record its loans go into, as a layout,
+/// paint or query walk carries them: it mints a [`TextSource`] per node.
 #[derive(Clone, Copy)]
 pub(crate) struct TextLender<'a> {
     cell: &'a RefCell<TextContext>,

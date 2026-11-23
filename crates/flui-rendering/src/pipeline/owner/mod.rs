@@ -137,7 +137,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     local_dirty: std::rc::Rc<super::local_invalidation::LocalDirtyInbox>,
 
     /// The UI runtime's text context, lent to every measurement in this
-    /// pipeline's layout, intrinsic and dry queries (ADR-0092 §10 step 3).
+    /// pipeline's layout, paint, intrinsic and dry queries (ADR-0092 §10 step 3).
     /// A constructor argument: no pipeline exists without one.
     text: crate::pipeline::TextContextHandle,
 
@@ -955,6 +955,7 @@ mod tests {
         fn paint_raw(
             &self,
             _recorder: &mut crate::context::FragmentRecorder,
+            _text: crate::pipeline::TextSource<'_>,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
         ) {
@@ -1025,6 +1026,7 @@ mod tests {
         fn paint_raw(
             &self,
             _recorder: &mut crate::context::FragmentRecorder,
+            _text: crate::pipeline::TextSource<'_>,
             _child_count: usize,
             _size: flui_foundation::geometry::Size,
         ) {

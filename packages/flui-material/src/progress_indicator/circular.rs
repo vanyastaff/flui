@@ -4,10 +4,9 @@ use std::any::Any;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use flui_sdk::geometry::{Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Paint, StrokeCap};
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ActivityIndicator, CustomPaint};
 
@@ -146,7 +145,9 @@ struct ArcPainter {
 }
 
 impl CustomPainter for ArcPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let side = size.width.min(size.height);
         if !side.is_finite() || side <= STROKE {
             return;

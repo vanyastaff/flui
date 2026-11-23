@@ -141,11 +141,10 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Paint, Path};
 use flui_sdk::painting::styling::{BorderSide, BorderStyle};
 use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisSize};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
@@ -945,7 +944,9 @@ struct ChipBorderPainter {
 }
 
 impl CustomPainter for ChipBorderPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         if !self.side.style.is_solid() || self.side.width <= 0.0 {
             return;
         }
@@ -980,7 +981,9 @@ struct ChipCheckmarkPainter {
 }
 
 impl CustomPainter for ChipCheckmarkPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let cell = size.height;
         // The stroke scales with the FULL cell height, not `check_size`.
         let stroke_width = 2.0 * cell / 24.0;

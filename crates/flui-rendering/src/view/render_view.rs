@@ -8,6 +8,7 @@ use crate::constraints::BoxConstraints;
 use crate::context::{BoxLayoutContext, FragmentRecorder, PaintContext};
 use crate::error::{RenderError, RenderResult};
 use crate::parent_data::BoxParentData;
+use crate::pipeline::TextSource;
 use crate::protocol::{BoxProtocol, Protocol, RawBoxLayoutContext, RenderObject};
 use crate::traits::HitTestOutcome;
 
@@ -61,10 +62,16 @@ impl RenderObject<BoxProtocol> for RenderView {
         Ok(size)
     }
 
-    fn paint_raw(&self, recorder: &mut FragmentRecorder, child_count: usize, size: Size) {
+    fn paint_raw(
+        &self,
+        recorder: &mut FragmentRecorder,
+        text: TextSource<'_>,
+        child_count: usize,
+        size: Size,
+    ) {
         // The root draws nothing and splices every child subtree in order;
         // `size` is only forwarded to the child-painting context.
-        let mut ctx = PaintContext::<Variable>::new(recorder, child_count, size);
+        let mut ctx = PaintContext::<Variable>::new(recorder, text, child_count, size);
         ctx.paint_children();
     }
 

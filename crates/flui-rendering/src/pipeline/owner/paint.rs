@@ -822,8 +822,9 @@ impl PipelineOwner<PaintPhase> {
             return Ok(());
         }
 
-        // Record the node's fragment. paint_raw sees ONLY the recorder
-        // (sans-IO): no tree access, no layer access, no recursion.
+        // Record the node's fragment. paint_raw sees ONLY the recorder and
+        // the node's text source (sans-IO): no tree access, no layer access,
+        // no recursion.
         //
         // `paint_effects()` is read HERE, inside this same `catch_unwind`,
         // behind the same three gates as `paint_raw` itself:
@@ -878,12 +879,20 @@ impl PipelineOwner<PaintPhase> {
             own_effects.is_empty(),
             "BUG: the last node took its effects"
         );
+        // The node's text source: a loan it takes while painting records it
+        // beside the nodes layout recorded, so a font change repaints it.
+        let text = crate::pipeline::TextLender::new(
+            self.text.cell(),
+            &self.text_measurers,
+            &self.text_sizing,
+        )
+        .source(node_id);
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: a render object's paint runs contained; a panic poisons the node"
         )]
         let painted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_node.paint_raw(recorder, child_ids.len());
+            render_node.paint_raw(recorder, text, child_ids.len());
             own_effect_layers(render_node.paint_effects(), origin, own_effects);
         }));
         if let Err(payload) = painted {

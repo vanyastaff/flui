@@ -17,7 +17,6 @@ use flui_objects::{
     CarouselConfig, CarouselGeometry, CarouselItemFrames, CarouselLayout, MAX_ITEM_EXTENT,
 };
 use flui_painting::Alignment;
-use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
 use flui_scheduler::PostFrameHandle;
@@ -39,7 +38,7 @@ use crate::{
     Align, Column, CustomPaint, Directionality, Expanded, Focus, Listener, MouseRegion, RawButton,
     Semantics, SizedBox, TickerMode,
 };
-use flui_rendering::delegates::CustomPainter;
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_view::environment::MediaQuery;
 use flui_view::environment::VsyncScope;
 
@@ -811,7 +810,9 @@ struct PauseGlyph {
 }
 
 impl CustomPainter for PauseGlyph {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let side = size.width.min(size.height);
         let unit = side / 24.0;
         let point = |x: f64, y: f64| flui_foundation::geometry::Point::new(x * unit, y * unit);

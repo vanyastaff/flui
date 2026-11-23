@@ -2,7 +2,7 @@
 
 use flui::animation::Animation;
 use flui::geometry::{Offset, Point, Rect, Size};
-use flui::painting::{Canvas, CustomPainter, DrawOp, paint::Paint};
+use flui::painting::{Canvas, CustomPaintContext, CustomPainter, DrawOp, paint::Paint};
 use flui::prelude::*;
 use flui::rendering::{
     BoxConstraints, BoxDryLayoutContext, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintContext,
@@ -18,7 +18,9 @@ use std::time::Duration;
 struct RectanglePainter;
 
 impl CustomPainter for RectanglePainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         canvas.draw_rect(
             Rect::from_origin_size(Point::ZERO, size),
             &Paint::fill(Color::rgb(10, 20, 30)),
@@ -48,7 +50,7 @@ impl CustomPainter for RectanglePainter {
 #[test]
 fn custom_painter_records_a_rectangle() {
     let mut canvas = Canvas::new();
-    RectanglePainter.paint(&mut canvas, Size::new(24.0, 16.0));
+    RectanglePainter.paint(&mut CustomPaintContext::without_text(&mut canvas, Size::new(24.0, 16.0)));
     let recording = canvas.finish();
     assert_eq!(recording.iter().len(), 1);
     let Some(DrawOp::Rect { rect, paint }) = recording.get(0).map(|command| command.op) else {
@@ -81,7 +83,8 @@ struct CardMotion(Appearance, f64);
 struct MotionPainter(flui::animation::AnimatedValueView<CardMotion>);
 
 impl CustomPainter for MotionPainter {
-    fn paint(&self, canvas: &mut Canvas, _size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let canvas = ctx.canvas();
         let sample = self.0.value();
         canvas.draw_rect(
             Rect::from_origin_size(
@@ -225,8 +228,7 @@ impl RenderBox for SolidLeaf {
     }
 
     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
-        let size = ctx.size();
-        RectanglePainter.paint(ctx.canvas(), size);
+        RectanglePainter.paint(&mut CustomPaintContext::new(ctx));
         self.paints.set(self.paints.get() + 1);
     }
 }
@@ -304,6 +306,107 @@ fn proxy_macros_forward_live_and_dry_layout() {
     assert_eq!(run.box_geometry(root), Size::new(24.0, 16.0));
     let forced = Size::new(37.0, 19.0);
     assert_eq!(run.dry_layout(root, BoxConstraints::tight(forced)), forced);
+}
+
+
+/// A caption shaped in layout through the context's text loan and painted
+/// from the committed geometry, all through the facade.
+#[derive(Debug, flui::foundation::inspect::Inspect)]
+struct CaptionLeaf {
+    #[inspect(skip)]
+    painter: flui::painting::TextPainter,
+}
+
+impl CaptionLeaf {
+    fn new(caption: &str) -> Self {
+        Self {
+            painter: flui::painting::TextPainter::new()
+                .with_text(flui::painting::typography::TextSpan::new(caption.to_owned()))
+                .with_text_direction(flui::foundation::TextDirection::Ltr),
+        }
+    }
+}
+
+impl RenderBox for CaptionLeaf {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> flui::rendering::RenderResult<Size> {
+        let constraints = *ctx.constraints();
+        let mut text = ctx.text()?;
+        text.measurement()
+            .layout(&mut self.painter, 0.0, constraints.max_width)?;
+        Ok(constraints.constrain(self.painter.size()))
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut BoxDryLayoutContext<'_>,
+    ) -> flui::rendering::RenderResult<Size> {
+        let mut text = ctx.text()?;
+        let size = text
+            .measurement()
+            .dry_size(&self.painter, 0.0, constraints.max_width)?;
+        Ok(constraints.constrain(size))
+    }
+
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        self.painter.paint(ctx.canvas(), Offset::ZERO);
+    }
+}
+
+#[test]
+fn custom_render_object_shapes_and_paints_text_through_the_facade() {
+    use flui::testing::rendering::{BoxQueryRun, DrawKind, Probe, RenderTester, box_node};
+    let mut run = RenderTester::mount(box_node(CaptionLeaf::new("Revenue")))
+        .with_constraints(BoxConstraints::loose(Size::new(200.0, 100.0)))
+        .run_frame();
+    let root = run.root();
+    let size = run.box_geometry(root);
+    assert!(size.width > 0.0 && size.height > 0.0, "the caption has no extent: {size:?}");
+    assert_eq!(
+        run.dry_layout(root, BoxConstraints::loose(Size::new(200.0, 100.0))),
+        size,
+        "dry and live layout measure the caption alike"
+    );
+    run.assert_paints_any(|command| command.kind == DrawKind::Text);
+}
+
+/// A chart label a custom painter shapes through its context's text loan,
+/// as an application writes one through the facade.
+#[derive(Debug)]
+struct ChartLabelPainter;
+
+impl CustomPainter for ChartLabelPainter {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let width = ctx.size().width;
+        let mut label = flui::painting::TextPainter::new()
+            .with_text(flui::painting::typography::TextSpan::new("Q3"))
+            .with_text_direction(flui::foundation::TextDirection::Ltr);
+        let shaped = ctx
+            .text()
+            .is_ok_and(|mut text| text.measurement().layout(&mut label, 0.0, width).is_ok());
+        assert!(shaped, "the paint pass lends the text context");
+        label.paint(ctx.canvas(), Offset::ZERO);
+    }
+
+    fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+        false
+    }
+}
+
+#[test]
+fn custom_painter_draws_text_through_the_facade() {
+    use flui::testing::rendering::{DrawKind, RenderTester, box_node};
+    let run = RenderTester::mount(box_node(flui::rendering::objects::RenderCustomPaint::new(
+        Some(Rc::new(ChartLabelPainter)),
+        None,
+        Size::new(80.0, 24.0),
+    )))
+    .with_constraints(BoxConstraints::loose(Size::new(200.0, 100.0)))
+    .run_frame();
+    run.assert_paints_any(|command| command.kind == DrawKind::Text);
 }
 
 #[test]

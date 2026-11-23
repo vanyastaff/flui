@@ -99,6 +99,7 @@ and edits its row.
 | A test that drives an application's frames | `flui_testing::host::HeadlessHost` over `UiRuntime::pump` and its manual clock; presentations at independent cadences are separate hosts | a frame loop over raw owners (ADR-0083 §4 deleted `HeadlessBinding` and its `pump_frame`) |
 | The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
 | A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
+| A custom painter draws text | `CustomPainter::paint(&self, ctx: &mut CustomPaintContext)` with `ctx.text()` and a `TextPainter` (the Flutter counterpart is `paint(Canvas, Size)` with a `TextPainter`; FLUI lends the text context per phase) | a `TextContextHandle` or font collection held by the painter; shaping outside the loan |
 
 ## Codebase map
 
