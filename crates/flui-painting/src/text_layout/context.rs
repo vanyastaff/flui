@@ -1329,7 +1329,9 @@ mod tests {
     fn a_held_blob_keeps_its_keys_across_a_prune() {
         use crate::glyphs::FontRegistry;
 
-        let pruned = |ctx: &mut TextContext| ctx.font_ctx.source_cache.prune(0, true);
+        // The prune a critical reclaim runs, with the layout context and the spare
+        // layout it drops: under Parley 0.13 they keep the blob alive.
+        let pruned = |ctx: &mut TextContext| ctx.reclaim(MemoryPressureLevel::Critical);
 
         let (fonts, path) = file_backed_roboto("held");
         let mut ctx = TextContext::new(&fonts);

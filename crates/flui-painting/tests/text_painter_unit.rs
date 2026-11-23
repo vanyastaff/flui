@@ -848,7 +848,12 @@ pub(crate) mod parley_measurement {
             .layout(&mut a, 0.0, WIDTH)
             .expect("valid fixture lays out");
         assert!((painter.size().width - shaped.width).abs() < f64::EPSILON);
-        assert!((painter.size().height - shaped.height).abs() < f64::EPSILON);
+        assert!(
+            (painter.size().height - shaped.height).abs() < f64::EPSILON,
+            "painter {} vs shaped {}",
+            painter.size().height,
+            shaped.height
+        );
     }
 
     /// The intrinsic widths a layout cached answer only for the context that
