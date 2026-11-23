@@ -247,7 +247,8 @@ impl TemplateBuilder {
     ///
     /// This is what `--dry-run` inspects, and what [`generate`](Self::generate)
     /// writes: the same plan either way, so a dry run shows exactly what a
-    /// real run would create — including `.gitignore` and, for a
+    /// real run would create — including `.gitignore`, `rust-analyzer.toml`,
+    /// an application's `.cargo/config.toml` and, for a
     /// non-library, non-hot-reload template, the platform scaffolding
     /// (`platforms/<name>/…`). The template match is exhaustive on
     /// purpose — a new [`Template`] variant must get its own generator
@@ -335,7 +336,7 @@ impl TemplateBuilder {
     /// Generate the project from the template.
     ///
     /// This is the terminal method that consumes the builder and writes
-    /// the plan — templates, `.gitignore`, and platform scaffolding alike
+    /// the plan — every file [`plan`](Self::plan) lists
     /// — to disk. It is a thin wrapper over [`plan`](Self::plan) and
     /// [`ProjectPlan::write`] on purpose: the only way to change what a
     /// real run produces is to change the plan, which is exactly what
