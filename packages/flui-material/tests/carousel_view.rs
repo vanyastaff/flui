@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_material::{CarouselView, CarouselViewThemeData, Theme, ThemeData, ThemeDataOverrides};
+use flui_material::{CarouselView, CarouselViewThemeData, Theme, ThemeData};
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::inspect::Rgba;
 use flui_sdk::geometry::Offset;
@@ -175,12 +175,10 @@ pub fn cards_cover_the_shown_part_of_each_item() {
 pub fn the_widget_beats_the_theme_which_beats_the_tokens() {
     let themed = Color::rgb(11, 22, 33);
     let mine = Color::rgb(44, 55, 66);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        carousel_view_theme: Some(CarouselViewThemeData {
-            background_color: Some(themed),
-            elevation: Some(3.0),
-            ..Default::default()
-        }),
+    let mut theme = ThemeData::light();
+    theme.carousel_view_theme = Some(CarouselViewThemeData {
+        background_color: Some(themed),
+        elevation: Some(3.0),
         ..Default::default()
     });
     let surface = ThemeData::light().color_scheme.surface;

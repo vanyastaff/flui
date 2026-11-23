@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{LaidOut, lay_out, loose};
-use flui_material::{ColorSchemeOverrides, MaterialApp, Theme, ThemeData, ThemeMode};
+use flui_material::{MaterialApp, Theme, ThemeData, ThemeMode};
 use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
@@ -27,20 +27,14 @@ use flui_sdk::widgets::SizedBox;
 /// assertion can tell "my theme arrived" from "some default arrived".
 fn light_sentinel() -> ThemeData {
     let mut theme = ThemeData::light();
-    theme.color_scheme = theme.color_scheme.copy_with(ColorSchemeOverrides {
-        primary: Some(Color::from_argb(0xFF10_2030)),
-        ..ColorSchemeOverrides::default()
-    });
+    theme.color_scheme.primary = Color::from_argb(0xFF10_2030);
     theme
 }
 
 /// A dark theme with a different sentinel primary color.
 fn dark_sentinel() -> ThemeData {
     let mut theme = ThemeData::dark();
-    theme.color_scheme = theme.color_scheme.copy_with(ColorSchemeOverrides {
-        primary: Some(Color::from_argb(0xFF40_5060)),
-        ..ColorSchemeOverrides::default()
-    });
+    theme.color_scheme.primary = Color::from_argb(0xFF40_5060);
     theme
 }
 
@@ -154,18 +148,12 @@ pub fn contrast_selects_authored_themes_in_a_retained_app() {
 
     let high_light = {
         let mut theme = light_sentinel();
-        theme.color_scheme = theme.color_scheme.copy_with(ColorSchemeOverrides {
-            primary: Some(Color::rgb(70, 80, 90)),
-            ..ColorSchemeOverrides::default()
-        });
+        theme.color_scheme.primary = Color::rgb(70, 80, 90);
         theme
     };
     let high_dark = {
         let mut theme = dark_sentinel();
-        theme.color_scheme = theme.color_scheme.copy_with(ColorSchemeOverrides {
-            primary: Some(Color::rgb(100, 110, 120)),
-            ..ColorSchemeOverrides::default()
-        });
+        theme.color_scheme.primary = Color::rgb(100, 110, 120);
         theme
     };
     // Each configuration exercises its complete normal -> high -> normal

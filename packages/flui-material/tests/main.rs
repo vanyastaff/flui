@@ -855,6 +855,10 @@ fn surface_contracts() {
             material::stadium_shape_excludes_a_corner_a_sharp_rectangle_would_include,
         ),
         (
+            "material::a material without a color paints the theme surface",
+            material::a_material_without_a_color_paints_the_theme_surface,
+        ),
+        (
             "card::card theme slot reaches the mounted materials color and elevation",
             card::card_theme_slot_reaches_the_mounted_materials_color_and_elevation,
         ),

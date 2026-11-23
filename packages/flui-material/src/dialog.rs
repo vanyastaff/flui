@@ -367,7 +367,8 @@ impl StatelessView for Dialog {
         if let Some(title) = &self.labelled_by {
             semantics = semantics.labelled_by(title.clone());
         }
-        let mut material = Material::new(color)
+        let mut material = Material::new()
+            .color(color)
             .elevation(elevation)
             .shape(shape)
             .clip_behavior(self.clip_behavior.unwrap_or(Clip::None));

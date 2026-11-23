@@ -7,17 +7,15 @@
 use crate::common;
 
 use common::{lay_out, loose};
-use flui_material::{Divider, DividerThemeData, Theme, ThemeData, ThemeDataOverrides};
+use flui_material::{Divider, DividerThemeData, Theme, ThemeData};
 use flui_sdk::painting::styling::Color;
 
 /// A widget-level `.color(...)` override wins over a configured
 /// `divider_theme.color` — the standard widget → theme → default cascade.
 pub fn widget_color_override_wins_over_the_divider_theme() {
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        divider_theme: Some(DividerThemeData {
-            color: Some(Color::rgb(1, 1, 1)),
-            ..Default::default()
-        }),
+    let mut theme = ThemeData::light();
+    theme.divider_theme = Some(DividerThemeData {
+        color: Some(Color::rgb(1, 1, 1)),
         ..Default::default()
     });
     let widget_color = Color::rgb(9, 9, 9);

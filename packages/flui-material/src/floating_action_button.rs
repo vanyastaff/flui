@@ -377,7 +377,8 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
         let constraints = BoxConstraints::tight(Size::new(FAB_SIZE, FAB_SIZE));
 
         ConstrainedBox::new(constraints).child(
-            Material::new(background_color)
+            Material::new()
+                .color(background_color)
                 .elevation(elevation)
                 .shape(shape)
                 .child(ink_well),

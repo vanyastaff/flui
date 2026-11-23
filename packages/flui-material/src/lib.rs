@@ -94,7 +94,7 @@ pub use card::Card;
 pub use carousel_view::CarouselView;
 pub use checkbox::{Checkbox, CheckboxState};
 pub use chip::{Chip, FilterChip};
-pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
+pub use color_scheme::ColorScheme;
 pub use data_table::{DataCell, DataColumn, DataRow, DataTable};
 pub use dialog::{AlertDialog, Dialog, show_dialog};
 pub use divider::{Divider, VerticalDivider};
@@ -146,6 +146,6 @@ pub use theme_data::{
     DataTableThemeData, DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,
     FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData, ListTileThemeData,
     MaterialStyle, NavigationBarThemeData, OutlinedButtonThemeData, RadioThemeData,
-    SwitchThemeData, TabBarThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    SwitchThemeData, TabBarThemeData, TextButtonThemeData, ThemeData,
 };
 pub use typography::english_like_2021;

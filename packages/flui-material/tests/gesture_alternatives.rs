@@ -26,10 +26,7 @@ use flui_testing::replay::TouchScript;
 const SIZE: f64 = 400.0;
 
 fn three_tabs() -> Vec<Tab> {
-    ["One", "Two", "Three"]
-        .into_iter()
-        .map(|label| Tab::text(label))
-        .collect()
+    ["One", "Two", "Three"].into_iter().map(Tab::text).collect()
 }
 
 /// The pager over three pages, sharing `controller`.

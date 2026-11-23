@@ -8,6 +8,12 @@
 //! (splashes/highlights) below its children. This substrate ships the first
 //! three; see "Scope" below for the fourth.
 //!
+//! # Surface color
+//!
+//! A `Material` with no [`color`](Material::color) of its own paints the
+//! theme's `color_scheme.surface`, depending on the `color_scheme` slot
+//! only, so it follows a theme change.
+//!
 //! # Body text style
 //!
 //! Under a [`Theme`], `Material` wraps its child in a
@@ -53,7 +59,7 @@
 //! retirement). `Material.surfaceTintColor` also requires a `BuildContext`
 //! (`Theme.of(context)`) to resolve `useMaterial3`/elevation opacity, which
 //! this substrate does not wire up — `Material` reads only the theme's
-//! `text_theme` slot. Not implementing `surfaceTintColor` is therefore a
+//! `text_theme` and `color_scheme` slots. Not implementing `surfaceTintColor` is therefore a
 //! named deferral (not a "this API is gone" claim), most likely landing
 //! alongside a future button family's token defaults.
 //!
@@ -102,9 +108,21 @@ use crate::theme_data::ThemeData;
 /// (clipping + elevation + shadow + the theme's body text style: yes;
 /// ink-feature registry, implicit animation, `surfaceTintColor`: named
 /// deferrals).
+///
+/// ```
+/// use flui_material::Material;
+/// use flui_sdk::painting::styling::Color;
+/// use flui_sdk::widgets::Text;
+///
+/// // Painted the theme's `color_scheme.surface`.
+/// let _surface = Material::new().child(Text::new("On the surface"));
+/// // Painted a color of its own.
+/// let _tinted = Material::new().color(Color::rgb(30, 60, 90)).elevation(2.0);
+/// ```
 #[derive(Clone, Debug, StatelessView)]
 pub struct Material {
-    color: Color,
+    /// `None` paints the theme's `color_scheme.surface`, resolved in `build`.
+    color: Option<Color>,
     elevation: f64,
     shape: MaterialShape,
     clip_behavior: Clip,
@@ -113,12 +131,25 @@ pub struct Material {
 
 impl Material {
     /// A flat (`elevation: 0`), sharp-cornered (`MaterialShape::rectangle()`),
-    /// unclipped (`Clip::None`) surface painted `color`, with every other
-    /// parameter left at its default.
+    /// unclipped (`Clip::None`) surface painted the theme's
+    /// [`ColorScheme::surface`](crate::ColorScheme::surface), with every
+    /// other parameter left at its default.
+    ///
+    /// The surface color is Flutter's default for its default
+    /// `MaterialType.canvas`: `Material.color ?? theme.canvasColor`
+    /// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/material.dart:457`),
+    /// whose Material 3 value is `colorScheme.surface`. FLUI has no
+    /// `MaterialType`: a card, a button or a transparent surface sets
+    /// its own [`color`](Self::color).
+    ///
+    /// # Panics
+    ///
+    /// `build` panics, as [`Theme::of`] does, when no color is set and the
+    /// surface has no [`Theme`] ancestor.
     #[must_use]
-    pub fn new(color: Color) -> Self {
+    pub fn new() -> Self {
         Self {
-            color,
+            color: None,
             elevation: 0.0,
             shape: MaterialShape::default(),
             clip_behavior: Clip::None,
@@ -126,10 +157,10 @@ impl Material {
         }
     }
 
-    /// Sets the fill color.
+    /// Sets the fill color in place of the theme's surface color.
     #[must_use]
     pub fn color(mut self, color: Color) -> Self {
-        self.color = color;
+        self.color = Some(color);
         self
     }
 
@@ -169,6 +200,12 @@ impl Material {
     }
 }
 
+impl Default for Material {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StatelessView for Material {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let mut child = self.child.clone();
@@ -183,8 +220,18 @@ impl StatelessView for Material {
                     .map(|view| DefaultTextStyle::new(body, view)),
             );
         }
+        let color = match self.color {
+            Some(color) => color,
+            // Depends on the color scheme alone, so a change to another
+            // slot of the theme does not rebuild every surface.
+            None => match Theme::color_scheme_of(ctx) {
+                Some(scheme) => scheme.surface,
+                // No `Theme` ancestor: `Theme::of` panics with its message.
+                None => Theme::of(ctx).color_scheme.surface,
+            },
+        };
         MaterialSurface {
-            color: self.color,
+            color,
             elevation: self.elevation,
             shape: self.shape,
             clip_behavior: self.clip_behavior,

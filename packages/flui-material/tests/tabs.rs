@@ -478,7 +478,7 @@ const TAB_WIDTH: f64 = BAR_WIDTH / 4.0;
 pub(crate) fn four_tabs() -> Vec<Tab> {
     ["One", "Two", "Three", "Four"]
         .into_iter()
-        .map(|label| Tab::text(label))
+        .map(Tab::text)
         .collect()
 }
 

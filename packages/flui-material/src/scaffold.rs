@@ -123,7 +123,7 @@
 //! messenger (Flutter's `_isRoot`). Only a registered scaffold shows the
 //! messenger's snack bar, so a scaffold nested in another's body shows none.
 //! The scope's handle lookup itself is untracked, while Scaffold's
-//! Theme and MediaQuery lookups establish inherited dependencies. Reactivating
+//! MediaQuery lookup establishes an inherited dependency. Reactivating
 //! a retained GlobalKey scaffold therefore schedules `did_change_dependencies`,
 //! which re-runs `sync_messenger_registration` against its current ancestry.
 //! An ordinary same-type messenger rebuild keeps the same handle identity.
@@ -166,7 +166,6 @@ use crate::drawer::{
 use crate::material::Material;
 use crate::scaffold_messenger::{ScaffoldMessengerHandle, ScaffoldMessengerScope};
 use crate::snack_bar::SnackBarPresenter;
-use crate::theme::Theme;
 
 /// The `app_bar` slot id — see [`ScaffoldLayoutDelegate`].
 const SLOT_APP_BAR: &str = "app_bar";
@@ -522,8 +521,6 @@ impl ViewState<Scaffold> for ScaffoldState {
     }
 
     fn build(&self, view: &Scaffold, ctx: &dyn BuildContext) -> impl IntoView {
-        let theme = Theme::of(ctx);
-        let background_color = view.background_color.unwrap_or(theme.color_scheme.surface);
         let media_query = MediaQuery::of(ctx);
 
         self.handle.set_has_drawer(view.drawer.is_some());
@@ -665,9 +662,13 @@ impl ViewState<Scaffold> for ScaffoldState {
             floating_action_button_side: HorizontalSide::end(direction),
         };
 
+        let mut surface = Material::new();
+        if let Some(color) = view.background_color {
+            surface = surface.color(color);
+        }
         ScaffoldScope {
             handle: self.handle.clone(),
-            child: Material::new(background_color)
+            child: surface
                 .child(CustomMultiChildLayout::new(delegate, children))
                 .boxed(),
         }

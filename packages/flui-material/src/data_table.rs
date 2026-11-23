@@ -1075,7 +1075,7 @@ impl StatelessView for DataTable {
             .column_widths(column_widths)
             .default_vertical_alignment(TableCellVerticalAlignment::Middle);
 
-        let material = Material::new(Color::TRANSPARENT).child(table);
+        let material = Material::new().color(Color::TRANSPARENT).child(table);
         let mut container = Container::new();
         if let Some(decoration) = style.decoration {
             container = container.decoration(decoration);

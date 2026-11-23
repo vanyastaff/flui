@@ -287,7 +287,8 @@ impl StatelessView for Drawer {
             .background_color
             .unwrap_or(theme.color_scheme.surface_container_low);
 
-        let mut material = Material::new(background_color)
+        let mut material = Material::new()
+            .color(background_color)
             .elevation(self.elevation)
             .shape(end_rounded_shape(side))
             .clip_behavior(Clip::AntiAlias);

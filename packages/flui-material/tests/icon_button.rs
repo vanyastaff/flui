@@ -19,9 +19,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{lay_out, tight};
-use flui_material::{
-    ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
-};
+use flui_material::{ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData};
 use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{IconTheme, IconThemeData, SizedBox, WidgetStateProperty};
@@ -56,14 +54,12 @@ pub fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
     let probe = IconThemeProbe {
         captured: Rc::clone(&captured),
     };
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        icon_button_theme: Some(IconButtonThemeData {
-            style: Some(ButtonStyle {
-                foreground_color: Some(WidgetStateProperty::all(Some(themed_color))),
-                ..Default::default()
-            }),
+    let mut theme = ThemeData::light();
+    theme.icon_button_theme = Some(IconButtonThemeData {
+        style: Some(ButtonStyle {
+            foreground_color: Some(WidgetStateProperty::all(Some(themed_color))),
+            ..Default::default()
         }),
-        ..Default::default()
     });
 
     let _laid = lay_out(

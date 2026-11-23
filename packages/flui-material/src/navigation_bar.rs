@@ -640,7 +640,8 @@ impl StatelessView for NavigationBar {
             .explicit_child_nodes(true)
             .child(SizedBox::height(height).child(Row::new(children)));
 
-        Material::new(background_color)
+        Material::new()
+            .color(background_color)
             .elevation(elevation)
             .child(SafeArea::new(content))
     }

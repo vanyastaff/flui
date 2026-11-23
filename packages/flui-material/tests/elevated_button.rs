@@ -17,9 +17,7 @@
 use crate::common;
 
 use common::{lay_out, rgba, tight};
-use flui_material::{
-    ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
-};
+use flui_material::{ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData};
 use flui_sdk::widgets::{Text, WidgetStateProperty};
 use flui_testing::a11y::{Action, Role};
 
@@ -29,14 +27,12 @@ use flui_testing::a11y::{Action, Role};
 pub fn widget_level_style_wins_over_the_elevated_button_theme() {
     let themed_background = flui_sdk::painting::styling::Color::rgb(1, 1, 1);
     let widget_background = flui_sdk::painting::styling::Color::rgb(9, 9, 9);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        elevated_button_theme: Some(ElevatedButtonThemeData {
-            style: Some(ButtonStyle {
-                background_color: Some(WidgetStateProperty::all(Some(themed_background))),
-                ..Default::default()
-            }),
+    let mut theme = ThemeData::light();
+    theme.elevated_button_theme = Some(ElevatedButtonThemeData {
+        style: Some(ButtonStyle {
+            background_color: Some(WidgetStateProperty::all(Some(themed_background))),
+            ..Default::default()
         }),
-        ..Default::default()
     });
 
     let laid = lay_out(

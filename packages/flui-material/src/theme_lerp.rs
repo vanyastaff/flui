@@ -74,9 +74,6 @@ impl Lerp for ColorScheme {
             on_inverse_surface,
             inverse_primary,
             surface_tint,
-            background,
-            on_background,
-            surface_variant
         )
     }
 }

@@ -314,7 +314,8 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
         .container(true)
         .role(SemanticsRole::Status)
         .child(
-            Material::new(background_color)
+            Material::new()
+                .color(background_color)
                 .elevation(elevation)
                 .clip_behavior(Clip::HardEdge)
                 .child(safe_area),
