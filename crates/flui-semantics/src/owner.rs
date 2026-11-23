@@ -1359,9 +1359,7 @@ impl SemanticsOwner {
         let mut call = request.call;
         // A click-only expandable node receives the transition its current
         // state allows through its click handler.
-        if crate::action::tap_disclosure_transition(actions, published.states.expanded)
-            == Some(requested)
-        {
+        if crate::action::tap_disclosure_transition(actions, &published.states) == Some(requested) {
             call = ActionCall::Click;
         }
         // A string written to a range with no text handler is offered to its

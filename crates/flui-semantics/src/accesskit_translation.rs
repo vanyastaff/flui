@@ -478,7 +478,7 @@ pub(crate) const fn offered_as(action: SemanticsAction) -> Option<accesskit::Act
 ///   AccessKit does not count a node with an expanded state as invocable
 ///   (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
 ///   click-only expandable node could be neither invoked nor expanded.
-fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_writable: bool) {
+fn apply_actions(node: &mut Node, actions: u64, states: &States, value_writable: bool) {
     for &action in SemanticsAction::ALL {
         if has_action(actions, action)
             && let Some(advertised) = advertised_action(action)
@@ -486,13 +486,13 @@ fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_wr
             node.add_action(advertised);
         }
     }
-    if let Some(expanded) = expanded {
+    if let Some(expanded) = states.expanded() {
         let transition = if expanded {
             SemanticsAction::Collapse
         } else {
             SemanticsAction::Expand
         };
-        let fallback = crate::action::tap_disclosure_transition(actions, Some(expanded));
+        let fallback = crate::action::tap_disclosure_transition(actions, states);
         if has_action(actions, transition) || fallback == Some(transition) {
             node.add_action(if expanded {
                 accesskit::Action::Collapse
@@ -862,7 +862,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     apply_actions(
         &mut node,
         data.actions,
-        data.attrs.states.expanded,
+        &data.attrs.states,
         value_writable(data, role),
     );
 

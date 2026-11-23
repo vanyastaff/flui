@@ -14,7 +14,7 @@ use smol_str::SmolStr;
 
 use crate::{
     action::{AssistiveFocusHandler, CustomActionId, SemanticsAction, SemanticsActionHandler},
-    action_subject::{ActionSubject, SubjectSet},
+    action_subject::{ActionPlan, ActionSubject, FoldPlace, SubjectSet},
     attributes::{RareAttributes, SemanticsAttributes},
     collection::{CellPosition, SetSize, SortDirection, TableShape},
     properties::{HeadingLevel, SemanticsSortKey, UNBLOCKED_USER_ACTIONS_MASK, join_strings},
@@ -136,6 +136,12 @@ pub struct SemanticsConfiguration {
     /// Actions that can be performed on this node. Custom actions keep their
     /// handlers out of line instead, one per action.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
+
+    /// The subjects whose owner, in a forced merge this configuration is
+    /// the result of, acted on them but offers none of their handlers (a
+    /// blocked or disabled control): an outer forced merge still reads this
+    /// configuration as acting on them (ADR-0392 §3).
+    withheld_subjects: SubjectSet,
 
     /// Told when the assistive technology's cursor enters or leaves the
     /// subtree of the node this configuration forms or merges into. Merging
@@ -990,6 +996,16 @@ impl SemanticsConfiguration {
         self.actions.keys().copied()
     }
 
+    /// See the field: subjects a forced merge's owner acted on but withheld.
+    pub(crate) const fn withheld_subjects(&self) -> SubjectSet {
+        self.withheld_subjects
+    }
+
+    /// Adds `subjects` to [`withheld_subjects`](Self::withheld_subjects).
+    pub(crate) fn withhold_subjects(&mut self, subjects: SubjectSet) {
+        self.withheld_subjects = self.withheld_subjects.union(subjects);
+    }
+
     /// Whether this configuration declares any of a scrollable's metrics
     /// (position, axis, extents), which are one group.
     pub(crate) fn declares_scroll_group(&self) -> bool {
@@ -1736,26 +1752,66 @@ impl SemanticsConfiguration {
     /// only the child's flag controls the action-mask filter applied
     /// to the child's actions during the merge.
     pub fn absorb(&mut self, other: &SemanticsConfiguration) {
+        self.absorb_with(other, None);
+    }
+
+    /// Starts a forced merge (`MergeSemantics`) of `parts` into this
+    /// configuration, the receiver: `parts` are every configuration the
+    /// merge will absorb, in fold order (ADR-0392 §2).
+    ///
+    /// The merge plans the owner of each action's subject from all of them
+    /// first, drops the receiver's own handlers the plan gives to another
+    /// part, and then [`ForcedMerge::absorb`] takes each part, in the same
+    /// order, by that plan.
+    pub fn forced_merge<'a, I>(&mut self, parts: I) -> ForcedMerge<'_>
+    where
+        I: Iterator<Item = &'a SemanticsConfiguration> + Clone,
+    {
+        let plan = ActionPlan::new(self, parts);
+        // Pinned before the fold (ADR-0223): dropping them here releases no
+        // last owner.
+        self.actions.retain(|action, _| plan.admits(*action, 0));
+        ForcedMerge {
+            receiver: Some(self),
+            plan,
+            next: 1,
+        }
+    }
+
+    /// [`absorb`](Self::absorb), or a forced merge's step for the part at a
+    /// place of `planned`.
+    fn absorb_with(
+        &mut self,
+        other: &SemanticsConfiguration,
+        planned: Option<(&ActionPlan, FoldPlace)>,
+    ) {
         if !other.has_been_annotated {
             return;
         }
 
-        // ----- subject owners, read before the attributes merge -----
-        // The receiver owns each subject it declares; the contributor takes one
-        // the receiver does not declare, and `toggled` with the role it brings.
-        let takes_role =
-            more_specific_role(self.attributes.role, other.attributes.role) != self.attributes.role;
-        let taken = SubjectSet::of(|subject| {
-            subject.is_declared_by(other)
-                && (!subject.is_declared_by(self)
-                    || (subject == ActionSubject::Toggle && takes_role))
-        });
-        // Subjects whose handlers now come from their owner alone.
-        let held =
-            SubjectSet::of(|subject| !taken.contains(subject) && subject.is_acted_on_by(self));
-        let seized =
-            SubjectSet::of(|subject| taken.contains(subject) && subject.is_acted_on_by(other));
-        let their_toggled = other.attributes.states.toggled;
+        // ----- standard actions -----
+        // An ordinary merge never takes a second handler for one action (two
+        // conflict, `shares_a_node_with`); a forced merge takes each from the
+        // part its plan admits, the first one where several are admitted.
+        let effective_other_actions = other.effective_actions_as_bits();
+        for (action, handler) in &other.actions {
+            if (action.value() & effective_other_actions) == 0 {
+                continue;
+            }
+            match planned {
+                None => {
+                    self.actions.insert(*action, Rc::clone(handler));
+                }
+                Some((plan, place)) => {
+                    if plan.admits(*action, place) {
+                        self.actions
+                            .entry(*action)
+                            .or_insert_with(|| Rc::clone(handler));
+                    }
+                }
+            }
+        }
+        self.withheld_subjects = self.withheld_subjects.union(other.withheld_subjects);
         // Custom actions append, each with its own handler, so the
         // contributor's ids follow the receiver's. A contributor that blocks
         // user actions contributes none.
@@ -1909,38 +1965,18 @@ impl SemanticsConfiguration {
         if mine.role != SemanticsRole::Heading {
             mine.heading_level = None;
         }
-        if taken.contains(ActionSubject::Toggle) {
-            mine.states.toggled = their_toggled;
-        }
-
-        // ----- standard actions, by subject (ADR-0392) -----
-        // Classified on the merged attributes, which are the node's so far.
-        if !seized.is_empty() {
-            let seized_actions = self
-                .registered_actions()
-                .filter(|action| {
-                    ActionSubject::of(*action, self).is_some_and(|subject| seized.contains(subject))
-                })
-                .fold(0_u64, |bits, action| bits | action.value());
-            // Pinned before the fold (ADR-0223): dropping them here releases
-            // no last owner.
-            self.actions
-                .retain(|action, _| action.value() & seized_actions == 0);
-        }
-        let effective_other_actions = other.effective_actions_as_bits();
-        for (action, handler) in &other.actions {
-            if (action.value() & effective_other_actions) == 0 {
-                continue;
+        // A forced merge publishes the states that belong to an action's
+        // owner from that owner (ADR-0392 §2).
+        if let Some((plan, place)) = planned {
+            let theirs = &other.attributes.states;
+            if plan.owner(ActionSubject::Toggle) == Some(place) {
+                mine.states.toggled = theirs.toggled;
             }
-            let Some(subject) = ActionSubject::of(*action, self) else {
-                continue;
-            };
-            if seized.contains(subject) {
-                self.actions.insert(*action, Rc::clone(handler));
-            } else if !held.contains(subject) {
-                self.actions
-                    .entry(*action)
-                    .or_insert_with(|| Rc::clone(handler));
+            if plan.owner(ActionSubject::Selection) == Some(place) {
+                mine.states.selected = theirs.selected;
+            }
+            if plan.enabled_from() == Some(place) {
+                mine.states.enabled = theirs.enabled;
             }
         }
 
@@ -1948,6 +1984,56 @@ impl SemanticsConfiguration {
     }
 }
 
+/// A forced merge in progress (`MergeSemantics`), from
+/// [`SemanticsConfiguration::forced_merge`]: it absorbs the planned parts one
+/// at a time, in the order the plan read them.
+#[derive(Debug)]
+#[must_use = "a forced merge absorbs its parts through `absorb`"]
+pub struct ForcedMerge<'c> {
+    /// `None` once [`finish`](Self::finish) handed it back.
+    receiver: Option<&'c mut SemanticsConfiguration>,
+    plan: ActionPlan,
+    /// The place of the next part in fold order.
+    next: FoldPlace,
+}
+
+impl<'c> ForcedMerge<'c> {
+    /// Absorbs the next part: the one after the last absorbed, in the order
+    /// `parts` listed them.
+    pub fn absorb(&mut self, part: &SemanticsConfiguration) {
+        let receiver = self
+            .receiver
+            .as_deref_mut()
+            .expect("BUG: a finished merge absorbs nothing");
+        receiver.absorb_with(part, Some((&self.plan, self.next)));
+        self.next += 1;
+    }
+
+    /// The receiver as merged so far.
+    #[must_use]
+    pub fn receiver(&self) -> &SemanticsConfiguration {
+        self.receiver
+            .as_deref()
+            .expect("BUG: a finished merge has no receiver")
+    }
+
+    /// Ends the merge and hands the merged receiver back.
+    pub fn finish(mut self) -> &'c mut SemanticsConfiguration {
+        let receiver = self.receiver.take().expect("BUG: a merge finishes once");
+        self.plan.record_withheld(receiver);
+        receiver
+    }
+}
+
+impl Drop for ForcedMerge<'_> {
+    /// A merge dropped before [`finish`](Self::finish) still records what
+    /// its owners withheld.
+    fn drop(&mut self) {
+        if let Some(receiver) = self.receiver.take() {
+            self.plan.record_withheld(receiver);
+        }
+    }
+}
 /// A role that describes content, not a control or a structure: the lowest
 /// rank of [`more_specific_role`], and what a control named by its contents
 /// takes from beneath it (ADR-0332).
@@ -2396,92 +2482,123 @@ mod tests {
         );
     }
 
-    /// A forced merge gives each standard action to the configuration whose
-    /// state it changes, in either order, and the rest to the first in fold
-    /// order (ADR-0392).
+    /// A forced merge gives each standard action to the part whose state it
+    /// changes, in either order and whatever a later part changes, and the
+    /// rest to the first part in fold order (ADR-0392).
     #[test]
-    fn a_merged_action_belongs_to_the_owner_of_its_subject() {
+    fn a_forced_merge_plans_each_action_by_its_owner() {
         use SemanticsAction as A;
         use std::cell::RefCell;
 
-        type Part = (&'static str, fn(&mut SemanticsConfiguration), &'static [A]);
-        // Folds `parts` in order into an empty receiver, as `MergeSemantics`
-        // does, and reports whose handler each of `asked` runs, if any.
-        fn fold(parts: &[Part], asked: &[A]) -> Vec<Option<&'static str>> {
-            let ran = Rc::new(RefCell::new(None));
+        type Declare = fn(&mut SemanticsConfiguration);
+        type Part = (&'static str, Declare, &'static [A]);
+        let ran = Rc::new(RefCell::new(None));
+        let build = |parts: &[Part]| -> Vec<SemanticsConfiguration> {
+            parts
+                .iter()
+                .map(|(name, declare, actions)| {
+                    let mut part = SemanticsConfiguration::new();
+                    declare(&mut part);
+                    for action in *actions {
+                        let ran = Rc::clone(&ran);
+                        let name = *name;
+                        part.add_action(*action, Rc::new(move |_| *ran.borrow_mut() = Some(name)));
+                    }
+                    part
+                })
+                .collect()
+        };
+        // Folds `parts` into an empty receiver as `MergeSemantics` does.
+        let merge = |parts: &[SemanticsConfiguration]| {
             let mut node = SemanticsConfiguration::new();
-            for (name, declare, actions) in parts {
-                let mut part = SemanticsConfiguration::new();
-                declare(&mut part);
-                for action in *actions {
-                    let ran = Rc::clone(&ran);
-                    let name = *name;
-                    part.add_action(*action, Rc::new(move |_| *ran.borrow_mut() = Some(name)));
-                }
-                node.absorb(&part);
+            let mut merge = node.forced_merge(parts.iter());
+            for part in parts {
+                merge.absorb(part);
             }
+            drop(merge);
+            node
+        };
+        // Whose handler each of `asked` runs on `node`, if it offers one.
+        let runs = |node: &SemanticsConfiguration, asked: &[A]| -> Vec<Option<&'static str>> {
             asked
                 .iter()
                 .map(|action| {
                     *ran.borrow_mut() = None;
                     let handler = node.action_handler(*action)?;
+                    if node.effective_actions_as_bits() & action.value() == 0 {
+                        return None;
+                    }
                     handler(crate::ActionCall::Click);
                     *ran.borrow()
                 })
                 .collect()
-        }
-        let plain: fn(&mut SemanticsConfiguration) = |_| {};
-        let radio: fn(&mut SemanticsConfiguration) = |c| {
+        };
+        let plain: Declare = |_| {};
+        let radio: Declare = |c| {
             c.set_role(SemanticsRole::RadioButton);
             c.set_toggled(Some(Toggled::Off));
         };
-        let disclosure: fn(&mut SemanticsConfiguration) = |c| c.set_expanded(false);
-        let scrollable: fn(&mut SemanticsConfiguration) = |c| {
+        let tab: Declare = |c| {
+            c.set_role(SemanticsRole::Tab);
+            c.set_selected(false);
+        };
+        let disclosure: Declare = |c| c.set_expanded(false);
+        let switch: Declare = |c| {
+            c.set_role(SemanticsRole::Switch);
+            c.set_toggled(Some(Toggled::Off));
+        };
+        let scrollable: Declare = |c| {
             c.set_scroll_position(0.0);
             c.set_scroll_extent_max(100.0);
         };
-        let clicks: &[A] = &[A::Click];
+        let click: &[A] = &[A::Click];
 
         for (parts, asked, expected, why) in [
             (
-                &[("a", plain, clicks), ("b", plain, clicks)][..],
+                &[("a", plain, click), ("b", plain, click)][..],
                 &[A::Click][..],
                 &[Some("a")][..],
                 "an activation keeps the first handler",
             ),
             (
-                &[("tile", plain, clicks), ("radio", radio, clicks)],
+                &[("tile", plain, click), ("radio", radio, click)],
                 &[A::Click],
                 &[Some("radio")],
-                "a later radio takes the click of the state it announces",
+                "a later radio owns the click of the state it announces",
             ),
             (
-                &[("radio", radio, clicks), ("tile", plain, clicks)],
+                &[("radio", radio, click), ("tile", plain, click)],
                 &[A::Click],
                 &[Some("radio")],
                 "an earlier radio keeps it",
             ),
             (
-                &[("button", plain, clicks), ("header", disclosure, clicks)],
+                &[("tap", plain, click), ("tab", tab, click)],
                 &[A::Click],
-                &[Some("header")],
-                "a click-only disclosure takes the click that expands it",
+                &[Some("tab")],
+                "a selectable tab owns the click that selects it",
             ),
             (
-                &[("header", disclosure, clicks), ("button", plain, clicks)],
+                &[("button", plain, click), ("header", disclosure, click)],
+                &[A::Click],
+                &[Some("header")],
+                "a click-only disclosure owns the click that expands it",
+            ),
+            (
+                &[("header", disclosure, click), ("button", plain, click)],
                 &[A::Click],
                 &[Some("header")],
                 "and keeps it when it comes first",
             ),
             (
-                &[("wrapper", disclosure, &[]), ("button", plain, clicks)],
+                &[("wrapper", disclosure, &[]), ("button", plain, click)],
                 &[A::Click],
                 &[Some("button")],
                 "a disclosure that registers nothing leaves its click to the first registrant",
             ),
             (
                 &[
-                    ("tile", plain, clicks),
+                    ("tile", plain, click),
                     (
                         "disabled radio",
                         |c| {
@@ -2498,7 +2615,6 @@ mod tests {
             ),
             (
                 &[
-                    ("tile", plain, clicks),
                     (
                         "blocked radio",
                         |c| {
@@ -2506,12 +2622,13 @@ mod tests {
                             c.set_toggled(Some(Toggled::Off));
                             c.set_blocks_user_actions(true);
                         },
-                        clicks,
+                        click,
                     ),
+                    ("tile", plain, click),
                 ],
                 &[A::Click],
                 &[None],
-                "a blocked radio's click is offered by nobody",
+                "a blocked radio's click is offered by nobody, in either order",
             ),
             (
                 &[
@@ -2519,16 +2636,126 @@ mod tests {
                     (
                         "second",
                         scrollable,
-                        &[A::ScrollUp, A::ScrollDown, A::Increment, A::Decrement],
+                        &[A::ScrollUp, A::ScrollDown, A::Increment],
                     ),
                 ],
                 &[A::ScrollUp, A::ScrollDown, A::Increment],
                 &[Some("first"), None, None],
                 "a scrollable at its extent keeps the actions of the metrics it publishes",
             ),
+            (
+                &[
+                    (
+                        "toggle button",
+                        |c| {
+                            c.set_role(SemanticsRole::Button);
+                            c.set_toggled(Some(Toggled::On));
+                        },
+                        click,
+                    ),
+                    (
+                        "check box",
+                        |c| {
+                            c.set_role(SemanticsRole::CheckBox);
+                            c.set_toggled(Some(Toggled::Off));
+                        },
+                        click,
+                    ),
+                    ("tree item", |c| c.set_role(SemanticsRole::TreeItem), &[]),
+                ],
+                &[A::Click],
+                &[Some("toggle button")],
+                "under a role that declares no state, the state and its click are the first declarer's",
+            ),
+            (
+                &[
+                    ("stepper", plain, &[A::Increment]),
+                    ("scrollable", scrollable, &[A::ScrollUp]),
+                    (
+                        "range",
+                        |c| {
+                            c.set_numeric_range(
+                                crate::NumericRange::try_new(0.0, 0.0, 1.0, 0.1).expect("valid"),
+                            );
+                        },
+                        &[],
+                    ),
+                ],
+                &[A::Increment],
+                &[Some("stepper")],
+                "a later range moves Increment to a subject nobody acts on",
+            ),
         ] {
-            assert_eq!(fold(parts, asked), expected, "{why}");
+            assert_eq!(runs(&merge(&build(parts)), asked), expected, "{why}");
         }
+
+        // A switch beside a click-only header: Click toggles the switch, and
+        // the node routes no Expand through it.
+        let node = merge(&build(&[
+            ("header", disclosure, click),
+            ("switch", switch, click),
+        ]));
+        assert_eq!(runs(&node, &[A::Click]), [Some("switch")]);
+        assert_eq!(
+            crate::action::tap_disclosure_transition(
+                node.effective_actions_as_bits(),
+                node.states()
+            ),
+            None,
+            "Expand is not offered through the switch's click"
+        );
+
+        // The node announces its click owner's `enabled`.
+        let node = merge(&build(&[
+            ("tile", |c| c.set_enabled(Some(true)), click),
+            (
+                "disabled radio",
+                |c| {
+                    c.set_role(SemanticsRole::RadioButton);
+                    c.set_toggled(Some(Toggled::Off));
+                    c.set_enabled(Some(false));
+                },
+                &[],
+            ),
+        ]));
+        assert_eq!(node.is_enabled(), Some(false), "the disabled radio's state");
+
+        // A nested merge whose blocked radio acted stays acting: an outer
+        // merge does not give its click to a tile.
+        let inner = merge(&build(&[(
+            "blocked radio",
+            |c| {
+                c.set_role(SemanticsRole::RadioButton);
+                c.set_toggled(Some(Toggled::Off));
+                c.set_blocks_user_actions(true);
+            },
+            click,
+        )]));
+        let mut outer = build(&[("tile", plain, click)]);
+        outer.insert(0, inner);
+        assert_eq!(runs(&merge(&outer), &[A::Click]), [None]);
+    }
+
+    /// An ordinary merge, where each group and each action has one supplier,
+    /// takes every action it is offered, as before ADR-0392.
+    #[test]
+    fn an_ordinary_merge_keeps_its_actions() {
+        let mut wrapper = SemanticsConfiguration::new();
+        wrapper.set_expanded(false);
+        wrapper.set_enabled(Some(false));
+        let mut detector = SemanticsConfiguration::new();
+        detector.add_action(SemanticsAction::Click, Rc::new(|_| {}));
+        assert!(wrapper.can_absorb(&detector, false));
+        wrapper.absorb(&detector);
+        assert!(wrapper.has_action(SemanticsAction::Click));
+
+        let mut value = SemanticsConfiguration::new();
+        value.set_value("4");
+        let mut writer = SemanticsConfiguration::new();
+        writer.add_action(SemanticsAction::SetValue, Rc::new(|_| {}));
+        assert!(value.can_absorb(&writer, false));
+        value.absorb(&writer);
+        assert!(value.has_action(SemanticsAction::SetValue));
     }
 
     /// A forced merge takes a yes/no state as the receiver declares it, or as
@@ -2542,7 +2769,7 @@ mod tests {
             receiver(&mut a);
             let mut b = SemanticsConfiguration::new();
             contributor(&mut b);
-            a.absorb(&b);
+            a.forced_merge(std::iter::once(&b)).absorb(&b);
             a
         };
         let kept = merged(
