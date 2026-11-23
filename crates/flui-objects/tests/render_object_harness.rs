@@ -163,9 +163,9 @@ use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints},
     context::BoxIntrinsicsContext,
     delegates::{
-        CustomPainter, FlowDelegate, FlowPaintingContext, MultiChildLayoutContext,
-        MultiChildLayoutDelegate, SingleChildLayoutDelegate, SliverGridDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout,
+        CustomPaintContext, CustomPainter, FlowDelegate, FlowPaintingContext,
+        MultiChildLayoutContext, MultiChildLayoutDelegate, SingleChildLayoutDelegate,
+        SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout,
     },
     parent_data::{
         HorizontalInsets, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
@@ -507,7 +507,9 @@ impl flui_foundation::Listenable for RemovalNotifier {
 struct ListeningPainter(Rc<RemovalNotifier>, Color);
 
 impl CustomPainter for ListeningPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         canvas.draw_rect(
             Rect::from_origin_size(Point::ZERO, size),
             &Paint::fill(self.1),
@@ -726,7 +728,9 @@ struct FaultPainter {
 }
 
 impl CustomPainter for FaultPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         canvas.draw_rect(
             Rect::from_origin_size(Point::ZERO, size),
             &Paint::fill(self.color),
@@ -988,7 +992,9 @@ impl HarnessPainter {
 }
 
 impl CustomPainter for HarnessPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         canvas.draw_rect(
             Rect::from_origin_size(Point::ZERO, size),
             &Paint::fill(self.color),
@@ -1354,7 +1360,8 @@ fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
     struct UnbalancedSavePainter;
 
     impl CustomPainter for UnbalancedSavePainter {
-        fn paint(&self, canvas: &mut Canvas, _size: Size) {
+        fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+            let canvas = ctx.canvas();
             canvas.save();
             // Deliberately no matching `restore()`.
         }
@@ -2550,12 +2557,14 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
                     .unwrap()
                     .is_none()
             );
+            let text = flui_rendering::TextContextHandle::standalone();
             let mut recorder = flui_rendering::context::FragmentRecorder::new(
                 Offset::ZERO,
                 flui_foundation::geometry::DevicePixelRatio::ONE,
             );
             icon.paint(&mut flui_rendering::context::PaintContext::new(
                 &mut recorder,
+                text.source(),
                 0,
                 Size::new(20.0, 20.0),
             ));
@@ -6344,7 +6353,7 @@ struct RegionPainter {
 }
 
 impl CustomPainter for RegionPainter {
-    fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+    fn paint(&self, _ctx: &mut CustomPaintContext<'_>) {}
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
         false
     }
@@ -6369,7 +6378,8 @@ struct RepaintingRegions {
 }
 
 impl CustomPainter for RepaintingRegions {
-    fn paint(&self, canvas: &mut Canvas, _size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let canvas = ctx.canvas();
         for region in self.regions.borrow().iter() {
             canvas.draw_rect(region.rect, &Paint::fill(Color::RED));
         }
@@ -6589,7 +6599,7 @@ struct CapturingRegionPainter {
 }
 
 impl CustomPainter for CapturingRegionPainter {
-    fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+    fn paint(&self, _ctx: &mut CustomPaintContext<'_>) {}
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
         false
     }

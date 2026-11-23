@@ -173,7 +173,7 @@ fn main() -> Result<(), flui::LaunchError> {
 //! |---|---|---|---|
 //! | [`geometry`] | `flui-foundation` | — | geometry values (`f64` logical pixels) |
 //! | [`foundation`] | `flui-foundation` | — | keys, listenables, ids, diagnostics |
-//! | [`painting`] | `flui-painting`, `flui-rendering`, `flui-semantics` | — | custom painting: `CustomPainter`, `Canvas`, paint, style and text values |
+//! | [`painting`] | `flui-painting`, `flui-rendering`, `flui-semantics` | — | custom painting: `CustomPainter`, `CustomPaintContext`, `Canvas`, paint, style and text values |
 //! | [`platform`] | `flui-platform` | — | platform contracts and values (brightness, locale, windows, storage, IME) |
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |

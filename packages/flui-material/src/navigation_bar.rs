@@ -131,13 +131,12 @@ use std::time::Duration;
 
 use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpec, curves};
 use flui_sdk::foundation::Listenable;
-use flui_sdk::geometry::{RRect, Rect, Size};
+use flui_sdk::geometry::{RRect, Rect};
 use flui_sdk::painting::Alignment;
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
 use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::rendering::objects::MainAxisAlignment;
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::environment::VsyncScope;
@@ -157,10 +156,10 @@ use crate::theme::Theme;
 use crate::theme_data::NavigationBarThemeData;
 
 /// The bar's default height (M3: 80.0).
-pub const NAVIGATION_BAR_HEIGHT: f64 = 80.0;
+pub(crate) const NAVIGATION_BAR_HEIGHT: f64 = 80.0;
 
 /// The bar's default elevation (M3: 3.0).
-pub const NAVIGATION_BAR_ELEVATION: f64 = 3.0;
+pub(crate) const NAVIGATION_BAR_ELEVATION: f64 = 3.0;
 
 /// The selection indicator's width (M3: 64.0).
 const NAVIGATION_INDICATOR_WIDTH: f64 = 64.0;
@@ -341,7 +340,7 @@ impl NavigationBar {
         self
     }
 
-    /// Overrides the bar's height. Defaults to [`NAVIGATION_BAR_HEIGHT`].
+    /// Overrides the bar's height. Defaults to 80 (the M3 bar height).
     #[must_use]
     pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
@@ -356,7 +355,7 @@ impl NavigationBar {
         self
     }
 
-    /// Overrides the bar's elevation. Defaults to [`NAVIGATION_BAR_ELEVATION`].
+    /// Overrides the bar's elevation. Defaults to 3 (the M3 bar elevation).
     #[must_use]
     pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = Some(elevation);
@@ -791,7 +790,9 @@ struct IndicatorPainter {
 }
 
 impl CustomPainter for IndicatorPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let width = size.width * self.fraction.value().clamp(0.0, 1.0);
         if width <= 0.0 || size.height <= 0.0 {
             return;

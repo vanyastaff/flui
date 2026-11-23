@@ -9,9 +9,9 @@ use flui_foundation::geometry::{Point, Size};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::{CrossAxisAlignment, MainAxisSize};
+use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, paint::Paint};
-use flui_rendering::delegates::CustomPainter;
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_view::ViewSeq;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RebuildHandle, RebuildReason, WriterSource};
@@ -521,7 +521,9 @@ struct Chevron {
 }
 
 impl CustomPainter for Chevron {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         if !size.width.is_finite()
             || !size.height.is_finite()
             || size.width <= 0.0

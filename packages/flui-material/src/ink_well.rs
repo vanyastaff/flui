@@ -185,7 +185,7 @@ impl InkWell {
     }
 
     /// Sets the tap handler. Presence of a handler is what makes this
-    /// `InkWell` [interactive](self) — see the module doc's `enabled`
+    /// `InkWell` interactive — see the module doc's `enabled`
     /// section.
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(

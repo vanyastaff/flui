@@ -129,6 +129,7 @@ impl RenderObject<BoxProtocol> for Rigged {
     fn paint_raw(
         &self,
         _recorder: &mut flui_rendering::context::FragmentRecorder,
+        _text: flui_rendering::TextSource<'_>,
         _child_count: usize,
         _size: Size,
     ) {

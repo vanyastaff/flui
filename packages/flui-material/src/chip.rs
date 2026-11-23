@@ -141,11 +141,10 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Paint, Path};
 use flui_sdk::painting::styling::{BorderSide, BorderStyle};
 use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisSize};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
@@ -168,13 +167,13 @@ use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
 /// The container's target height when its content fits within it.
-pub const CHIP_HEIGHT: f64 = 32.0;
+pub(crate) const CHIP_HEIGHT: f64 = 32.0;
 
 /// The container's corner radius, `8.0`.
 const CORNER_RADIUS: f64 = 8.0;
 
 /// The avatar/delete-icon/checkmark side length, `18.0`.
-pub const CHIP_ICON_SIZE: f64 = 18.0;
+pub(crate) const CHIP_ICON_SIZE: f64 = 18.0;
 
 /// The default container padding, `EdgeInsets::all(8.0)`.
 const PADDING: f64 = 8.0;
@@ -945,7 +944,9 @@ struct ChipBorderPainter {
 }
 
 impl CustomPainter for ChipBorderPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         if !self.side.style.is_solid() || self.side.width <= 0.0 {
             return;
         }
@@ -980,7 +981,9 @@ struct ChipCheckmarkPainter {
 }
 
 impl CustomPainter for ChipCheckmarkPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let cell = size.height;
         // The stroke scales with the FULL cell height, not `check_size`.
         let stroke_width = 2.0 * cell / 24.0;

@@ -35,6 +35,11 @@ http = []
 # own `images` feature: both forward `flui-runtime`'s, which registers it, and
 # the facade's `images` turns both on.
 images = ["flui-runtime/images"]
+# `heap::sites`: `CountingAllocator` forwards to DHAT's allocator, which records each
+# allocation's stack while a `SiteProfiler` runs. A run turns it on from the command line
+# (`--features flui-testing/dhat`); no manifest enables it, and CI's `test-features` job runs
+# `heap_sites` with it.
+dhat = ["dep:dhat", "dep:backtrace"]
 
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline
@@ -126,6 +131,9 @@ serde_json = { workspace = true }
 flui-protocol = { workspace = true, features = ["serde"] }
 # Per-frame tables of the motion gate, keyed by `RenderId`.
 rustc-hash = { workspace = true }
+# The `dhat` feature's heap profiler, and the symbols of the stacks it records.
+dhat = { workspace = true, optional = true }
+backtrace = { workspace = true, optional = true }
 
 [dev-dependencies]
 flui-testing = { path = ".", features = ["http"] }
@@ -147,6 +155,13 @@ cargo_metadata = { workspace = true }
 [[test]]
 name = "flui_testing_it"
 path = "tests/main.rs"
+
+# Its own process: it installs a global allocator and runs the process's one DHAT profiler.
+# CI's `test-features` job runs it.
+[[test]]
+name = "heap_sites"
+path = "tests/heap_sites.rs"
+required-features = ["dhat"]
 
 [package.metadata.flui]
 tier = "K"

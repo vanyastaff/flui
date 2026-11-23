@@ -370,8 +370,7 @@ pub(crate) fn a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_
 /// a position its runs lack.
 pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
     use flui_foundation::geometry::{Point, Rect, Size};
-    use flui_painting::Canvas;
-    use flui_rendering::delegates::CustomPainter;
+    use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
     use flui_semantics::SemanticsRole;
     use flui_semantics::{
         DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsConfiguration,
@@ -384,7 +383,7 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
     #[derive(Debug)]
     struct Static(SemanticsAnchor);
     impl CustomPainter for Static {
-        fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+        fn paint(&self, _ctx: &mut CustomPaintContext<'_>) {}
         fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
             false
         }

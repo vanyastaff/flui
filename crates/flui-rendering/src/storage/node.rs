@@ -683,6 +683,7 @@ impl RenderNode {
     pub(crate) fn paint_raw(
         &self,
         recorder: &mut crate::context::FragmentRecorder,
+        text: crate::pipeline::TextSource<'_>,
         child_count: usize,
     ) {
         match self {
@@ -691,11 +692,15 @@ impl RenderNode {
                     .state()
                     .geometry()
                     .unwrap_or(flui_foundation::geometry::Size::ZERO);
-                entry.render_object().paint_raw(recorder, child_count, size);
+                entry
+                    .render_object()
+                    .paint_raw(recorder, text, child_count, size);
             }
             Self::Sliver(entry) => {
                 let size = entry.state().absolute_paint_size();
-                entry.render_object().paint_raw(recorder, child_count, size);
+                entry
+                    .render_object()
+                    .paint_raw(recorder, text, child_count, size);
             }
         }
     }

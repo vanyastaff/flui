@@ -77,9 +77,9 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Paint, Path};
 use flui_sdk::painting::styling::{BorderSide, BorderStyle};
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::node::Description;
@@ -99,7 +99,7 @@ use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
 /// A checkbox's edge length (`18.0`).
-pub const CHECKBOX_EDGE_SIZE: f64 = 18.0;
+pub(crate) const CHECKBOX_EDGE_SIZE: f64 = 18.0;
 
 /// The box outline's and checkmark/dash's stroke width.
 const STROKE_WIDTH: f64 = 2.0;
@@ -107,7 +107,7 @@ const STROKE_WIDTH: f64 = 2.0;
 /// The M3 tap-target side length (`48.0`, the minimum interactive dimension),
 /// always used in V1 (no `material_tap_target_size` override yet — see the
 /// module docs).
-pub const CHECKBOX_TAP_TARGET_SIZE: f64 = 48.0;
+pub(crate) const CHECKBOX_TAP_TARGET_SIZE: f64 = 48.0;
 
 /// The box's corner radius, `2.0`.
 const CORNER_RADIUS: f64 = 2.0;
@@ -613,7 +613,9 @@ struct CheckboxPainter {
 }
 
 impl CustomPainter for CheckboxPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let center_x = size.width / 2.0;
         let center_y = size.height / 2.0;
         let half_edge = CHECKBOX_EDGE_SIZE / 2.0;

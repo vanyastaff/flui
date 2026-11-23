@@ -2,6 +2,6 @@
 # counts, not timings. One scenario of crates/flui-widgets/tests/perf.rs.
 
 [list_10k_scroll_warm]
-allocated_bytes = 268273
+allocated_bytes = 268281
 allocations = 1478
 reallocations = 84

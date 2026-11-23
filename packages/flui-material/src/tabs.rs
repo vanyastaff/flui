@@ -99,11 +99,10 @@ use flui_sdk::foundation::TextDirection;
 use flui_sdk::foundation::panic::FirstPanic;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{EdgeInsets, Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
 use flui_sdk::painting::typography::TextStyle;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::rendering::objects::CrossAxisAlignment;
 use flui_sdk::semantics::{SemanticsAnchor, SemanticsRole};
 use flui_sdk::view::environment::VsyncScope;
@@ -123,15 +122,15 @@ use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
 /// A `Tab` with no icon's height.
-pub const TAB_HEIGHT: f64 = 46.0;
+pub(crate) const TAB_HEIGHT: f64 = 46.0;
 
 /// A `Tab` with both an icon and text/child's height.
-pub const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
+pub(crate) const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
 
 /// The horizontal padding every tab label gets, both sides
 /// (`EdgeInsets.symmetric(horizontal: 16.0)`) — see the module docs for why this crate has no override surface
 /// for it yet.
-pub const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
+pub(crate) const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
 
 /// One [`TabBar`] tab's label content: some combination of `text`/`child`
 /// and `icon`.
@@ -782,7 +781,9 @@ struct TabIndicatorPainter {
 }
 
 impl CustomPainter for TabIndicatorPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         if !size.width.is_finite() || !size.height.is_finite() || size.width <= 0.0 {
             return;
         }

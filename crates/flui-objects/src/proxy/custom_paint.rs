@@ -17,7 +17,6 @@ use std::rc::Rc;
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::panic::FirstPanic;
-use flui_painting::Canvas;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -25,7 +24,7 @@ use flui_rendering::{
         BoxDryLayoutContext, BoxHitTestContext, BoxIntrinsicsContext, BoxLayoutContext,
         PaintContext,
     },
-    delegates::CustomPainter,
+    delegates::{CustomPaintContext, CustomPainter},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
@@ -237,15 +236,18 @@ fn painter_update_impact(
     }
 }
 
-/// Runs `painter.paint(canvas, size)` inside a balanced `save()`/`restore()`
-/// pair.
+/// Runs `painter.paint` inside a balanced `save()`/`restore()` pair, through
+/// a [`CustomPaintContext`] over this node's canvas, text source and size, so
+/// the painter's text loan records this node.
 ///
-/// No offset translation: the fragment recorder pre-translates `canvas` to
+/// No offset translation: the fragment recorder pre-translates the canvas to
 /// this node's local origin before paint runs.
-fn paint_with_painter(canvas: &mut Canvas, size: Size, painter: &dyn CustomPainter) {
-    canvas.save();
-    let save_count = canvas.save_count();
-    painter.paint(canvas, size);
+fn paint_with_painter(ctx: &mut PaintContext<'_, Single>, painter: &dyn CustomPainter) {
+    let mut painter_ctx = CustomPaintContext::new(ctx);
+    painter_ctx.canvas().save();
+    let save_count = painter_ctx.canvas().save_count();
+    painter.paint(&mut painter_ctx);
+    let canvas = painter_ctx.canvas();
     debug_assert_eq!(
         canvas.save_count(),
         save_count,
@@ -397,13 +399,12 @@ impl RenderBox for RenderCustomPaint {
     }
 
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
-        let size = ctx.size();
         if let Some(background) = &self.painter {
-            paint_with_painter(ctx.canvas(), size, background.as_ref());
+            paint_with_painter(ctx, background.as_ref());
         }
         ctx.paint_child();
         if let Some(foreground) = &self.foreground_painter {
-            paint_with_painter(ctx.canvas(), size, foreground.as_ref());
+            paint_with_painter(ctx, foreground.as_ref());
         }
     }
 

@@ -55,10 +55,9 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::{ChangeNotifier, Listenable, Subscription};
 use flui_sdk::geometry::{Point, Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Clip, ClipOp, Paint};
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController};
@@ -827,7 +826,9 @@ pub(crate) struct IndicationPainter {
 }
 
 impl CustomPainter for IndicationPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         if !(size.width.is_finite() && size.height.is_finite())
             || size.width <= 0.0
             || size.height <= 0.0

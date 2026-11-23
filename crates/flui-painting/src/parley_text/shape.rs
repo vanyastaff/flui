@@ -110,7 +110,10 @@ const _: () = {
 #[derive(Clone, Debug)]
 struct SpanInfo {
     len: usize,
-    family: std::sync::Arc<str>,
+    /// The family it was shaped in, held as [`ShapedFamily`]'s two parts so that the
+    /// generic sits in the padding beside `italic`.
+    family_name: Option<std::sync::Arc<str>>,
+    generic_family: Generic,
     weight: f32,
     italic: bool,
     size: Option<f32>,
@@ -129,7 +132,11 @@ impl SpanInfo {
     fn description(&self, color: Option<Color>) -> SpanDescription {
         SpanDescription {
             len: self.len,
-            family: std::sync::Arc::clone(&self.family),
+            family: ShapedFamily {
+                name: self.family_name.clone(),
+                generic: self.generic_family,
+            }
+            .described(),
             weight: self.weight,
             italic: self.italic,
             size: self.size,
@@ -209,7 +216,7 @@ impl ParagraphLayout {
             .runs()
             .map(|run| run.clusters().map(|cluster| cluster.advance()).sum::<f32>())
             .sum();
-        advance - line.metrics().trailing_whitespace
+        advance - line.metrics().hanging_advance
     }
 
     /// The paragraph's narrowest and widest widths: `(min, max)`, where min
@@ -335,7 +342,7 @@ impl ParagraphLayout {
             let mut open: Option<(DecoratedStretch<V>, f32)> = None;
             for run in line.runs() {
                 let size = run.font_size();
-                let run_metrics = DecorationMetrics::of(run.metrics(), size);
+                let run_metrics = DecorationMetrics::of(run.font_metrics(), size);
                 for cluster in run.visual_clusters() {
                     let (left, right) = (x, x + cluster.advance());
                     x = right;
@@ -538,7 +545,7 @@ impl ParagraphLayout {
                 let synthesis = synthesis_of(&run.synthesis());
                 let font_size = run.font_size();
                 let coords_start = coords.len();
-                coords.extend_from_slice(run.normalized_coords());
+                coords.extend(run.normalized_coords().iter().map(|coord| coord.to_bits()));
                 let glyph_start = glyphs.len();
                 let baseline = glyph_run.baseline();
                 for (index, glyph) in glyph_run.positioned_glyphs().enumerate() {
@@ -677,12 +684,14 @@ pub(crate) struct DecorationMetrics {
 impl DecorationMetrics {
     /// The decoration lines of a run of `size` whose font reports `metrics`.
     ///
-    /// The font's values are trusted only within an em of the baseline and
-    /// with a thickness up to a quarter em: a font without them makes
-    /// Parley substitute values in font units, not pixels. Outside that, an
-    /// underline is an eighteenth of an em thick, that far below the
-    /// baseline, and a line-through is centred half an x-height above it.
-    pub(crate) fn of(metrics: &parley::layout::RunMetrics, size: f32) -> Self {
+    /// Parley fills in what a font does not report with HarfBuzz's defaults, in
+    /// pixels: an underline an eighteenth of an em thick, that far below the
+    /// baseline, and a line-through that thick at half the ascent. The values
+    /// are trusted only within an em of the baseline and with a thickness up to
+    /// a quarter em. A font that reports more, or a non-finite value, gets the
+    /// default underline and a line-through centred half an x-height above the
+    /// baseline.
+    pub(crate) fn of(metrics: &parley::FontMetrics, size: f32) -> Self {
         let em = f64::from(size).max(0.0);
         let fallback = em / 18.0;
         let thickness = |size: f32| {
@@ -751,7 +760,22 @@ impl fmt::Debug for ParagraphLayout {
 
 /// Confines Parley's public line-width escape hatch to allocation alignment.
 /// The shaped clusters are reused; this repeats line breaking, not shaping.
+/// Parley aligns the lines when the breaker finishes, so the alignment is set first.
 fn align_allocated_lines(layout: &mut Layout<SpanBrush>, spec: &ParagraphSpec<'_>, width: f32) {
+    let alignment = match spec.text_align.resolve(spec.direction) {
+        TextAlign::Left | TextAlign::Start => Alignment::Left,
+        TextAlign::Right | TextAlign::End => Alignment::Right,
+        TextAlign::Center => Alignment::Center,
+        TextAlign::Justify => Alignment::Justify,
+    };
+    // A left-aligned line of an LTR paragraph sits at its indent whatever width it is
+    // aligned in (Parley's `alignment::align`), and the breaking that shaped it aligned it
+    // to `Start`, which is `Left` there: breaking again would move nothing. The base
+    // direction is the layout's own, from its first strong character.
+    if alignment == Alignment::Left && !layout.is_rtl() {
+        return;
+    }
+    layout.set_alignment(alignment, AlignmentOptions::default());
     let cap = spec.max_width.unwrap_or(f32::MAX);
     let mut breaker = layout.break_lines();
     breaker.state_mut().set_layout_max_advance(cap);
@@ -760,13 +784,6 @@ fn align_allocated_lines(layout: &mut Layout<SpanBrush>, spec: &ParagraphSpec<'_
         breaker.set_prior_line_width(width);
     }
     breaker.finish();
-    let alignment = match spec.text_align.resolve(spec.direction) {
-        TextAlign::Left | TextAlign::Start => Alignment::Left,
-        TextAlign::Right | TextAlign::End => Alignment::Right,
-        TextAlign::Center => Alignment::Center,
-        TextAlign::Justify => Alignment::Justify,
-    };
-    layout.align(alignment, AlignmentOptions::default());
 }
 
 /// `start..end` as `u32`s; a paragraph holds fewer than 2^32 glyphs.
@@ -1030,18 +1047,18 @@ fn validate_layout(paragraph: &ParagraphLayout) -> Result<(), TextLayoutError> {
     for line in paragraph.layout.lines() {
         let metrics = line.metrics();
         if [
-            metrics.ascent,
-            metrics.descent,
-            metrics.leading,
             metrics.line_height,
             metrics.baseline,
             metrics.offset,
             metrics.advance,
-            metrics.trailing_whitespace,
+            metrics.hanging_advance,
             metrics.inline_min_coord,
             metrics.inline_max_coord,
             metrics.block_min_coord,
             metrics.block_max_coord,
+            metrics.content_block_min_coord,
+            metrics.content_block_max_coord,
+            metrics.indent,
         ]
         .into_iter()
         .any(|value| !value.is_finite())
@@ -1107,7 +1124,7 @@ impl TextContext {
             .take(kept)
             .fold(0.0_f32, |width, line| {
                 let metrics = line.metrics();
-                width.max(metrics.inline_min_coord + metrics.advance - metrics.trailing_whitespace)
+                width.max(metrics.inline_min_coord + metrics.advance - metrics.hanging_advance)
             });
         let alignment_width = paragraph.min_width.max(content_width);
         let widths = shaped.layout.calculate_content_widths();
@@ -1209,7 +1226,7 @@ impl TextContext {
                 && paragraph.max_width.is_none_or(|max_width| {
                     candidate.layout.lines().last().is_none_or(|line| {
                         let metrics = line.metrics();
-                        metrics.advance - metrics.trailing_whitespace <= max_width + 1e-3
+                        metrics.advance - metrics.hanging_advance <= max_width + 1e-3
                     })
                 });
             let Some((previous, _)) = full[..cut].char_indices().next_back() else {
@@ -1242,11 +1259,23 @@ impl TextContext {
 
         // Families are resolved against the collection before the builder
         // borrows it (`resolve_family_name`).
+        // The properties go into the context's scratch, so a shaping allocates
+        // for them only past what an earlier one grew it to.
+        let mut style_scratch = std::mem::take(&mut self.style_scratch);
+        let mut span_scratch = std::mem::take(&mut self.span_scratch);
         let collection = &mut self.font_ctx.collection;
-        let (default_family, default_family_name) = family(collection, None);
-        let default_properties = paragraph.default_style.map_or_default(|style| {
-            properties(collection, style, None, paragraph.font_weight_adjustment)
-        });
+        let default_family = family(collection, None);
+        let default_family_name = ShapedFamily::of(collection, None);
+        if let Some(style) = paragraph.default_style {
+            properties(
+                collection,
+                style,
+                None,
+                paragraph.font_weight_adjustment,
+                &mut style_scratch,
+            );
+        }
+        let defaults_end = style_scratch.len();
         let default_info = span_info(
             0,
             default_family_name,
@@ -1256,56 +1285,54 @@ impl TextContext {
         );
         let mut start = 0;
         let mut infos = Vec::with_capacity(spans.len());
-        let mut run_colors: Vec<Option<Color>> = Vec::new();
-        let span_properties: Vec<_> = spans
-            .iter()
-            .enumerate()
-            .map(|(index, (span, style))| {
-                let range = start..start + span.len();
-                start = range.end;
-                let mut properties = style.as_ref().map_or_default(|style| {
-                    properties(
-                        collection,
-                        style,
+        // At most one run per span, so boxing the runs reallocates nothing.
+        let mut run_colors: Vec<Option<Color>> = Vec::with_capacity(spans.len());
+        for (index, (span, style)) in spans.iter().enumerate() {
+            let range = start..start + span.len();
+            start = range.end;
+            if let Some(style) = style {
+                properties(
+                    collection,
+                    style,
+                    paragraph.default_style,
+                    paragraph.font_weight_adjustment,
+                    &mut style_scratch,
+                );
+            }
+            let paint_run = (!span.is_empty()).then(|| {
+                let color = span_paint_color(style.as_ref(), paragraph.default_style);
+                if run_colors.last() != Some(&color) {
+                    run_colors.push(color);
+                }
+                run_colors.len() - 1
+            });
+            // Run 0 is the default brush, which every span starts with.
+            if let Some(run) = paint_run.filter(|&run| run > 0) {
+                style_scratch.push(StyleProperty::Brush(SpanBrush(run)));
+            }
+            let info = match style {
+                Some(style) => {
+                    let name = ShapedFamily::of(collection, Some(style));
+                    span_info(
+                        span.len(),
+                        name,
+                        Some(style),
                         paragraph.default_style,
                         paragraph.font_weight_adjustment,
                     )
-                });
-                let paint_run = (!span.is_empty()).then(|| {
-                    let color = span_paint_color(style.as_ref(), paragraph.default_style);
-                    if run_colors.last() != Some(&color) {
-                        run_colors.push(color);
-                    }
-                    run_colors.len() - 1
-                });
-                // Run 0 is the default brush, which every span starts with.
-                if let Some(run) = paint_run.filter(|&run| run > 0) {
-                    properties.push(StyleProperty::Brush(SpanBrush(run)));
                 }
-                let info = match style {
-                    Some(style) => {
-                        let (_, name) = family(collection, Some(style));
-                        span_info(
-                            span.len(),
-                            name,
-                            Some(style),
-                            paragraph.default_style,
-                            paragraph.font_weight_adjustment,
-                        )
-                    }
-                    None => SpanInfo {
-                        len: span.len(),
-                        ..default_info.clone()
-                    },
-                };
-                infos.push(SpanInfo {
-                    source: sources.source(index),
-                    paint_run,
-                    ..info
-                });
-                (range, properties)
-            })
-            .collect();
+                None => SpanInfo {
+                    len: span.len(),
+                    ..default_info.clone()
+                },
+            };
+            infos.push(SpanInfo {
+                source: sources.source(index),
+                paint_run,
+                ..info
+            });
+            span_scratch.push((range, style_scratch.len()));
+        }
 
         // A dropped layout's buffers, when one was handed back: building into
         // them clears what they held and allocates only past their capacity.
@@ -1319,35 +1346,75 @@ impl TextContext {
         let mut builder = self
             .layout_ctx
             .ranged_builder(&mut self.font_ctx, &breaks, 1.0, false);
-        builder.push_default(default_family);
-        builder.push_default(StyleProperty::FontSize(paragraph.font_size));
-        if let Some(weight) = adjusted_weight(
-            paragraph.default_style,
-            None,
-            paragraph.font_weight_adjustment,
-        ) {
-            builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
-        }
-        // A word wider than the line breaks between its glyphs instead of
-        // overflowing the line. `BreakWord` rather than `Anywhere`: the
-        // min-content width stays the widest word (flui-painting
-        // `ARCHITECTURE.md`, mapping decision 15).
-        builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
-        // No explicit height is 1.2 em of each run's own size, so a larger
-        // span grows its line box; an explicit height is one absolute line
-        // box for the paragraph.
-        builder.push_default(StyleProperty::LineHeight(match paragraph.line_height {
-            Some(height) => LineHeight::Absolute(height),
-            None => LineHeight::FontSizeRelative(1.2),
-        }));
-        for property in default_properties {
-            builder.push_default(property);
-        }
-        for (range, properties) in span_properties {
-            for property in properties {
-                builder.push(property, range.clone());
+        // Flutter sizes a line by its runs alone; Parley starts every line with
+        // the root span's box (CSS's strut, CSS 2 §10.8), so a root font no span
+        // uses would make every line taller. The root therefore takes the first
+        // text's box-shaping properties, whose box that text makes anyway, and
+        // the root's own values of them are pushed back over the text after it,
+        // so no later span inherits the first span's from the root. A paragraph
+        // of one span pushes nothing more.
+        let first_text = spans.iter().position(|(text, _)| !text.is_empty());
+        let span_properties = |index: usize| {
+            let begin = index
+                .checked_sub(1)
+                .map_or(defaults_end, |previous| span_scratch[previous].1);
+            begin..span_scratch[index].1
+        };
+        let mut strut =
+            first_text.map_or_default(|index| Strut::of(&style_scratch[span_properties(index)]));
+        let tail = first_text.map_or(text.len(), |index| span_scratch[index].0.end)..text.len();
+        let mut properties = style_scratch.drain(..);
+        {
+            let mut push_root =
+                |property: StyleProperty<'static, SpanBrush>| match strut.takes(&property) {
+                    true if !tail.is_empty() => builder.push(property, tail.clone()),
+                    true => {}
+                    false => builder.push_default(property),
+                };
+            push_root(default_family);
+            push_root(StyleProperty::FontSize(paragraph.font_size));
+            if let Some(weight) = adjusted_weight(
+                paragraph.default_style,
+                None,
+                paragraph.font_weight_adjustment,
+            ) {
+                push_root(StyleProperty::FontWeight(FontWeight::new(weight)));
+            }
+            // A word wider than the line breaks between its glyphs instead of
+            // overflowing the line. `BreakWord` rather than `Anywhere`: the
+            // min-content width stays the widest word (flui-painting
+            // `ARCHITECTURE.md`, mapping decision 15).
+            push_root(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
+            // No explicit height is 1.2 em of each run's own size, so a larger
+            // span grows its line box; an explicit height is one absolute line
+            // box for the paragraph.
+            push_root(StyleProperty::LineHeight(match paragraph.line_height {
+                Some(height) => LineHeight::Absolute(height),
+                None => LineHeight::FontSizeRelative(1.2),
+            }));
+            for property in properties.by_ref().take(defaults_end) {
+                push_root(property);
             }
         }
+        if !tail.is_empty() {
+            for property in strut.unset_by_root() {
+                builder.push(property, tail.clone());
+            }
+        }
+        let mut taken = defaults_end;
+        for (index, (range, end)) in span_scratch.drain(..).enumerate() {
+            for property in properties.by_ref().take(end - taken) {
+                if Some(index) == first_text && Strut::shapes_the_box(&property) {
+                    builder.push_default(property);
+                } else {
+                    builder.push(property, range.clone());
+                }
+            }
+            taken = end;
+        }
+        drop(properties);
+        self.style_scratch = style_scratch;
+        self.span_scratch = span_scratch;
         builder.build_into(&mut layout, &breaks);
         // Reject overflow before the line breaker consumes derived advances.
         let widths = layout.calculate_content_widths();
@@ -1406,7 +1473,7 @@ fn sliced_spans(
 /// its source and paint run are the caller's to set.
 fn span_info(
     len: usize,
-    family: std::sync::Arc<str>,
+    family: ShapedFamily,
     style: Option<&TextStyle>,
     default: Option<&TextStyle>,
     adjustment: i32,
@@ -1417,7 +1484,8 @@ fn span_info(
     )]
     SpanInfo {
         len,
-        family,
+        family_name: family.name,
+        generic_family: family.generic,
         weight: adjusted_weight(style, default, adjustment).unwrap_or_else(|| {
             style
                 .and_then(|style| style.font_weight)
@@ -1434,20 +1502,18 @@ fn span_info(
     }
 }
 
-/// The one family a style is shaped with, and its name as a snapshot prints
-/// it: FLUI's family rule (`resolve_family_name`) over the families
-/// `collection` holds, so an absent name never reaches Parley's fallback
-/// walk (flui-painting `ARCHITECTURE.md`, mapping decision 8). Nothing follows it in the list: past that family,
+/// The one family a style is shaped with: FLUI's family rule
+/// (`resolve_family_name`) over the families `collection` holds, so an absent
+/// name never reaches Parley's fallback walk (flui-painting `ARCHITECTURE.md`,
+/// mapping decision 8). Nothing follows it in the list: past that family,
 /// Parley walks the collection's fallback families, which a collection fed
 /// from the host takes from FLUI's lists for it
 /// (`FontCollection::with_host_fonts`).
 fn family(
     collection: &mut Collection,
     style: Option<&TextStyle>,
-) -> (StyleProperty<'static, SpanBrush>, std::sync::Arc<str>) {
-    let family = resolve_family_name(style, |name| holds_exactly(collection, name));
-    let described: std::sync::Arc<str> = format!("{family:?}").into();
-    let name = match family {
+) -> StyleProperty<'static, SpanBrush> {
+    let name = match resolve_family_name(style, |name| holds_exactly(collection, name)) {
         Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
         Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),
         Family::SansSerif => FontFamilyName::Generic(GenericFamily::SansSerif),
@@ -1455,10 +1521,58 @@ fn family(
         Family::Fantasy => FontFamilyName::Generic(GenericFamily::Fantasy),
         Family::Monospace => FontFamilyName::Generic(GenericFamily::Monospace),
     };
-    (
-        StyleProperty::FontFamily(FontFamily::Single(name)),
-        described,
-    )
+    StyleProperty::FontFamily(FontFamily::Single(name))
+}
+
+/// The family a span was shaped in ([`family`]'s rule), kept for
+/// [`ShapedParagraph::describe_spans`]. A generic family holds nothing on
+/// the heap; the text a snapshot prints is made only when one is described.
+#[derive(Clone, Debug)]
+struct ShapedFamily {
+    /// The family's name when it is one the collection holds; `None` for a generic.
+    name: Option<std::sync::Arc<str>>,
+    /// Which generic, when `name` is `None`.
+    generic: Generic,
+}
+
+/// A CSS generic family, one byte beside [`ShapedFamily::name`].
+#[derive(Clone, Copy, Debug)]
+enum Generic {
+    Serif,
+    SansSerif,
+    Cursive,
+    Fantasy,
+    Monospace,
+}
+
+impl ShapedFamily {
+    fn of(collection: &mut Collection, style: Option<&TextStyle>) -> Self {
+        let generic = match resolve_family_name(style, |name| holds_exactly(collection, name)) {
+            Family::Name(name) => {
+                return Self {
+                    name: Some(name.into()),
+                    generic: Generic::SansSerif,
+                };
+            }
+            Family::Serif => Generic::Serif,
+            Family::SansSerif => Generic::SansSerif,
+            Family::Cursive => Generic::Cursive,
+            Family::Fantasy => Generic::Fantasy,
+            Family::Monospace => Generic::Monospace,
+        };
+        Self {
+            name: None,
+            generic,
+        }
+    }
+
+    /// The family as a snapshot prints it: `Family`'s `Debug` form.
+    fn described(&self) -> std::sync::Arc<str> {
+        match (&self.name, self.generic) {
+            (Some(name), _) => format!("{:?}", Family::Name(name)).into(),
+            (None, generic) => format!("{generic:?}").into(),
+        }
+    }
 }
 
 /// Whether `collection` holds a family spelled exactly `name`.
@@ -1511,7 +1625,92 @@ fn adjusted_weight(
     Some((authored + f64::from(adjustment)).clamp(1.0, 1000.0) as f32)
 }
 
-/// The Parley properties `style` sets, with a resolved weight adjustment.
+/// Which box-shaping properties a paragraph's root takes from its first text, so that its line
+/// boxes are Flutter's (see where the root is pushed in `shape`).
+///
+/// A set of property kinds: `first` holds the kinds the first text sets, `root` the kinds the
+/// root's own properties supplied for them. Nothing is allocated.
+#[derive(Default)]
+struct Strut {
+    first: u8,
+    root: u8,
+}
+
+impl Strut {
+    const FAMILY: u8 = 1;
+    const SIZE: u8 = 1 << 1;
+    const WEIGHT: u8 = 1 << 2;
+    const STYLE: u8 = 1 << 3;
+    const WIDTH: u8 = 1 << 4;
+    const VARIATIONS: u8 = 1 << 5;
+    const LINE_HEIGHT: u8 = 1 << 6;
+
+    /// The kind of a property that sizes a run's box, or `None`.
+    fn kind(property: &StyleProperty<'_, SpanBrush>) -> Option<u8> {
+        Some(match property {
+            StyleProperty::FontFamily(_) => Self::FAMILY,
+            StyleProperty::FontSize(_) => Self::SIZE,
+            StyleProperty::FontWeight(_) => Self::WEIGHT,
+            StyleProperty::FontStyle(_) => Self::STYLE,
+            StyleProperty::FontWidth(_) => Self::WIDTH,
+            StyleProperty::FontVariations(_) => Self::VARIATIONS,
+            StyleProperty::LineHeight(_) => Self::LINE_HEIGHT,
+            _ => return None,
+        })
+    }
+
+    fn shapes_the_box(property: &StyleProperty<'_, SpanBrush>) -> bool {
+        Self::kind(property).is_some()
+    }
+
+    fn of(first_text: &[StyleProperty<'static, SpanBrush>]) -> Self {
+        Self {
+            first: first_text
+                .iter()
+                .filter_map(Self::kind)
+                .fold(0, |kinds, kind| kinds | kind),
+            root: 0,
+        }
+    }
+
+    /// Whether the first text's value replaces this root property at the root, in which case
+    /// the root's value goes over the text after the first.
+    fn takes(&mut self, property: &StyleProperty<'_, SpanBrush>) -> bool {
+        match Self::kind(property) {
+            Some(kind) if self.first & kind != 0 => {
+                self.root |= kind;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Parley's defaults for the kinds the first text sets and the root does not, which the
+    /// text after the first gets back. The root always holds a family, a size and a line height.
+    fn unset_by_root(&self) -> impl Iterator<Item = StyleProperty<'static, SpanBrush>> {
+        let unset = self.first & !self.root;
+        [
+            (Self::WEIGHT, StyleProperty::FontWeight(FontWeight::NORMAL)),
+            (
+                Self::STYLE,
+                StyleProperty::FontStyle(ParleyFontStyle::Normal),
+            ),
+            (
+                Self::WIDTH,
+                StyleProperty::FontWidth(parley::FontWidth::NORMAL),
+            ),
+            (
+                Self::VARIATIONS,
+                StyleProperty::FontVariations(FontVariations::List(Cow::Borrowed(&[]))),
+            ),
+        ]
+        .into_iter()
+        .filter_map(move |(kind, property)| (unset & kind != 0).then_some(property))
+    }
+}
+
+/// Pushes the Parley properties `style` sets onto `properties`, with a resolved
+/// weight adjustment.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "f64 style values narrow to Parley's f32 layout space"
@@ -1521,11 +1720,11 @@ fn properties(
     style: &TextStyle,
     default: Option<&TextStyle>,
     adjustment: i32,
-) -> Vec<StyleProperty<'static, SpanBrush>> {
-    let mut properties = Vec::new();
+    properties: &mut Vec<StyleProperty<'static, SpanBrush>>,
+) {
     let adjusted = adjusted_weight(Some(style), default, adjustment);
     if style.font_family.is_some() {
-        properties.push(family(collection, Some(style)).0);
+        properties.push(family(collection, Some(style)));
     }
     if let Some(weight) = adjusted {
         properties.push(StyleProperty::FontWeight(FontWeight::new(weight)));
@@ -1585,7 +1784,6 @@ fn properties(
             height as f32,
         )));
     }
-    properties
 }
 
 #[cfg(test)]
@@ -1781,24 +1979,26 @@ mod tests {
     }
 
     /// A font's own decoration metrics are used where they are in range; the
-    /// values Parley substitutes for a font without them, in font units, and
-    /// non-finite ones fall back to an eighteenth of an em.
+    /// values past an em, which a broken font reports, and non-finite ones
+    /// fall back to an eighteenth of an em.
     #[test]
     fn decoration_metrics_trust_the_font_only_in_range() {
-        use parley::layout::RunMetrics;
+        use parley::FontMetrics;
 
         use super::{DecorationMetrics, LinePlacement};
 
         let size = 72.0;
         let em_18 = 4.0;
-        let font = RunMetrics {
+        let font = FontMetrics {
             ascent: 66.0,
             x_height: Some(38.0),
             underline_offset: -7.0,
             underline_size: 3.0,
             strikethrough_offset: 20.0,
             strikethrough_size: 5.0,
-            ..RunMetrics::default()
+            descent: 18.0,
+            leading: 0.0,
+            cap_height: None,
         };
         assert_eq!(
             DecorationMetrics::of(&font, size),
@@ -1819,17 +2019,16 @@ mod tests {
             "a font's metrics in range are its own"
         );
 
-        // 2048 units per em over 18, unscaled: what a font without the
-        // metrics reports.
+        // 2048 units per em over 18, unscaled: past an em at 72 px.
         let units = 2048.0 / 18.0;
-        let substituted = RunMetrics {
+        let out_of_range = FontMetrics {
             underline_offset: units,
             underline_size: units,
             strikethrough_offset: units,
             strikethrough_size: units,
             ..font
         };
-        let not_finite = RunMetrics {
+        let not_finite = FontMetrics {
             ascent: f32::NAN,
             x_height: Some(f32::INFINITY),
             underline_offset: f32::NAN,
@@ -1839,7 +2038,7 @@ mod tests {
             ..font
         };
         for (fixture, metrics, ascent, x_height) in [
-            ("substituted", substituted, 66.0, 38.0),
+            ("out of range", out_of_range, 66.0, 38.0),
             ("not finite", not_finite, 72.0 * 0.8, 72.0 * 0.5),
         ] {
             assert_eq!(

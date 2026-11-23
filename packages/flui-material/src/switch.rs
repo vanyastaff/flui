@@ -36,9 +36,9 @@
 //! # Painting: track pill + thumb circle, both real `Canvas` shapes
 //!
 //! `SwitchPainter` draws the 52×32dp track as a stadium-shaped fill +
-//! optional 2dp outline ([`Canvas::draw_rrect`]/[`Canvas::draw_drrect`],
+//! optional 2dp outline ([`Canvas::draw_rrect`](flui_sdk::painting::Canvas::draw_rrect)/[`Canvas::draw_drrect`](flui_sdk::painting::Canvas::draw_drrect),
 //! the same shape math `CheckboxPainter`'s box border already established)
-//! and the thumb as a filled circle ([`Canvas::draw_circle`]) at the
+//! and the thumb as a filled circle ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle)) at the
 //! animated position.
 //!
 //! **Named deferral**: the M3 thumb radius follows the position from
@@ -89,10 +89,9 @@ use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpe
 use flui_sdk::foundation::TextDirection;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, RRect, Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
@@ -110,10 +109,10 @@ use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
 /// The track's width (M3: `52.0`).
-pub const SWITCH_TRACK_WIDTH: f64 = 52.0;
+pub(crate) const SWITCH_TRACK_WIDTH: f64 = 52.0;
 
 /// The track's height (M3: `32.0`).
-pub const SWITCH_TRACK_HEIGHT: f64 = 32.0;
+pub(crate) const SWITCH_TRACK_HEIGHT: f64 = 32.0;
 
 /// The M3 default horizontal padding added to the track to form the tap
 /// target, each side: `EdgeInsets.symmetric(horizontal: 4)`.
@@ -121,13 +120,14 @@ const TAP_TARGET_HORIZONTAL_PADDING: f64 = 4.0;
 
 /// The tap target's width: the track plus the M3 default horizontal
 /// padding on both sides.
-pub const SWITCH_TAP_TARGET_WIDTH: f64 = SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
+pub(crate) const SWITCH_TAP_TARGET_WIDTH: f64 =
+    SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
 
 /// The tap target's height: the minimum interactive dimension, `48.0`
 /// (`40.0 + 8.0`) — the `MaterialTapTargetSize.padded` branch this V1
 /// always takes (no override yet, matching [`crate::Checkbox`]'s own
 /// deferral).
-pub const SWITCH_TAP_TARGET_HEIGHT: f64 = 48.0;
+pub(crate) const SWITCH_TAP_TARGET_HEIGHT: f64 = 48.0;
 
 /// The thumb radius when selected (or thumb-iconed, which V1 doesn't
 /// paint): `24.0 / 2`.
@@ -563,7 +563,9 @@ struct SwitchPainter {
 }
 
 impl CustomPainter for SwitchPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         // A spring may overshoot; the thumb stays on its track.
         let t = self.position.value().clamp(0.0, 1.0);
         let track_color = Color::lerp(self.off.track, self.on.track, t);

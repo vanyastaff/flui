@@ -5,8 +5,8 @@
 # --features flui/material,flui/cupertino,flui/native --test perf`.
 
 [cupertino_tab_bar_alone]
-allocations = 474
-bytes = 63078
+allocations = 467
+bytes = 67607
 elements = 33
-reallocations = 8
+reallocations = 3
 render_nodes = 18

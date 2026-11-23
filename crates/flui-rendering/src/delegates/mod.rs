@@ -8,7 +8,7 @@
 //! | Delegate | Purpose | Used By |
 //! |----------|---------|---------|
 //! | [`SliverGridDelegate`] | Grid layout in slivers | RenderSliverGrid |
-//! | [`CustomPainter`] | Custom painting | RenderCustomPaint |
+//! | [`CustomPainter`] | Custom painting, through a [`CustomPaintContext`] | RenderCustomPaint |
 //! | [`FlowDelegate`] | Flow layout algorithm | RenderFlow |
 //! | [`SingleChildLayoutDelegate`] | Custom single-child layout | RenderCustomSingleChildLayoutBox |
 //! | [`MultiChildLayoutDelegate`] | Custom multi-child layout | RenderCustomMultiChildLayoutBox |
@@ -21,6 +21,8 @@ pub use sliver_grid_delegate::*;
 // unconditionally (flui-objects `proxy::custom_paint`).
 mod custom_painter;
 pub use custom_painter::*;
+mod custom_paint_context;
+pub use custom_paint_context::CustomPaintContext;
 
 // Flow delegate — always available because RenderFlow ships unconditionally
 // (flui-objects `layout::flow`).

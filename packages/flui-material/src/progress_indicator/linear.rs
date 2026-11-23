@@ -20,10 +20,9 @@ use flui_sdk::animation::{
 use flui_sdk::foundation::Listenable;
 use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::{Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{CustomPaint, Directionality};
@@ -264,7 +263,9 @@ struct BarPainter {
 }
 
 impl CustomPainter for BarPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         if !size.width.is_finite() || !size.height.is_finite() || size.width <= 0.0 {
             return;
         }

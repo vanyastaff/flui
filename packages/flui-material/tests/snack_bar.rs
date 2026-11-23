@@ -149,10 +149,7 @@ pub fn unmounting_a_hovered_snack_bar_releases_its_timer_pause() {
     ));
     laid.pump();
     assert!(
-        slot.borrow()
-            .as_ref()
-            .expect("retained scope")
-            .ptr_eq(&handle),
+        slot.borrow().as_ref().expect("retained scope") == &handle,
         "only the Scaffold unmounts; its messenger and accepted timer survive"
     );
     pump_ms(&mut laid, 1_300);

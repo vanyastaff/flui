@@ -858,8 +858,16 @@ the heap; `FLUI_SCENARIO=<name>` runs one scenario (a name it does not know
 fails) and
 `FLUI_SCENARIO_SAMPLES=1` prints every step. Under
 `valgrind --tool=callgrind --toggle-collect='*scenario_measured*'` only the
-measured steps are counted, which is how a phase's share of a step is read. A
-start scenario mounts twelve times in one process, so what only the first
+measured steps are counted, which is how a phase's share of a step is read.
+With `--features flui-testing/dhat` the bench records the stack of every
+allocation of each scenario through `flui_testing::heap::sites::SiteProfiler`
+and prints, after the scenario's figures, the twenty lines of FLUI code whose
+measured steps allocated most (the first frame below the allocator, the
+standard library and dependencies). The whole profile lands in
+`target/dhat/app_scenarios-<name>.json`, which DHAT's viewer (`dh_view.html`,
+from Valgrind or online) opens for whole stacks and lifetimes. A profiled run is
+many times slower, so its timings mean nothing; its counts equal those of a run
+without the feature. A start scenario mounts twelve times in one process, so what only the first
 mount pays (loading fonts) is one sample of the twelve. The bench asserts
 nothing and no job runs it: it is where a cost is found and a fix is measured,
 and what a fix changes is held by a test of its own or by a count above.

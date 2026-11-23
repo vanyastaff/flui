@@ -31,7 +31,7 @@ of alignment. A changed alignment invalidates the cached layout; an unchanged
 alignment preserves it. Ellipsis fitting and kept-line selection precede the
 allocation calculation and subsequent placement.
 
-Parley 0.11.1's public `BreakLines::set_prior_line_width` is the confined adapter
+Parley 0.13's public `BreakLines::set_prior_line_width` is the confined adapter
 for separate breaking and alignment widths. It is doc-hidden and explicitly
 warns that the escape hatch has not been carefully evaluated upstream. FLUI
 re-breaks the same shaped data at the original cap, supplies the allocated width

@@ -20,10 +20,9 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
@@ -177,7 +176,9 @@ struct TickPainter {
 }
 
 impl CustomPainter for TickPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let radius = size.width.min(size.height) / 2.0;
         if !radius.is_finite() || radius <= 0.0 {
             return;

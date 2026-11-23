@@ -46,16 +46,16 @@
 //!
 //! # Painting: concentric circles, no dedicated `Circle` decoration needed
 //!
-//! `flui-painting`'s [`Canvas::draw_circle`] draws both rings directly — the
+//! `flui-painting`'s [`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle) draws both rings directly — the
 //! painting-reality-check this control's own module doc calls for resolves
 //! favorably without any nested-`DecoratedBox` workaround. `RadioPainter`
 //! draws the `8.0`dp outer ring as a **centered stroke**
-//! ([`Canvas::draw_circle`] with a [`Paint::stroke`]) rather than
+//! ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle) with a [`Paint::stroke`]) rather than
 //! [`crate::Checkbox`]'s fill+`drrect`-border approach: the oracle's own
 //! default `activeSide`/`inactiveSide` (`radio.dart` `:749-764`) already use
 //! `BorderSide.strokeAlignCenter`, which a centered stroke paint is a direct
 //! port of (Checkbox's border is inside-aligned instead, hence the
-//! `drrect`). The inner dot ([`Canvas::draw_circle`], filled) paints only
+//! `drrect`). The inner dot ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle), filled) paints only
 //! when selected — the oracle's own `!position.isDismissed` guard
 //! (`radio.dart` `:870`) collapses to exactly that under V1's non-animated
 //! `position ∈ {0.0, 1.0}`. Both rings share ONE resolved color (the
@@ -97,10 +97,9 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::node::Description;
@@ -129,7 +128,7 @@ const RING_STROKE_WIDTH: f64 = 2.0;
 /// dimension), the `MaterialTapTargetSize.padded` branch this V1 always
 /// takes — same deferral
 /// [`crate::Checkbox`]/[`crate::Switch`] already make.
-pub const RADIO_TAP_TARGET_SIZE: f64 = 48.0;
+pub(crate) const RADIO_TAP_TARGET_SIZE: f64 = 48.0;
 
 const _: () = assert!(OUTER_RADIUS * 2.0 < RADIO_TAP_TARGET_SIZE);
 const _: () = assert!(INNER_RADIUS < OUTER_RADIUS);
@@ -452,7 +451,9 @@ struct RadioPainter {
 }
 
 impl CustomPainter for RadioPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let center = Point::new(size.width / 2.0, size.height / 2.0);
 
         canvas.draw_circle(

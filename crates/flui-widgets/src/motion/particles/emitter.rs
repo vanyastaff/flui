@@ -7,8 +7,7 @@ use std::rc::{Rc, Weak};
 
 use flui_animation::{Animation, AnimationController, DrivenController, MotionPolicy, Simulation};
 use flui_foundation::Listenable;
-use flui_foundation::geometry::{Point, Size};
-use flui_painting::Canvas;
+use flui_foundation::geometry::Point;
 use flui_painting::paint::BlendMode;
 use flui_view::prelude::*;
 
@@ -16,7 +15,7 @@ use super::atlas::Atlas;
 use super::config::ParticleConfig;
 use super::system::ParticleSystem;
 use crate::{CustomPaint, TickerMode};
-use flui_rendering::delegates::CustomPainter;
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_view::environment::MediaQuery;
 use flui_view::environment::VsyncScope;
 
@@ -414,7 +413,9 @@ impl fmt::Debug for ParticlePainter {
 }
 
 impl CustomPainter for ParticlePainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let Ok(mut system) = self.core.system.try_borrow_mut() else {
             return;
         };

@@ -423,7 +423,7 @@ impl ParagraphLayout {
             .map(|(number, line)| {
                 let m = line.metrics();
                 let hang = if self.layout.is_rtl() {
-                    m.trailing_whitespace
+                    m.hanging_advance
                 } else {
                     0.0
                 };

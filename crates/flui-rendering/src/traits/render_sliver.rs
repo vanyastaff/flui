@@ -560,6 +560,7 @@ where
     fn paint_raw(
         &self,
         recorder: &mut crate::context::FragmentRecorder,
+        text: crate::pipeline::TextSource<'_>,
         child_count: usize,
         size: flui_foundation::geometry::Size,
     ) {
@@ -568,7 +569,8 @@ where
         // RenderSliver::paint. `size` is the sliver's absolute paint size
         // (`absolute_size(paint_extent)`), resolved by the driver
         // from `RenderState` so paint reads `ctx.size()` (2B field dedup).
-        let mut ctx = crate::context::PaintContext::<T::Arity>::new(recorder, child_count, size);
+        let mut ctx =
+            crate::context::PaintContext::<T::Arity>::new(recorder, text, child_count, size);
         T::paint(self, &mut ctx);
     }
 
