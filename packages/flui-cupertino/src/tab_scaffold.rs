@@ -23,6 +23,7 @@ use flui_sdk::widgets::{
 use crate::CupertinoColor;
 use crate::CupertinoTabBar;
 use crate::CupertinoTheme;
+use crate::ObstructingPreferredSizeView;
 
 /// Coordinates tab selection between a [`CupertinoTabBar`] and a
 /// [`CupertinoTabScaffold`]. A `ChangeNotifier` wrapping
@@ -129,9 +130,15 @@ type TabBuilder = Rc<dyn Fn(&dyn BuildContext, usize) -> BoxedView>;
 ///   with `Offstage`, not unmounted, so its state (a counter, a scroll
 ///   position, a nested navigator stack) survives a switch away and back,
 ///   and its animations stop advancing while it is hidden.
-/// - Content is padded up by the bar's height plus `MediaQuery`
-///   `padding.bottom`, unless the on-screen keyboard inset is already taller
-///   than the bar, in which case it is not padded twice.
+/// - The obstructed height is the bar's height plus `MediaQuery`
+///   `padding.bottom`. A bar whose
+///   [`should_fully_obstruct`](crate::ObstructingPreferredSizeView::should_fully_obstruct)
+///   answer is `true` pads the content up by it and consumes the bottom
+///   padding; one that answers `false` (the default, translucent bar) lets the
+///   content run under the bar and publishes the height as the content's
+///   `MediaQuery` `padding.bottom`. Neither applies while the on-screen
+///   keyboard inset is already taller than the bar, so the content is not
+///   padded twice.
 /// - [`resize_to_avoid_bottom_inset`](Self::resize_to_avoid_bottom_inset)
 ///   defaults to `true`, with the same contract as
 ///   [`CupertinoPageScaffold`](crate::CupertinoPageScaffold)'s.
@@ -331,7 +338,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         // double-pad.
         if !view.resize_to_avoid_bottom_inset || tab_bar_height > media.view_insets.bottom {
             let bottom_padding = tab_bar_height + media.padding().bottom;
-            if view.tab_bar.opaque(&theme, ctx) {
+            if view.tab_bar.should_fully_obstruct(ctx) {
                 // Opaque: directly stop content higher, and the bar's own
                 // height is fully consumed out of the republished padding.
                 content_padding_bottom = bottom_padding;

@@ -26,8 +26,8 @@ use flui_testing::heap::CountingAllocator;
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-const TAB_BAR_ELEMENTS: u64 = 33;
-const TAB_BAR_RENDER_NODES: u64 = 18;
+const TAB_BAR_ELEMENTS: u64 = 35;
+const TAB_BAR_RENDER_NODES: u64 = 19;
 
 /// `cost` recorded as `scenario` and held to this catalog's baseline file.
 fn held_to_baseline(scenario: &str, cost: ControlCost) -> ControlCost {
@@ -59,7 +59,7 @@ fn perf_cupertino_button_over_text() {
 }
 
 /// What a `CupertinoTabBar` of two items costs in place of an empty box,
-/// under a `MediaQuery`: the bar's decoration and row, and per item its
+/// under a `MediaQuery`: the bar's backdrop filter, decoration and row, and per item its
 /// icon and label on one interactive node that carries the item's
 /// selection and tap.
 #[test]

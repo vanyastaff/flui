@@ -18,7 +18,9 @@
 //!   [`CupertinoPageControl`], [`CupertinoNavigationBar`] with
 //!   [`CupertinoPageScaffold`], and [`CupertinoTabBar`] with
 //!   [`CupertinoTabScaffold`] and [`CupertinoTabController`] (the lazy-build,
-//!   state-retaining tabbed root layout).
+//!   state-retaining tabbed root layout). Both bars are
+//!   [`ObstructingPreferredSizeView`]s: a scaffold lets content run under a
+//!   bar whose background is translucent, which the bar blurs.
 //!
 //! Every item is exported at the crate root; the modules are private. The
 //! constant tables (the dynamic-color statics, the default text styles, the
@@ -44,8 +46,9 @@
 //! independent (ADR-0028), and the kind rule (ADR-0081 §3, ADR-0088 §2)
 //! refuses that edge in any dependency kind. It adds no render object of its
 //! own: components compose existing widgets (`FadeTransition`,
-//! `DecoratedBox`, `Stack`/`Positioned`, `Offstage`, `HeroMode`, …) and name
-//! no render-layer value.
+//! `DecoratedBox`, `BackdropFilter`, `Stack`/`Positioned`, `Offstage`,
+//! `HeroMode`, …), and the navigation bar lays out its slots with a private
+//! `MultiChildLayoutDelegate` under `CustomMultiChildLayout`.
 //!
 //! ## Example
 //!
@@ -76,11 +79,13 @@
 
 mod activity_indicator;
 mod app;
+mod bar_background;
 mod bottom_tab_bar;
 mod button;
 mod colors;
 mod interface_level;
 mod nav_bar;
+mod navigation_toolbar;
 mod page_control;
 mod page_scaffold;
 mod tab_scaffold;
@@ -95,7 +100,7 @@ pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 pub use interface_level::{CupertinoUserInterfaceLevel, CupertinoUserInterfaceLevelData};
 pub use nav_bar::CupertinoNavigationBar;
 pub use page_control::CupertinoPageControl;
-pub use page_scaffold::CupertinoPageScaffold;
+pub use page_scaffold::{CupertinoPageScaffold, ObstructingPreferredSizeView};
 pub use tab_scaffold::{CupertinoTabController, CupertinoTabScaffold, CupertinoTabScaffoldState};
 pub use text_theme::{CupertinoTextThemeData, ResolvedCupertinoTextTheme};
 pub use theme::{CupertinoTheme, CupertinoThemeData, ResolvedCupertinoTheme};
