@@ -91,7 +91,7 @@ use std::time::Duration;
 use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, MotionPolicy,
 };
-use flui_sdk::foundation::Listenable;
+use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::Point;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::interaction::{ButtonChange, PointerDispatch, PointerEvent};
@@ -443,7 +443,9 @@ impl Action<ButtonActivateIntent> for Core {
 /// Persistent state behind [`InkWell`] — see [`StatefulView`]/[`ViewState`].
 pub struct InkWellState {
     states: WidgetStatesController,
-    states_listener: Option<flui_sdk::foundation::Subscription>,
+    /// The indication's listener on `states`, re-made on the controller
+    /// `did_update_view` swaps in; inert once `dispose` has detached it.
+    states_listener: Subscription,
     core: Rc<Core>,
     /// The tap and the wave it drives, made once: it reads the handler from
     /// `core` at event time. The node is handed it while the well is enabled
@@ -463,19 +465,24 @@ impl std::fmt::Debug for InkWellState {
     }
 }
 
+/// Listen to `states` for `indication`: every change moves the state layer,
+/// which repaints through the painter's listenable. The well rebuilds only to
+/// attach the painter, when the change makes an idle well visible
+/// (ADR-0322 §3).
+fn listen_to_states(states: &WidgetStatesController, indication: &Rc<Indication>) -> Subscription {
+    let indication = Rc::downgrade(indication);
+    states.listen(Rc::new(move || {
+        if let Some(indication) = indication.upgrade() {
+            indication.sync();
+            indication.attach_when_active();
+        }
+    }))
+}
+
 impl InkWellState {
-    /// Listen to the current states controller: every change moves the state
-    /// layer, which repaints through the painter's listenable. The well
-    /// rebuilds only to attach the painter, when the change makes an idle
-    /// well visible (ADR-0322 §3).
-    fn listen_to_states(&mut self) {
-        let indication = Rc::downgrade(&self.core.indication);
-        self.states_listener = Some(self.states.listen(Rc::new(move || {
-            if let Some(indication) = indication.upgrade() {
-                indication.sync();
-                indication.attach_when_active();
-            }
-        })));
+    /// Detach the listener on `states`, leaving an inert subscription.
+    fn unlisten(&mut self) {
+        std::mem::replace(&mut self.states_listener, Subscription::inert()).detach();
     }
 
     /// Read the ambient clock, ripple configuration, theme colour and motion
@@ -527,21 +534,21 @@ impl StatefulView for InkWell {
             indication,
             this: std::rc::Weak::clone(this),
         });
+        let tap = Rc::new(press_feedback(&core));
+        // From here on every real change of the states set (hover/focus/
+        // press/disabled) moves the state layer.
+        let states_listener = listen_to_states(&states, &core.indication);
         InkWellState {
             states,
-            states_listener: None,
-            tap: Rc::new(press_feedback(&core)),
+            states_listener,
             core,
+            tap,
         }
     }
 }
 
 impl ViewState<InkWell> for InkWellState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // From here on every real change of the states set (hover/focus/
-        // press/disabled) moves the state layer.
-        self.listen_to_states();
-
         self.read_ambient(ctx);
     }
 
@@ -583,7 +590,7 @@ impl ViewState<InkWell> for InkWellState {
         };
 
         if controller_changed {
-            drop(self.states_listener.take());
+            self.unlisten();
 
             self.states = new_view.states_controller.clone().unwrap_or_default();
             self.core.indication.set_states(self.states.clone());
@@ -601,7 +608,7 @@ impl ViewState<InkWell> for InkWellState {
             self.states
                 .update(WidgetState::Disabled, !new_view.is_enabled());
 
-            self.listen_to_states();
+            self.states_listener = listen_to_states(&self.states, &self.core.indication);
         } else if new_view.is_enabled() != old_view.is_enabled() {
             // The node writes the new `Disabled` during this build; seeded
             // here, that write notifies nobody mid-build.
@@ -678,7 +685,9 @@ impl ViewState<InkWell> for InkWellState {
     }
 
     fn dispose(&mut self) {
-        drop(self.states_listener.take());
+        // Detached first: releasing the press hold below writes `states`,
+        // and a disposed well's indication must not follow it.
+        self.unlisten();
         self.core.cancel_pending_deactivation();
         self.core.release_press_hold();
         self.core.indication.dispose();

@@ -426,7 +426,9 @@ impl InputDecorator {
 /// tracking (see the struct doc's "State inputs" section).
 pub struct InputDecoratorState {
     hover: WidgetStatesController,
-    hover_listener: Option<Subscription>,
+    /// Rebuilds the decorator on every change of `hover`; detaches when the
+    /// state drops.
+    _hover_listener: Subscription,
 }
 
 impl std::fmt::Debug for InputDecoratorState {
@@ -440,28 +442,22 @@ impl std::fmt::Debug for InputDecoratorState {
 impl StatefulView for InputDecorator {
     type State = InputDecoratorState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let hover = WidgetStatesController::default();
+        // ADR-0018: fired from the hover-controller listener, never from
+        // `build`.
+        let rebuild = ctx.rebuild_handle();
+        let hover_listener = hover.listen(std::rc::Rc::new(move || {
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        }));
         InputDecoratorState {
-            hover: WidgetStatesController::default(),
-            hover_listener: None,
+            hover,
+            _hover_listener: hover_listener,
         }
     }
 }
 
 impl ViewState<InputDecorator> for InputDecoratorState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // ADR-0018: `rebuild_handle()` is acquired here, fired later from the
-        // hover-controller listener below — never called from `build`.
-        let rebuild = ctx.rebuild_handle();
-        self.hover_listener = Some(self.hover.listen(std::rc::Rc::new(move || {
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
-    }
-
-    fn dispose(&mut self) {
-        drop(self.hover_listener.take());
-    }
-
     fn build(&self, view: &InputDecorator, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let colors = theme.color_scheme;

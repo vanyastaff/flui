@@ -1105,9 +1105,11 @@ impl std::fmt::Debug for DefaultTabController {
 /// [`DefaultTabController`]'s docs.
 pub struct DefaultTabControllerState {
     controller: TabController,
+    /// The ambient clock, `None` with no [`VsyncScope`] above; re-read in
+    /// `did_change_dependencies`.
     vsync: Option<Vsync>,
     /// Registered under the owned controller; replaced with it.
-    clock: Option<ClockLease>,
+    clock: ClockLease,
 }
 
 impl std::fmt::Debug for DefaultTabControllerState {
@@ -1121,27 +1123,23 @@ impl std::fmt::Debug for DefaultTabControllerState {
 impl StatefulView for DefaultTabController {
     type State = DefaultTabControllerState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let controller =
+            TabController::new(self.length, self.initial_index).with_motion(self.motion.clone());
+        let vsync = VsyncScope::maybe_of(ctx);
+        let clock = controller.lease_clock(vsync.clone());
         DefaultTabControllerState {
-            controller: TabController::new(self.length, self.initial_index)
-                .with_motion(self.motion.clone()),
-            vsync: None,
-            clock: None,
+            controller,
+            vsync,
+            clock,
         }
     }
 }
 
 impl ViewState<DefaultTabController> for DefaultTabControllerState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.vsync = VsyncScope::maybe_of(ctx);
-        self.clock = Some(self.controller.lease_clock(self.vsync.clone()));
-    }
-
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.vsync = VsyncScope::maybe_of(ctx);
-        if let Some(clock) = &self.clock {
-            clock.set(self.vsync.clone());
-        }
+        self.clock.set(self.vsync.clone());
     }
 
     fn did_update_view(
@@ -1150,9 +1148,12 @@ impl ViewState<DefaultTabController> for DefaultTabControllerState {
         new_view: &DefaultTabController,
     ) {
         if new_view.length != old_view.length {
-            self.clock = None;
-            self.controller = recreate_for_length_change(&self.controller, new_view.length);
-            self.clock = Some(self.controller.lease_clock(self.vsync.clone()));
+            let controller = recreate_for_length_change(&self.controller, new_view.length);
+            let clock = controller.lease_clock(self.vsync.clone());
+            // The outgoing lease leaves the outgoing controller before that
+            // controller is released.
+            drop(std::mem::replace(&mut self.clock, clock));
+            self.controller = controller;
         }
         self.controller.set_motion(new_view.motion.clone());
     }
