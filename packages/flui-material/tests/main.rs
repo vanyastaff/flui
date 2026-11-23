@@ -305,6 +305,10 @@ fn action_component_contracts() {
             list_tile::merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button,
         ),
         (
+            "list_tile::merge semantics over a tile and radio clicks the radio",
+            list_tile::merge_semantics_over_a_tile_and_radio_clicks_the_radio,
+        ),
+        (
             "list_tile::whole tile tap fires from a point inside the content padding",
             list_tile::whole_tile_tap_fires_from_a_point_inside_the_content_padding,
         ),

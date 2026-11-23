@@ -1083,6 +1083,7 @@ fn merge_child_fragments<'f>(
 
     // The iterator holds the fragments' buffer, below the conflict marks: it is dropped after
     // them, so the arena frees both in the reverse order it handed them out.
+    let mut has_text = fold.receiver().text_content().is_some();
     let mut drained = fragments.into_iter();
     for (index, fragment) in drained.by_ref().enumerate() {
         let rest = total - index - 1;
@@ -1098,8 +1099,7 @@ fn merge_child_fragments<'f>(
                 if conflicts
                     .as_ref()
                     .is_some_and(|places| places[index].forms_node())
-                    || (pending.config.text_content().is_some()
-                        && fold.receiver().text_content().is_some()) =>
+                    || keeps_its_own_text(&mut has_text, &pending.config) =>
             {
                 make_room(&mut children, 1 + rest);
                 children.push(pending.form());
@@ -1166,8 +1166,7 @@ impl<'c> Fold<'c> {
 }
 
 /// The configurations a forced fold absorbs, in fold order: every pending
-/// fragment but a second text, which keeps its own node and runs (ADR-0214
-/// §2), the rule `merge_child_fragments` applies as it folds.
+/// fragment but one [`keeps_its_own_text`] sends to a node of its own.
 fn forced_parts<'a>(
     receiver_has_text: bool,
     fragments: &'a [SemanticsFragment<'_>],
@@ -1178,18 +1177,26 @@ fn forced_parts<'a>(
             Some(match fragment {
                 SemanticsFragment::Formed(_) => None,
                 SemanticsFragment::Pending(pending) => {
-                    let text = pending.config.text_content().is_some();
-                    if text && *has_text {
-                        None
-                    } else {
-                        *has_text |= text;
-                        Some(&pending.config)
-                    }
+                    (!keeps_its_own_text(has_text, &pending.config)).then_some(&pending.config)
                 }
             })
         })
         .flatten()
 }
+
+/// Whether `part` keeps a node of its own because the fold already holds a
+/// text: runs are the synthetic children of the one node declaring them, so
+/// a merge never drops a second text's runs for the first's (ADR-0214 §2).
+/// Otherwise the fold absorbs it, and `has_text` notes a text it brings.
+fn keeps_its_own_text(has_text: &mut bool, part: &SemanticsConfiguration) -> bool {
+    let text = part.text_content().is_some();
+    if text && *has_text {
+        return true;
+    }
+    *has_text |= text;
+    false
+}
+
 /// Makes room in `list` for `additional` more: exactly that much for its first allocation, which
 /// is sized for every fragment still to come, and by doubling after that.
 fn make_room<T>(list: &mut FrameVec<'_, T>, additional: usize) {

@@ -8,6 +8,7 @@
 //! the state a node announces and the action that changes it come from one
 //! control, whatever the order of the parts and whatever a later part changes.
 
+use crate::applicability::{RoleAttribute, applicable};
 use crate::configuration::more_specific_role;
 use crate::{SemanticsAction, SemanticsConfiguration, SemanticsRole};
 
@@ -80,9 +81,8 @@ impl ActionSubject {
             A::SetTextSelection | A::ReplaceSelectedText => Self::Text,
             A::Focus | A::Blur => Self::Focus,
             A::ShowTooltip | A::HideTooltip => Self::Tooltip,
-            // Reveal runs through the node's scrolling ancestors; it moves no
-            // scroll group of the node itself.
-            A::ScrollIntoView | A::ShowContextMenu => Self::Activation,
+            // Reveal moves the scroll groups of the node and its ancestors.
+            A::ScrollIntoView => Self::Scroll,
             A::CustomAction => return None,
             _ => Self::Activation,
         })
@@ -91,7 +91,8 @@ impl ActionSubject {
     /// What `Click` changes on `node`: the first of `toggled`, `selected`
     /// and a click-only `expanded` (one without `Expand` or `Collapse`) it
     /// declares.
-    pub(crate) fn click_on(node: &SemanticsConfiguration) -> Self {
+    #[cfg(test)]
+    fn click_on(node: &SemanticsConfiguration) -> Self {
         let states = node.states();
         if states.toggled().is_some() {
             Self::Toggle
@@ -182,6 +183,8 @@ pub(crate) struct ActionPlan {
     /// The place whose `enabled` the node publishes, when the owner of
     /// `Click`'s subject declares one.
     enabled_from: Option<FoldPlace>,
+    /// Whether the merged node announces no `expanded` (see `new`).
+    drops_expanded: bool,
 }
 
 impl ActionPlan {
@@ -227,17 +230,30 @@ impl ActionPlan {
             at(owners[index]?)
         };
         let has_range = owner_of(ActionSubject::Range).is_some();
-        let click = if owner_of(ActionSubject::Toggle).is_some() {
+        // A state counts only where the published role carries it: what the
+        // node does not announce cannot be what its click changes.
+        let announced = |subject: ActionSubject, attribute: RoleAttribute| {
+            owner_of(subject).is_some() && applicable(role, attribute)
+        };
+        let click_only_disclosure = owner_of(ActionSubject::Disclosure).is_some_and(|owner| {
+            !owner.has_action(SemanticsAction::Expand)
+                && !owner.has_action(SemanticsAction::Collapse)
+        });
+        let click = if announced(ActionSubject::Toggle, RoleAttribute::Toggled) {
             ActionSubject::Toggle
-        } else if owner_of(ActionSubject::Selection).is_some() {
+        } else if announced(ActionSubject::Selection, RoleAttribute::Selected) {
             ActionSubject::Selection
-        } else if owner_of(ActionSubject::Disclosure)
-            .is_some_and(|owner| ActionSubject::click_on(owner) == ActionSubject::Disclosure)
+        } else if click_only_disclosure
+            && announced(ActionSubject::Disclosure, RoleAttribute::Expanded)
         {
             ActionSubject::Disclosure
         } else {
             ActionSubject::Activation
         };
+        // A click-only disclosure whose click another state owns cannot be
+        // expanded through the node, which then announces no `expanded`.
+        let drops_expanded = click_only_disclosure
+            && matches!(click, ActionSubject::Toggle | ActionSubject::Selection);
         let acting = OWNED
             .into_iter()
             .filter(|subject| {
@@ -256,6 +272,7 @@ impl ActionPlan {
             click,
             has_range,
             enabled_from,
+            drops_expanded,
         }
     }
 
@@ -302,12 +319,16 @@ impl ActionPlan {
             .fold(SubjectSet::default(), SubjectSet::with)
     }
 
-    /// Records on `merged`, the node this plan built, the subjects whose
-    /// owner acted but whose handlers it offers none of, so that an outer
-    /// merge still reads it as acting on them (ADR-0392 §3).
-    pub(crate) fn record_withheld(&self, merged: &mut SemanticsConfiguration) {
+    /// Settles `merged`, the node this plan built: it records the subjects
+    /// whose owner acted but whose handlers it offers none of, so that an
+    /// outer fold still reads it as acting on them (ADR-0392 §3), and drops
+    /// an `expanded` its click cannot change.
+    pub(crate) fn settle(&self, merged: &mut SemanticsConfiguration) {
         let withheld = self.withheld(merged);
         merged.withhold_subjects(withheld);
+        if self.drops_expanded {
+            merged.clear_expanded();
+        }
     }
 }
 
@@ -335,7 +356,7 @@ mod tests {
             (A::ScrollDown, Some(S::Scroll)),
             (A::ScrollLeft, Some(S::Scroll)),
             (A::ScrollRight, Some(S::Scroll)),
-            (A::ScrollIntoView, Some(S::Activation)),
+            (A::ScrollIntoView, Some(S::Scroll)),
             (A::SetScrollOffset, Some(S::Scroll)),
             (A::SetTextSelection, Some(S::Text)),
             (A::ReplaceSelectedText, Some(S::Text)),

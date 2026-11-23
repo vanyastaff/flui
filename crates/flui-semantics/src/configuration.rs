@@ -1006,6 +1006,12 @@ impl SemanticsConfiguration {
         self.withheld_subjects = self.withheld_subjects.union(subjects);
     }
 
+    /// Forgets the declared expanded state, for a forced merge that cannot
+    /// route its transition (ADR-0392 §1).
+    pub(crate) fn clear_expanded(&mut self) {
+        self.attributes.states.expanded = None;
+    }
+
     /// Whether this configuration declares any of a scrollable's metrics
     /// (position, axis, extents), which are one group.
     pub(crate) fn declares_scroll_group(&self) -> bool {
@@ -2020,7 +2026,7 @@ impl<'c> ForcedMerge<'c> {
     /// Ends the merge and hands the merged receiver back.
     pub fn finish(mut self) -> &'c mut SemanticsConfiguration {
         let receiver = self.receiver.take().expect("BUG: a merge finishes once");
-        self.plan.record_withheld(receiver);
+        self.plan.settle(receiver);
         receiver
     }
 }
@@ -2030,7 +2036,7 @@ impl Drop for ForcedMerge<'_> {
     /// its owners withheld.
     fn drop(&mut self) {
         if let Some(receiver) = self.receiver.take() {
-            self.plan.record_withheld(receiver);
+            self.plan.settle(receiver);
         }
     }
 }
@@ -2699,10 +2705,10 @@ mod tests {
         assert_eq!(
             crate::action::tap_disclosure_transition(
                 node.effective_actions_as_bits(),
-                node.states()
+                node.expanded()
             ),
             None,
-            "Expand is not offered through the switch's click"
+            "the node announces no disclosure its click cannot open"
         );
 
         // The node announces its click owner's `enabled`.

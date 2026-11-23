@@ -114,6 +114,61 @@ pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
     );
 }
 
+/// Click on a merged tile announcing its radio selects the radio and does
+/// not also run the tile's tap: the node announces the radio's selection, so
+/// the radio owns the click (ADR-0392). In `RadioListTile`'s form the tap and
+/// the radio share one callback, so the click runs it once.
+pub fn merge_semantics_over_a_tile_and_radio_clicks_the_radio() {
+    use flui_testing::a11y::{Action, ActionRequest, TreeId};
+    use std::sync::Mutex;
+
+    for shared in [false, true] {
+        let ran = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let (radio_ran, tile_ran) = (Arc::clone(&ran), Arc::clone(&ran));
+        let mut laid = lay_out(
+            themed(
+                ThemeData::light(),
+                MergeSemantics::new().child(
+                    ListTile::new()
+                        .leading(
+                            Radio::new("spring", Some("autumn")).on_changed(move |_ctx, _| {
+                                radio_ran.lock().expect("not poisoned").push("radio");
+                            }),
+                        )
+                        .title(Text::new("Spring"))
+                        .on_tap(move |_ctx| {
+                            let who = if shared { "radio" } else { "tile" };
+                            tile_ran.lock().expect("not poisoned").push(who);
+                        }),
+                ),
+            ),
+            tight(400.0, 56.0),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let radio = tree
+            .nodes()
+            .find(|node| node.role() == Role::RadioButton)
+            .unwrap_or_else(|| panic!("one merged radio button. Tree was:\n{}", tree.describe()))
+            .id();
+        laid.invoke_semantics_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: radio,
+            data: None,
+        })
+        .expect("the merged node takes a click");
+        assert_eq!(
+            *ran.lock().expect("not poisoned"),
+            ["radio"],
+            "shared callback: {shared}"
+        );
+    }
+}
+
 /// A selectable tile is an option, the role ARIA gives a selection, whether or
 /// not it is selected, so its role does not change as selection toggles; a
 /// tile that is not selectable declares no selection, even while highlighted.

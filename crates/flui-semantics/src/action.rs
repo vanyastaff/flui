@@ -14,7 +14,6 @@ use thiserror::Error;
 pub use flui_protocol::semantics::SemanticsAction;
 
 use crate::identity::AccessibilityNodeId;
-use crate::states::States;
 
 /// The disclosure transition an expandable node offers through its click handler.
 ///
@@ -23,20 +22,20 @@ use crate::states::States;
 /// toggles by clicking. It offers [`SemanticsAction::Expand`] while collapsed
 /// and [`SemanticsAction::Collapse`] while expanded, and the owner routes that
 /// one request to the click handler. A node registering either discrete action
-/// offers only what it registers, and a node whose click changes its
-/// `toggled` or `selected` state routes no transition through it (ADR-0392
-/// §1). `actions` are effective action bits and `states` the node's.
-pub(crate) fn tap_disclosure_transition(actions: u64, states: &States) -> Option<SemanticsAction> {
+/// offers only what it registers. `actions` are effective action bits and
+/// `expanded` the node's declared expanded state.
+pub(crate) fn tap_disclosure_transition(
+    actions: u64,
+    expanded: Option<bool>,
+) -> Option<SemanticsAction> {
     let has = |action: SemanticsAction| actions & action.value() != 0;
     if !has(SemanticsAction::Click)
         || has(SemanticsAction::Expand)
         || has(SemanticsAction::Collapse)
-        || states.toggled().is_some()
-        || states.selected().is_some()
     {
         return None;
     }
-    disclosure_transition(states.expanded())
+    disclosure_transition(expanded)
 }
 
 /// The one transition a node's expanded state allows: `Expand` while
