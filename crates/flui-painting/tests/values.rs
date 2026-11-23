@@ -1749,3 +1749,67 @@ pub(crate) fn a_style_copy_and_merge_share_its_font_names() {
         "no fallback is the empty list"
     );
 }
+
+/// A paragraph compares its old and new spoken text, and asks whether it has any, without
+/// building either: the answers match `to_semantics_text` for labels that replace their
+/// span's text, children in order, a split that moves a boundary, and a placeholder.
+pub(crate) fn spoken_text_compares_without_being_built() {
+    use flui_painting::typography::{InlineSpan, PlaceholderAlignment, PlaceholderSpan, TextSpan};
+
+    let span = |children: Vec<TextSpan>| InlineSpan::from(TextSpan::with_children(children));
+    let labelled = span(vec![
+        TextSpan::new("Sign"),
+        TextSpan::new("→").with_semantics_label(" in"),
+    ]);
+    let cases = [
+        (labelled.clone(), span(vec![TextSpan::new("Sign in")])),
+        (
+            labelled.clone(),
+            span(vec![TextSpan::new("Sig"), TextSpan::new("n in")]),
+        ),
+        (labelled.clone(), span(vec![TextSpan::new("Sign →")])),
+        (labelled.clone(), span(vec![TextSpan::new("Sign in!")])),
+        (labelled.clone(), span(vec![TextSpan::new("Sign")])),
+        (span(vec![]), InlineSpan::from(TextSpan::new(""))),
+        (
+            InlineSpan::from(PlaceholderSpan::new(4.0, 4.0, PlaceholderAlignment::Middle)),
+            InlineSpan::from(TextSpan::new("\u{FFFC}")),
+        ),
+        (
+            span(vec![TextSpan::with_children(vec![
+                TextSpan::new("a"),
+                TextSpan::new("b"),
+            ])]),
+            span(vec![
+                TextSpan::new("a"),
+                TextSpan::with_children(vec![TextSpan::new("b")]),
+            ]),
+        ),
+    ];
+    for (a, b) in &cases {
+        let (spoken_a, spoken_b) = (a.to_semantics_text(), b.to_semantics_text());
+        assert_eq!(
+            a.semantics_text_eq(b),
+            spoken_a == spoken_b,
+            "{spoken_a:?} vs {spoken_b:?}"
+        );
+        assert_eq!(
+            b.semantics_text_eq(a),
+            spoken_a == spoken_b,
+            "{spoken_b:?} vs {spoken_a:?}"
+        );
+        assert_eq!(
+            a.semantics_text_is_empty(),
+            spoken_a.is_empty(),
+            "{spoken_a:?}"
+        );
+        assert!(a.semantics_text_eq(&a.clone()), "{spoken_a:?} vs itself");
+    }
+    assert_eq!(labelled.to_semantics_text(), "Sign in");
+
+    let (allocations, equal) = crate::foreign_image::allocations_during(|| {
+        labelled.semantics_text_eq(&cases[1].1) && !labelled.semantics_text_is_empty()
+    });
+    assert!(equal);
+    assert_eq!(allocations, 0, "comparing spoken text built it");
+}

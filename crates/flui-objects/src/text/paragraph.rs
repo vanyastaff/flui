@@ -344,7 +344,7 @@ impl RenderParagraph {
     fn selectable_runs(&self) -> Option<TextContent> {
         self.selectable.as_ref()?;
         let span = self.painter.text()?;
-        if span.to_semantics_text().is_empty() {
+        if span.semantics_text_is_empty() {
             return None;
         }
         let plain = span.to_plain_text();
@@ -546,8 +546,10 @@ impl RenderParagraph {
         let runs = SpanRuns::of(&text);
         // The runs decide the link nodes' boundaries and labels.
         let semantics_changed = runs != self.runs
-            || self.painter.text().map(InlineSpan::to_semantics_text)
-                != Some(text.to_semantics_text());
+            || !self
+                .painter
+                .text()
+                .is_some_and(|old| old.semantics_text_eq(&text));
         self.runs = runs;
         let impact = text_invalidation_impact(self.painter.set_text(Some(text)), true);
         if semantics_changed {
