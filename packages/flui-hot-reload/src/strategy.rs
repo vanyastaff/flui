@@ -70,23 +70,23 @@ pub mod env {
     pub const HOT_RELOAD: &str = "FLUI_HOT_RELOAD";
 }
 
-/// Shared timing defaults for polling and debouncing.
+/// How often a host reads its plugin artifact. A reload waits for the next
+/// read, so the interval is part of every edit's latency; one `stat` per
+/// read is all it costs, and only a development host with a reload hook
+/// installed reads at all. Source watching and its debounce are the CLI's
+/// (`flui run`), not the host's.
 pub mod timing {
     use super::Duration;
 
-    /// How often [`crate::HotReloadDriver`] checks the plugin artifact mtime.
-    pub const ARTIFACT_POLL: Duration = Duration::from_millis(500);
+    /// How often [`crate::HotReloadDriver`] and
+    /// [`crate::WorkerReloadDriver`] read the plugin artifact's stamp at a
+    /// frame boundary.
+    pub const ARTIFACT_POLL: Duration = Duration::from_millis(50);
 
     /// How often the host's background worker-artifact watcher checks for a
     /// rebuild. Same scale as [`ARTIFACT_POLL`]; kept separate because that
     /// one paces an owner-thread poll at a frame boundary, while this paces a
     /// standalone watcher thread that must notice a rebuild while the owner is
     /// idle (see [`crate::worker_artifact_stamp`]).
-    pub const WATCHER_POLL: Duration = Duration::from_millis(500);
-
-    /// Debounce for source-file watchers in `flui run` desktop mode.
-    pub const SOURCE_DEBOUNCE: Duration = Duration::from_millis(500);
-
-    /// Debounce for `flui run --scene` Android scene rebuild loop.
-    pub const ANDROID_SCENE_DEBOUNCE: Duration = Duration::from_millis(300);
+    pub const WATCHER_POLL: Duration = Duration::from_millis(50);
 }

@@ -51,6 +51,9 @@ pub struct WorkerReloadHook {
     watch_interval: Duration,
     /// A worker asked for a rebuild since the last poll.
     rebuild_requested: Arc<AtomicBool>,
+    /// The watcher saw the artifact change since the last poll, which then
+    /// reads it whatever the driver's poll interval says.
+    artifact_changed: Arc<AtomicBool>,
     watcher: Option<ArtifactWatcher>,
     #[cfg(feature = "app-plugin")]
     registration: Option<crate::RebuildHookRegistration>,
@@ -76,6 +79,7 @@ impl WorkerReloadHook {
             watch_path,
             watch_interval: timing::WATCHER_POLL,
             rebuild_requested: Arc::new(AtomicBool::new(false)),
+            artifact_changed: Arc::new(AtomicBool::new(false)),
             watcher: None,
             #[cfg(feature = "app-plugin")]
             registration: None,
@@ -95,7 +99,12 @@ impl DevReloadHook for WorkerReloadHook {
                 rebuild_wake.wake();
             }));
         }
-        self.watcher = ArtifactWatcher::spawn(&self.watch_path, self.watch_interval, wake);
+        self.watcher = ArtifactWatcher::spawn(
+            &self.watch_path,
+            self.watch_interval,
+            Arc::clone(&self.artifact_changed),
+            wake,
+        );
     }
 
     fn detach(&mut self) {
@@ -107,7 +116,11 @@ impl DevReloadHook for WorkerReloadHook {
     }
 
     fn poll(&mut self) -> ReloadEvent {
-        let outcome = self.driver.poll();
+        let outcome = if self.artifact_changed.swap(false, Ordering::AcqRel) {
+            self.driver.poll_now()
+        } else {
+            self.driver.poll()
+        };
         event_for(
             outcome,
             self.rebuild_requested.swap(false, Ordering::AcqRel),
@@ -171,14 +184,22 @@ struct ArtifactWatcher {
 }
 
 impl ArtifactWatcher {
-    fn spawn(path: &Path, interval: Duration, wake: ReloadWake) -> Option<Self> {
+    fn spawn(
+        path: &Path,
+        interval: Duration,
+        changed: Arc<AtomicBool>,
+        wake: ReloadWake,
+    ) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         let thread_path = path.to_path_buf();
+        // Read on the caller's thread, before `attach` returns: a rebuild that
+        // lands while the thread is still starting differs from this stamp
+        // and wakes the host, instead of becoming the thread's baseline.
+        let mut last = worker_artifact_stamp(&thread_path);
         let spawned = std::thread::Builder::new()
             .name("flui-worker-watch".to_string())
             .spawn(move || {
-                let mut last = worker_artifact_stamp(&thread_path);
                 while !stop_thread.load(Ordering::Acquire) {
                     std::thread::sleep(interval);
                     if stop_thread.load(Ordering::Acquire) {
@@ -191,6 +212,9 @@ impl ArtifactWatcher {
                             "hot reload: worker artifact changed; waking owner"
                         );
                         last = now;
+                        // Recorded before the wake, so the poll it brings
+                        // reads the artifact.
+                        changed.store(true, Ordering::Release);
                         wake.wake();
                     }
                 }

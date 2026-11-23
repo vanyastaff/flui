@@ -750,7 +750,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    use super::{gradle_apk, scene_build_args, scene_push_commands};
+    use super::{app_build_args, gradle_apk, scene_build_args, scene_push_commands};
     use crate::app_id::AppId;
     use crate::build::error::BuildError;
     use crate::build::platform::Profile;

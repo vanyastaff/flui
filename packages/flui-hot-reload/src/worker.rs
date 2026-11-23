@@ -383,7 +383,8 @@ pub struct WorkerReloadDriver {
     /// Path the currently loaded plugin came from.
     loaded_path: PathBuf,
     poll_interval: std::time::Duration,
-    last_poll: std::time::Instant,
+    /// When the artifact was last read.
+    pub(crate) last_poll: std::time::Instant,
     reload_count: u32,
     last_fingerprint: u64,
 }
@@ -415,7 +416,8 @@ impl WorkerReloadDriver {
         }
     }
 
-    /// Polling interval for mtime checks (default: 500ms).
+    /// Polling interval for mtime checks (default:
+    /// [`timing::ARTIFACT_POLL`](crate::strategy::timing::ARTIFACT_POLL)).
     pub fn with_poll_interval(mut self, interval: std::time::Duration) -> Self {
         self.poll_interval = interval;
         self
@@ -441,11 +443,20 @@ impl WorkerReloadDriver {
         &self.lib_path
     }
 
-    /// Poll for worker updates. Call from the platform frame loop.
+    /// Poll for worker updates. Call from the platform frame loop: the
+    /// artifact is read at most once per poll interval.
     pub fn poll(&mut self) -> WorkerPollOutcome {
         if self.last_poll.elapsed() < self.poll_interval {
             return WorkerPollOutcome::NoChange;
         }
+        self.poll_now()
+    }
+
+    /// Read the artifact now, whenever it was last read: the poll a watcher
+    /// that saw the artifact change asks for. Held to the interval, the poll
+    /// its wake produced could fall inside it, and an idle host would draw no
+    /// later frame to pick the change up.
+    pub(crate) fn poll_now(&mut self) -> WorkerPollOutcome {
         self.last_poll = std::time::Instant::now();
 
         let load_path = resolve_worker_path(&self.lib_path);

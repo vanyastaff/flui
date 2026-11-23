@@ -13,16 +13,13 @@ use std::{
 
 use notify_debouncer_mini::{DebouncedEvent, DebouncedEventKind, Debouncer, new_debouncer};
 
-/// Debounce and polling intervals for the dev loop.
-pub(crate) mod timing {
-    use std::time::Duration;
-
-    /// Debounce window for source changes on a desktop host.
-    pub(crate) const SOURCE_DEBOUNCE: Duration = Duration::from_millis(500);
-    /// Debounce window for Android scene-plugin sources, where `adb push`
-    /// follows every rebuild and a shorter window keeps the round trip tight.
-    pub(crate) const ANDROID_SCENE_DEBOUNCE: Duration = Duration::from_millis(300);
-}
+/// How long the watcher waits after a change before it reports the batch.
+///
+/// An editor's save is a burst of events within milliseconds (a temporary
+/// file, a rename, a metadata write), so a short window still reports one
+/// save once; every millisecond of it is added to each edit's rebuild, which
+/// is why it is not longer.
+const SOURCE_DEBOUNCE: Duration = Duration::from_millis(80);
 
 /// Error creating or configuring a [`SourceWatcher`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,15 +60,10 @@ pub(crate) struct SourceWatcher {
 }
 
 impl SourceWatcher {
-    /// Create a watcher with the default desktop debounce interval.
+    /// Create a watcher that reports a save once it is [`SOURCE_DEBOUNCE`] old.
     pub(crate) fn try_new() -> Result<Self, WatchError> {
-        Self::with_debounce(timing::SOURCE_DEBOUNCE)
-    }
-
-    /// Create a watcher with a custom debounce interval.
-    pub(crate) fn with_debounce(debounce: Duration) -> Result<Self, WatchError> {
         let (tx, rx) = mpsc::channel();
-        let debouncer = new_debouncer(debounce, tx).map_err(WatchError::create)?;
+        let debouncer = new_debouncer(SOURCE_DEBOUNCE, tx).map_err(WatchError::create)?;
         Ok(Self { rx, debouncer })
     }
 

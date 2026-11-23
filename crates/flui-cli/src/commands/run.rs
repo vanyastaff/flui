@@ -24,7 +24,7 @@ use crate::config::{FluiConfig, HotReloadConfig};
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::serve::DevServer;
 use crate::ui;
-use crate::watch::{SourceWatcher, timing};
+use crate::watch::SourceWatcher;
 use console::style;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -2903,7 +2903,7 @@ pub(crate) fn execute_scene(
         style(scene_src.display()).dim()
     ))?;
 
-    let mut watcher = SourceWatcher::with_debounce(timing::ANDROID_SCENE_DEBOUNCE)
+    let mut watcher = SourceWatcher::try_new()
         .map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
 
     watcher

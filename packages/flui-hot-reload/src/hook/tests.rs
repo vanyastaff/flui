@@ -114,6 +114,42 @@ fn an_artifact_change_wakes_the_host() {
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch dir"));
 }
 
+/// An idle host draws one frame for the watcher's wake, so that frame's poll
+/// reads the artifact even when a frame polled moments before: held to the
+/// driver's poll interval it would report no change, and nothing would draw
+/// again to pick the rebuild up.
+#[test]
+fn the_poll_a_watcher_wakes_reads_the_artifact_inside_the_poll_interval() {
+    #[cfg(feature = "app-plugin")]
+    let _registry = crate::dispatch::REBUILD_HOOK_TEST_LOCK.lock();
+    let path = scratch_worker("woken-poll");
+    let mut hook = fast_hook(&path);
+    hook.driver = WorkerReloadDriver::new(&path).with_poll_interval(Duration::from_secs(3600));
+    let (wake, wakes) = channel_wake();
+    hook.attach(wake);
+    assert_eq!(hook.poll(), ReloadEvent::Unchanged);
+    let read_before = hook.driver.last_poll;
+
+    std::fs::write(&path, b"a rebuilt worker").expect("write the artifact");
+    wakes
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the watcher woke the host after the artifact appeared");
+    hook.poll();
+    assert!(
+        hook.driver.last_poll > read_before,
+        "the woken poll read the artifact although the interval has not passed"
+    );
+    let read_on_wake = hook.driver.last_poll;
+    hook.poll();
+    assert_eq!(
+        hook.driver.last_poll, read_on_wake,
+        "a later poll with no new change keeps to the interval"
+    );
+
+    hook.detach();
+    let _ = std::fs::remove_dir_all(path.parent().expect("scratch dir"));
+}
+
 #[test]
 fn dropping_an_attached_hook_joins_its_watcher() {
     #[cfg(feature = "app-plugin")]

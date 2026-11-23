@@ -127,7 +127,11 @@ the window, in the observed failure). `WorkerReloadHook` therefore runs a small
 worker artifact's `(path, mtime)` stamp — the same identity the driver resolves
 through the sidecar — and calls the host's `wake` on a change. `wake` requests a
 frame; that frame's poll then performs the actual owner-thread
-`dlopen`, exactly as before.
+`dlopen`, exactly as before. The woken poll reads the artifact even when a frame
+polled moments before, inside the driver's poll interval: an idle host draws no
+later frame to pick the rebuild up. Both the watcher and the frame-boundary poll
+read every 50 ms (`flui_hot_reload::timing`), since a reload waits for the next
+read.
 
 This is still layer 2: the watcher watches the **artifact**, never `src/` (layer
 1, the CLI, owns source watching and the rebuild), and it adds no second
