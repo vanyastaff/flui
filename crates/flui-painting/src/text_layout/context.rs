@@ -1092,7 +1092,7 @@ mod tests {
         }
         assert_eq!(
             collection
-                .fallback_families(FallbackKey::new(Script::from_str_unchecked("Latn"), None))
+                .fallback_families(FallbackKey::new(Script::from_bytes(*b"Latn"), None))
                 .collect::<Vec<_>>(),
             [probe, roboto],
             "the host's order is installed, ending in the sans-serif family"

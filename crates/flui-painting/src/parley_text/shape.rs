@@ -209,7 +209,7 @@ impl ParagraphLayout {
             .runs()
             .map(|run| run.clusters().map(|cluster| cluster.advance()).sum::<f32>())
             .sum();
-        advance - line.metrics().trailing_whitespace
+        advance - line.metrics().hanging_advance
     }
 
     /// The paragraph's narrowest and widest widths: `(min, max)`, where min
@@ -335,7 +335,7 @@ impl ParagraphLayout {
             let mut open: Option<(DecoratedStretch<V>, f32)> = None;
             for run in line.runs() {
                 let size = run.font_size();
-                let run_metrics = DecorationMetrics::of(run.metrics(), size);
+                let run_metrics = DecorationMetrics::of(run.font_metrics(), size);
                 for cluster in run.visual_clusters() {
                     let (left, right) = (x, x + cluster.advance());
                     x = right;
@@ -538,7 +538,7 @@ impl ParagraphLayout {
                 let synthesis = synthesis_of(&run.synthesis());
                 let font_size = run.font_size();
                 let coords_start = coords.len();
-                coords.extend_from_slice(run.normalized_coords());
+                coords.extend(run.normalized_coords().iter().map(|coord| coord.to_bits()));
                 let glyph_start = glyphs.len();
                 let baseline = glyph_run.baseline();
                 for (index, glyph) in glyph_run.positioned_glyphs().enumerate() {
@@ -677,12 +677,14 @@ pub(crate) struct DecorationMetrics {
 impl DecorationMetrics {
     /// The decoration lines of a run of `size` whose font reports `metrics`.
     ///
-    /// The font's values are trusted only within an em of the baseline and
-    /// with a thickness up to a quarter em: a font without them makes
-    /// Parley substitute values in font units, not pixels. Outside that, an
-    /// underline is an eighteenth of an em thick, that far below the
-    /// baseline, and a line-through is centred half an x-height above it.
-    pub(crate) fn of(metrics: &parley::layout::RunMetrics, size: f32) -> Self {
+    /// Parley fills in what a font does not report with HarfBuzz's defaults, in
+    /// pixels: an underline an eighteenth of an em thick, that far below the
+    /// baseline, and a line-through that thick at half the ascent. The values
+    /// are trusted only within an em of the baseline and with a thickness up to
+    /// a quarter em. A font that reports more, or a non-finite value, gets the
+    /// default underline and a line-through centred half an x-height above the
+    /// baseline.
+    pub(crate) fn of(metrics: &parley::FontMetrics, size: f32) -> Self {
         let em = f64::from(size).max(0.0);
         let fallback = em / 18.0;
         let thickness = |size: f32| {
@@ -751,7 +753,15 @@ impl fmt::Debug for ParagraphLayout {
 
 /// Confines Parley's public line-width escape hatch to allocation alignment.
 /// The shaped clusters are reused; this repeats line breaking, not shaping.
+/// Parley aligns the lines when the breaker finishes, so the alignment is set first.
 fn align_allocated_lines(layout: &mut Layout<SpanBrush>, spec: &ParagraphSpec<'_>, width: f32) {
+    let alignment = match spec.text_align.resolve(spec.direction) {
+        TextAlign::Left | TextAlign::Start => Alignment::Left,
+        TextAlign::Right | TextAlign::End => Alignment::Right,
+        TextAlign::Center => Alignment::Center,
+        TextAlign::Justify => Alignment::Justify,
+    };
+    layout.set_alignment(alignment, AlignmentOptions::default());
     let cap = spec.max_width.unwrap_or(f32::MAX);
     let mut breaker = layout.break_lines();
     breaker.state_mut().set_layout_max_advance(cap);
@@ -760,13 +770,6 @@ fn align_allocated_lines(layout: &mut Layout<SpanBrush>, spec: &ParagraphSpec<'_
         breaker.set_prior_line_width(width);
     }
     breaker.finish();
-    let alignment = match spec.text_align.resolve(spec.direction) {
-        TextAlign::Left | TextAlign::Start => Alignment::Left,
-        TextAlign::Right | TextAlign::End => Alignment::Right,
-        TextAlign::Center => Alignment::Center,
-        TextAlign::Justify => Alignment::Justify,
-    };
-    layout.align(alignment, AlignmentOptions::default());
 }
 
 /// `start..end` as `u32`s; a paragraph holds fewer than 2^32 glyphs.
@@ -1030,18 +1033,18 @@ fn validate_layout(paragraph: &ParagraphLayout) -> Result<(), TextLayoutError> {
     for line in paragraph.layout.lines() {
         let metrics = line.metrics();
         if [
-            metrics.ascent,
-            metrics.descent,
-            metrics.leading,
             metrics.line_height,
             metrics.baseline,
             metrics.offset,
             metrics.advance,
-            metrics.trailing_whitespace,
+            metrics.hanging_advance,
             metrics.inline_min_coord,
             metrics.inline_max_coord,
             metrics.block_min_coord,
             metrics.block_max_coord,
+            metrics.content_block_min_coord,
+            metrics.content_block_max_coord,
+            metrics.indent,
         ]
         .into_iter()
         .any(|value| !value.is_finite())
@@ -1107,7 +1110,7 @@ impl TextContext {
             .take(kept)
             .fold(0.0_f32, |width, line| {
                 let metrics = line.metrics();
-                width.max(metrics.inline_min_coord + metrics.advance - metrics.trailing_whitespace)
+                width.max(metrics.inline_min_coord + metrics.advance - metrics.hanging_advance)
             });
         let alignment_width = paragraph.min_width.max(content_width);
         let widths = shaped.layout.calculate_content_widths();
@@ -1209,7 +1212,7 @@ impl TextContext {
                 && paragraph.max_width.is_none_or(|max_width| {
                     candidate.layout.lines().last().is_none_or(|line| {
                         let metrics = line.metrics();
-                        metrics.advance - metrics.trailing_whitespace <= max_width + 1e-3
+                        metrics.advance - metrics.hanging_advance <= max_width + 1e-3
                     })
                 });
             let Some((previous, _)) = full[..cut].char_indices().next_back() else {
@@ -1781,24 +1784,26 @@ mod tests {
     }
 
     /// A font's own decoration metrics are used where they are in range; the
-    /// values Parley substitutes for a font without them, in font units, and
-    /// non-finite ones fall back to an eighteenth of an em.
+    /// values past an em, which a broken font reports, and non-finite ones
+    /// fall back to an eighteenth of an em.
     #[test]
     fn decoration_metrics_trust_the_font_only_in_range() {
-        use parley::layout::RunMetrics;
+        use parley::FontMetrics;
 
         use super::{DecorationMetrics, LinePlacement};
 
         let size = 72.0;
         let em_18 = 4.0;
-        let font = RunMetrics {
+        let font = FontMetrics {
             ascent: 66.0,
             x_height: Some(38.0),
             underline_offset: -7.0,
             underline_size: 3.0,
             strikethrough_offset: 20.0,
             strikethrough_size: 5.0,
-            ..RunMetrics::default()
+            descent: 18.0,
+            leading: 0.0,
+            cap_height: None,
         };
         assert_eq!(
             DecorationMetrics::of(&font, size),
@@ -1819,17 +1824,16 @@ mod tests {
             "a font's metrics in range are its own"
         );
 
-        // 2048 units per em over 18, unscaled: what a font without the
-        // metrics reports.
+        // 2048 units per em over 18, unscaled: past an em at 72 px.
         let units = 2048.0 / 18.0;
-        let substituted = RunMetrics {
+        let out_of_range = FontMetrics {
             underline_offset: units,
             underline_size: units,
             strikethrough_offset: units,
             strikethrough_size: units,
             ..font
         };
-        let not_finite = RunMetrics {
+        let not_finite = FontMetrics {
             ascent: f32::NAN,
             x_height: Some(f32::INFINITY),
             underline_offset: f32::NAN,
@@ -1839,7 +1843,7 @@ mod tests {
             ..font
         };
         for (fixture, metrics, ascent, x_height) in [
-            ("substituted", substituted, 66.0, 38.0),
+            ("out of range", out_of_range, 66.0, 38.0),
             ("not finite", not_finite, 72.0 * 0.8, 72.0 * 0.5),
         ] {
             assert_eq!(
