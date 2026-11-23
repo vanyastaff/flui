@@ -47,6 +47,7 @@
 // moving a type between them changes no consumer.
 mod accesskit_translation;
 mod action;
+mod action_subject;
 mod agent;
 mod announce;
 mod applicability;

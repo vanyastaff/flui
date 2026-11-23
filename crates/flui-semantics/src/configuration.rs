@@ -14,6 +14,7 @@ use smol_str::SmolStr;
 
 use crate::{
     action::{AssistiveFocusHandler, CustomActionId, SemanticsAction, SemanticsActionHandler},
+    action_subject::{ActionSubject, SubjectSet},
     attributes::{RareAttributes, SemanticsAttributes},
     collection::{CellPosition, SetSize, SortDirection, TableShape},
     properties::{HeadingLevel, SemanticsSortKey, UNBLOCKED_USER_ACTIONS_MASK, join_strings},
@@ -984,6 +985,21 @@ impl SemanticsConfiguration {
         self.actions.get(&action)
     }
 
+    /// The standard actions registered here, before blocking policy.
+    pub(crate) fn registered_actions(&self) -> impl Iterator<Item = SemanticsAction> + '_ {
+        self.actions.keys().copied()
+    }
+
+    /// Whether this configuration declares any of a scrollable's metrics
+    /// (position, axis, extents), which are one group.
+    pub(crate) fn declares_scroll_group(&self) -> bool {
+        let rare = self.attributes.rare();
+        rare.scroll_position.is_some()
+            || rare.scroll_axis_direction.is_some()
+            || rare.scroll_extent_max.is_some()
+            || rare.scroll_extent_min.is_some()
+    }
+
     /// All registered standard and custom handler ownership, including blocked
     /// actions, for an assembler retaining captures until its pass is validated.
     ///
@@ -1643,10 +1659,11 @@ impl SemanticsConfiguration {
             role_description: _,
             custom_actions: _,
             sort_key: _,
-            scroll_position,
-            scroll_axis_direction,
-            scroll_extent_max,
-            scroll_extent_min,
+            // One group, read by `declares_scroll_group`.
+            scroll_position: _,
+            scroll_axis_direction: _,
+            scroll_extent_max: _,
+            scroll_extent_min: _,
             document_selection,
             hosted_runs,
             anchors: _,
@@ -1656,19 +1673,9 @@ impl SemanticsConfiguration {
         let their_rare = theirs.rare();
         let both = |a: bool, b: bool| a && b;
         let non_empty = |value: &Option<SmolStr>| value.as_ref().is_some_and(|v| !v.is_empty());
-
-        // A scroll group is one scrollable's metrics: two of them never combine.
-        let scrolls = scroll_position.is_some()
-            || scroll_axis_direction.is_some()
-            || scroll_extent_max.is_some()
-            || scroll_extent_min.is_some();
-        let their_scrolls = their_rare.scroll_position.is_some()
-            || their_rare.scroll_axis_direction.is_some()
-            || their_rare.scroll_extent_max.is_some()
-            || their_rare.scroll_extent_min.is_some();
-
         !(states.conflicts(&theirs.states)
-            || both(scrolls, their_scrolls)
+            // A scroll group is one scrollable's metrics: two of them never combine.
+            || both(self.declares_scroll_group(), other.declares_scroll_group())
             // A collection group is one entry's place in one set.
             || collection.conflicts(&theirs.collection)
             // A live group is one region's setting and atomicity.
@@ -1699,15 +1706,23 @@ impl SemanticsConfiguration {
     ///
     /// The merge rules, per group (ADR-0206, decision 4):
     ///
-    /// - **States** — each by its own rule ([`States`]): `Mixed` over `On`
-    ///   over `Off`, and a yes/no state as the receiver declares it, else as
-    ///   the contributor does.
+    /// - **States** — each by its own rule ([`States`]): as the receiver
+    ///   declares it, else as the contributor does; `toggled` is also taken
+    ///   from a contributor that brings the role the node publishes
+    ///   (ADR-0392 §2).
     /// - **Role** — by specificity, see `more_specific_role`; without a
     ///   role on either side, none.
-    /// - **Actions** — absorb every action whose handler the child
-    ///   defined. If `other.blocks_user_actions == true`, only actions in
-    ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
-    ///   filtered out.
+    /// - **Actions** — each standard action changes one group of
+    ///   attributes, its subject (ADR-0392). The configuration whose
+    ///   declaration of the group the node publishes owns it; an owner that
+    ///   acts on it (registers one of its actions, or declares itself
+    ///   disabled) supplies every handler of it, and one it does not offer
+    ///   is taken from nobody. Every other action keeps the first handler:
+    ///   the receiver's, else the first contributor's. Assembly absorbs in
+    ///   reading order (sort key, then tree order). Eligibility is filtered
+    ///   first: if `other.blocks_user_actions == true`, only actions in the
+    ///   `UNBLOCKED_USER_ACTIONS_MASK` mask cross, but a blocked handler
+    ///   still makes its owner act on its subject.
     /// - **Custom actions** — the contributor's follow the receiver's, each
     ///   with its own handler; a contributor that blocks user actions adds
     ///   none.
@@ -1725,13 +1740,22 @@ impl SemanticsConfiguration {
             return;
         }
 
-        // ----- actions (blocked / unblocked filter) -----
-        let effective_other_actions = other.effective_actions_as_bits();
-        for (action, handler) in &other.actions {
-            if (action.value() & effective_other_actions) != 0 {
-                self.actions.insert(*action, Rc::clone(handler));
-            }
-        }
+        // ----- subject owners, read before the attributes merge -----
+        // The receiver owns each subject it declares; the contributor takes one
+        // the receiver does not declare, and `toggled` with the role it brings.
+        let takes_role =
+            more_specific_role(self.attributes.role, other.attributes.role) != self.attributes.role;
+        let taken = SubjectSet::of(|subject| {
+            subject.is_declared_by(other)
+                && (!subject.is_declared_by(self)
+                    || (subject == ActionSubject::Toggle && takes_role))
+        });
+        // Subjects whose handlers now come from their owner alone.
+        let held =
+            SubjectSet::of(|subject| !taken.contains(subject) && subject.is_acted_on_by(self));
+        let seized =
+            SubjectSet::of(|subject| taken.contains(subject) && subject.is_acted_on_by(other));
+        let their_toggled = other.attributes.states.toggled;
         // Custom actions append, each with its own handler, so the
         // contributor's ids follow the receiver's. A contributor that blocks
         // user actions contributes none.
@@ -1884,6 +1908,40 @@ impl SemanticsConfiguration {
         let mine = &mut self.attributes;
         if mine.role != SemanticsRole::Heading {
             mine.heading_level = None;
+        }
+        if taken.contains(ActionSubject::Toggle) {
+            mine.states.toggled = their_toggled;
+        }
+
+        // ----- standard actions, by subject (ADR-0392) -----
+        // Classified on the merged attributes, which are the node's so far.
+        if !seized.is_empty() {
+            let seized_actions = self
+                .registered_actions()
+                .filter(|action| {
+                    ActionSubject::of(*action, self).is_some_and(|subject| seized.contains(subject))
+                })
+                .fold(0_u64, |bits, action| bits | action.value());
+            // Pinned before the fold (ADR-0223): dropping them here releases
+            // no last owner.
+            self.actions
+                .retain(|action, _| action.value() & seized_actions == 0);
+        }
+        let effective_other_actions = other.effective_actions_as_bits();
+        for (action, handler) in &other.actions {
+            if (action.value() & effective_other_actions) == 0 {
+                continue;
+            }
+            let Some(subject) = ActionSubject::of(*action, self) else {
+                continue;
+            };
+            if seized.contains(subject) {
+                self.actions.insert(*action, Rc::clone(handler));
+            } else if !held.contains(subject) {
+                self.actions
+                    .entry(*action)
+                    .or_insert_with(|| Rc::clone(handler));
+            }
         }
 
         self.has_been_annotated |= other.has_been_annotated;
@@ -2338,9 +2396,144 @@ mod tests {
         );
     }
 
-    /// A forced merge takes each state by its type's rule: `Mixed` over `On`
-    /// over `Off`, and a yes/no state as the receiver declares it, or as the
-    /// contributor does when the receiver declares nothing.
+    /// A forced merge gives each standard action to the configuration whose
+    /// state it changes, in either order, and the rest to the first in fold
+    /// order (ADR-0392).
+    #[test]
+    fn a_merged_action_belongs_to_the_owner_of_its_subject() {
+        use SemanticsAction as A;
+        use std::cell::RefCell;
+
+        type Part = (&'static str, fn(&mut SemanticsConfiguration), &'static [A]);
+        // Folds `parts` in order into an empty receiver, as `MergeSemantics`
+        // does, and reports whose handler each of `asked` runs, if any.
+        fn fold(parts: &[Part], asked: &[A]) -> Vec<Option<&'static str>> {
+            let ran = Rc::new(RefCell::new(None));
+            let mut node = SemanticsConfiguration::new();
+            for (name, declare, actions) in parts {
+                let mut part = SemanticsConfiguration::new();
+                declare(&mut part);
+                for action in *actions {
+                    let ran = Rc::clone(&ran);
+                    let name = *name;
+                    part.add_action(*action, Rc::new(move |_| *ran.borrow_mut() = Some(name)));
+                }
+                node.absorb(&part);
+            }
+            asked
+                .iter()
+                .map(|action| {
+                    *ran.borrow_mut() = None;
+                    let handler = node.action_handler(*action)?;
+                    handler(crate::ActionCall::Click);
+                    *ran.borrow()
+                })
+                .collect()
+        }
+        let plain: fn(&mut SemanticsConfiguration) = |_| {};
+        let radio: fn(&mut SemanticsConfiguration) = |c| {
+            c.set_role(SemanticsRole::RadioButton);
+            c.set_toggled(Some(Toggled::Off));
+        };
+        let disclosure: fn(&mut SemanticsConfiguration) = |c| c.set_expanded(false);
+        let scrollable: fn(&mut SemanticsConfiguration) = |c| {
+            c.set_scroll_position(0.0);
+            c.set_scroll_extent_max(100.0);
+        };
+        let clicks: &[A] = &[A::Click];
+
+        for (parts, asked, expected, why) in [
+            (
+                &[("a", plain, clicks), ("b", plain, clicks)][..],
+                &[A::Click][..],
+                &[Some("a")][..],
+                "an activation keeps the first handler",
+            ),
+            (
+                &[("tile", plain, clicks), ("radio", radio, clicks)],
+                &[A::Click],
+                &[Some("radio")],
+                "a later radio takes the click of the state it announces",
+            ),
+            (
+                &[("radio", radio, clicks), ("tile", plain, clicks)],
+                &[A::Click],
+                &[Some("radio")],
+                "an earlier radio keeps it",
+            ),
+            (
+                &[("button", plain, clicks), ("header", disclosure, clicks)],
+                &[A::Click],
+                &[Some("header")],
+                "a click-only disclosure takes the click that expands it",
+            ),
+            (
+                &[("header", disclosure, clicks), ("button", plain, clicks)],
+                &[A::Click],
+                &[Some("header")],
+                "and keeps it when it comes first",
+            ),
+            (
+                &[("wrapper", disclosure, &[]), ("button", plain, clicks)],
+                &[A::Click],
+                &[Some("button")],
+                "a disclosure that registers nothing leaves its click to the first registrant",
+            ),
+            (
+                &[
+                    ("tile", plain, clicks),
+                    (
+                        "disabled radio",
+                        |c| {
+                            c.set_role(SemanticsRole::RadioButton);
+                            c.set_toggled(Some(Toggled::Off));
+                            c.set_enabled(Some(false));
+                        },
+                        &[],
+                    ),
+                ],
+                &[A::Click],
+                &[None],
+                "a disabled radio's click is offered by nobody",
+            ),
+            (
+                &[
+                    ("tile", plain, clicks),
+                    (
+                        "blocked radio",
+                        |c| {
+                            c.set_role(SemanticsRole::RadioButton);
+                            c.set_toggled(Some(Toggled::Off));
+                            c.set_blocks_user_actions(true);
+                        },
+                        clicks,
+                    ),
+                ],
+                &[A::Click],
+                &[None],
+                "a blocked radio's click is offered by nobody",
+            ),
+            (
+                &[
+                    ("first", scrollable, &[A::ScrollUp, A::Decrement]),
+                    (
+                        "second",
+                        scrollable,
+                        &[A::ScrollUp, A::ScrollDown, A::Increment, A::Decrement],
+                    ),
+                ],
+                &[A::ScrollUp, A::ScrollDown, A::Increment],
+                &[Some("first"), None, None],
+                "a scrollable at its extent keeps the actions of the metrics it publishes",
+            ),
+        ] {
+            assert_eq!(fold(parts, asked), expected, "{why}");
+        }
+    }
+
+    /// A forced merge takes a yes/no state as the receiver declares it, or as
+    /// the contributor does when the receiver declares nothing; `toggled` is
+    /// also taken with the role the contributor brings (ADR-0392 §2).
     #[test]
     fn state_merge_precedence() {
         let merged = |receiver: fn(&mut SemanticsConfiguration),
@@ -2352,16 +2545,30 @@ mod tests {
             a.absorb(&b);
             a
         };
-        let on = merged(
+        let kept = merged(
             |c| c.set_toggled(Some(Toggled::Off)),
             |c| c.set_toggled(Some(Toggled::On)),
         );
-        assert_eq!(on.toggled(), Some(Toggled::On));
-        let mixed = merged(
-            |c| c.set_toggled(Some(Toggled::Mixed)),
-            |c| c.set_toggled(Some(Toggled::On)),
+        assert_eq!(
+            kept.toggled(),
+            Some(Toggled::Off),
+            "one control's state: the receiver's (ADR-0392 §2)"
         );
-        assert_eq!(mixed.toggled(), Some(Toggled::Mixed));
+        let with_role = merged(
+            |c| {
+                c.set_role(SemanticsRole::Button);
+                c.set_toggled(Some(Toggled::Off));
+            },
+            |c| {
+                c.set_role(SemanticsRole::CheckBox);
+                c.set_toggled(Some(Toggled::Mixed));
+            },
+        );
+        assert_eq!(
+            (with_role.role(), with_role.toggled()),
+            (SemanticsRole::CheckBox, Some(Toggled::Mixed)),
+            "the state comes with the role that gives it its meaning"
+        );
         let unfocused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
         assert!(!unfocused.is_focused(), "the receiver's declaration stands");
         let disabled = merged(
