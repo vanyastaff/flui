@@ -30,6 +30,7 @@ use flui_sdk::widgets::{
     Column, Icon, IconData, ListView, Padding, PageHandle, Routable, Router, RouterHandle,
     ScrollController, ScrollView, SingleChildScrollView, Text, TextEditingController,
 };
+use flui_testing::heap::sites::SiteProfiler;
 use flui_testing::heap::{CountingAllocator, HeapCounts};
 use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::widgets::SharedSignal;
@@ -578,6 +579,10 @@ fn main() {
         if only.as_deref().is_some_and(|only| only != name) {
             continue;
         }
+        let profiler = SiteProfiler::start(format!(
+            "{}/../../target/dhat/app_scenarios-{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        ));
         let samples = scenario();
         if every_step {
             for (step, sample) in samples.iter().enumerate() {
@@ -590,5 +595,11 @@ fn main() {
             }
         }
         report(name, &samples);
+        if let Some(profiler) = profiler {
+            match profiler.finish("scenario_measured") {
+                Ok(sites) => println!("{name}: where the measured steps allocated\n{sites}"),
+                Err(error) => eprintln!("{name}: {error}"),
+            }
+        }
     }
 }
