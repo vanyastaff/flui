@@ -6,7 +6,8 @@
   development reload hook, accepted on its own, and the condition on which a code patcher returns);
   [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md) and
   [ADR-0111](ADR-0111-worker-image-lifetime.md) (the dlopen path's lifetime contracts);
-  [ADR-0096](ADR-0096-dev-build-dynamic-linking.md) (dynamic linking, independent of hot reload);
+  [ADR-0096](ADR-0096-dev-build-dynamic-linking.md) (the development dylib, which a reload image
+  links under ADR-0394);
   [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the globals a code patcher splits)
 - **Revised:** 2026-11-04 — rejected. The hook this record proposed was built ahead of Subsecond and
   is now ADR-0311's; the record keeps the Subsecond proposal, the spike that ran it and the reasons
@@ -135,8 +136,8 @@ applied on the owner thread, and the spike had run on macOS and Android and agai
 ## More information
 
 - **Revisit** when a `dx` release keeps RAX in its Windows x64 stub. Subsecond then returns as a new
-  `Proposed` record, which brings the per-call seam and the restart event (ADR-0311 §7), and its
-  spike runs first on Linux, where CI's container can run it, then on Windows, macOS and Android
+  `Proposed` record, which brings the per-call seam ADR-0311 §7 names and reports the versions of
+  ADR-0393 §3, and its spike runs first on Linux, where CI's container can run it, then on Windows, macOS and Android
   devices. The spike's findings above stand as that record's starting evidence: app-crate statics
   and thread-locals break, only hook-wrapped calls reach patched code, and patch addresses must be
   canonicalised.

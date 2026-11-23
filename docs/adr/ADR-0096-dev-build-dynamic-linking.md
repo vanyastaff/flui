@@ -33,9 +33,9 @@ artifact, so every crate the dylib contains is then taken from it, and an edit t
 application relinks a small executable instead of the whole engine. Bevy calls it its biggest
 iteration lever.
 
-FLUI has two pointers to it. `CHANGELOG.md:1098-1104` notes "Bevy-style `dynamic_linking`
-(`flui-dylib`) noted as the next lever if needed" after the move to one integration-test binary
-per heavy crate. The architecture review proposes a dev-only `dynamic-linking` feature on the
+FLUI has two pointers to it. The `CHANGELOG.md` entry for the move to one integration-test
+binary per heavy crate notes "Bevy-style `dynamic_linking` (`flui-dylib`) noted as the next lever
+if needed". The architecture review proposes a dev-only `dynamic-linking` feature on the
 facade ([`docs/research/2026-09-25-architecture-review/report-architecture.ru.md:189`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-09-25-architecture-review/report-architecture.ru.md#L189)). Neither
 was measured, and the review's own verification showed that a facade feature over a crate that
 depends on the facade is a Cargo cycle
@@ -43,7 +43,7 @@ depends on the facade is a Cargo cycle
 
 Two prototypes measured it on the Windows dev host (MSVC `link.exe`, rustc 1.98.1, the
 workspace dev profile, which builds workspace crates at opt-level 1 and dependencies at
-opt-level 3, `Cargo.toml:779-822`):
+opt-level 3, `[profile.dev]` and `[profile.dev.package."*"]` in `Cargo.toml`):
 
 | Measurement | Static | Dynamic |
 |---|---|---|
@@ -67,7 +67,7 @@ Three facts follow from the table.
 2. **Windows sits at the export ceiling.** PE export ordinals are 16-bit. About 40,000 of the
    64,336 exports are shared generic instances from FLUI's own crates: rustc shares and exports
    generics across crates only at opt-level 0 and 1, and the dependencies are already at 3
-   (`Cargo.toml:807-813`). The fix Bevy applied, `-Zshare-generics=n`, is nightly-only, and the
+   (`[profile.dev.package."*"]`). The fix Bevy applied, `-Zshare-generics=n`, is nightly-only, and the
    toolchain is pinned to stable (`rust-toolchain.toml`). The only stable fix is opt-level ≥ 2
    for the dylib's crates, whose cost on framework rebuilds is unmeasured.
 3. **std becomes a DLL.** The executable needs `std-<hash>.dll` on `PATH`: `cargo run` and
@@ -91,7 +91,7 @@ application's workspace:
 FLUI does not build its own crates, examples, tests or CI through a framework dylib. The
 CHANGELOG's "next lever" is withdrawn: the measurement shows framework edits get slower, test
 binaries cannot use it, and CI builds without incremental compilation
-(`Cargo.toml:788-791`), where the dylib is only extra output.
+(the comment over `[profile.dev]`'s `incremental`), where the dylib is only extra output.
 
 ### 2. The application side waits for its preconditions
 
@@ -132,6 +132,10 @@ Nothing generates a dylib yet. `flui run` does, in the shape of §3, when all of
   writes two: the framework's crates with the official packages, and the remaining dependencies in
   a second dylib that depends on the first. Cargo builds both with `-C prefer-dynamic`, so they
   share std.
+- **A process runs from staged copies.** The tool starts each process from copies of the launcher
+  and the dylibs staged under content-addressed names, as it stages images, so a build never
+  writes a file a running process has mapped. Windows refuses that write, and a process restart
+  builds while the process it replaces still runs (ADR-0393 §2).
 - **No workspace crate, no feature, nothing published.** The dylib is the tool's output for one
   project. The facade gains no `dynamic-linking` feature and no optional dependency, and no tier
   or kind is assigned (ADR-0081): the generated workspace is not part of FLUI's.

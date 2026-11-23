@@ -215,7 +215,7 @@ user code:
   hook is retired without a `detach`), `poll`, `detach`, `scene_frame` and the destruction when the
   loop ends. A later loop calls the factory again. A `scene_frame` whose render panics or returns
   `false` keeps the font reset pending (ADR-0108). `run_entry` is the one call whose panic keeps
-  the hook: it is the application's entry panicking, and it refuses that restart (ADR-0393 §3).
+  the hook: it is the application's entry panicking, and it fails that restart (ADR-0393 §3).
 - A destructor that panics while the thread is already unwinding aborts, as in std (ADR-0281 §1);
   nothing guards it.
 
@@ -276,8 +276,7 @@ user code:
   inside `AppConfig` (ADR-0323 §2, a `handle`).
 - Bad, because `flui create --hot-reload` stays a three-crate project until a code patcher arrives,
   and Android and the web have no widget reload.
-- Neutral, because the reload tiers stay `flui_runtime::reload::ReloadTier`, and only `Reassemble`
-  has a producer.
+- Neutral, because the reload tiers are ADR-0393's, which a hook reports as versions.
 
 ### Confirmation
 

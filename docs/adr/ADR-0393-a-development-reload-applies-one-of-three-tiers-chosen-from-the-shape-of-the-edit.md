@@ -9,7 +9,7 @@
   hook that reports a reload);
   [ADR-0394](ADR-0394-application-code-reloads-as-an-image-the-element-tree-adopts.md) (a proposed
   mechanism that loads new code); [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the
-  rejected patcher, whose structural hash is option 3 here);
+  rejected patcher, whose structural hash is option 4 here);
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (the runtime names no tool);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) and
   [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md) (containment
@@ -17,13 +17,14 @@
   [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) §10 (a
   retired scene owner and the lineage of the one that follows it);
   [ADR-0326](ADR-0326-one-entry-starts-an-application-on-every-platform.md) (the entry a restart runs again)
-- **Sources:** `flutter/flutter@3.50.1`
+- **Sources:** `flutter/flutter@3.50.1` (`ae9b586f34`)
   `packages/flutter/lib/src/foundation/binding.dart:742` (`reassembleApplication`),
   `packages/flutter/lib/src/widgets/binding.dart:1715` (`performReassemble`),
   `packages/flutter/lib/src/widgets/framework.dart:1053` (`State.reassemble`), `:3471`
   (`BuildOwner.reassemble`), `:3772` (`Element.reassemble`);
-  `packages/flutter_tools/lib/src/run_hot.dart:604` (`_restartFromSources`), `:759` (a rejected
-  reload), `:1586` (the advice to restart)
+  `packages/flutter_tools/lib/src/run_hot.dart:604` (`_restartFromSources`, which kills the
+  isolates the UI isolate spawned before `main` runs again), `:759` (a rejected reload), `:1586`
+  (the advice to restart)
 
 ## Context and problem statement
 
@@ -35,12 +36,13 @@ holds:
 | The runtime names three tiers: `Reassemble`, `Restart`, `ProcessRestart` | `ReloadTier` in `crates/flui-runtime/src/reload.rs` |
 | Only `Reassemble` is built: `Restart` logs that the root remount is not implemented and reassembles | `Presentation::apply_hot_reload` in `crates/flui-runtime/src/presentation.rs` |
 | A hook reports `Unchanged` or `Patched`; the loop keeps one epoch and one tier for all its UI runtimes, and each applies a reload it has not seen at its own frame boundary | `ReloadEvent` in `crates/flui-view/src/dev_reload.rs`; `Slot` and `poll_and_apply` in `crates/flui-app/src/app/hot_reload.rs` |
-| What an application's entry hands the loop is more than a root: its capability providers, keyed by `TypeId`, its plugins and its handlers, built once and handed to every UI runtime | `Application` in `crates/flui-app/src/app/launch.rs`; `CapabilityRegistry` in `crates/flui-runtime/src/capability.rs` |
+| What an application's entry hands the loop is more than a root: capability providers keyed by `TypeId`, plugins, handlers, services, an exit policy and a main-window factory, from which the loop builds state of its own once per run | `Application` in `crates/flui-app/src/app/launch.rs`; `crates/flui-app/src/app/runtime.rs`; `crates/flui-app/src/app/runner/main_window.rs` |
+| `Application::run` starts and drives the platform loop and returns when the run ends; only Android hands something into a run already going | ADR-0326; `hand_android_entry` in `crates/flui-app/src/app/runner/mod.rs` |
 | A UI runtime owns its text context and font collection, and its id is a generational key | `crates/flui-runtime/src/ui_runtime/construct.rs`; `UiRuntimeId` in `crates/flui-foundation/src/id.rs` |
 | An edit that cannot keep `State` replaces the process: every edit in a project from `flui create`, and an edit to the types crate of one from `flui create --hot-reload`. The tool stops the process and then builds | [`docs/hot-reload.md`](../hot-reload.md); `on_change` of the process strategy in `crates/flui-cli/src/commands/run.rs` |
-| A process restart after a one-line edit takes about 2.9 s, of which about 0.25 s is the start to the first frame; a worker reload takes 1.5–2.0 s | run of 2026-11-23, generated counter, Linux x86_64, 4 cores |
+| A process restart after a one-line edit takes about 2.9 s, of which about 0.25 s is the start to the first frame and the rest is the build; a worker reload takes 1.5–2.0 s | run of 2026-11-23, generated counter, Linux x86_64, 4 cores |
 | Between two builds of one crate with the same `-C metadata`, a type's `TypeId` is unchanged when a field's type changes and when an `async` block keeps more across an `.await`, while its size changes | run of 2026-11-23, rustc 1.100.0 |
-| Flutter keeps `State` across a hot reload and rebuilds every element without running `main`; a hot restart runs `main` again in a new isolate, in the same engine and window | Sources |
+| Flutter keeps `State` across a hot reload and rebuilds every element without running `main`; a hot restart ends the isolates of the running program and runs `main` again in a new isolate, in the same engine and window | Sources |
 
 Rust has no VM that could give a live object a new layout, so an edit that changes a type cannot
 keep the values of that type. Which edits keep `State`, what happens to the others, who decides,
@@ -53,8 +55,9 @@ and who owns the record of what each tree was built from?
 - An author writes widgets as before: no derive, attribute or registration exists for reload.
 - New code never reads a value an older build laid out differently. A slower tier is the price of
   an edit the tool cannot place; a crash in the middle of an edit is not.
-- A window, its surface, the GPU context with its pipelines, and the font collection do not depend
-  on application code, and recreating them is what a process restart spends its start on.
+- A window, its surface and the GPU context with its pipelines do not depend on application code,
+  and keeping them keeps the window on screen, where a process restart closes it and builds them
+  again.
 - One owner for each piece of reload state: which build a tree was made from is recorded once, and
   a tier is derived from it, not stored beside it.
 - The hook names no tool and the runtime names no host (ADR-0311, ADR-0083).
@@ -66,8 +69,8 @@ and who owns the record of what each tree was built from?
 1. Two tiers, as built: reassemble, and replace the process for everything else.
 2. Three tiers chosen by the tool from the shape of the edit, where a restart remounts the root
    inside each UI runtime.
-3. Three tiers chosen by the tool from the shape of the edit, where a restart retires the UI
-   runtimes and runs the application's entry again.
+3. Three tiers chosen by the tool from the shape of the edit, where a restart retires the
+   application and runs its entry again.
 4. Three tiers, and the author's types declare what can be kept: a derive writes a structural hash
    for every retained `View` and `ViewState` (ADR-0094 §3).
 5. Per-type tiers: remount only the subtrees whose `State` type changed and keep the rest.
@@ -76,15 +79,15 @@ and who owns the record of what each tree was built from?
 
 Chosen option: 3, because it gives the author Flutter's two fast outcomes without asking them to
 mark anything, because the one party that sees the whole edit decides, and because a restart then
-has one rule (what the entry made is made again) instead of one rule per kind of state the entry
-left behind.
+has one rule (what the application made is dropped and made again) instead of one rule per kind
+of state the application left behind.
 
 §1. **A reload applies one of three tiers.**
 
 | Tier | What it does | What survives |
 |---|---|---|
 | Reassemble | a UI runtime rebuilds every element with the code now loaded | every `State` whose view type is unchanged, with its signals, focus, scroll offset and routes |
-| Restart | the loop retires every UI runtime and composes the application again from the entry of the code now loaded | the process, the event loop, the windows the runner opened with their size, position and state, their surfaces, the GPU context and its pipelines, each window's text context and font collection |
+| Restart | the loop retires the application and composes it again from the entry of the code now loaded | the process, the event loop, the windows the runner opened with their size, position and state, their surfaces, the GPU context and its pipelines, and the fonts the system provides as they were loaded |
 | Process restart | the supervisor replaces the process | nothing |
 
 Flutter's counterparts are hot reload, hot restart and a full restart, and as there the entry
@@ -96,46 +99,70 @@ tokens of every `.rs` file of the crate, as `syn` parses them:
 
 - In the shape: every item with its attributes; signatures, generics and `where` clauses; fields
   and variants; trait and `impl` headers; `const` and `static` initialisers; the body of a
-  `const fn`, since a type's layout may be computed from it; every token of a macro invocation in
-  item position; and each item declared inside a body, wherever it is nested.
-- Outside it: the block of a function, method or closure apart from the items it declares;
-  comments and doc attributes; spans and whitespace.
+  `const fn`, since a type's layout may be computed from it; the body of an `async fn` and of an
+  `async` block, since what it keeps across an `.await` is the layout of its future; every token
+  of a macro invocation in item position, and of one inside a body whose tokens hold an item
+  keyword (`struct`, `enum`, `union`, `type`, `impl`, `fn`, `static`); and each item declared
+  inside a body, wherever it is nested.
+- Outside it: the rest of the block of a function, method or closure; comments and doc
+  attributes; spans and whitespace.
 
 A *reloadable crate* is one whose code the installed mechanism loads again in the running
 process. The mechanism tells the tool which crates those are.
 
-| The edit, since the build the application runs | Tier |
+| The edit, since the build the tool staged before | Tier |
 |---|---|
 | The shape of every reloadable crate is unchanged | Reassemble |
 | The shape of a reloadable crate changed; a file of one that the build read and the tool does not parse changed; the author asked for a restart | Restart |
 | Anything else the build's dependency information names (a manifest, the lock file, a build script, a crate that is not reloadable); the author asked for a process restart | Process restart |
 | The sources do not build | none: the running application is left as it is and the error is shown |
 
-- The tool is the one decider. It errs upward: what it cannot place takes the higher tier. The
+- The tool is the one placer. It errs upward: what it cannot place takes the higher tier. The
   author may ask for a higher tier than the tool chose, as Flutter's `R` does, and never a lower
-  one.
-- Each build the tool hands a mechanism carries a `CodeVersion` (§3). The tool gives a build a new
-  `layout` exactly when it places the edit at Restart, and the layout of the build before it
-  otherwise. Nothing downstream compares shapes or derives a tier a second time.
+  one. The loop applies the tier each version implies (§3), and two builds staged before one frame
+  boundary are applied as one at the higher of their tiers.
+- The tool mints every version: a `CodeVersion` (§3) per staged build, from one `IdMint` per
+  `flui run` session, written into the build's manifest as integers. A build gets a new `layout`
+  exactly when the tool places it at Restart, and the layout of the build staged before it
+  otherwise. Nothing downstream mints a version or compares shapes.
+- A manifest belongs to one process. A build placed at Process restart is staged only for the
+  process that replaces the running one, so the running process never loads a build made against
+  other dependencies.
 - A mechanism that cannot restart in the process takes a process restart where the table says
   Restart, and the tool applies it. The worker path is one: its `State` types are linked into the
   host. An edit that changes the shape of its worker crate therefore replaces the process, where
   today it reloads with nothing guarding the element that an older worker built.
 - The supervisor replaces the process only after the new build succeeds, so a build error leaves
-  the old window on screen at every tier.
+  the old window on screen at every tier. A process runs from copies of its executable and
+  libraries staged under content-addressed names, so a build never writes a file the running
+  process has mapped, which Windows refuses.
 
 §3. **The hook reports the version loaded, and the loop derives the tier from its own record.**
 In `flui_view::dev_reload`:
 
 ```rust
-/// The build a tree is made from. The hook mints it from what the tool stamped; the loop
-/// compares it for equality and never orders or interprets it.
+/// The build a tree is made from. The tool mints it and the hook reads it from the build's
+/// manifest; the loop compares it for equality and never orders or interprets it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CodeVersion {
     /// Equal for two builds whose kept values the later build may read.
     pub layout: LayoutEpoch,
     /// Differs for every build.
     pub revision: Revision,
+}
+
+/// Opaque: two are equal or they are not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LayoutEpoch(NonZeroU64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Revision(NonZeroU64);
+
+impl LayoutEpoch {
+    /// The epoch the tool wrote into a manifest; `None` for zero.
+    pub fn try_new(raw: u64) -> Option<Self>;
+}
+impl Revision {
+    pub fn try_new(raw: u64) -> Option<Self>;
 }
 
 /// Exhaustive: a host derives the tier from the version and its own record.
@@ -149,113 +176,126 @@ pub enum ReloadEvent {
 pub trait DevReloadHook: 'static {
     // `attach`, `detach` and `poll` as in ADR-0311 §1.
 
-    /// Restart: run the entry of the code now loaded, on the owner thread. The entry hands its
-    /// application to the loop that called this, as it handed the first one. The default runs
-    /// nothing, for a mechanism that cannot restart in the process.
+    /// Restart: run the entry of the code now loaded, on the owner thread, while the loop's
+    /// hand-over is open (§4 step 2). The default runs nothing, for a mechanism that cannot
+    /// restart in the process.
     fn run_entry(&mut self) {}
 
-    /// What the loop did with a version, after the frame that applied it.
+    /// What the loop did with a version, after the turn that applied it.
     fn applied(&mut self, outcome: &ReloadOutcome<'_>) {}
 }
 
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ReloadOutcome<'a> {
-    /// One UI runtime reassembled. `behind` names the view types of the elements that still run
-    /// code of an earlier build.
-    Reassembled { version: CodeVersion, runtime: UiRuntimeId, behind: &'a [&'static str] },
-    /// The loop restarted: because the layout changed, or because a reassemble was `raised`.
-    Restarted { version: CodeVersion, raised: Option<RaiseReason> },
-    /// The restart did not happen and the application that was running still is.
-    RestartRefused { version: CodeVersion, reason: RestartRefusal },
-}
-
-/// Opaque: two are equal or they are not. The tool mints them and the hook carries them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LayoutEpoch(NonZeroU64);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Revision(NonZeroU64);
-
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum RaiseReason {
-    /// A mechanism handed back the element of this view type instead of reassembling it.
-    ElementRefused { view: &'static str },
+    /// One UI runtime reassembled to `version`.
+    #[non_exhaustive]
+    Reassembled { version: CodeVersion, runtime: UiRuntimeId },
+    /// The application was composed again from `version`.
+    #[non_exhaustive]
+    Restarted { version: CodeVersion },
+    /// The restart did not compose an application; the loop has none until the next one does.
+    #[non_exhaustive]
+    RestartFailed { version: CodeVersion, reason: RestartFailure<'a> },
 }
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum RestartRefusal {
+pub enum RestartFailure<'a> {
     EntryPanicked,
     /// The entry returned without handing an application over.
     NoApplication,
-    /// The entry's application is one `run` refuses; the error is the host's.
-    Launch(Box<dyn std::error::Error>),
+    /// The handed application is one `run` refuses, or composing it failed; the error is the
+    /// host's.
+    Launch(&'a dyn std::error::Error),
+    /// User code that composing runs (a plugin's registration, a service's start) panicked.
+    ComposePanicked,
 }
 ```
 
 - **One record, in the loop.** Beside each event loop's hook instance the host keeps the version
-  its UI runtimes were composed from (`composed`), the last version the hook reported (`loaded`)
-  and, per UI runtime, the revision it last reassembled to. `composed` is written when the
-  application is first composed and when a restart succeeds, and nowhere else. No tier is stored.
-- **The tier is derived.** When the hook reports a version whose layout differs from
-  `composed.layout`, the loop restarts to it (§4), once, at its next turn and before any UI
-  runtime's frame; a restart that is refused is not tried again for that version. While the two
-  layouts are equal, each UI runtime whose revision differs from `loaded.revision` reassembles at
-  its own frame boundary, as ADR-0311 §2 has it apply a reload, and records the revision; while
-  they differ no UI runtime reassembles. A version the hook reports twice changes nothing.
-- **A mechanism may raise and never lowers.** A hook that cannot place a build mints a layout no
-  earlier version had. A UI runtime that cannot finish a reassemble (its mechanism refuses an
-  element) raises: the loop restarts to the same `loaded` version at its next turn and the outcome
-  carries the reason. No path turns a changed layout into a reassemble.
+  its application was composed from (`composed`, empty after a restart that failed), the last
+  version the hook reported (`loaded`) and, per UI runtime, the revision it was composed from or
+  last reassembled to. `composed` is written when an application is composed and emptied when a
+  restart fails, and nowhere else. No tier is stored.
+- **The tier is derived, at the poll that reports a version.** A version equal to `loaded`
+  changes nothing. Otherwise the loop records it as `loaded`, and:
+  - when `composed` is empty or its layout differs, the loop restarts to it (§4) when the frame in
+    which it was polled returns, before the loop waits for the next event; no UI runtime
+    reassembles in that frame;
+  - when the layouts are equal, each UI runtime whose revision differs from `loaded.revision`
+    reassembles at its own frame boundary, as ADR-0311 §2 has it apply a reload, and records the
+    revision. A window that draws late reassembles to the latest version, once.
+  A failed restart is not tried again for that version; the next version the hook reports is.
+- **Where the loop polls.** At each UI runtime's frame boundary, as ADR-0311 §1 says, and, in a
+  loop with no UI runtime, when the hook's wake arrives. The polling, the record and the restart
+  are one module of `flui-app` that every host calls; no host writes them.
 - **Process restart has no event.** The supervisor that started the process replaces it. A hook
   that needs one (an image it cannot load) says so to its tool on its own channel and reports
-  `Unchanged`.
+  `Unchanged`. A hook mints no version.
 - **The outcome is the report's source.** The host calls `applied` once per UI runtime that
-  reassembled and once per restart or refusal. A panic in `poll` or `applied` retires the hook as
-  ADR-0311 §5 says. A panic in `run_entry` is the application's entry panicking: it refuses that
-  restart and the hook stays.
+  reassembled and once per restart, succeeded or failed. A panic in `poll` or `applied` retires the
+  hook as ADR-0311 §5 says. A panic in `run_entry` is the application's entry panicking: it fails
+  that restart and the hook stays.
+- **A mechanism may add ways for a reassemble to stop.** A mechanism whose record lets an element
+  refuse new code, or leave code of an earlier build running, extends `Reassembled` and this
+  record with them (ADR-0394 proposes both). Without one a reassemble always completes.
 
-§4. **A restart retires the UI runtimes and composes the application again.** The host:
+§4. **A restart retires the application and composes it again.** The loop holds what it builds
+from an `Application` (the capability registry, plugins, handlers, services, the exit policy, the
+main-window factory and its installer, the placement registry, the opening handler, the executors
+and their tasks, the application-control ingress, the application's font registrations, every UI
+runtime) in one value, the *application scope*, which a restart drops and builds again. What the
+loop holds outside it is what the host made before any application code ran, and only that is
+kept. The host, at the end of the turn:
 
-1. runs `DevReloadHook::run_entry` and takes the application the entry hands over: its
-   `Application` and its root. An entry that panics, returns an error or returns without an
-   application refuses the restart, and so does an application `run` would refuse
-   (`LaunchError`). A refused restart changes nothing in the process: the UI runtimes keep
-   running, `composed` keeps its value and the outcome is `RestartRefused`. The tool, which
-   receives the outcome, then applies a process restart, so the edit is shown either way.
-2. retires every UI runtime of the loop: each unmounts its root, so every `State` is disposed in
-   tree order by the code that created it. A dispose that panics does not stop the unmount; the
-   first payload is kept (`FirstPanic`) and logged. Each presentation detaches from its surface,
-   and each window the application opened is closed.
-3. composes from the application of step 1 what `run` composes at the start: the capability
-   registry, the plugins and the handlers of the later `Application`, and for each window the
-   runner opened a new UI runtime, which takes over that window's text context, mounts the root
-   and attaches to the window's surface. A new scene owner has a new lineage, so its first
-   publication is drawn in full (ADR-0304 §10).
-4. writes `composed` and reports `Restarted`.
+1. **retires the application.** Each UI runtime unmounts its root, so every `State` is disposed in
+   tree order by the code that created it, and its presentation detaches from its surface. A
+   dispose that panics does not stop the unmount; the first payload is kept (`FirstPanic`) and
+   logged. Each window the application opened is closed as the end of a run closes it: no close
+   request is asked and no handler of the earlier application runs. Then the scope is dropped in
+   the reverse of the order it was built in, services stopped as at the end of a run, the first
+   panic kept.
+2. **runs the entry with the hand-over open.** The loop opens its hand-over, which belongs to this
+   call: empty before it and drained after it on every exit. While it is open, `Application::run`
+   on the owner thread hands its application and root to it and returns without starting a loop,
+   and the entry's declarations (`#[flui::main]`'s `declare`) are recorded for the new scope. The
+   loop holds no borrow of its own state across the call. An entry that panics, returns without
+   handing an application over, or hands one `run` refuses (`LaunchError`) fails the restart.
+3. **composes the handed application** as `run` composes it at the start: a new scope, and for
+   each window the runner opened a new UI runtime, with a text context built from the kept system
+   fonts and the application's registrations, that mounts the root and attaches to the window's
+   surface. A new scene owner has a new lineage, so its first publication is drawn in full
+   (ADR-0304 §10), and the window's accessibility tree is replaced in full. A UI runtime that
+   cannot be built, a surface that cannot be attached, or composing code that panics fails the
+   restart, and what step 3 composed is retired as in step 1. A panic in the new root's mount
+   shows what a build's panic shows (ADR-0287) and does not fail it.
+4. **writes `composed`**, answers the exit-policy question with the new application's policy, and
+   reports `Restarted`.
 
-- A retired `UiRuntimeId` is never issued again, so work the earlier application started and that
-  finishes later (a completion, a queued command, an answer addressed to a presentation) is
-  refused by its id, as it is for a closed window. Nothing of the earlier application is kept by
-  key and value type.
-- A panic in the new root's mount shows what a build's panic shows (ADR-0287). `composed` is
-  written all the same: the runtimes that exist were made from that version.
+- A failed restart leaves the loop with the kept windows, their last frames and no application.
+  `composed` is emptied and the outcome is `RestartFailed`. The tool, which receives the outcome,
+  then applies a process restart, so the edit is shown either way; a later version the hook
+  reports before that is tried.
+- Work the earlier application addressed through the framework is refused after it is retired: a
+  retired `UiRuntimeId` is never issued again, the earlier ingress refuses every request an
+  `AppHandle` of it sends, and an accessibility action names a node of a tree that is gone. Tasks
+  on the scope's executors are dropped with it. A thread the application spawned itself is its
+  own: the framework cannot end it, and it keeps running code of the earlier build.
 - The later application's window description is not applied to a kept window. An author who
   changed it asks for a process restart.
-- The loop owns the list of its windows and which of them the runner opened. A window the
-  application opened belongs to the application that opened it and goes with it.
 
-`flui_runtime::reload::ReloadTier` is deleted with its `Restart` and `ProcessRestart` variants:
-a UI runtime reassembles, and the two higher tiers are not operations on a UI runtime.
+`flui_runtime::reload::ReloadTier` is deleted, and the runtime's reload command loses its
+argument: a UI runtime reassembles, and the two higher tiers are not operations on a UI runtime.
+`HotReloadTier` of `packages/flui-hot-reload`, its second statement, is deleted in the same change.
 
-§5. **The tool reports what the process did.** For every build `flui run` prints the tier, the
-reason (the first changed file and, for a restart, the item whose shape changed), the time from
-the save to the outcome, and what the outcome names: a raise with its reason, a refusal with its
-reason and the process restart that follows it, the view types left behind. A build with no
-outcome within the tool's deadline is reported as unanswered. When a mechanism knows of code an
-edit replaced that keeps running, its record says
-how the report names it.
+§5. **The tool reports what the process did.** For every outcome `flui run` prints the tier the
+outcome names, the tool's reason (the first changed file and, for a restart, the item whose shape
+changed), the time from the save to the outcome, and the outcome's details: a failure with its
+reason and the process restart that follows it. A build the next one replaced before the process
+loaded it is reported as applied with the next. A build with no outcome within the tool's deadline
+is handled as a failed restart: the tool applies a process restart and says so. When a mechanism
+knows of code an edit replaced that keeps running, its record says how the report names it.
 
 §6. **The tiers hold on every host that drives `DevReloadHook`.** Where no mechanism loads new
 code, the tool applies a process restart, or the page reload that stands for it on the web, and
@@ -267,61 +307,65 @@ says so. Which hosts have a mechanism is the mechanism's record and
 - Good, because an edit to a type costs a new composition in the same window instead of a new
   process.
 - Good, because the author marks nothing, and soundness does not rest on the author's discipline.
-- Good, because a restart has one rule. The capability registry, the plugins, the handlers, the
-  caches of a UI runtime, the queues and the windows the application opened need no rule each.
-- Good, because the entry runs when Flutter's `main` runs.
+- Good, because a restart has one rule: what is in the application scope is dropped and built
+  again, and adding state to the scope needs no rule of its own.
+- Good, because the entry runs when Flutter's `main` runs, after the earlier application is gone,
+  as Flutter runs it after the earlier isolate is gone.
 - Good, because no tier is stored: a window that draws late, two saves that arrive as one, and a
   restart that failed are all answered by comparing versions.
 - Bad, because the tool parses the changed sources on every save.
-- Bad, because the shape is conservative: an edit to an attribute or to a `const` initialiser
-  restarts where a finer rule could reassemble.
-- Bad, because a statement macro inside a body that declares a type is outside the shape, so a
-  mechanism needs its own guard for a value whose size changed.
-- Bad, because a restart builds a UI runtime again: its element, render and semantics trees and
-  its caches start empty.
+- Bad, because the shape is conservative: an edit to an attribute, a `const` initialiser or any
+  `async` body restarts where a finer rule could reassemble.
+- Bad, because a macro invocation inside a body whose expansion declares a type without an item
+  keyword among its tokens is outside the shape, so a mechanism needs its own guard for a value
+  whose size changed.
+- Bad, because a restart builds the UI runtimes again: their element, render and semantics trees
+  and their caches start empty.
 - Bad, because the worker path restarts the process on an edit that today reloads.
-- Bad, because the entry runs again while the earlier application is still alive and in the same
-  process, where Flutter gives `main` a new isolate: an entry that sets a process-wide value a
-  second time (a global log subscriber) or takes what the earlier one still holds (a port) refuses
-  every restart, and each of its Restart-tier edits costs a process restart.
+- Bad, because the entry runs again in the same process, where Flutter gives `main` a new isolate:
+  an entry that sets a process-wide value a second time (a global log subscriber) fails every
+  restart, and each of its Restart-tier edits costs a process restart.
+- Bad, because a thread the earlier application spawned outlives a restart, where Flutter's
+  restart ends the isolates the program spawned.
 - Bad, because nothing restarts in the process until a mechanism implements `run_entry`.
 
 ### Confirmation
 
 Each decision and what holds it. The tests are added by the changes that build the sections; the
 loop's record lives in `flui-app`, so its tests run there on the headless platform with a
-scripted hook from the testing kit.
+scripted hook from the testing kit. They replace ADR-0311's
+`each_reload_event_maps_to_the_ui_runtime_tier`.
 
 | Decision | Held by |
 |---|---|
-| §2 placement by shape | `flui-cli` table test `an_edit_is_placed_by_its_shape`: a body edit, a field added, a field's type changed, a doc comment, a `const fn` body, an item declared inside a body, an item macro, a file the build read and the tool does not parse, a manifest, the lock file, a build script, a crate that is not reloadable, the author's two requests, and sources that do not build |
-| §2 a new layout exactly at Restart | `flui-cli`: `a_restart_tier_build_gets_a_new_layout_and_a_reassemble_keeps_it` |
+| §2 placement by shape | `flui-cli` table test `an_edit_is_placed_by_its_shape`: a body edit, a field added, a field's type changed, a doc comment, a `const fn` body, an `async fn` body, an `async` block in a body, an item declared inside a body, an item macro, a body macro with and without an item keyword, a file the build read and the tool does not parse, a manifest, the lock file, a build script, a crate that is not reloadable, the author's two requests, and sources that do not build |
+| §2 versions | `flui-cli`: `a_restart_tier_build_gets_a_new_layout_and_a_reassemble_keeps_it`, `a_process_restart_build_is_staged_only_for_the_next_process` |
 | §2 the worker path restarts the process on a changed worker shape | `flui-cli`: `a_changed_worker_shape_restarts_the_process` |
-| §2 the old process runs until the build succeeds | `flui-cli`: `a_failed_build_leaves_the_running_process` |
-| §3 the tier is derived per UI runtime | `flui-app`: `a_window_that_draws_late_reassembles_to_the_latest_revision`, `a_changed_layout_restarts_and_a_later_body_edit_reassembles`, `two_versions_before_a_boundary_apply_once`, `a_version_reported_twice_changes_nothing` |
-| §3 a raise restarts to the same version | `flui-app`: `a_raised_reassemble_restarts_the_loop` |
-| §3 the outcome | `flui-app`: `each_reassembled_runtime_and_each_restart_is_reported_once` |
+| §2 the old process runs until the build succeeds, from staged copies | `flui-cli`: `a_failed_build_leaves_the_running_process`, `a_process_runs_from_staged_copies`; the nightly Windows `flui-cli` scenarios run a process restart |
+| §3 the tier is derived per UI runtime | `flui-app`: `a_window_that_draws_late_reassembles_to_the_latest_revision`, `a_changed_layout_restarts_and_a_later_body_edit_reassembles`, `two_versions_before_a_boundary_apply_once`, `a_version_reported_twice_changes_nothing`, `a_restart_tier_save_then_a_body_save_restart_once` |
+| §3 where the loop polls | `flui-app`: `an_idle_loop_restarts_on_the_wake_that_reported_the_version`, `a_loop_without_a_ui_runtime_polls_on_the_wake` |
+| §3 the outcome | `flui-app`: `each_reassembled_runtime_and_each_restart_is_reported_once`, `a_panicking_applied_retires_the_hook` |
 | §3 `ReloadEvent` is exhaustive | the compiler: a host that does not map `Loaded` does not compile |
-| §4 step 1 | `flui-app`: `a_panicking_entry_refuses_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_refuses_the_restart`, `a_refused_restart_keeps_every_state` |
-| §4 step 2 | `flui-app`: `a_restart_disposes_every_state_before_the_new_root_mounts`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened` |
-| §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_its_text_context`, `an_answer_to_a_retired_runtime_is_refused` |
-| §4 `ReloadTier` is gone | the compiler |
-| §5 the report | `flui-cli`: `the_report_names_the_tier_the_reason_and_the_outcome`, `a_refused_restart_restarts_the_process`, `a_build_without_an_outcome_is_reported_unanswered` |
+| §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `an_app_handle_of_the_earlier_application_is_refused` |
+| §4 step 2 | `flui-app`: `a_panicking_entry_fails_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_fails_the_restart`, `a_failed_restart_leaves_nothing_in_the_hand_over` |
+| §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_registers_the_fonts_again`, `a_failed_composition_retires_what_it_built`, `a_panic_in_the_new_roots_mount_is_still_a_restart`, `an_answer_to_a_retired_runtime_is_refused` |
+| §4 step 4 | `flui-app`: `a_resident_application_is_asked_to_exit_by_its_new_policy` |
+| §4 `ReloadTier` and `HotReloadTier` are gone | the compiler |
+| §5 the report | `flui-cli`: `the_report_names_the_tier_the_reason_and_the_outcome`, `a_failed_restart_restarts_the_process`, `a_build_without_an_outcome_restarts_the_process`, `a_replaced_build_is_reported_with_the_next` |
 | §6 no mechanism | `flui-cli`: `a_target_without_a_mechanism_restarts_the_process` |
 
-- What a restart keeps on a real surface (the window does not close, the pipelines are not built
-  again) cannot be seen on the headless platform: the change that builds §4 adds its row to
-  `crates/flui-native/platform-parity.toml`.
-- [`docs/gaps.md`](../gaps.md) lists this record under "Accepted ADR sections not built yet" until
-  the sections are built.
+What a restart keeps on a real surface (the window does not close, the pipelines are not built
+again) cannot be seen on the headless platform: the change that builds §4 adds its row to
+`crates/flui-native/platform-parity.toml`.
 
 ## Pros and cons of the options
 
 ### 1. Two tiers
 
 - Good, because nothing is built.
-- Bad, because every edit to a type costs a process: about 2.9 s, a window that closes and opens,
-  and shaders and fonts loaded again.
+- Bad, because every edit to a type closes the window and opens a new one, with the start to the
+  first frame (about 0.25 s) and the shaders and fonts loaded again; the build is the same in
+  every option.
 - Bad, because `ReloadTier::Restart` stays a variant that does something else.
 
 ### 2. Three tiers, a restart remounts the root inside each UI runtime
@@ -335,12 +379,13 @@ scripted hook from the testing kit.
 - Bad, because every UI runtime needs a root of the new code, and one root handed over once does
   not serve two.
 
-### 3. Three tiers, a restart runs the entry again (chosen)
+### 3. Three tiers, a restart retires the application and runs the entry again (chosen)
 
-- Good, because it is Flutter's hot restart: a new isolate there, new UI runtimes here, the same
-  engine and window in both.
-- Good, because what survives is what the host made before any application code ran.
-- Good, because stale work is refused by an id the framework already mints.
+- Good, because it is Flutter's hot restart: a new isolate there, a new application scope here,
+  the same engine and window in both.
+- Good, because what survives is what the host made before any application code ran, held apart
+  by a type.
+- Good, because stale work is refused by ids and an ingress the framework already has.
 - Bad, because a UI runtime is built again, which costs more than a remount.
 
 ### 4. Three tiers, declared by a derive on the author's types
@@ -360,11 +405,16 @@ scripted hook from the testing kit.
 
 ## More information
 
+- Weighed inside option 3, the order of the two halves. Running the new entry before the earlier
+  application is retired would keep that application on screen when the entry fails; but a
+  failure is followed by a process restart, which discards it anyway, and the new entry would meet
+  every resource the earlier one still holds (a port, a device, an audio context), failing or
+  duplicating it. Retiring first is Flutter's order.
 - The `TypeId` run: a struct that gains a field and a closure that captures another type change
   their `TypeId`; a field whose type changes and an `async` block whose interior grows do not. It
-  is why the tool, which sees the edit, decides, and why `TypeId` alone guards nothing.
+  is why the tool, which sees the edit, decides, why `async` bodies are in the shape, and why
+  `TypeId` alone guards nothing.
 - Revisit §2 when rustc can report whether a crate's interface changed apart from its bodies (the
   "relink, don't rebuild" goal), which would replace the syntactic shape with the compiler's own.
 - Revisit §4's cost when a restart is measured on a real application: the element and render
-  trees are rebuilt in both forms of restart, so the difference is the UI runtime's own
-  construction.
+  trees are rebuilt in both forms of restart, so the difference is the scope's own construction.

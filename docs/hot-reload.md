@@ -9,7 +9,7 @@ FLUI targets **hot reload** (state preserved, `build()` re-run). The operational
 | Capability | FLUI today | FLUI target |
 |------------|------------|-------------|
 | Hot reload (state kept) | Yes — `flui run` worker dylib swap (`perform_reassemble`) | Keep |
-| Restart (state lost, window kept) | No: an edit to the types crate replaces the host process | The loop retires its UI runtimes and runs the entry again in the same window, and `flui run` chooses that tier from the shape of the edit ([ADR-0393](adr/ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md)) |
+| Restart (state lost, window kept) | No: an edit to the types crate replaces the host process | The loop retires the application and runs the entry again in the same window, and `flui run` chooses that tier from the shape of the edit ([ADR-0393](adr/ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md)) |
 | Reload of a one-crate project | No: `State` survives only in the three-crate project below | An application image the element tree adopts (proposed, [ADR-0394](adr/ADR-0394-application-code-reloads-as-an-image-the-element-tree-adopts.md)) |
 | Scene plugin reload | Yes | Keep for GPU demos |
 
