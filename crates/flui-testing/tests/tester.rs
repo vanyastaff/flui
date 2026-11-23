@@ -1735,7 +1735,9 @@ fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
 struct SwatchPainter(flui_painting::styling::Color);
 
 impl flui_rendering::delegates::CustomPainter for SwatchPainter {
-    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+    fn paint(&self, ctx: &mut flui_rendering::delegates::CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         canvas.draw_rect(
             flui_foundation::geometry::Rect::from_origin_size(
                 flui_foundation::geometry::Point::ZERO,
@@ -2026,7 +2028,9 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
 struct OverhangPainter(flui_painting::styling::Color);
 
 impl flui_rendering::delegates::CustomPainter for OverhangPainter {
-    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+    fn paint(&self, ctx: &mut flui_rendering::delegates::CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         use flui_foundation::geometry::{Point, Rect, Size};
         let paint = flui_painting::paint::Paint::fill(self.0);
         canvas.draw_rect(Rect::from_origin_size(Point::ZERO, size), &paint);
@@ -2140,7 +2144,9 @@ fn draw_commands_refuse_a_render_object_with_more_children_than_one_inspection()
 struct RegionPainter;
 
 impl flui_rendering::delegates::CustomPainter for RegionPainter {
-    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+    fn paint(&self, ctx: &mut flui_rendering::delegates::CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         canvas.draw_rect(
             flui_foundation::geometry::Rect::from_origin_size(
                 flui_foundation::geometry::Point::ZERO,

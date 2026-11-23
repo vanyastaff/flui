@@ -89,6 +89,7 @@ impl RenderObject<BoxProtocol> for FlakyLeaf {
     fn paint_raw(
         &self,
         _recorder: &mut flui_rendering::context::FragmentRecorder,
+        _text: flui_rendering::TextSource<'_>,
         _child_count: usize,
         _size: Size,
     ) {
@@ -406,6 +407,7 @@ impl RenderObject<BoxProtocol> for RetainingLeaf {
     fn paint_raw(
         &self,
         _recorder: &mut flui_rendering::context::FragmentRecorder,
+        _text: flui_rendering::TextSource<'_>,
         _child_count: usize,
         _size: Size,
     ) {

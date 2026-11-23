@@ -702,8 +702,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
 
 pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_size() {
     use flui_foundation::geometry::{Point, Rect, Size};
-    use flui_painting::Canvas;
-    use flui_rendering::delegates::CustomPainter;
+    use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
     use flui_semantics::{SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey};
     use flui_widgets::CustomPaint;
 
@@ -713,7 +712,7 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
         rebuild_semantics: bool,
     }
     impl CustomPainter for Painter {
-        fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+        fn paint(&self, _ctx: &mut CustomPaintContext<'_>) {}
         fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
             false
         }
@@ -773,8 +772,7 @@ pub(crate) fn custom_painter_regions_follow_semantics_only_updates_and_layout_si
 /// cannot name.
 pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     use flui_foundation::geometry::{Point, Rect, Size};
-    use flui_painting::Canvas;
-    use flui_rendering::delegates::CustomPainter;
+    use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
     use flui_semantics::{
         SemanticsConfiguration, SemanticsRegion, SemanticsRegionKey, TextContent, TextRun,
         TextRunParts, TextRunPosition, TextRunSelection,
@@ -785,7 +783,7 @@ pub(crate) fn a_fields_runs_keep_their_identities_until_their_text_changes() {
     #[derive(Debug)]
     struct Field(&'static str);
     impl CustomPainter for Field {
-        fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+        fn paint(&self, _ctx: &mut CustomPaintContext<'_>) {}
         fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
             false
         }

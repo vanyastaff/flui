@@ -44,7 +44,8 @@ second widget model, and they complement `view`, `widgets` and `foundation`.
 
 The export set follows the extension tasks an application performs:
 
-- `painting`: implement `CustomPainter` for `widgets::CustomPaint`, with
+- `painting`: implement `CustomPainter` for `widgets::CustomPaint`, painting through the
+  `CustomPaintContext` it is handed (its canvas, size and text loan), with
   `Canvas`, `DisplayList`, the paint, style and typography modules, and
   `SemanticsRegion`, `SemanticsRegionId`, `SemanticsRegionKey` and
   `SemanticsRegions`, which a painter reports to assistive technology.

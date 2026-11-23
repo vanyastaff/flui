@@ -97,10 +97,9 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::node::Description;
@@ -452,7 +451,9 @@ struct RadioPainter {
 }
 
 impl CustomPainter for RadioPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let center = Point::new(size.width / 2.0, size.height / 2.0);
 
         canvas.draw_circle(

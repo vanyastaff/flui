@@ -1087,7 +1087,7 @@ struct StateReader {
 }
 
 impl flui_rendering::delegates::CustomPainter for StateReader {
-    fn paint(&self, _canvas: &mut flui_painting::Canvas, _size: flui_foundation::geometry::Size) {
+    fn paint(&self, _ctx: &mut flui_rendering::delegates::CustomPaintContext<'_>) {
         self.painted.borrow_mut().push(self.states.value());
     }
 

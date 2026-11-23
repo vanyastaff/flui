@@ -89,10 +89,9 @@ use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpe
 use flui_sdk::foundation::TextDirection;
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::geometry::{Point, RRect, Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::Paint;
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
@@ -563,7 +562,9 @@ struct SwitchPainter {
 }
 
 impl CustomPainter for SwitchPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         // A spring may overshoot; the thumb stays on its track.
         let t = self.position.value().clamp(0.0, 1.0);
         let track_color = Color::lerp(self.off.track, self.on.track, t);

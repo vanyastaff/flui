@@ -77,9 +77,9 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Paint, Path};
 use flui_sdk::painting::styling::{BorderSide, BorderStyle};
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::node::Description;
@@ -613,7 +613,9 @@ struct CheckboxPainter {
 }
 
 impl CustomPainter for CheckboxPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let center_x = size.width / 2.0;
         let center_y = size.height / 2.0;
         let half_edge = CHECKBOX_EDGE_SIZE / 2.0;

@@ -23,7 +23,7 @@ impl RenderObject<BoxProtocol> for RawConsumer {
         Ok(size)
     }
 
-    fn paint_raw(&self, _recorder: &mut FragmentRecorder, _child_count: usize, _size: Size) {}
+    fn paint_raw(&self, _recorder: &mut FragmentRecorder, _text: flui_rendering::TextSource<'_>, _child_count: usize, _size: Size) {}
 
     fn hit_test_raw(
         &self,

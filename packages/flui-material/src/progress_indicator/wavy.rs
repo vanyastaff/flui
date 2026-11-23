@@ -18,10 +18,9 @@ use flui_sdk::animation::{
 use flui_sdk::foundation::Listenable;
 use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::{Point, Rect, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Paint, Path, StrokeCap};
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
@@ -453,7 +452,9 @@ struct LinearWavePainter {
 }
 
 impl CustomPainter for LinearWavePainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let (width, height) = (size.width, size.height);
         if !width.is_finite() || !height.is_finite() || width <= 0.0 {
             return;
@@ -512,7 +513,9 @@ struct CircularWavePainter {
 }
 
 impl CustomPainter for CircularWavePainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let side = size.width.min(size.height);
         if !side.is_finite() || side <= STROKE + 2.0 * CIRCULAR_AMPLITUDE {
             return;

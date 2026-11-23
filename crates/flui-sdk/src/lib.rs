@@ -354,7 +354,7 @@ pub mod painting {
     pub use flui_painting::DrawOp;
     pub use flui_painting::TextSizing;
     pub use flui_painting::{paint, styling, typography};
-    pub use flui_rendering::delegates::CustomPainter;
+    pub use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
     pub use flui_semantics::SemanticsRegion;
     pub use flui_semantics::SemanticsRegionKey;
 }

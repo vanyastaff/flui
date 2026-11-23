@@ -46,7 +46,7 @@ use flui_platform::{
     ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, WheelPreferences,
 };
 use flui_rendering::constraints::AxisDirection;
-use flui_rendering::delegates::CustomPainter;
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_rendering::view::ViewportOffset as _;
 use flui_view::environment::{GestureArenaScope, MediaQuery, VsyncScope};
 use flui_view::prelude::StatefulView;
@@ -848,7 +848,9 @@ impl fmt::Debug for ScrollbarPainter {
     }
 }
 impl CustomPainter for ScrollbarPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let bar = &self.bar;
         bar.size.set(size);
         let knobs = bar.knobs.get();

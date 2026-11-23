@@ -9,8 +9,8 @@ use flui_animation::{Animation, MotionPolicy, SharedCurve, curves};
 use flui_foundation::Listenable;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Rect, Size};
-use flui_painting::{Canvas, paint::Paint, styling::Color};
-use flui_rendering::delegates::CustomPainter;
+use flui_painting::{paint::Paint, styling::Color};
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_semantics::SemanticsRole;
 use flui_view::prelude::*;
 use flui_view::{EventContext, RebuildHandle, RebuildReason};
@@ -465,7 +465,9 @@ impl std::fmt::Debug for Live {
 }
 
 impl CustomPainter for DotsPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let count = self.live.count.get();
         let style = &self.style;
         let window = style.window.get().min(count);

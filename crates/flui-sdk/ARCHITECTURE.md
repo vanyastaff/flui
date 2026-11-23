@@ -67,8 +67,9 @@ crate.
 - **Curated modules**, at the facade's paths, each item the same type as the facade's:
   - `painting`: the `paint`, `styling` and `typography` modules whole, and the root items
     `Alignment`, `AlignmentDirectional`, `Canvas`, `DrawOp` (packages' paint tests),
-    `BlurSigma`, `TextSizing`, `CustomPainter` and the semantics regions that
-    `CustomPainter::semantics_regions` returns (ADR-0223); the shadow and decoration types come
+    `BlurSigma`, `TextSizing`, `CustomPainter` with the `CustomPaintContext` its `paint` takes,
+    and the semantics regions that `CustomPainter::semantics_regions` returns (ADR-0223); the
+    shadow and decoration types come
     in through `styling` and `typography` (ADR-0309, ADR-0310).
   - `rendering` and `rendering::objects`: constraints, protocol, hit-test behaviour, layout
     delegates and the configuration types widgets take from the built-in render objects.

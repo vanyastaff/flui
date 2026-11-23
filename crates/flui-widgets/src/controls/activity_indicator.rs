@@ -11,8 +11,8 @@ use flui_animation::{
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Rect, Size};
-use flui_painting::{Canvas, paint::Paint, paint::StrokeCap, styling::Color};
-use flui_rendering::delegates::CustomPainter;
+use flui_painting::{paint::Paint, paint::StrokeCap, styling::Color};
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_semantics::SemanticsRole;
 use flui_view::prelude::*;
 
@@ -244,7 +244,9 @@ struct ArcPainter {
 }
 
 impl CustomPainter for ArcPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let side = size.width.min(size.height);
         if !side.is_finite() || side <= STROKE {
             return;
