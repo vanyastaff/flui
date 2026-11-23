@@ -1357,16 +1357,67 @@ impl ReloadStrategy for ProcessRestart {
     }
 
     fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
-        if !timed_build(|| {
+        if self.build() {
+            self.spawn(child)?;
+        }
+        Ok(())
+    }
+
+    /// Rebuild while the app keeps running, and replace it only with a build
+    /// that succeeded: a compile error leaves the window up with the
+    /// previous build while the author fixes it, and a good build replaces
+    /// it without the app being gone for the length of the build. Windows
+    /// refuses to overwrite a running executable, so there the app stops
+    /// before the build, and a failed build leaves no app running.
+    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
+        if cfg!(windows) {
+            stop_and_report(child);
+        }
+        ui::step("Rebuilding...")?;
+        let built = self.build();
+        if built {
+            stop_and_report(child);
+            self.spawn(child)?;
+        }
+        ui::emit(
+            "run.reload",
+            &serde_json::json!({ "kind": "restart", "ok": built }),
+        );
+        if !built {
+            if self.is_running(child.as_ref()) {
+                ui::warning(
+                    "Build failed. The application keeps running its previous build... \
+                     (fix errors and save to retry)",
+                )?;
+            } else {
+                ui::warning(
+                    "Build failed. Watching for changes... (fix errors and save to retry)",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn reload_label(&self) -> &'static str {
+        "Rebuild and restart"
+    }
+}
+
+impl ProcessRestart {
+    /// `cargo build` of the application, reported as `run.build.*`.
+    fn build(&self) -> bool {
+        timed_build(|| {
             run_cargo_build(
                 &self.selection,
                 self.profile.as_deref(),
                 self.verbose,
                 self.agent.as_ref(),
             )
-        }) {
-            return Ok(());
-        }
+        })
+    }
+
+    /// Start the built application into `child`.
+    fn spawn(&self, child: &mut Option<AppChild>) -> CliResult<()> {
         if let Some(session) = &self.agent {
             session.clear_endpoint();
         }
@@ -1380,24 +1431,6 @@ impl ReloadStrategy for ProcessRestart {
         announce_started(&spawned, "Application started");
         *child = Some(spawned);
         Ok(())
-    }
-
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
-        stop_and_report(child);
-        ui::step("Rebuilding...")?;
-        self.build_and_spawn(child)?;
-        ui::emit(
-            "run.reload",
-            &serde_json::json!({ "kind": "restart", "ok": child.is_some() }),
-        );
-        if child.is_none() {
-            ui::warning("Build failed. Watching for changes... (fix errors and save to retry)")?;
-        }
-        Ok(())
-    }
-
-    fn reload_label(&self) -> &'static str {
-        "Rebuild and restart"
     }
 }
 

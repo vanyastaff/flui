@@ -11,6 +11,10 @@
 - **`flui-hot-reload`**: a host reads its worker or scene artifact every 50 ms instead of every
   500 ms (`timing::ARTIFACT_POLL`, `timing::WATCHER_POLL`), so a rebuilt worker is picked up up
   to half a second sooner.
+- **`flui-cli`**: a restart in `flui run` rebuilds while the application keeps running and replaces
+  it only with a build that succeeded. A compile error leaves the previous build on screen
+  instead of closing the window for the length of the build. Windows, which cannot overwrite a
+  running executable, still stops the application first.
 
 ### Removed
 
