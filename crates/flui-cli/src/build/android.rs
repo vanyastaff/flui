@@ -202,6 +202,41 @@ impl AndroidBuilder {
     }
 }
 
+/// The `cargo ndk` arguments that build the application's library for `abi`
+/// against `api_level` and copy it into `out_dir` as `<abi>/lib<name>.so`.
+///
+/// The library is compiled as a `cdylib`, the form `NativeActivity` loads,
+/// with the `android_main` its `#[flui::main]` function writes. The crate
+/// type is asked for here rather than declared in the manifest: a declared
+/// `cdylib` is linked on every desktop build as well, a second link of the
+/// whole framework per edit that no desktop run loads. A manifest that still
+/// declares it builds the same library.
+fn app_build_args<'a>(
+    abi: &'a str,
+    api_level: &'a str,
+    out_dir: &'a str,
+    profile_flag: Option<&'a str>,
+    features: &'a [String],
+) -> Vec<&'a str> {
+    let mut args = vec![
+        "-t",
+        abi,
+        "--platform",
+        api_level,
+        "-o",
+        out_dir,
+        "rustc",
+        "--lib",
+        "--crate-type",
+        "cdylib",
+    ];
+    args.extend(profile_flag);
+    for feature in features {
+        args.extend(["--features", feature.as_str()]);
+    }
+    args
+}
+
 /// The `cargo ndk` arguments that build the scene crate `scene_crate` for
 /// `abi` against `api_level` and copy its library into `out_dir`. The crate
 /// is named by its package name, which is how cargo-ndk finds its manifest.
@@ -386,26 +421,13 @@ impl AndroidBuilder {
         for target in targets {
             crate::ui::debug(format!("Building for Android target: {target}"));
 
-            // The project's own package: its `[lib]` is a `cdylib` with
-            // the `android_main` its `#[flui::main]` function writes, which `cargo ndk`
-            // drops into `jniLibs/<abi>/lib<name>.so`.
-            let mut args = vec![
-                "-t",
-                target.as_str(),
-                "--platform",
-                platform.as_str(),
-                "-o",
+            let args = app_build_args(
+                target,
+                &platform,
                 jni_libs_str,
-                "build",
-                "--lib",
-            ];
-
-            if let Some(profile_flag) = ctx.profile.cargo_flag() {
-                args.push(profile_flag);
-            }
-            for feature in &ctx.features {
-                args.extend(["--features", feature.as_str()]);
-            }
+                ctx.profile.cargo_flag(),
+                &ctx.features,
+            );
 
             process::run(
                 self.cargo_ndk()
@@ -613,7 +635,7 @@ fn gradle_apk(apk_dir: &Path, profile: Profile) -> BuildResult<PathBuf> {
 /// SDK's build-tools, see `android_package.rs`.
 impl AndroidBuilder {
     /// What the crates linked for the ABIs built, with the features the build
-    /// turns on, declare (ADR-0307). `cargo ndk build --lib` runs in the
+    /// turns on, declare (ADR-0307). `cargo ndk rustc --lib` runs in the
     /// project's directory and names no package, so the build is cargo's
     /// default selection there.
     fn declarations(&self, ctx: &BuilderContext) -> BuildResult<crate::declarations::Declarations> {
@@ -643,12 +665,12 @@ impl AndroidBuilder {
         by_gradle: bool,
     ) -> BuildResult<()> {
         let lib_name = super::util::cargo::cargo_project(&self.workspace_root)?
-            .cdylib
+            .library
             .ok_or_else(|| {
                 BuildError::invalid_config(
                     "Cargo.toml",
-                    "the application builds no `cdylib`, which NativeActivity loads; \
-                     `flui create` writes `[lib] crate-type = [\"cdylib\", …]`",
+                    "the application has no library, which NativeActivity loads as a \
+                     `cdylib`; `flui create` puts the application in `src/lib.rs`",
                 )
             })?;
         super::android_manifest::write(
@@ -782,6 +804,44 @@ mod tests {
     /// The scene crate is built against the application's floor and its
     /// library copied where the build reads it, the crate named as
     /// cargo-ndk finds it.
+    #[test]
+    fn the_application_library_is_compiled_as_the_cdylib_android_loads() {
+        let features = ["driver".to_owned()];
+        assert_eq!(
+            app_build_args("arm64-v8a", "26", "jniLibs", Some("--release"), &features),
+            [
+                "-t",
+                "arm64-v8a",
+                "--platform",
+                "26",
+                "-o",
+                "jniLibs",
+                "rustc",
+                "--lib",
+                "--crate-type",
+                "cdylib",
+                "--release",
+                "--features",
+                "driver"
+            ]
+        );
+        assert_eq!(
+            app_build_args("x86_64", "26", "jniLibs", None, &[]),
+            [
+                "-t",
+                "x86_64",
+                "--platform",
+                "26",
+                "-o",
+                "jniLibs",
+                "rustc",
+                "--lib",
+                "--crate-type",
+                "cdylib"
+            ]
+        );
+    }
+
     #[test]
     fn the_scene_plugin_is_built_at_the_floor_into_its_own_directory() {
         assert_eq!(

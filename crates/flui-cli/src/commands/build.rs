@@ -205,7 +205,7 @@ pub(crate) fn execute(
 fn validate_options(target: BuildTarget, options: &BuildOptions) -> CliResult<()> {
     if target == BuildTarget::Android && (options.example.is_some() || options.package.is_some()) {
         return Err(CliError::Usage(
-            "Android APK builds select the current package's cdylib; --example and --package are unsupported".into(),
+            "Android APK builds select the current package's library; --example and --package are unsupported".into(),
         ));
     }
     if options.library && target != BuildTarget::Ios {

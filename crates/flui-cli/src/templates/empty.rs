@@ -29,7 +29,6 @@ fn cargo_toml(name: &str, source: &DependencySource) -> String {
     } else {
         ""
     };
-    let lib_table = super::LIB_TABLE;
     let profiles = super::PROFILES;
 
     format!(
@@ -45,7 +44,6 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 
-{lib_table}
 [dependencies]
 {deps}
 

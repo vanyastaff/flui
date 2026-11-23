@@ -78,9 +78,11 @@ pub(crate) struct CargoProject {
     /// The package whose manifest is in `dir`, not a package of an
     /// enclosing workspace; `None` for a virtual workspace.
     pub(crate) package: Option<String>,
-    /// The file stem of that package's `cdylib`, as it lands in
-    /// `lib<stem>.so` (`-` as `_`), when it builds one.
-    pub(crate) cdylib: Option<String>,
+    /// The file stem of that package's library target, as an Android build
+    /// lands it in `lib<stem>.so` (`-` as `_`), when it has one. The crate
+    /// types the manifest declares do not matter: that build asks for the
+    /// `cdylib` itself.
+    pub(crate) library: Option<String>,
 }
 
 /// Ask `cargo metadata` (without dependencies) about the project at `dir`.
@@ -104,17 +106,28 @@ pub(crate) fn cargo_project(dir: &Path) -> BuildResult<CargoProject> {
                 .and_then(|dir| std::fs::canonicalize(dir).ok())
                 == here
     });
-    let cdylib = package.and_then(|package| {
+    let library = package.and_then(|package| {
         package
             .targets
             .iter()
-            .find(|target| target.crate_types.contains(&CrateType::CDyLib))
+            .find(|target| {
+                target.crate_types.iter().any(|crate_type| {
+                    matches!(
+                        crate_type,
+                        CrateType::Lib
+                            | CrateType::RLib
+                            | CrateType::DyLib
+                            | CrateType::CDyLib
+                            | CrateType::StaticLib
+                    )
+                })
+            })
             .map(|target| target.name.replace('-', "_"))
     });
     Ok(CargoProject {
         target_dir: metadata.target_directory.into_std_path_buf(),
         package: package.map(|package| package.name.to_string()),
-        cdylib,
+        library,
     })
 }
 

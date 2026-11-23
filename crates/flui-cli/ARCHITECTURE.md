@@ -138,8 +138,8 @@ stays the application when a crate of its build depends on it
 (`only_the_application_declares_the_links_it_opens`). A packager reads the member its build
 compiled (`BuildArtifacts::package`), not the member's siblings
 (`a_desktop_entry_registers_what_the_built_member_opens`,
-`an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk build
---lib` in the project's directory without naming a package, so it reads the default selection.
+`an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk rustc
+--lib --crate-type cdylib` in the project's directory without naming a package, so it reads the default selection.
 `flui run` selects the binary plain `cargo run` would run, as `flui build` selects a desktop
 binary (a root package's default members; among several default members, the one `default-run`
 when exactly one names one: `a_run_without_a_package_selects_the_binary_cargo_runs`), and names
@@ -653,7 +653,7 @@ no allocation-count claim is inferred from those behavior tests.
 ### Build selectors reach the selected platform unit
 
 Web builds forward `--example` and `--package` through the existing Cargo target
-resolver. Android APK builds currently require the current package's cdylib;
+resolver. Android APK builds compile the current package's library as its cdylib;
 unsupported selectors are rejected before SDK probing rather than ignored.
 `platform_build_selectors_reach_the_selected_cargo_unit_or_refuse` drives the
 public CLI. Its portable fixture delegates metadata and project discovery to
