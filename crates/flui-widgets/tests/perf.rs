@@ -584,8 +584,8 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
 }
 
 /// What a `RawButton` adds to the `Text` it holds, per button: the four
-/// numbers `docs/gaps.md` closes "An interactive widget costs eighteen
-/// elements" on (ADR-0322). The `Text` alone is recorded beside them.
+/// numbers ADR-0322's drivers count a control's cost by. The `Text` alone is
+/// recorded beside them.
 #[test]
 fn perf_raw_button_over_text() {
     let cost = control_over_text(|row| {
@@ -603,7 +603,7 @@ fn perf_raw_button_over_text() {
 
     // One element for the button and one for its behaviours; one render
     // object. The allocations and bytes are held by the baseline, which
-    // only falls: the entry's numbers for them are 40 and 3 KB.
+    // only falls.
     assert!(
         cost.elements <= 2,
         "a button adds {} elements to its child",

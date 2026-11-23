@@ -196,7 +196,6 @@ pub mod platform {
     pub mod input_capabilities {
         pub use flui_platform::Availability;
         pub use flui_platform::input::capabilities::InputCapabilities;
-        pub use flui_platform::input::capabilities::PointerKindSet;
     }
 
     /// Haptic patterns, requests and outcomes (ADR-0210); the widget handle

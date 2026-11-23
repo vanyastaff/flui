@@ -389,7 +389,7 @@ wgpu = { version = "30.0", default-features = false, features = ["wgsl", "naga-i
 # `wayland-protocols` carries `zxdg_output_v1`, `xdg-decoration` and
 # `xdg-foreign` under `unstable`, and
 # `wp_fractional_scale_v1` and `wp_color_management_v1` under `staging`.
-x11rb = { version = "0.13", default-features = false, features = ["randr"] }
+x11rb = { version = "0.14", default-features = false, features = ["randr"] }
 # COMPOUND_TEXT, the encoding X Input Method servers send text in, for the
 # native X11 host's text input where no input method answers on D-Bus. The XIM
 # wire format itself is flui-native's own (`text::linux::x11::xim::wire`).
@@ -887,8 +887,8 @@ single-instance = ["flui-app/single-instance"]
 
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
-# (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
-# `PointerKindSet`) and the second haptic tier (`flui::platform::haptics`,
+# (`flui::platform::input_capabilities`: `InputCapabilities` and its builder)
+# and the second haptic tier (`flui::platform::haptics`,
 # `flui::interaction::HapticsHandle`), until every backend passes its
 # conformance rows (ADR-0213 §5, ADR-0210 §9); `flui-sdk` has the matching
 # feature for packages. The platform crates build the types regardless.
@@ -904,8 +904,8 @@ unstable-input = []
 native = ["flui-app/native"]
 
 # === Windows beyond the first ===
-# Additive and unstable. Publishes `flui::open_window`, `flui::open_secondary_window`
-# and `flui::WindowPolicy` (and their `flui::app` paths) until ADR-0091 §3–§5 are
+# Additive and unstable. Publishes `flui::app::open_window`, `flui::app::open_secondary_window`
+# and `flui::app::WindowPolicy` until ADR-0091 §3–§5 are
 # built: a `Shared` window is refused and an open answers only that it was
 # admitted (`docs/gaps.md`). Without it an application has one window.
 unstable-windows = ["flui-app/unstable-windows"]

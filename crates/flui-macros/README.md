@@ -4,7 +4,7 @@ The procedural macros of FLUI. An author never names this crate: each macro is
 re-exported beside the trait or function it serves, at the path the table
 gives. An application reaches the same items through the facade:
 `flui::prelude` carries the view derives, `InheritedData` and `Routable`,
-`Inspect` is `flui::Inspect`, `MotionValue` is in `flui::animation`, `Lerp` is in
+`Inspect` is `flui::foundation::inspect::Inspect`, `MotionValue` is in `flui::animation`, `Lerp` is in
 `flui::geometry`, and
 the entry attribute is `flui::main`.
 

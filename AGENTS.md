@@ -130,9 +130,7 @@ conversation:
   `flui-rendering`, `flui-painting` or `flui-engine` builds a task of
   `docs/plans/specs/render-scaling/` or fixes a
   defect, and it writes a new ADR for that pipeline only when the step it builds cannot be built
-  without one. While `docs/gaps.md` has
-  [An interactive widget costs eighteen elements](docs/gaps.md#an-interactive-widget-costs-eighteen-elements),
-  no new widget family starts; a family under way is finished.
+  without one.
 - **A replacement finishes in its own change.** A PR that brings a form to replace another (a
   primitive, an API, a rule, an ADR decision) moves every user of the old form and deletes it, or
   marks it `#[deprecated(note = "use …")]` and adds a `docs/gaps.md` entry for what is left.

@@ -188,7 +188,7 @@ pub mod persist {
 `Router::from_stack(stack: Vec<R>, page) -> Result<Self, RouterError>` (пустой стек —
 новый вариант `RouterError::EmptyStack`) и `RouterHandle::stack(&self) -> Vec<R>`.
 
-**`flui-app`** (H) — `flui::AppConfig`, фича `persist`: `with_storage_dir(self, name: StorageName)
+**`flui-app`** (H) — `flui::app::AppConfig`, фича `persist`: `with_storage_dir(self, name: StorageName)
 -> Self` (данные — `<dirs::data_dir>/<name>/`, сеанс — `<dirs::data_local_dir>/<name>/`).
 
 **`flui-testing`** — `flui::testing::…`: `storage::MemoryStorage` (`put`, `contents`,

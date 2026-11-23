@@ -483,9 +483,7 @@ mod measured_unstable {
         HapticTicket as _, HapticTiming as _, Intensity as _, ParameterCurve as _,
         PatternPlayback as _, Sharpness as _, UnitRangeError as _,
     };
-    use flui_sdk::platform::input_capabilities::{
-        Availability as _, InputCapabilities as _, PointerKindSet as _,
-    };
+    use flui_sdk::platform::input_capabilities::{Availability as _, InputCapabilities as _};
 }
 
 #[cfg(feature = "unstable-input")]
@@ -496,9 +494,6 @@ fn the_unstable_input_re_exports_are_the_owning_crates_types() {
     ) -> flui_sdk::platform::input_capabilities::InputCapabilities = |x| x;
     let _: fn(flui_platform::Availability) -> flui_sdk::platform::input_capabilities::Availability =
         |x| x;
-    let _: fn(
-        flui_platform::input::capabilities::PointerKindSet,
-    ) -> flui_sdk::platform::input_capabilities::PointerKindSet = |x| x;
     let _: fn(flui_platform::haptics::HapticPattern) -> flui_sdk::platform::haptics::HapticPattern =
         |x| x;
     let _: fn(flui_platform::haptics::HapticRequest) -> flui_sdk::platform::haptics::HapticRequest =
@@ -745,7 +740,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::haptics::Sharpness;",
         "pub use flui_platform::haptics::UnitRangeError;",
         "pub use flui_platform::input::capabilities::InputCapabilities;",
-        "pub use flui_platform::input::capabilities::PointerKindSet;",
         "pub use flui_platform::input::capabilities::PointerKindSet;",
         "pub use flui_platform::input::pointer::ButtonChange;",
         "pub use flui_platform::input::pointer::PointerKind;",

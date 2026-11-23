@@ -40,6 +40,7 @@ the part you write.
 `Application` yourself and give it an `AppConfig`:
 
 ```rust,no_run
+use flui::app::AppConfig;
 use flui::prelude::*;
 
 # #[derive(Clone, StatelessView)]

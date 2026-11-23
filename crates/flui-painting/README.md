@@ -26,7 +26,7 @@ let list = canvas.finish(); // Save, DrawRect, Restore
 - `TextPainter` — lays an inline span out against a width constraint,
   answers caret / hit-test / line queries, paints it. Measurement, paint and
   the queries read one Parley layout, shaped through the UI runtime's
-  `TextContext`. A face an app registers (`flui::register_font`, through the
+  `TextContext`. A face an app registers (`flui::app::register_font`, through the
   app's `FontCollection`) reaches all three alike.
 - `BoxDecoration::paint` and `TableBorder::paint` (in `styling`): a
   decoration value records itself into a canvas.
