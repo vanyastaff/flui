@@ -34,7 +34,7 @@ painter and display list, and the engine's replay of a paragraph.
 | `TextShadow` duplicates `styling::Shadow` with split offset fields | `crates/flui-painting/src/typography/text_style.rs`, `crates/flui-painting/src/styling/shadow.rs:22-35` |
 | ADR-0092 §4 says a run carries "decoration as today"; no style field takes a decoration | `docs/adr/ADR-0092-per-realm-text-over-parley.md:340-343`; `rg TextDecoration` finds no consumer |
 | A blur exists only as a layer image filter, whose sigma is validated into a sticky recording error that blanks the segment | `crates/flui-engine/src/painter/layer.rs` (`save_layer_with_image_filter`), `crates/flui-engine/src/record/command_ir.rs` (`support_radius`) |
-| Parley merges adjacent spans whose shaping styles are equal, so a span that differs from its neighbour only in a shadow shares its glyph run | `parley-0.11.1/src/resolve/range.rs:139-154` |
+| Parley merges adjacent spans whose shaping styles are equal, so a span that differs from its neighbour only in a shadow shares its glyph run | `parley-0.13.0/src/resolve/range.rs:141-155` |
 
 A shadow, a span background or an icon opacity set by an application did nothing, without a
 warning. How does a paint attribute reach the screen, and how does the next one not get dropped

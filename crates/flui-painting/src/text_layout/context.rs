@@ -791,6 +791,12 @@ pub struct TextContext {
     pub(crate) layout_ctx: parley::LayoutContext<SpanBrush>,
     /// A dropped layout the next shaping builds into, keeping its buffers.
     pub(crate) spare_layout: Option<parley::Layout<SpanBrush>>,
+    /// The style properties of the paragraph being shaped, its root's and then
+    /// each span's in order; empty between shapings, which keep its capacity.
+    pub(crate) style_scratch: Vec<parley::StyleProperty<'static, SpanBrush>>,
+    /// Each span of the paragraph being shaped: its byte range and where its
+    /// properties end in `style_scratch`; empty between shapings.
+    pub(crate) span_scratch: Vec<(std::ops::Range<usize>, usize)>,
 }
 
 impl TextContext {
@@ -808,6 +814,8 @@ impl TextContext {
             },
             layout_ctx: parley::LayoutContext::new(),
             spare_layout: None,
+            style_scratch: Vec::new(),
+            span_scratch: Vec::new(),
         }
     }
 
@@ -829,6 +837,8 @@ impl TextContext {
     pub fn reclaim(&mut self, level: MemoryPressureLevel) {
         self.layout_ctx = parley::LayoutContext::new();
         self.spare_layout = None;
+        self.style_scratch = Vec::new();
+        self.span_scratch = Vec::new();
         match level {
             MemoryPressureLevel::Moderate => self.font_ctx.source_cache.prune(TRIM_MAX_AGE, false),
             _ => self.font_ctx.source_cache.prune(0, true),
@@ -1092,7 +1102,7 @@ mod tests {
         }
         assert_eq!(
             collection
-                .fallback_families(FallbackKey::new(Script::from_str_unchecked("Latn"), None))
+                .fallback_families(FallbackKey::new(Script::from_bytes(*b"Latn"), None))
                 .collect::<Vec<_>>(),
             [probe, roboto],
             "the host's order is installed, ending in the sans-serif family"
@@ -1329,7 +1339,9 @@ mod tests {
     fn a_held_blob_keeps_its_keys_across_a_prune() {
         use crate::glyphs::FontRegistry;
 
-        let pruned = |ctx: &mut TextContext| ctx.font_ctx.source_cache.prune(0, true);
+        // The prune a critical reclaim runs, with the layout context and the spare
+        // layout it drops: under Parley 0.13 they keep the blob alive.
+        let pruned = |ctx: &mut TextContext| ctx.reclaim(MemoryPressureLevel::Critical);
 
         let (fonts, path) = file_backed_roboto("held");
         let mut ctx = TextContext::new(&fonts);
