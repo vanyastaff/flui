@@ -249,7 +249,7 @@ Each decision and what holds it. "Two images" is a fixture crate built twice, th
 | §2 `behind` | two images: `an_element_left_behind_is_named_in_the_outcome` |
 | §3 guard 3, and the raise | two images, with a view that holds an unboxed future whose size the edit changes: `an_element_whose_size_changed_raises_a_restart` |
 | §4 the tool's part of the report | `flui-cli`: `a_changed_init_state_is_named_in_the_report`, `the_two_hundredth_image_restarts_the_process` |
-| §5 | `flui-cli`: `a_static_in_a_reloadable_crate_is_warned_once`; two images: `a_dependencys_static_is_shared_by_both_images` |
+| §5 | `flui-cli`: `a_static_in_a_reloadable_crate_is_warned_once`; two images: `a_static_of_a_dependency_is_shared_by_both_images` |
 | Nothing of it outside the tool's build | the compiler: without `cfg(flui_dev_reload)` `flui-view` has no `reload` module and `View` no `adopt_element`, and the workspace's lints name the `cfg` |
 | The generated project | a `flui-cli` scenario generates a project, loads two images and reads the counter after the second |
 
