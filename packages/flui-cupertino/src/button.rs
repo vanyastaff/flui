@@ -1,41 +1,9 @@
-//! [`CupertinoButton`] — a themed button with a tap-fade sequence.
+//! The iOS-style button and its tap-fade sequence.
 //!
-//! [`CupertinoButtonSize`] selects padding, border radius and minimum
-//! geometry; theme and brightness determine its foreground and fill.
-//!
-//! ## One recognized tap drives the fade
-//!
-//! Flutter starts the press-opacity fade the instant the finger goes down
-//! and reverses it at the up, or mid-gesture when the finger drags past the
-//! tap-move slop. This button runs the whole sequence on the recognized tap
-//! (down and up within touch slop) instead, the same reduction
-//! `flui-material`'s `ink_well` documents for its own press-state timing.
-//!
-//! So the fade *sequence* is applied uniformly to that single
-//! `on_tap` event: on tap, animate toward `CupertinoButton::pressed_opacity` over
-//! [`K_FADE_OUT_DURATION`] (`curves::EASE_IN_OUT_CUBIC_EMPHASIZED`, the press-down
-//! curve), call the handler, then — once that fade
-//! completes — animate back to full opacity over [`K_FADE_IN_DURATION`]
-//! (`curves::EASE_OUT_CUBIC`, the release curve). The visible result
-//! is a brief "flash" per tap instead of a fade that tracks how long the
-//! finger is actually held down. Tap-move-slop-driven cancel-while-dragging
-//! has no equivalent here (named, not silently dropped): there is no drag
-//! signal to cancel against.
-//!
-//! ## Deferred (named, not silently dropped)
-//!
-//! - **Focus ring** (`RoundedSuperellipseBorder` outline on
-//!   `enabled && isFocused`) — `flui-painting` has the superellipse
-//!   primitive, but wiring a focus-visible border is out of this crate's V1
-//!   scope.
-//! - **`WidgetState`-resolved mouse cursor** — a pointer cursor is only
-//!   appropriate on web, and FLUI has no `MouseCursor` type yet to resolve
-//!   against. Not "Cupertino doesn't use `WidgetState`" — just no consumer
-//!   for it in this crate yet.
-//! - **`onFocusChange`/`autofocus`** — no `FocusableActionDetector`-equivalent
-//!   wiring in this pass: the button's interactive node takes no focus.
-//! - **Icon theming** — wrapping `child` in an `IconTheme` sized off
-//!   the resolved text style is not wired here (no icon-bearing V1 consumer).
+//! Implementation notes: the press fade's controller is made at the first tap
+//! that fades and chained leg to leg through `AnimationRunFuture`
+//! (ADR-0064); the button's behaviours and semantics are one interactive
+//! node (ADR-0322 §1).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -63,18 +31,18 @@ use flui_sdk::widgets::{
     Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, Padding,
 };
 
+use crate::CupertinoTheme;
 use crate::colors::{CupertinoColor, CupertinoColors};
-use crate::theme::CupertinoTheme;
 
 /// A user tap/long-press handler. `Rc`-based (owner-local, per ADR-0027) —
 /// matches the callback shape of the node's `ControlTap::on_tap`.
 type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>)>;
 
 /// The press-in fade's duration.
-pub const K_FADE_OUT_DURATION: Duration = Duration::from_millis(120);
+pub(crate) const FADE_OUT_DURATION: Duration = Duration::from_millis(120);
 
 /// The release fade's duration.
-pub const K_FADE_IN_DURATION: Duration = Duration::from_millis(180);
+pub(crate) const FADE_IN_DURATION: Duration = Duration::from_millis(180);
 
 /// The tinted background's opacity under a light theme.
 const K_TINTED_OPACITY_LIGHT: f64 = 0.12;
@@ -85,7 +53,7 @@ const K_TINTED_OPACITY_DARK: f64 = 0.26;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum CupertinoButtonSize {
-    /// A smaller button with round sides and [`crate::text_theme::CupertinoTextThemeData::action_small_text_style`].
+    /// A smaller button with round sides and [`crate::CupertinoTextThemeData::action_small_text_style`].
     Small,
     /// A medium-sized button with round sides and regular-sized text.
     Medium,
@@ -137,8 +105,37 @@ enum ButtonFillStyle {
     Filled,
 }
 
-/// An iOS-style button — see the module doc for the honest reductions made
-/// against real down/move/up press tracking.
+/// An iOS-style button: plain ([`CupertinoButton::new`]), tinted
+/// ([`CupertinoButton::tinted`]) or filled ([`CupertinoButton::filled`]).
+///
+/// [`CupertinoButtonSize`] selects padding, border radius and minimum
+/// geometry; the theme and brightness determine the foreground and the fill.
+/// A button with a tap or long-press handler is [`enabled`](Self::enabled);
+/// without one it paints its disabled colors and announces itself as a
+/// disabled button.
+///
+/// # Tap fade
+///
+/// Flutter's `CupertinoButton` starts the opacity fade when the pointer goes
+/// down and reverses it on release, or when the pointer moves past the tap
+/// slop. This button runs the whole sequence on the recognized tap instead:
+/// it animates toward [`pressed_opacity`](Self::pressed_opacity) over 120 ms
+/// (`curves::EASE_IN_OUT_CUBIC_EMPHASIZED`), calls the handler, and once
+/// that fade completes animates back to full opacity over 180 ms
+/// (`curves::EASE_OUT_CUBIC`). Each tap shows a brief flash rather than a
+/// fade that lasts as long as the pointer is held, and a drag past the slop
+/// does not cancel a fade, because the fade starts only after the tap is
+/// recognized.
+///
+/// # Not implemented
+///
+/// - The button does not take keyboard focus, so it has no focus ring
+///   (`RoundedSuperellipseBorder` outline), `autofocus` or focus-change
+///   callback.
+/// - It resolves no mouse cursor; FLUI has no `MouseCursor` type to resolve.
+/// - It does not wrap its child in an `IconTheme` sized from the text style.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/button.dart`.
 #[derive(Clone, StatefulView)]
 pub struct CupertinoButton {
     child: BoxedView,
@@ -192,7 +189,7 @@ impl CupertinoButton {
     }
 
     /// A button with a translucent background derived from
-    /// [`crate::theme::CupertinoThemeData::primary_color`].
+    /// [`crate::CupertinoThemeData::primary_color`].
     #[must_use]
     pub fn tinted(child: impl IntoView) -> Self {
         Self::with_style(child, ButtonFillStyle::Tinted)
@@ -383,7 +380,7 @@ fn resolve_background_color(
 fn resolve_foreground_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
-    theme: &crate::theme::CupertinoThemeData,
+    theme: &crate::CupertinoThemeData,
     primary_color: Color,
     enabled: bool,
 ) -> Color {
@@ -415,7 +412,7 @@ fn start_press_fade(
     pressed_opacity?;
     let curve: Rc<dyn flui_sdk::animation::Curve> =
         std::rc::Rc::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED);
-    let outcome = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve);
+    let outcome = controller.animate_to_curved(1.0, Some(FADE_OUT_DURATION), curve);
     if let Err(error) = &outcome {
         tracing::debug!(?error, "CupertinoButton press fade failed to start");
     }
@@ -443,7 +440,7 @@ fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRun
             let curve: Rc<dyn flui_sdk::animation::Curve> =
                 std::rc::Rc::new(curves::EASE_OUT_CUBIC);
             if let Err(error) =
-                release_controller.animate_to_curved(0.0, Some(K_FADE_IN_DURATION), curve)
+                release_controller.animate_to_curved(0.0, Some(FADE_IN_DURATION), curve)
             {
                 tracing::debug!(?error, "CupertinoButton release fade failed to start");
             }

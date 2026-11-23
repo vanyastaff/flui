@@ -4,7 +4,7 @@
 //! track steps through the cycle's eight phases (`Steps(8, JumpAt::End)`);
 //! tick `i` reads it delayed by `Stagger(125 ms, First)`, so each tick is one
 //! phase behind the tick before it. A tick's phase picks its alpha from
-//! `[47, 47, 47, 47, 72, 97, 122, 147]` (Flutter's `activity_indicator.dart`),
+//! `[47, 47, 47, 47, 72, 97, 122, 147]` (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/activity_indicator.dart:139`),
 //! which makes the brightest tick walk around the circle once a second. The
 //! painter samples the track at the controller's progress, so the ticks move
 //! by repaint, never by rebuild.
@@ -28,7 +28,7 @@ use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{CustomPaint, Semantics};
 
-use crate::colors::CupertinoDynamicColor;
+use crate::CupertinoDynamicColor;
 
 /// One revolution of the brightest tick.
 const CYCLE: Duration = Duration::from_secs(1);

@@ -20,8 +20,8 @@ use flui_sdk::widgets::{ColoredBox, Routable, Router, RouterHandle, Text};
 use flui_testing::find;
 use flui_testing::tester::{LogicalPoint, TestWindow, Tester};
 
-/// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
-/// tag `3.44.0`).
+/// `CupertinoRouteTransitionMixin.kTransitionDuration`
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/route.dart:155`).
 const TRANSITION: Duration = Duration::from_millis(500);
 /// The per-pump virtual-time step.
 const FRAME: Duration = Duration::from_millis(50);
@@ -215,7 +215,7 @@ fn pushed_primary_slide_dx(laid: &common::LaidOut) -> f64 {
 }
 
 /// A page pushed under a `CupertinoApp` slides in from fully off the right
-/// edge of the viewport to flush with it, over the oracle's 500ms
+/// edge of the viewport to flush with it, over Flutter's 500ms
 /// `kTransitionDuration` — not a jump cut, and not settled before the
 /// duration elapses. The midpoint value is pinned against
 /// `curves::FAST_EASE_IN_TO_SLOW_EASE_OUT`'s own math (the exact curve

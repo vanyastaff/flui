@@ -1,5 +1,5 @@
 //! Integration tests for [`CupertinoNavigationBar`] — the 44pt persistent
-//! height contract, the hairline border's oracle-cited alpha, background
+//! height contract, the hairline border's alpha, background
 //! resolution against the theme, the top safe-area inset, and that
 //! leading/middle/trailing all actually reach the mounted render tree.
 //!

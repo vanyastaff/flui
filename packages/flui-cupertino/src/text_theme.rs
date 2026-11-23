@@ -1,30 +1,13 @@
-//! [`CupertinoTextThemeData`] — the iOS text-style roles (`textStyle`,
-//! `actionTextStyle`, `navTitleTextStyle`, …).
+//! The iOS text-style roles and their default styles.
 //!
-//! ## Font family: alias names, not real San Francisco metrics
-//!
-//! The default styles use the font-family names `'CupertinoSystemText'`
-//! and `'CupertinoSystemDisplay'` — aliases conventionally resolved to the
-//! platform's San Francisco font on iOS/macOS. FLUI has no engine-level alias
-//! table and ships no bundled SF font (license), so the alias names are kept
-//! as the primary family and a fallback chain follows. This is **metrics
-//! parity, not pixel parity** — sizes, weights and letter-spacing follow the
-//! iOS type ramp, but off Apple platforms the glyphs come from whatever the
-//! host provides.
-//!
-//! What resolves that name off Apple platforms is `flui_painting`'s family
-//! resolution: it walks the style's own family, then each entry of
-//! `font_family_fallback` in order, and degrades to the sans-serif generic
-//! only when the host carries none of them.
-//!
-//! The chain's two leading entries — `"-apple-system"` and `"system-ui"` —
-//! are deliberately *not* mapped to a generic, and fall through as ordinary
-//! names the host does not carry. Mapping them would be worse than the gap it
-//! closes: a generic terminates the walk, so `"-apple-system"` would resolve
-//! to sans-serif on every non-Apple host and `"Segoe UI"` would never be
-//! reached — on Windows that means losing the actual platform UI font to
-//! whatever `common_fallback()` happens to name first. Falling through is
-//! what makes the rest of the chain do its job.
+//! Implementation notes: the chain's two leading entries, `"-apple-system"`
+//! and `"system-ui"`, are deliberately not mapped to a generic family.
+//! `flui_painting`'s family resolution walks the style's own family and then
+//! each `font_family_fallback` entry in order, and a generic terminates the
+//! walk, so mapping `"-apple-system"` would resolve to sans-serif on every
+//! non-Apple host and `"Segoe UI"` would never be reached. Left as ordinary
+//! names the host does not carry, they fall through and the rest of the chain
+//! does its job.
 
 use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
 use flui_sdk::painting::styling::Color;
@@ -142,8 +125,8 @@ fn default_date_time_picker_text_style() -> TextStyle {
     }
 }
 
-/// Named, documented fallback chain for `'CupertinoSystemText'` — see the
-/// module doc's "Font family" section.
+/// The fallback chain for `'CupertinoSystemText'`; see the notes at the top of
+/// this file.
 fn system_text_fallback() -> SharedSlice<FontFamilyName> {
     [
         "-apple-system",
@@ -205,8 +188,8 @@ fn apply_label_color(style: TextStyle, color: Color) -> TextStyle {
 /// colors that drive them.
 ///
 /// The label and inactive-gray colors are typed as [`CupertinoDynamicColor`]
-/// directly, since they are always dynamic in practice — see `colors.rs`'s module doc on why FLUI needs
-/// [`crate::colors::CupertinoColor`] only where a field can hold *either* a
+/// directly, since they are always dynamic in practice; FLUI needs
+/// [`crate::CupertinoColor`] only where a field can hold *either* a
 /// concrete or dynamic color, not where it is always one or the other.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct TextThemeDefaults {
@@ -269,6 +252,18 @@ impl TextThemeDefaults {
 /// Cupertino typography theme: the type-style roles a Cupertino widget tree
 /// reads by name instead of hard-coding a `TextStyle`.
 ///
+/// # Font family
+///
+/// The default styles name the families `'CupertinoSystemText'` and
+/// `'CupertinoSystemDisplay'`, aliases conventionally resolved to the
+/// platform's San Francisco font on iOS and macOS. FLUI has no engine-level
+/// alias table and ships no bundled SF font (license), so the alias is the
+/// primary family and a fallback chain follows. The match is metrics
+/// parity, not pixel parity: sizes, weights and letter-spacing follow the iOS
+/// type ramp, but off Apple platforms the glyphs come from whatever the host
+/// provides.
+///
+///
 /// ## Read-time dynamic resolution
 ///
 /// The label/action-family roles below are **not** pre-resolved: they embed
@@ -278,14 +273,16 @@ impl TextThemeDefaults {
 /// [`CupertinoTextThemeData::resolve_from`] produces a copy with those roles
 /// collapsed to the color actually implied by the ambient context (dark mode
 /// flips `label`/`inactiveGray`/`primaryColor` to their dark variants).
-/// [`crate::theme::CupertinoTheme::of`] calls this before returning, so
+/// [`crate::CupertinoTheme::of`] calls this before returning, so
 /// ordinary consumers always see already-resolved styles — see that
 /// function's doc.
 ///
 /// Caller-supplied overrides (`with_text_style`, …) are **not** re-resolved:
 /// FLUI's `TextStyle::color` is a concrete [`Color`], never a
-/// [`CupertinoDynamicColor`] (see `colors.rs`'s module doc), so an override
-/// the caller passed in was already concrete when it was set.
+/// [`CupertinoDynamicColor`], so an override the caller passed in was already
+/// concrete when it was set.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/text_theme.dart`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CupertinoTextThemeData {
     defaults: TextThemeDefaults,
