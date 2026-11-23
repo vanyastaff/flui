@@ -236,3 +236,44 @@ pub fn controller_mutation_during_build_is_refused() {
         .expect("a change outside build is accepted");
     assert_eq!((controller.index(), notified.get()), (1, 1));
 }
+
+/// A scaffold that a rebuild hands a controller no scaffold has used binds it
+/// before the build that reads it: the new controller's write from the tab
+/// builder is refused, as the first controller's would be.
+pub fn a_swapped_in_controller_refuses_writes_during_build() {
+    let first = CupertinoTabController::new(0);
+    let scaffold = |controller: CupertinoTabController, write: bool| {
+        let in_build = controller.clone();
+        let outcome = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&outcome);
+        let view = CupertinoTabScaffold::new(two_tab_bar(), controller, move |_ctx, _| {
+            if write {
+                recorded.borrow_mut().push(in_build.set_index(1));
+            }
+            SizedBox::new(10.0, 10.0).into_view().boxed()
+        });
+        (MediaQuery::new(MediaQueryData::default(), view), outcome)
+    };
+    let (root, _) = scaffold(first, false);
+    let mut laid = lay_out(root, tight(400.0, 800.0));
+    laid.tick();
+
+    let second = CupertinoTabController::new(0);
+    let (root, outcome) = scaffold(second.clone(), true);
+    laid.pump_widget(root);
+    laid.tick();
+
+    let refused = flui_sdk::foundation::MutatedDuringBuild {
+        controller: "CupertinoTabController",
+    };
+    assert!(!outcome.borrow().is_empty(), "the tab builder ran");
+    assert!(
+        outcome
+            .borrow()
+            .iter()
+            .all(|result| *result == Err(refused)),
+        "{:?}",
+        outcome.borrow()
+    );
+    assert_eq!(second.index(), 0);
+}

@@ -70,6 +70,18 @@ fn cupertino_activity_indicator_ticks_step() {
             "activity_indicator::inactive loading stays visible and resumes",
             activity_indicator::inactive_loading_stays_visible_and_resumes,
         ),
+        (
+            "activity_indicator::radius and color size and tint the ticks",
+            activity_indicator::radius_and_color_size_and_tint_the_ticks,
+        ),
+        (
+            "activity_indicator::animating starts and stops a mounted indicator",
+            activity_indicator::animating_starts_and_stops_a_mounted_indicator,
+        ),
+        (
+            "activity_indicator::partially revealed shows still ticks for its progress",
+            activity_indicator::partially_revealed_shows_still_ticks_for_its_progress,
+        ),
     ]);
 }
 
@@ -283,6 +295,10 @@ fn navigation_contracts() {
         (
             "tab_scaffold::controller mutation during build is refused",
             tab_scaffold::controller_mutation_during_build_is_refused,
+        ),
+        (
+            "tab_scaffold::a swapped in controller refuses writes during build",
+            tab_scaffold::a_swapped_in_controller_refuses_writes_during_build,
         ),
         (
             "tab_scaffold::tapping a tab item switches the active tab",
