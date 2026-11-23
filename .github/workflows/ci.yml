@@ -298,13 +298,18 @@ jobs:
           while read -r manifest; do
             grep -qE '^[[:space:]]*autotests[[:space:]]*=[[:space:]]*false' "$manifest" || continue
             crates=$((crates + 1))
+            # The crate's directory as a path prefix: empty for the root package,
+            # whose manifest's dirname `.` would never match the absolute target
+            # paths cargo metadata prints.
             dir=$(dirname "$manifest")
+            prefix=""
+            [ "$dir" = "." ] || prefix="$dir/"
             # This crate's target roots under tests/.
             roots=()
             while read -r root; do
               roots+=("$root")
-            done < <(grep -F "$PWD/$dir/tests/" <<< "$targets" || true)
-            for file in "$dir"/tests/*.rs; do
+            done < <(grep -F "$PWD/${prefix}tests/" <<< "$targets" || true)
+            for file in "${prefix}"tests/*.rs; do
               [ -e "$file" ] || continue
               stem=$(basename "$file" .rs)
               grep -qxF "$PWD/$file" <<< "$targets" && continue
