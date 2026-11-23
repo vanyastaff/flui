@@ -98,6 +98,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{Child, RenderView, impl_render_view};
 use flui_sdk::widgets::DefaultTextStyle;
 
+use crate::color_scheme::ColorScheme;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
@@ -142,10 +143,9 @@ impl Material {
     /// `MaterialType`: a card, a button or a transparent surface sets
     /// its own [`color`](Self::color).
     ///
-    /// # Panics
-    ///
-    /// `build` panics, as [`Theme::of`] does, when no color is set and the
-    /// surface has no [`Theme`] ancestor.
+    /// Without a [`Theme`] ancestor the default is the light baseline
+    /// scheme's surface, as Flutter's `Theme.of` falls back to
+    /// `ThemeData.fallback()`.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -224,11 +224,13 @@ impl StatelessView for Material {
             Some(color) => color,
             // Depends on the color scheme alone, so a change to another
             // slot of the theme does not rebuild every surface.
-            None => match Theme::color_scheme_of(ctx) {
-                Some(scheme) => scheme.surface,
-                // No `Theme` ancestor: `Theme::of` panics with its message.
-                None => Theme::of(ctx).color_scheme.surface,
-            },
+            // No `Theme` ancestor: the light baseline, as Flutter's `Theme.of`
+            // falls back to `ThemeData.fallback()`.
+            None => {
+                Theme::color_scheme_of(ctx)
+                    .unwrap_or_else(ColorScheme::light)
+                    .surface
+            }
         };
         MaterialSurface {
             color,

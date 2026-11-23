@@ -6,7 +6,8 @@
   longer compiles; `Tab::new()`, `Tab::default()` and the `.text`/`.child` builders are gone.
 - **`flui-material`**: `Material::new()` takes no color and paints the theme's
   `color_scheme.surface`, following a theme change; `.color(c)` sets a color of its own.
-  Without a color and without a `Theme` ancestor, `build` panics as `Theme::of` does.
+  Without a color and without a `Theme` ancestor it paints the light baseline's surface, as
+  Flutter's `ThemeData.fallback()` does.
 - **`flui-material`**: `Scaffold` no longer depends on the whole theme; its surface follows
   `color_scheme` alone.
 - **`flui-objects`**: `RenderPhysicalModel` and `RenderPhysicalShape` store a negative, NaN or

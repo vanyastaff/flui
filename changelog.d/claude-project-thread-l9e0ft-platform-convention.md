@@ -19,7 +19,7 @@
 
 ### Removed
 
-- `ThemeData::platform` and `ThemeDataOverrides::platform` in `flui-material`: page transitions
+- `ThemeData::platform` in `flui-material`: page transitions
   follow the `PlatformConvention`.
 - `Default` for `TargetPlatform`, `CaretHandle`, `LongPressSelection` and `SelectionMenuPolicy`,
   which read the build host: use `for_platform` with `PlatformConvention::of`.

@@ -110,4 +110,11 @@ pub fn a_material_without_a_color_paints_the_theme_surface() {
     assert_eq!(painted_color(&laid), rgba(own));
     laid.pump_widget(Theme::new(recolored, surface().color(own)));
     assert_eq!(painted_color(&laid), rgba(own));
+
+    // No `Theme` above: the light baseline, as Flutter's `ThemeData.fallback()`.
+    let laid = lay_out(surface(), tight(40.0, 40.0));
+    assert_eq!(
+        painted_color(&laid),
+        rgba(ThemeData::light().color_scheme.surface)
+    );
 }
