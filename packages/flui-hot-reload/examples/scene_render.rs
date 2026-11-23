@@ -1,7 +1,7 @@
 //! A desktop host for a scene plugin.
 //!
 //! The window is a FLUI application that installs
-//! [`flui_hot_reload::ScenePluginHook`] through [`flui::AppConfig::dev_reload`]:
+//! [`flui_hot_reload::ScenePluginHook`] through [`flui::app::AppConfig::dev_reload`]:
 //! while the plugin library is loaded, the runner draws the plugin's scene in
 //! place of the widget tree, and reloads it when the library is rebuilt. Until
 //! then the window shows the root view below, which says what to build.
@@ -29,8 +29,9 @@ mod effects;
 
 use std::path::{Path, PathBuf};
 
+use flui::Application;
+use flui::app::AppConfig;
 use flui::prelude::*;
-use flui::{AppConfig, Application};
 use flui_hot_reload::{ScenePluginHook, engine::env};
 
 /// The gallery's size in physical pixels.

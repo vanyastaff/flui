@@ -583,7 +583,7 @@ that wires what it adds.
      mapping decisions 14 and 15).
    - (3b) Registering raises a font-collection-changed event on every UI runtime, which marks
      text render objects for layout (ADR-0065's named gap). The app's door is
-     `flui::register_font` (`flui_app::register_font`): it registers on the app's collection,
+     `flui::app::register_font` (`flui_app::register_font`): it registers on the app's collection,
      whose `register_font` also loads the face into the process font system the collection was
      fed from, and dispatches `UiRuntime::fonts_changed` to every UI runtime, which requests a frame
      for each presentation. Each `PipelineOwner` records, per loan of the context, the node the

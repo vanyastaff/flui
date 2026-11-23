@@ -1,7 +1,7 @@
 ### Changed
 
 - **The facade and the test harness read the typed snapshot** (`flui`, `flui-testing`):
-  `flui::Inspect` (trait and derive) replaces the `flui::Diagnosticable` re-exports,
+  `flui::foundation::inspect::Inspect` (trait and derive) replaces the `flui::Diagnosticable` re-exports,
   `flui_rendering::testing::inspect::render_snapshot` replaces `render_diagnostics`, and
   `LaidOut::render_node(id)` (a one-node `SnapshotNode`, read with `get::<T>`) replaces
   `LaidOut::render_property(id, name)`, which returned the field as text. `widgets::rgba(color)`

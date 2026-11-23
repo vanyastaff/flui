@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 
+use flui::app::AppConfig;
 use flui::prelude::*;
 use flui::view::SignalError;
 use flui::view::ValueKey;
