@@ -249,7 +249,9 @@ impl Switch {
 /// It also owns the animated toggle position (see the module docs).
 pub struct SwitchState {
     states: WidgetStatesController,
-    states_listener: Option<Subscription>,
+    /// Rebuilds the switch on every change of `states`; detaches when the
+    /// state drops.
+    _states_listener: Subscription,
     position: AnimatedValue<f64>,
 }
 
@@ -270,7 +272,7 @@ fn switch_position(value: bool) -> f64 {
 impl StatefulView for Switch {
     type State = SwitchState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let initial = if self.value {
             WidgetStates::from(WidgetState::Selected)
         } else {
@@ -288,9 +290,15 @@ impl StatefulView for Switch {
         } else {
             initial.with_state(WidgetState::Disabled)
         };
+        let states = WidgetStatesController::new(initial);
+        // Fired from the listener, never from `build` (ADR-0018).
+        let rebuild = ctx.rebuild_handle();
+        let states_listener = states.listen(std::rc::Rc::new(move || {
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        }));
         SwitchState {
-            states: WidgetStatesController::new(initial),
-            states_listener: None,
+            states,
+            _states_listener: states_listener,
             position,
         }
     }
@@ -308,12 +316,6 @@ impl SwitchState {
 impl ViewState<Switch> for SwitchState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.bind(ctx);
-        // The handle is consumed directly by the listener closure; nothing
-        // else needs to re-read it later, so it is not stored on `self`.
-        let rebuild = ctx.rebuild_handle();
-        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -421,7 +423,6 @@ impl ViewState<Switch> for SwitchState {
     }
 
     fn dispose(&mut self) {
-        drop(self.states_listener.take());
         self.position.dispose();
     }
 }

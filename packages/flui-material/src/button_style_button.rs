@@ -63,8 +63,8 @@
 //! the *current* interactive state, which only changes through
 //! hover/press/focus events the inner `InkWell` observes. So this type owns
 //! its own [`WidgetStatesController`] — created once in `create_state`,
-//! `Disabled`-synced from `on_pressed.is_some()` before any listener is
-//! attached, and handed to the inner `InkWell` via
+//! seeded with `Disabled` from `on_pressed.is_some()` before its listener
+//! attaches, and handed to the inner `InkWell` via
 //! [`InkWell::states_controller`] — mirroring
 //! `crate::ink_well::InkWellState`'s own `create_state`/`did_update_view`
 //! ordering precisely (see that module's docs for why the sync-before-listen
@@ -88,7 +88,6 @@ use flui_sdk::painting::styling::Color;
 use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::semantics::{SemanticsRole, Toggled};
-use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ConstrainedBox, DefaultTextStyle, Padding, WidgetState, WidgetStateProperty, WidgetStates,
@@ -237,46 +236,37 @@ impl std::fmt::Debug for ButtonStyleButtonCore {
 /// ordering this mirrors exactly (see the module docs).
 pub(crate) struct ButtonStyleButtonCoreState {
     states: WidgetStatesController,
-    states_listener: Option<Subscription>,
-    /// Seeded from the initial view in `create_state`; consumed once by
-    /// `init_state`, which has no `view` parameter: `create_state` is where a
-    /// `ViewState` impl captures anything it needs before its first build, as
-    /// `InkWellState` seeds its handler there.
-    initially_enabled: bool,
-    /// Seeded the same way as `initially_enabled`.
-    initially_selected: bool,
-    rebuild: RebuildHandle,
+    /// Rebuilds the button on every change of `states`; detaches when the
+    /// state drops.
+    _states_listener: Subscription,
 }
 
 impl StatefulView for ButtonStyleButtonCore {
     type State = ButtonStyleButtonCoreState;
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        // Seeded BEFORE listening (ADR-0322 §3): this build reads `Disabled`
+        // above the node, which writes the same value during it.
+        let mut initial = WidgetStates::NONE;
+        if !self.is_interactive() {
+            initial = initial.with_state(WidgetState::Disabled);
+        }
+        if self.is_selected() {
+            initial = initial.with_state(WidgetState::Selected);
+        }
+        let states = WidgetStatesController::new(initial);
+        let rebuild = ctx.rebuild_handle();
+        let states_listener = states.listen(std::rc::Rc::new(move || {
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        }));
         ButtonStyleButtonCoreState {
-            states: WidgetStatesController::default(),
-            states_listener: None,
-            initially_enabled: self.is_interactive(),
-            initially_selected: self.is_selected(),
-            rebuild: ctx.rebuild_handle(),
+            states,
+            _states_listener: states_listener,
         }
     }
 }
 
 impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
-    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
-        // Sync BEFORE listening (ADR-0322 §3): this build reads `Disabled`
-        // above the node, which writes the same value during it.
-        self.states
-            .update(WidgetState::Disabled, !self.initially_enabled);
-        self.states
-            .update(WidgetState::Selected, self.initially_selected);
-
-        let rebuild_for_listener = self.rebuild.clone();
-        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
-            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
-    }
-
     fn did_update_view(
         &mut self,
         old_view: &ButtonStyleButtonCore,
@@ -397,10 +387,6 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
                 .shape(shape)
                 .child(ink_well),
         )
-    }
-
-    fn dispose(&mut self) {
-        drop(self.states_listener.take());
     }
 }
 

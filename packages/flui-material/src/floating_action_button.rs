@@ -78,7 +78,6 @@ use flui_sdk::painting::styling::BorderRadius;
 use flui_sdk::painting::styling::Color;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::semantics::SemanticsRole;
-use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::node::Description;
 use flui_sdk::widgets::{
@@ -261,22 +260,21 @@ fn resolve_colors(theme: &ThemeData) -> ResolvedFabStyle {
 }
 
 /// Persistent state behind [`FloatingActionButton`] — owns the
-/// [`WidgetStatesController`] shared with the inner [`InkWell`], mirroring
-/// `ButtonStyleButtonCoreState`'s sync-before-listen pattern (see that
-/// type's docs for why the ordering is load-bearing) so `resolve_elevation`
-/// always sees the real, lifecycle-synced `Disabled` bit on the first build.
+/// [`WidgetStatesController`] shared with the inner [`InkWell`], seeded with
+/// `Disabled` before its listener attaches, as `ButtonStyleButtonCoreState`
+/// is (see that type's docs for why the ordering is load-bearing), so
+/// `resolve_elevation` sees the real `Disabled` bit on the first build.
 pub struct FloatingActionButtonState {
     states: WidgetStatesController,
-    states_listener: Option<Subscription>,
-    initially_enabled: bool,
-    rebuild: RebuildHandle,
+    /// Rebuilds the button on every change of `states`; detaches when the
+    /// state drops.
+    _states_listener: Subscription,
 }
 
 impl std::fmt::Debug for FloatingActionButtonState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FloatingActionButtonState")
             .field("states", &self.states)
-            .field("initially_enabled", &self.initially_enabled)
             .finish_non_exhaustive()
     }
 }
@@ -285,26 +283,24 @@ impl StatefulView for FloatingActionButton {
     type State = FloatingActionButtonState;
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let initial = if self.is_interactive() {
+            WidgetStates::NONE
+        } else {
+            WidgetStates::from(WidgetState::Disabled)
+        };
+        let states = WidgetStatesController::new(initial);
+        let rebuild = ctx.rebuild_handle();
+        let states_listener = states.listen(std::rc::Rc::new(move || {
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        }));
         FloatingActionButtonState {
-            states: WidgetStatesController::default(),
-            states_listener: None,
-            initially_enabled: self.is_interactive(),
-            rebuild: ctx.rebuild_handle(),
+            states,
+            _states_listener: states_listener,
         }
     }
 }
 
 impl ViewState<FloatingActionButton> for FloatingActionButtonState {
-    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
-        self.states
-            .update(WidgetState::Disabled, !self.initially_enabled);
-
-        let rebuild_for_listener = self.rebuild.clone();
-        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
-            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
-    }
-
     /// Re-syncs `WidgetState::Disabled` when `on_pressed` presence changes
     /// across a swap — mirroring `ButtonStyleButtonCoreState::did_update_view`.
     /// **Currently unobservable through any wired consumer**: the inner
@@ -386,9 +382,5 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
                 .shape(shape)
                 .child(ink_well),
         )
-    }
-
-    fn dispose(&mut self) {
-        drop(self.states_listener.take());
     }
 }

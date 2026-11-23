@@ -699,9 +699,11 @@ impl<T: 'static> StatefulView for OpenContainer<T> {
     type State = OpenContainerState<T>;
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let seat = FlightSeat::new();
+        seat.bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
         OpenContainerState {
             shared: Rc::new(Shared {
-                seat: Rc::new(FlightSeat::new()),
+                seat: Rc::new(seat),
                 config: RefCell::new(self.clone()),
                 rebuild: RefCell::new(Some(ctx.rebuild_handle())),
                 driver: RefCell::new(ctx.async_driver()),
@@ -712,12 +714,6 @@ impl<T: 'static> StatefulView for OpenContainer<T> {
 }
 
 impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.shared
-            .seat
-            .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
-    }
-
     fn did_update_view(&mut self, _old: &OpenContainer<T>, new_view: &OpenContainer<T>) {
         let previous = self.shared.config.replace(new_view.clone());
         drop(previous);
@@ -830,7 +826,9 @@ struct MorphState {
     primary: RouteAnimation,
     /// The morph's own frame: where the navigator's page area sits.
     frame: Rc<FlightSeat>,
-    listener: Option<Subscription>,
+    /// Re-measures on every tick of `primary`; re-made on the animation
+    /// `did_update_view` swaps in.
+    listener: Subscription,
 }
 
 impl fmt::Debug for MorphState {
@@ -839,19 +837,18 @@ impl fmt::Debug for MorphState {
     }
 }
 
+/// Re-measure `frame` for `flight` on every tick of `primary`.
+fn listen_for_ticks(
+    primary: &RouteAnimation,
+    flight: &Rc<Flight>,
+    frame: &Rc<FlightSeat>,
+) -> Subscription {
+    let flight = Rc::clone(flight);
+    let frame = Rc::clone(frame);
+    primary.listen(Rc::new(move || flight.measure(&frame)))
+}
+
 impl MorphState {
-    /// Re-measure on every tick of the primary animation.
-    fn listen(&mut self) {
-        self.unlisten();
-        let flight = Rc::clone(&self.flight);
-        let frame = Rc::clone(&self.frame);
-        self.listener = Some(self.primary.listen(Rc::new(move || flight.measure(&frame))));
-    }
-
-    fn unlisten(&mut self) {
-        drop(self.listener.take());
-    }
-
     /// Measure the frame once the frame it was mounted in has laid it out,
     /// then redraw. A route whose animation is already settled when the morph
     /// mounts (a zero duration) never ticks again, so the tick listener alone
@@ -884,29 +881,30 @@ impl MorphState {
 impl StatefulView for ContainerMorph {
     type State = MorphState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let frame = FlightSeat::new();
+        frame.bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
+        let frame = Rc::new(frame);
         MorphState {
+            listener: listen_for_ticks(&self.primary, &self.flight, &frame),
             flight: Rc::clone(&self.flight),
             primary: Rc::clone(&self.primary),
-            frame: Rc::new(FlightSeat::new()),
-            listener: None,
+            frame,
         }
     }
 }
 
 impl ViewState<ContainerMorph> for MorphState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.frame
-            .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
-        self.listen();
         self.flight.set_mounted(true);
         self.measure_after_first_frame(ctx);
     }
 
     fn did_update_view(&mut self, _old: &ContainerMorph, new_view: &ContainerMorph) {
         if !Rc::ptr_eq(&self.primary, &new_view.primary) {
+            std::mem::replace(&mut self.listener, Subscription::inert()).detach();
             self.primary = Rc::clone(&new_view.primary);
-            self.listen();
+            self.listener = listen_for_ticks(&self.primary, &self.flight, &self.frame);
         }
     }
 
@@ -933,7 +931,6 @@ impl ViewState<ContainerMorph> for MorphState {
     }
 
     fn dispose(&mut self) {
-        self.unlisten();
         self.flight.set_mounted(false);
     }
 }

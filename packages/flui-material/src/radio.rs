@@ -243,7 +243,9 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
 /// `InkWell`'s to manage.
 pub struct RadioState {
     states: WidgetStatesController,
-    states_listener: Option<Subscription>,
+    /// Rebuilds the radio on every change of `states`; detaches when the
+    /// state drops.
+    _states_listener: Subscription,
 }
 
 impl std::fmt::Debug for RadioState {
@@ -257,7 +259,7 @@ impl std::fmt::Debug for RadioState {
 impl<T: PartialEq + Clone + 'static> StatefulView for Radio<T> {
     type State = RadioState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let initial = if self.is_selected() {
             WidgetStates::from(WidgetState::Selected)
         } else {
@@ -271,23 +273,20 @@ impl<T: PartialEq + Clone + 'static> StatefulView for Radio<T> {
         } else {
             initial.with_state(WidgetState::Disabled)
         };
+        let states = WidgetStatesController::new(initial);
+        // Fired from the listener, never from `build` (ADR-0018).
+        let rebuild = ctx.rebuild_handle();
+        let states_listener = states.listen(std::rc::Rc::new(move || {
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        }));
         RadioState {
-            states: WidgetStatesController::new(initial),
-            states_listener: None,
+            states,
+            _states_listener: states_listener,
         }
     }
 }
 
 impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // The handle is consumed directly by the listener closure; nothing
-        // else needs to re-read it later, so it is not stored on `self`.
-        let rebuild = ctx.rebuild_handle();
-        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
-    }
-
     fn did_update_view(&mut self, old_view: &Radio<T>, new_view: &Radio<T>) {
         // Seeded before this build reads it, from the switch the well is
         // given; the well's node writes the same value (ADR-0322 §3).
@@ -362,10 +361,6 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         }
 
         ink_well
-    }
-
-    fn dispose(&mut self) {
-        drop(self.states_listener.take());
     }
 }
 
