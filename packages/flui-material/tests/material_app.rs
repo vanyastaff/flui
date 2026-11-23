@@ -63,7 +63,7 @@ struct ThemeCapture {
 impl StatelessView for ThemeCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
-        *self.captured.borrow_mut() = Some(Theme::of(ctx));
+        *self.captured.borrow_mut() = Some(ThemeData::clone(&Theme::of(ctx)));
         SizedBox::shrink()
     }
 }
