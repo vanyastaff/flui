@@ -67,12 +67,6 @@ use crate::traits::{PaintClip, PaintOpacity};
 /// output in tests. Under default/production features this type is intentionally
 /// absent from the external re-export paths.
 #[derive(Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a run is the step the pass records for nearly every node, into a buffer it keeps \
-              between passes; boxing it costs an allocation per run, inline it costs bytes in \
-              that kept buffer"
-)]
 #[cfg_attr(
     any(test, feature = "testing"),
     expect(
@@ -98,21 +92,26 @@ pub enum FragmentOp {
     },
 
     /// Opens an effect-layer scope (clip, shader mask, backdrop filter);
-    /// balanced by a matching [`Self::Pop`].
-    /// Boxed: clip shapes (especially paths) dwarf the other variants,
-    /// and scope ops are rare relative to runs/markers.
-    Push(Box<FragmentScope>),
+    /// balanced by a matching [`Self::Pop`]. Inline: no scope is larger than
+    /// the [`DisplayList`] a run carries (asserted below), so it
+    /// does not grow the op.
+    Push(FragmentScope),
 
     /// Opens a transform-layer scope; balanced by a matching [`Self::Pop`].
-    /// Boxed: `Matrix4` is 64 bytes ([f64; 16]) vs. this enum's other
-    /// variants — an unboxed variant would bloat `FragmentOp` for every
-    /// render object's every paint, not just the (rare) per-child
-    /// transform case this exists for (`RenderFlow` and friends).
-    PushTransform(Box<Matrix4>),
+    /// Inline for the same reason as [`Self::Push`].
+    PushTransform(Matrix4),
 
     /// Closes the innermost open scope.
     Pop,
 }
+
+/// A scope op is held inline in the recorder's buffer, which a run's
+/// [`DisplayList`] already sizes, so a scope or a transform that outgrew it
+/// would grow every op of every paint: it fails the build here instead.
+const _: () = assert!(
+    size_of::<FragmentScope>() <= size_of::<DisplayList>()
+        && size_of::<Matrix4>() <= size_of::<DisplayList>()
+);
 
 /// An effect-layer scope operation recorded during paint.
 ///
@@ -415,14 +414,13 @@ impl FragmentRecorder {
 
     fn push_scope(&mut self, scope: FragmentScope) {
         self.seal();
-        self.ops.push(FragmentOp::Push(Box::new(scope)));
+        self.ops.push(FragmentOp::Push(scope));
         self.open_scopes += 1;
     }
 
     fn push_transform_scope(&mut self, transform: Matrix4) {
         self.seal();
-        self.ops
-            .push(FragmentOp::PushTransform(Box::new(transform)));
+        self.ops.push(FragmentOp::PushTransform(transform));
         self.open_scopes += 1;
     }
 
