@@ -110,7 +110,10 @@ const _: () = {
 #[derive(Clone, Debug)]
 struct SpanInfo {
     len: usize,
-    family: ShapedFamily,
+    /// The family it was shaped in, held as [`ShapedFamily`]'s two parts so that the
+    /// generic sits in the padding beside `italic`.
+    family_name: Option<std::sync::Arc<str>>,
+    generic_family: Generic,
     weight: f32,
     italic: bool,
     size: Option<f32>,
@@ -129,7 +132,11 @@ impl SpanInfo {
     fn description(&self, color: Option<Color>) -> SpanDescription {
         SpanDescription {
             len: self.len,
-            family: self.family.described(),
+            family: ShapedFamily {
+                name: self.family_name.clone(),
+                generic: self.generic_family,
+            }
+            .described(),
             weight: self.weight,
             italic: self.italic,
             size: self.size,
@@ -1418,7 +1425,8 @@ fn span_info(
     )]
     SpanInfo {
         len,
-        family,
+        family_name: family.name,
+        generic_family: family.generic,
         weight: adjusted_weight(style, default, adjustment).unwrap_or_else(|| {
             style
                 .and_then(|style| style.font_weight)
@@ -1461,8 +1469,16 @@ fn family(
 /// [`ShapedParagraph::describe_spans`]. A generic family holds nothing on
 /// the heap; the text a snapshot prints is made only when one is described.
 #[derive(Clone, Debug)]
-enum ShapedFamily {
-    Name(std::sync::Arc<str>),
+struct ShapedFamily {
+    /// The family's name when it is one the collection holds; `None` for a generic.
+    name: Option<std::sync::Arc<str>>,
+    /// Which generic, when `name` is `None`.
+    generic: Generic,
+}
+
+/// A CSS generic family, one byte beside [`ShapedFamily::name`].
+#[derive(Clone, Copy, Debug)]
+enum Generic {
     Serif,
     SansSerif,
     Cursive,
@@ -1472,25 +1488,30 @@ enum ShapedFamily {
 
 impl ShapedFamily {
     fn of(collection: &mut Collection, style: Option<&TextStyle>) -> Self {
-        match resolve_family_name(style, |name| holds_exactly(collection, name)) {
-            Family::Name(name) => Self::Name(name.into()),
-            Family::Serif => Self::Serif,
-            Family::SansSerif => Self::SansSerif,
-            Family::Cursive => Self::Cursive,
-            Family::Fantasy => Self::Fantasy,
-            Family::Monospace => Self::Monospace,
+        let generic = match resolve_family_name(style, |name| holds_exactly(collection, name)) {
+            Family::Name(name) => {
+                return Self {
+                    name: Some(name.into()),
+                    generic: Generic::SansSerif,
+                };
+            }
+            Family::Serif => Generic::Serif,
+            Family::SansSerif => Generic::SansSerif,
+            Family::Cursive => Generic::Cursive,
+            Family::Fantasy => Generic::Fantasy,
+            Family::Monospace => Generic::Monospace,
+        };
+        Self {
+            name: None,
+            generic,
         }
     }
 
     /// The family as a snapshot prints it: `Family`'s `Debug` form.
     fn described(&self) -> std::sync::Arc<str> {
-        match self {
-            Self::Name(name) => format!("{:?}", Family::Name(name)).into(),
-            Self::Serif => "Serif".into(),
-            Self::SansSerif => "SansSerif".into(),
-            Self::Cursive => "Cursive".into(),
-            Self::Fantasy => "Fantasy".into(),
-            Self::Monospace => "Monospace".into(),
+        match (&self.name, self.generic) {
+            (Some(name), _) => format!("{:?}", Family::Name(name)).into(),
+            (None, generic) => format!("{generic:?}").into(),
         }
     }
 }
