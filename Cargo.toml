@@ -649,6 +649,10 @@ needless_collect = "warn"
 collection_is_never_read = "warn"
 # Keep stack-heavy async work visible even if the pedantic group changes.
 large_futures = "warn"
+# A function whose frame passes clippy's 512 KB default holds a large value by
+# value somewhere below it: a `MaterialApp` with four themes inline once made a
+# test's frame 702 KB. Share the value (`Rc`) or box it instead.
+large_stack_frames = "warn"
 # Preserve small differences and representable lengths in floating-point math.
 imprecise_flops = "warn"
 # A mutating debug assertion changes behavior between debug and release builds.
