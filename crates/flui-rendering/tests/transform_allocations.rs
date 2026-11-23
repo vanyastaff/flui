@@ -222,7 +222,10 @@ fn a_warm_subtree_removal_allocates_nothing() {
         let removed = owner.remove_render_object(black_box(item));
         removals.push((removed, ALLOCATIONS.with(Cell::get) - before));
     }
-    assert!(removals.iter().all(|&(removed, _)| removed == 8), "{removals:?}");
+    assert!(
+        removals.iter().all(|&(removed, _)| removed == 8),
+        "{removals:?}"
+    );
     assert_eq!(
         removals.last().map(|&(_, allocations)| allocations),
         Some(0),
