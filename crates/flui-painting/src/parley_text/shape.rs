@@ -1260,7 +1260,7 @@ impl TextContext {
         let mut start = 0;
         let mut infos = Vec::with_capacity(spans.len());
         let mut run_colors: Vec<Option<Color>> = Vec::new();
-        let span_properties: Vec<_> = spans
+        let mut span_properties: Vec<_> = spans
             .iter()
             .enumerate()
             .map(|(index, (span, style))| {
@@ -1322,38 +1322,58 @@ impl TextContext {
         let mut builder = self
             .layout_ctx
             .ranged_builder(&mut self.font_ctx, &breaks, 1.0, false);
-        let mut root = vec![default_family, StyleProperty::FontSize(paragraph.font_size)];
+        // Flutter sizes a line by its runs alone; Parley starts every line with
+        // the root span's box (CSS's strut, CSS 2 §10.8), so a root font no span
+        // uses would make every line taller. The root therefore takes the first
+        // text's box-shaping properties, whose box that text makes anyway, and
+        // the root's own values of them are pushed back over the text after it,
+        // so no later span inherits the first span's from the root. A paragraph
+        // of one span pushes nothing more.
+        let first_text = spans.iter().position(|(text, _)| !text.is_empty());
+        let mut strut = first_text.map_or_default(|index| Strut::of(&span_properties[index].1));
+        let tail = first_text.map_or(text.len(), |index| span_properties[index].0.end)..text.len();
+        let mut push_root =
+            |property: StyleProperty<'static, SpanBrush>| match strut.takes(&property) {
+                true if !tail.is_empty() => builder.push(property, tail.clone()),
+                true => {}
+                false => builder.push_default(property),
+            };
+        push_root(default_family);
+        push_root(StyleProperty::FontSize(paragraph.font_size));
         if let Some(weight) = adjusted_weight(
             paragraph.default_style,
             None,
             paragraph.font_weight_adjustment,
         ) {
-            root.push(StyleProperty::FontWeight(FontWeight::new(weight)));
+            push_root(StyleProperty::FontWeight(FontWeight::new(weight)));
         }
         // A word wider than the line breaks between its glyphs instead of
         // overflowing the line. `BreakWord` rather than `Anywhere`: the
         // min-content width stays the widest word (flui-painting
         // `ARCHITECTURE.md`, mapping decision 15).
-        root.push(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
+        push_root(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
         // No explicit height is 1.2 em of each run's own size, so a larger
         // span grows its line box; an explicit height is one absolute line
         // box for the paragraph.
-        root.push(StyleProperty::LineHeight(match paragraph.line_height {
+        push_root(StyleProperty::LineHeight(match paragraph.line_height {
             Some(height) => LineHeight::Absolute(height),
             None => LineHeight::FontSizeRelative(1.2),
         }));
-        root.extend(default_properties);
-        let first_text = spans
-            .iter()
-            .zip(&span_properties)
-            .find(|((text, _), _)| !text.is_empty())
-            .map(|(_, (_, properties))| properties.as_slice());
-        let strut = Strut::of(&root, first_text.unwrap_or_default());
-        for property in root.into_iter().chain(strut.root) {
-            builder.push_default(property);
+        for property in default_properties {
+            push_root(property);
         }
-        for property in strut.restored {
-            builder.push(property, 0..text.len());
+        if !tail.is_empty() {
+            for property in strut.unset_by_root() {
+                builder.push(property, tail.clone());
+            }
+        }
+        if let Some(index) = first_text {
+            for property in span_properties[index]
+                .1
+                .extract_if(.., |property| Strut::shapes_the_box(property))
+            {
+                builder.push_default(property);
+            }
         }
         for (range, properties) in span_properties {
             for property in properties {
@@ -1523,71 +1543,87 @@ fn adjusted_weight(
     Some((authored + f64::from(adjustment)).clamp(1.0, 1000.0) as f32)
 }
 
-/// The root style a paragraph is built with, so that its line boxes are Flutter's.
+/// Which box-shaping properties a paragraph's root takes from its first text, so that its line
+/// boxes are Flutter's (see where the root is pushed in `shape`).
 ///
-/// Flutter sizes a line by its runs alone. Parley starts every line with the root span's box,
-/// CSS's strut (CSS 2 §10.8), so a root font no span uses would make every line taller. The root
-/// therefore takes the font metrics of the paragraph's first text, whose box that text makes
-/// anyway, and the paragraph's own values of those properties are pushed back over the whole text,
-/// so no span inherits the first span's from the root.
+/// A set of property kinds: `first` holds the kinds the first text sets, `root` the kinds the
+/// root's own properties supplied for them. Nothing is allocated.
+#[derive(Default)]
 struct Strut {
-    /// Pushed over the root after its own properties: the first text's font metrics.
-    root: Vec<StyleProperty<'static, SpanBrush>>,
-    /// Pushed over the whole text before the spans: the root's values the strut replaced.
-    restored: Vec<StyleProperty<'static, SpanBrush>>,
+    first: u8,
+    root: u8,
 }
 
 impl Strut {
-    fn of(
-        root: &[StyleProperty<'static, SpanBrush>],
-        first_text: &[StyleProperty<'static, SpanBrush>],
-    ) -> Self {
-        let shapes_the_box = |property: &StyleProperty<'_, SpanBrush>| {
-            matches!(
-                property,
-                StyleProperty::FontFamily(_)
-                    | StyleProperty::FontSize(_)
-                    | StyleProperty::FontWeight(_)
-                    | StyleProperty::FontStyle(_)
-                    | StyleProperty::FontWidth(_)
-                    | StyleProperty::FontVariations(_)
-                    | StyleProperty::LineHeight(_)
-            )
-        };
-        let overrides: Vec<_> = first_text
-            .iter()
-            .filter(|property| shapes_the_box(property))
-            .cloned()
-            .collect();
-        let restored = overrides
-            .iter()
-            .map(|over| {
-                let kind = std::mem::discriminant(over);
-                root.iter()
-                    .rev()
-                    .find(|property| std::mem::discriminant(*property) == kind)
-                    .cloned()
-                    .unwrap_or(match over {
-                        StyleProperty::FontWeight(_) => {
-                            StyleProperty::FontWeight(FontWeight::NORMAL)
-                        }
-                        StyleProperty::FontStyle(_) => {
-                            StyleProperty::FontStyle(ParleyFontStyle::Normal)
-                        }
-                        StyleProperty::FontWidth(_) => {
-                            StyleProperty::FontWidth(parley::FontWidth::NORMAL)
-                        }
-                        // The root always holds a family, a size and a line height.
-                        _ => {
-                            StyleProperty::FontVariations(FontVariations::List(Cow::Borrowed(&[])))
-                        }
-                    })
-            })
-            .collect();
+    const FAMILY: u8 = 1;
+    const SIZE: u8 = 1 << 1;
+    const WEIGHT: u8 = 1 << 2;
+    const STYLE: u8 = 1 << 3;
+    const WIDTH: u8 = 1 << 4;
+    const VARIATIONS: u8 = 1 << 5;
+    const LINE_HEIGHT: u8 = 1 << 6;
+
+    /// The kind of a property that sizes a run's box, or `None`.
+    fn kind(property: &StyleProperty<'_, SpanBrush>) -> Option<u8> {
+        Some(match property {
+            StyleProperty::FontFamily(_) => Self::FAMILY,
+            StyleProperty::FontSize(_) => Self::SIZE,
+            StyleProperty::FontWeight(_) => Self::WEIGHT,
+            StyleProperty::FontStyle(_) => Self::STYLE,
+            StyleProperty::FontWidth(_) => Self::WIDTH,
+            StyleProperty::FontVariations(_) => Self::VARIATIONS,
+            StyleProperty::LineHeight(_) => Self::LINE_HEIGHT,
+            _ => return None,
+        })
+    }
+
+    fn shapes_the_box(property: &StyleProperty<'_, SpanBrush>) -> bool {
+        Self::kind(property).is_some()
+    }
+
+    fn of(first_text: &[StyleProperty<'static, SpanBrush>]) -> Self {
         Self {
-            root: overrides,
-            restored,
+            first: first_text
+                .iter()
+                .filter_map(Self::kind)
+                .fold(0, |kinds, kind| kinds | kind),
+            root: 0,
         }
+    }
+
+    /// Whether the first text's value replaces this root property at the root, in which case
+    /// the root's value goes over the text after the first.
+    fn takes(&mut self, property: &StyleProperty<'_, SpanBrush>) -> bool {
+        match Self::kind(property) {
+            Some(kind) if self.first & kind != 0 => {
+                self.root |= kind;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Parley's defaults for the kinds the first text sets and the root does not, which the
+    /// text after the first gets back. The root always holds a family, a size and a line height.
+    fn unset_by_root(&self) -> impl Iterator<Item = StyleProperty<'static, SpanBrush>> {
+        let unset = self.first & !self.root;
+        [
+            (Self::WEIGHT, StyleProperty::FontWeight(FontWeight::NORMAL)),
+            (
+                Self::STYLE,
+                StyleProperty::FontStyle(ParleyFontStyle::Normal),
+            ),
+            (
+                Self::WIDTH,
+                StyleProperty::FontWidth(parley::FontWidth::NORMAL),
+            ),
+            (
+                Self::VARIATIONS,
+                StyleProperty::FontVariations(FontVariations::List(Cow::Borrowed(&[]))),
+            ),
+        ]
+        .into_iter()
+        .filter_map(move |(kind, property)| (unset & kind != 0).then_some(property))
     }
 }
 
