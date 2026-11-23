@@ -1577,3 +1577,38 @@ pub fn dragging_an_opened_drawer_past_halfway_reports_it_closed() {
     );
     assert!(!handle.is_drawer_open(), "the scaffold heard it close");
 }
+
+/// A negative, NaN or infinite width or elevation still lays the panel out
+/// at a finite width inside the space it is offered, and casts no shadow.
+pub fn a_drawer_with_an_unusable_width_or_elevation_lays_out_finite() {
+    for (width, elevation, expected_width) in [
+        (-40.0, -3.0, 0.0),
+        (f64::NAN, f64::NAN, 0.0),
+        (f64::INFINITY, f64::INFINITY, 300.0),
+    ] {
+        let laid = common::lay_out(
+            Theme::new(
+                ThemeData::light(),
+                Drawer::new()
+                    .width(width)
+                    .elevation(elevation)
+                    .child(SizedBox::new(10.0, 10.0)),
+            ),
+            common::loose(300.0),
+        );
+        let panel = laid
+            .try_find_by_render_type("RenderPhysicalShape")
+            .expect("the drawer mounts one Material surface");
+        let size = laid.size(panel);
+        assert!(
+            size.width.is_finite() && size.height.is_finite(),
+            "width {width}, elevation {elevation}: the panel is {size:?}"
+        );
+        assert_eq!(size.width, expected_width, "width {width}");
+        assert_eq!(
+            laid.render_node(panel).get::<f64>("elevation"),
+            Ok(0.0),
+            "elevation {elevation} casts no shadow"
+        );
+    }
+}

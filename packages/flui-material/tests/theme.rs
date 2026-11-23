@@ -18,7 +18,7 @@ use std::rc::Rc;
 use crate::common;
 
 use common::{lay_out, loose};
-use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
+use flui_material::{Theme, ThemeData};
 use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
@@ -49,15 +49,8 @@ pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
     // Sentinel primary color distinct from both presets so the assertion
     // fails if `Theme::of` returned a preset instead of the provided value.
     let sentinel = Color::from_argb(0xFF0A_141E);
-    let base = ThemeData::dark();
-    let scheme = base.color_scheme.copy_with(ColorSchemeOverrides {
-        primary: Some(sentinel),
-        ..Default::default()
-    });
-    let provided = base.copy_with(ThemeDataOverrides {
-        color_scheme: Some(scheme),
-        ..Default::default()
-    });
+    let mut provided = ThemeData::dark();
+    provided.color_scheme.primary = sentinel;
 
     let _laid = lay_out(
         Theme::new(

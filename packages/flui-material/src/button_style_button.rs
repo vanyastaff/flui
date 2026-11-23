@@ -382,7 +382,8 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
         }
 
         ConstrainedBox::new(constraints).child(
-            Material::new(background_color)
+            Material::new()
+                .color(background_color)
                 .elevation(elevation)
                 .shape(shape)
                 .child(ink_well),

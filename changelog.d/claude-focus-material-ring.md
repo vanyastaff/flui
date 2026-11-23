@@ -3,7 +3,7 @@
 - **`flui-widgets`**: `Focus::on_visible_focus_change` reports each edge of visible focus, the
   focus a key, traversal or assistive technology moved, including a modality change with no change
   of primary focus.
-- **`flui-material`**: `ThemeData::focus_ring` (and `ThemeDataOverrides::focus_ring`). `Theme`
+- **`flui-material`**: `ThemeData::focus_ring`. `Theme`
   provides it as the inherited `DefaultFocusRingStyle`, so every focus ring below a theme,
   `RawButton`'s included, takes its colours; the baselines draw `on_surface` outside `surface`.
 

@@ -823,7 +823,8 @@ impl StatelessView for ListTile {
             BoxConstraints::new(0.0, f64::INFINITY, resolved.tile_height, f64::INFINITY);
 
         ConstrainedBox::new(tile_constraints).child(
-            Material::new(resolved.tile_color)
+            Material::new()
+                .color(resolved.tile_color)
                 .shape(resolved.shape)
                 .child(ink_well),
         )

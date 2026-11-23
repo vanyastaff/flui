@@ -885,7 +885,8 @@ impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
                 .role(SemanticsRole::Button)
                 .on_click(move |_ctx| on_click.open());
         }
-        let surface = Material::new(look.closed_color)
+        let surface = Material::new()
+            .color(look.closed_color)
             .elevation(look.closed_elevation)
             .shape(MaterialShape::RoundedRect(look.closed_radius))
             .clip_behavior(Clip::AntiAlias)
@@ -1134,7 +1135,8 @@ fn morph(
             .child(SizedBox::new(full.width(), full.height()).child(page.clone())),
     );
 
-    let surface = Material::new(color)
+    let surface = Material::new()
+        .color(color)
         .elevation(elevation)
         .shape(MaterialShape::RoundedRect(radius))
         .clip_behavior(Clip::AntiAlias)

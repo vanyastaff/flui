@@ -227,7 +227,7 @@ fn perf_tab_bar_alone() {
         control_alone_under(
             |column| Theme::new(ThemeData::light(), column).boxed(),
             |_row| {
-                TabBar::secondary(vec![Tab::new().text("One"), Tab::new().text("Two")])
+                TabBar::secondary(vec![Tab::text("One"), Tab::text("Two")])
                     .controller(TabController::new(2, 0))
                     .boxed()
             },

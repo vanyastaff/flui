@@ -10,9 +10,7 @@
 use crate::common;
 
 use common::{lay_out, rgba, tight};
-use flui_material::{
-    FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData, ThemeDataOverrides,
-};
+use flui_material::{FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData};
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::widgets::SizedBox;
 
@@ -23,12 +21,10 @@ use flui_sdk::widgets::SizedBox;
 /// tier of the elevation state chain.
 pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let themed_background = flui_sdk::painting::styling::Color::rgb(70, 80, 90);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        floating_action_button_theme: Some(FabThemeData {
-            background_color: Some(themed_background),
-            elevation: Some(12.0),
-            ..Default::default()
-        }),
+    let mut theme = ThemeData::light();
+    theme.floating_action_button_theme = Some(FabThemeData {
+        background_color: Some(themed_background),
+        elevation: Some(12.0),
         ..Default::default()
     });
 

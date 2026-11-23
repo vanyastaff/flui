@@ -578,7 +578,12 @@ impl StatelessView for Chip {
 
         CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
-            .child(Material::new(background_color).shape(shape).child(ink_well))
+            .child(
+                Material::new()
+                    .color(background_color)
+                    .shape(shape)
+                    .child(ink_well),
+            )
     }
 }
 
@@ -858,7 +863,12 @@ impl StatelessView for FilterChip {
 
         CustomPaint::new()
             .foreground_painter(ChipBorderPainter { side, shape })
-            .child(Material::new(background_color).shape(shape).child(ink_well))
+            .child(
+                Material::new()
+                    .color(background_color)
+                    .shape(shape)
+                    .child(ink_well),
+            )
     }
 }
 

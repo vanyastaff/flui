@@ -189,7 +189,7 @@ design.md §7; в таблице стоит рекомендуемый вари�
 
 | # | Было | Стало | Почему | alias | Ссылок | Риск |
 |---|---|---|---|---|---|---|
-| M1 | `ThemeData` / `Theme`; `ThemeDataOverrides`; модуль `theme_data` | `Theme` (значение) / `ThemeScope` (виджет); `ThemeOverrides`; слить в `theme` (**О1**, swap) | Значение — существительное (iced, GPUI, egui `Style`); поставщик — `…Scope`, как `HeroScope`, `VsyncScope` | `ThemeData` на `Theme`; на `ThemeScope` без alias | 350/374 | В |
+| M1 | `ThemeData` / `Theme`; модуль `theme_data` | `Theme` (значение) / `ThemeScope` (виджет); слить в `theme` (**О1**, swap) | Значение — существительное (iced, GPUI, egui `Style`); поставщик — `…Scope`, как `HeroScope`, `VsyncScope` | `ThemeData` на `Theme`; на `ThemeScope` без alias | 350/374 | В |
 | M2 | `AppBarThemeData`, `CardThemeData`, `CheckboxThemeData`, `ChipThemeData`, `DataTableThemeData`, `DialogThemeData`, `DividerThemeData`, `ElevatedButtonThemeData`, `FilledButtonThemeData`, `IconButtonThemeData`, `InputDecorationThemeData`, `NavigationBarThemeData`, `OutlinedButtonThemeData`, `RadioThemeData`, `SwitchThemeData`, `TabBarThemeData`, `TextButtonThemeData` | `*Theme` (`AppBarTheme`, …) (**О1**) | То же | исходные | 281 (семейство) | С |
 | M3 | `FabThemeData` | `FloatingActionButtonTheme` | Без сокращения, одно слово на понятие | `FabThemeData` | 11 | Н |
 | M4 | `Material`, `MaterialShape`; модуль `material::material` | `Surface`, `SurfaceShape`; `surface` (**О4**) | Material 3 и Compose: surface; модуль `material::material` — `module_inception` | `Material` | 16 вызовов `Material::new`; слово — 782, в основном проза | В |

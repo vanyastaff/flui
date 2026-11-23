@@ -596,6 +596,10 @@ fn overlay_contracts() {
             "drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed",
             drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed,
         ),
+        (
+            "drawer::a drawer with an unusable width or elevation lays out finite",
+            drawer::a_drawer_with_an_unusable_width_or_elevation_lays_out_finite,
+        ),
     ]);
 }
 
@@ -849,6 +853,10 @@ fn surface_contracts() {
         (
             "material::stadium shape excludes a corner a sharp rectangle would include",
             material::stadium_shape_excludes_a_corner_a_sharp_rectangle_would_include,
+        ),
+        (
+            "material::a material without a color paints the theme surface",
+            material::a_material_without_a_color_paints_the_theme_surface,
         ),
         (
             "card::card theme slot reaches the mounted materials color and elevation",

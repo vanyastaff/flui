@@ -8,7 +8,7 @@ use std::time::Duration;
 use flui_material::{
     CircularProgressIndicator, CircularWavyProgressIndicator, ContainedLoadingIndicator,
     LinearProgressIndicator, LinearWavyProgressIndicator, LoadingIndicator, MaterialApp,
-    MaterialStyle, Theme, ThemeData, ThemeDataOverrides,
+    MaterialStyle, Theme, ThemeData,
 };
 use flui_painting::paint::PathCommand;
 use flui_sdk::animation::{MotionOverride, Vsync};
@@ -834,10 +834,8 @@ pub fn expressive_material_app_refresh_shows_the_loading_indicator() {
         SizedBox::new(24.0, 24.0),
     )))
     .expect("one labelled command");
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        style: Some(MaterialStyle::Expressive),
-        ..Default::default()
-    });
+    let mut theme = ThemeData::light();
+    theme.style = MaterialStyle::Expressive;
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),

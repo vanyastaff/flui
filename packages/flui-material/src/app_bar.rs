@@ -550,7 +550,8 @@ impl StatelessView for AppBar {
             None => safe_toolbar.boxed(),
         };
 
-        Material::new(background_color)
+        Material::new()
+            .color(background_color)
             .elevation(elevation)
             .child(surface_content)
     }

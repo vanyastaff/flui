@@ -220,7 +220,8 @@ impl StatelessView for Card {
             margin,
         } = resolve_style(&theme, self.color, self.elevation, self.shape, self.margin);
 
-        let mut material = Material::new(color)
+        let mut material = Material::new()
+            .color(color)
             .elevation(elevation)
             .shape(shape)
             .clip_behavior(self.clip_behavior.unwrap_or(Clip::None));

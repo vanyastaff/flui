@@ -218,11 +218,11 @@ impl Drawer {
         self
     }
 
-    /// Overrides the panel's elevation (must be non-negative). Defaults to
-    /// `1.0`.
+    /// Overrides the panel's elevation. Defaults to `1.0`. A negative or
+    /// non-finite elevation casts no shadow (the physical model stores it
+    /// as `0.0`).
     #[must_use]
     pub fn elevation(mut self, elevation: f64) -> Self {
-        debug_assert!(elevation >= 0.0, "Drawer elevation must be non-negative");
         self.elevation = elevation;
         self
     }
@@ -230,10 +230,13 @@ impl Drawer {
     /// Overrides the panel's width. Defaults to 304 (the M3 drawer width) — see the
     /// module docs on why this value, not a live measurement, is what drives
     /// [`DrawerController`]'s drag math.
+    ///
+    /// A negative or NaN width is stored as `0.0`, a panel with no extent
+    /// that no drag moves. `+∞` is kept: layout bounds the panel by the
+    /// width the scaffold offers, and the drag math by the laid-out width.
     #[must_use]
     pub fn width(mut self, width: f64) -> Self {
-        debug_assert!(width > 0.0, "Drawer width must be positive");
-        self.width = width;
+        self.width = if width > 0.0 { width } else { 0.0 };
         self
     }
 
@@ -284,7 +287,8 @@ impl StatelessView for Drawer {
             .background_color
             .unwrap_or(theme.color_scheme.surface_container_low);
 
-        let mut material = Material::new(background_color)
+        let mut material = Material::new()
+            .color(background_color)
             .elevation(self.elevation)
             .shape(end_rounded_shape(side))
             .clip_behavior(Clip::AntiAlias);

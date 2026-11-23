@@ -144,11 +144,11 @@ impl SnackBar {
         self
     }
 
-    /// Overrides the elevation (must be non-negative). Defaults to
+    /// Overrides the elevation; a negative or non-finite one casts no shadow
+    /// (the physical model stores it as `0.0`). Defaults to
     /// `DEFAULT_ELEVATION` (6.0).
     #[must_use]
     pub fn elevation(mut self, elevation: f64) -> Self {
-        debug_assert!(elevation >= 0.0, "SnackBar elevation must be non-negative");
         self.elevation = Some(elevation);
         self
     }
@@ -314,7 +314,8 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
         .container(true)
         .role(SemanticsRole::Status)
         .child(
-            Material::new(background_color)
+            Material::new()
+                .color(background_color)
                 .elevation(elevation)
                 .clip_behavior(Clip::HardEdge)
                 .child(safe_area),

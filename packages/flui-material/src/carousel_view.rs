@@ -366,7 +366,8 @@ impl CarouselCard {
             }
             None => surface.boxed(),
         };
-        let card = Material::new(color)
+        let card = Material::new()
+            .color(color)
             .elevation(elevation)
             .shape(shape)
             .clip_behavior(Clip::AntiAlias)

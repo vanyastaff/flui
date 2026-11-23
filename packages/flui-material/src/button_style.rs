@@ -23,20 +23,15 @@
 //!
 //! # Shape: an all-optional patch, not `#[non_exhaustive]`
 //!
-//! Every field here is already `Option`-wrapped — `ButtonStyle` plays the
-//! role [`crate::ThemeDataOverrides`] plays for [`crate::ThemeData`]: a patch
+//! Every field here is already `Option`-wrapped: `ButtonStyle` is a patch
 //! callers build with a struct literal and `..Default::default()`
 //! (`ButtonStyle { background_color: Some(…), ..Default::default() }`), not
-//! a value with meaningful non-`None` defaults of its own. Per
-//! [`crate::ColorSchemeOverrides`]/[`crate::ThemeDataOverrides`]'s own
-//! precedent in this crate, a patch struct built exclusively through
-//! `..Default::default()` deliberately stays OFF `#[non_exhaustive]`:
-//! `#[non_exhaustive]` blocks external-crate struct-literal construction
-//! even with a functional update, which would break the only construction
-//! path this type has. Future V1+ slots are still additive for any caller
-//! already writing `..Default::default()`, without the `#[non_exhaustive]`
-//! ceremony — see those types' doc comments for the same reasoning spelled
-//! out in full.
+//! a value with meaningful non-`None` defaults of its own. A patch struct
+//! built exclusively through `..Default::default()` deliberately stays OFF
+//! `#[non_exhaustive]`: `#[non_exhaustive]` blocks external-crate
+//! struct-literal construction even with a functional update, which would
+//! break the only construction path this type has. A later slot is still
+//! additive for any caller already writing `..Default::default()`.
 //!
 //! # V1 slots
 //!

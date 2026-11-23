@@ -8071,6 +8071,45 @@ fn harness_physical_model_elevation_casts_shadow_before_fill_and_child() {
     );
 }
 
+/// A negative, NaN or infinite elevation, whether built in or set on a live
+/// model, is stored as `0.0`: the model casts no shadow and still paints its
+/// fill and child.
+fn harness_physical_model_unusable_elevation_casts_no_shadow() {
+    for requested in [-4.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let built = RenderPhysicalModel::new(Color::WHITE).with_elevation(requested);
+        assert_eq!(built.elevation(), 0.0, "built with {requested}");
+
+        let mut run = RenderTester::mount(
+            box_node(RenderPhysicalModel::new(Color::WHITE).with_elevation(4.0))
+                .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let root = run.root();
+        flui_rendering::testing::update_render_object::<RenderPhysicalModel, _>(
+            run.owner_mut(),
+            root,
+            |node| {
+                let impact = node.set_elevation(requested);
+                assert_eq!(node.elevation(), 0.0, "set to {requested}");
+                impact
+            },
+        );
+        run.pump();
+
+        let commands = run.display_commands();
+        assert!(
+            commands.iter().all(|c| c.kind != DrawKind::Shadow),
+            "elevation {requested} must cast no shadow; commands:\n{commands:#?}",
+        );
+        assert!(
+            commands.iter().any(|c| c.kind == DrawKind::RRect)
+                && commands.iter().any(|c| c.kind == DrawKind::Rect),
+            "elevation {requested} still paints the fill and the child; commands:\n{commands:#?}",
+        );
+    }
+}
+
 // The `usesSaveLayer` fork (research plan trap) — controls WHERE the
 // fill is drawn, not just whether. These two tests are the direct check
 // that a naive port didn't collapse the fork into "always fill outside"
@@ -15088,6 +15127,10 @@ fn family_clips_and_effects() {
             (
                 "physical_model_elevation_casts_shadow_before_fill_and_child",
                 harness_physical_model_elevation_casts_shadow_before_fill_and_child,
+            ),
+            (
+                "physical_model_unusable_elevation_casts_no_shadow",
+                harness_physical_model_unusable_elevation_casts_no_shadow,
             ),
             (
                 "physical_shape_hit_test_triangular_clipper",

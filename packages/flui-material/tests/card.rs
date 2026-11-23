@@ -9,7 +9,7 @@
 use crate::common;
 
 use common::{lay_out, rgba, tight};
-use flui_material::{Card, CardThemeData, Theme, ThemeData, ThemeDataOverrides};
+use flui_material::{Card, CardThemeData, Theme, ThemeData};
 use flui_sdk::foundation::inspect::Rgba;
 use flui_sdk::painting::styling::Color;
 use flui_sdk::widgets::ColoredBox;
@@ -21,12 +21,10 @@ use flui_sdk::widgets::ColoredBox;
 /// mount only needs to prove the theme tier is reachable at all).
 pub fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let themed_color = Color::rgb(77, 88, 99);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        card_theme: Some(CardThemeData {
-            color: Some(themed_color),
-            elevation: Some(15.0),
-            ..Default::default()
-        }),
+    let mut theme = ThemeData::light();
+    theme.card_theme = Some(CardThemeData {
+        color: Some(themed_color),
+        elevation: Some(15.0),
         ..Default::default()
     });
 
