@@ -508,7 +508,7 @@ mod lane {
             crate::lane::release_outcome([keys, buttons])
         }
 
-        fn read_tree(&mut self, placement: &Placement) -> Result<Tree> {
+        fn read_tree(&mut self, placement: &Placement, _app: &Tree) -> Result<Tree> {
             let bus = A11yBus::connect(self.session_bus.as_deref(), safety::LANE)?;
             let mut tree = bus.read(WindowTarget::of(self.pid, placement))?;
             if let Some(root) = tree.roots.first_mut() {
