@@ -99,7 +99,7 @@ use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
 /// A checkbox's edge length (`18.0`).
-pub const CHECKBOX_EDGE_SIZE: f64 = 18.0;
+pub(crate) const CHECKBOX_EDGE_SIZE: f64 = 18.0;
 
 /// The box outline's and checkmark/dash's stroke width.
 const STROKE_WIDTH: f64 = 2.0;
@@ -107,7 +107,7 @@ const STROKE_WIDTH: f64 = 2.0;
 /// The M3 tap-target side length (`48.0`, the minimum interactive dimension),
 /// always used in V1 (no `material_tap_target_size` override yet — see the
 /// module docs).
-pub const CHECKBOX_TAP_TARGET_SIZE: f64 = 48.0;
+pub(crate) const CHECKBOX_TAP_TARGET_SIZE: f64 = 48.0;
 
 /// The box's corner radius, `2.0`.
 const CORNER_RADIUS: f64 = 2.0;

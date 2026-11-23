@@ -80,7 +80,6 @@
 //! - **Dense/`VisualDensity`** — no consumer wired to this substrate yet,
 //!   matching every other V1 selection control in this crate.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use flui_sdk::foundation::TextDirection;
@@ -934,19 +933,19 @@ impl StatelessView for DataTable {
         let column_count = self.columns.len() + usize::from(display_checkbox_column);
         let border_side = row_border_side(&theme.color_scheme, style.divider_thickness);
 
-        let mut column_widths: HashMap<usize, TableColumnWidth> = HashMap::new();
+        let mut column_widths: Vec<(usize, TableColumnWidth)> = Vec::with_capacity(column_count);
         if display_checkbox_column {
-            column_widths.insert(
+            column_widths.push((
                 0,
                 TableColumnWidth::Fixed(checkbox_column_width(
                     style.checkbox_margin_start,
                     style.checkbox_margin_end,
                 )),
-            );
+            ));
         }
         for (index, column) in self.columns.iter().enumerate() {
             let display_index = index + usize::from(display_checkbox_column);
-            column_widths.insert(display_index, column_table_width(column, index, only_text));
+            column_widths.push((display_index, column_table_width(column, index, only_text)));
         }
 
         // ---- heading row ----

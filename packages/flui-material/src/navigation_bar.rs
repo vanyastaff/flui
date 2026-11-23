@@ -156,10 +156,10 @@ use crate::theme::Theme;
 use crate::theme_data::NavigationBarThemeData;
 
 /// The bar's default height (M3: 80.0).
-pub const NAVIGATION_BAR_HEIGHT: f64 = 80.0;
+pub(crate) const NAVIGATION_BAR_HEIGHT: f64 = 80.0;
 
 /// The bar's default elevation (M3: 3.0).
-pub const NAVIGATION_BAR_ELEVATION: f64 = 3.0;
+pub(crate) const NAVIGATION_BAR_ELEVATION: f64 = 3.0;
 
 /// The selection indicator's width (M3: 64.0).
 const NAVIGATION_INDICATOR_WIDTH: f64 = 64.0;
@@ -340,7 +340,7 @@ impl NavigationBar {
         self
     }
 
-    /// Overrides the bar's height. Defaults to [`NAVIGATION_BAR_HEIGHT`].
+    /// Overrides the bar's height. Defaults to 80 (the M3 bar height).
     #[must_use]
     pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
@@ -355,7 +355,7 @@ impl NavigationBar {
         self
     }
 
-    /// Overrides the bar's elevation. Defaults to [`NAVIGATION_BAR_ELEVATION`].
+    /// Overrides the bar's elevation. Defaults to 3 (the M3 bar elevation).
     #[must_use]
     pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = Some(elevation);

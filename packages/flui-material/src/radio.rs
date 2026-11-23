@@ -128,7 +128,7 @@ const RING_STROKE_WIDTH: f64 = 2.0;
 /// dimension), the `MaterialTapTargetSize.padded` branch this V1 always
 /// takes — same deferral
 /// [`crate::Checkbox`]/[`crate::Switch`] already make.
-pub const RADIO_TAP_TARGET_SIZE: f64 = 48.0;
+pub(crate) const RADIO_TAP_TARGET_SIZE: f64 = 48.0;
 
 const _: () = assert!(OUTER_RADIUS * 2.0 < RADIO_TAP_TARGET_SIZE);
 const _: () = assert!(INNER_RADIUS < OUTER_RADIUS);

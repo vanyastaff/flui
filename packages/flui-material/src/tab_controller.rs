@@ -109,10 +109,6 @@ impl TabListenerRegistry {
         self.listeners.listen(listener)
     }
 
-    fn len(&self) -> usize {
-        self.listeners.len()
-    }
-
     /// Fires every registered listener inside `recovery`, so the caller's
     /// first failure stays first and a panicking listener's captures retire
     /// under it.
@@ -724,13 +720,6 @@ impl TabController {
     /// just-updated `(index, previous_index)` pair.
     pub fn listen(&self, listener: impl Fn() + 'static) -> Subscription {
         self.shared.index_listeners.listen(Rc::new(listener))
-    }
-
-    /// The number of currently-registered index listeners, so a consumer's
-    /// `dispose()` can be shown to unregister.
-    #[must_use]
-    pub fn listener_count(&self) -> usize {
-        self.shared.index_listeners.len()
     }
 
     /// Whether an attached pager settles at once on a controller-driven

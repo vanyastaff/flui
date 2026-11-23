@@ -85,7 +85,7 @@ use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
 /// Default width of a [`Drawer`].
-pub const DEFAULT_DRAWER_WIDTH: f64 = 304.0;
+pub(crate) const DEFAULT_DRAWER_WIDTH: f64 = 304.0;
 /// Default width of the closed-state edge-drag detection zone — `_kEdgeDragWidth`.
 const EDGE_DRAG_WIDTH: f64 = 20.0;
 /// Fling-velocity threshold, in normalized (value/second) units —
@@ -178,7 +178,7 @@ fn end_rounded_shape(side: HorizontalSide) -> MaterialShape {
 /// M3 styling:
 /// [`ColorScheme::surface_container_low`](crate::ColorScheme::surface_container_low)
 /// background, elevation `1.0`, a 16dp shape rounded on the corners facing
-/// the scaffold's interior, width [`DEFAULT_DRAWER_WIDTH`] (304.0) by
+/// the scaffold's interior, width 304 by
 /// default. [`crate::theme_data::ThemeData`] has no `DrawerTheme` extension
 /// slot yet — see the module docs.
 ///
@@ -227,7 +227,7 @@ impl Drawer {
         self
     }
 
-    /// Overrides the panel's width. Defaults to [`DEFAULT_DRAWER_WIDTH`] (304.0) — see the
+    /// Overrides the panel's width. Defaults to 304 (the M3 drawer width) — see the
     /// module docs on why this value, not a live measurement, is what drives
     /// [`DrawerController`]'s drag math.
     #[must_use]
@@ -486,7 +486,7 @@ impl DrawerController {
 
     /// The declared panel extent, capped by the laid-out available width for
     /// drag movement and velocity. A custom child must supply its own extent.
-    /// Defaults to [`DEFAULT_DRAWER_WIDTH`] before layout.
+    /// Defaults to the panel width (304) before layout.
     #[must_use]
     pub fn panel_width(mut self, panel_width: f64) -> Self {
         self.panel_width = panel_width;
