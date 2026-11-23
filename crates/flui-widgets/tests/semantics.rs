@@ -2808,6 +2808,51 @@ pub(crate) fn a_merged_action_runs_the_control_whose_state_it_announces() {
             .expect("the offered direction resolves");
         assert_eq!(*ran.borrow(), ["first"], "the first scrollable moves");
     }
+
+    // A text write follows the value's owner: a part that declares the
+    // value and takes text writes runs them, and a value nobody writes
+    // leaves the text to the range, whose numeric handler reads it as a
+    // number, as on a range that is not merged (ADR-0392 §1).
+    type Written = Rc<RefCell<Vec<String>>>;
+    let range = |written: &Written| {
+        let written = Rc::clone(written);
+        Semantics::new()
+            .numeric_range(
+                flui_semantics::NumericRange::try_new(50.0, 0.0, 100.0, 1.0)
+                    .expect("ordered range"),
+            )
+            .on_set_numeric_value(move |_ctx, value| {
+                written.borrow_mut().push(format!("range {value}"));
+            })
+            .child(SizedBox::new(40.0, 20.0))
+    };
+    for takes_text in [false, true] {
+        let written: Written = Rc::new(RefCell::new(Vec::new()));
+        let value = Semantics::new().value("Loud");
+        let value = if takes_text {
+            let written = Rc::clone(&written);
+            value.on_set_value(move |_ctx, text| {
+                written.borrow_mut().push(format!("value {text}"));
+            })
+        } else {
+            value
+        };
+        let (laid, _tree, node_id) = pump_labelled(MergeSemantics::new().child(host().child(
+            Column::new((value.child(SizedBox::new(40.0, 20.0)), range(&written))),
+        )));
+        laid.invoke_semantics_action(request(
+            Action::SetValue,
+            node_id,
+            Some(ActionData::Value("70".into())),
+        ))
+        .expect("the merged node takes a text write");
+        let expected = if takes_text { "value 70" } else { "range 70" };
+        assert_eq!(
+            *written.borrow(),
+            [expected],
+            "a value part that takes text: {takes_text}"
+        );
+    }
 }
 
 /// A label names one action of a widget: a second `custom_action` with the
