@@ -2083,6 +2083,67 @@ pub(crate) fn a_horizontal_item_scroll_moves_one_character() {
     assert_eq!(scroll.pixels(), 16.0, "an item step moves one character");
 }
 
+/// `MergeSemantics` over a scroll view folds the viewport into the merged
+/// node and keeps the scroll position's slider a child node of its own, as
+/// it is outside a merge: a `ScrollView` publishes no numeric range (the
+/// harness fails a frame that publishes an inapplicable attribute), and a
+/// screen reader still scrolls the merged node.
+pub(crate) fn merge_semantics_over_a_scroll_view_keeps_its_position_slider() {
+    use flui_view::{BoxedView, ViewExt as _};
+    use flui_widgets::{ListView, ScrollController, SingleChildScrollView};
+
+    type Build = fn(ScrollController) -> BoxedView;
+    let views: [(&str, Build); 2] = [
+        ("SingleChildScrollView", |scroll| {
+            SingleChildScrollView::new()
+                .controller(scroll)
+                .child(SizedBox::new(100.0, 1000.0))
+                .boxed()
+        }),
+        ("ListView", |scroll| {
+            ListView::builder(20, 50.0, |_| Some(SizedBox::new(100.0, 50.0).boxed()))
+                .controller(scroll)
+                .boxed()
+        }),
+    ];
+    for (name, view) in views {
+        let scroll = ScrollController::new();
+        let (mut laid, tree, merged) = pump_labelled(
+            MergeSemantics::new()
+                .child(host().child(SizedBox::new(100.0, 100.0).child(view(scroll.clone())))),
+        );
+        let node = tree
+            .nodes()
+            .find(|node| node.id() == merged)
+            .expect("the labelled node is in the tree");
+        assert_eq!(
+            node.raw().role(),
+            flui_testing::a11y::Role::ScrollView,
+            "{name}: the merged node is the scroll view. Tree was:\n{}",
+            tree.describe()
+        );
+        assert!(
+            node.supports_action(Action::ScrollDown),
+            "{name}: the merged node scrolls. Tree was:\n{}",
+            tree.describe()
+        );
+        let sliders = tree
+            .nodes()
+            .filter(|node| node.raw().role() == flui_testing::a11y::Role::Slider)
+            .count();
+        assert_eq!(
+            sliders,
+            1,
+            "{name}: the position slider keeps its own node. Tree was:\n{}",
+            tree.describe()
+        );
+        laid.invoke_semantics_action(request(Action::ScrollDown, merged, None))
+            .expect("scroll-down resolves on the merged node");
+        laid.tick();
+        assert!(scroll.pixels() > 0.0, "{name}: scroll-down moved the view");
+    }
+}
+
 /// A screen reader scrolls a list through the same position a drag drives:
 /// the scrollable advertises scroll-down/up, and each page request moves the
 /// offset by most of a viewport and each item request by one line, clamped to

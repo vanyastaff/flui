@@ -1007,6 +1007,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_repeated_custom_action_label_replaces_the_action", crate::semantics::a_repeated_custom_action_label_replaces_the_action),
             ("semantics::a_gated_custom_action_follows_its_gate_without_a_rebuild", crate::semantics::a_gated_custom_action_follows_its_gate_without_a_rebuild),
             ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
+            ("semantics::merge_semantics_over_a_scroll_view_keeps_its_position_slider", crate::semantics::merge_semantics_over_a_scroll_view_keeps_its_position_slider),
             ("semantics::a_horizontal_item_scroll_moves_one_character", crate::semantics::a_horizontal_item_scroll_moves_one_character),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
             ("semantics::a_fitted_child_moved_by_a_fit_change_moves_its_semantics", crate::semantics::a_fitted_child_moved_by_a_fit_change_moves_its_semantics),
