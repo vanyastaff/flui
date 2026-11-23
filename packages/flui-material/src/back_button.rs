@@ -13,7 +13,7 @@
 //!
 //! The Material spec uses a platform-specific glyph (an iOS-style chevron on
 //! iOS/macOS, the `arrow_back` arrow everywhere else). FLUI has no
-//! platform/action-icon-theme substrate to switch on, and — as
+//! platform/action-icon-theme support to switch on, and — as
 //! [`Icon`]'s own module docs state plainly — **no
 //! bundled icon font**: every codepoint shapes to tofu (the "missing glyph"
 //! box) until font-registration infrastructure lands, regardless of which

@@ -1,48 +1,6 @@
 //! [`SnackBar`] — a lightweight message with an optional action, shown via
 //! [`crate::ScaffoldMessengerHandle::show_snack_bar`] — and
 //! [`SnackBarAction`], its single-fire action button.
-//!
-//! # Scope
-//!
-//! Narrowed to `SnackBarBehavior.fixed` — see the module docs' "V1 scope"
-//! section. M3 token values are cited per value below.
-//!
-//! ## Entrance animation
-//!
-//! Fixed behavior always takes the oracle's LAST transition branch
-//! (`_SnackBarState.build`, `:850-875`): `accessibleNavigation` is not ported
-//! (no `MediaQuery.accessibleNavigation` consumer exists yet), and
-//! `isFloatingSnackBar` is always `false` (fixed-only), so the
-//! `ValueListenableBuilder`-over-`_heightAnimation` branch is the only one
-//! this substrate ever takes — an `Align(alignment: topStart, heightFactor:
-//! value)` grown by [`curves::FAST_OUT_SLOW_IN`] (`_snackBarHeightCurve`,
-//! `:30`), applied symmetrically on entrance and exit (the oracle sets no
-//! `reverseCurve` on `_heightAnimation`, `:576`). Wrapped in
-//! [`AnimatedBuilder`] rather than a `ValueListenableBuilder`+`CurvedAnimation`
-//! pair — this substrate applies the curve inline in the builder closure,
-//! which is equivalent and needs no extra `CurvedAnimation` object.
-//! **`FadeTransition` is never used**: the oracle's inner `Material`-wrapping
-//! fade (`_fadeOutAnimation`) is skipped whenever `accessibleNavigation ||
-//! useMaterial3` (`:809`) — this substrate is M3-only, so that condition is
-//! always true.
-//!
-//! ## V1 scope
-//!
-//! `SnackBarBehavior` is **not exposed** — fixed only, wrapped in
-//! `SafeArea(top: false)` unconditionally (oracle: `:790-792`), no
-//! `width`/`margin`/floating positioning, no action-overflow-to-a-second-row
-//! layout (`actionOverflowThreshold`, `:735-740` — the action always shares
-//! the content's row; a very long label may visually crowd the content,
-//! which the oracle avoids by wrapping — a named, cosmetic-only
-//! simplification). No close icon (`showCloseIcon` — pulls in
-//! `SnackBarClosedReason::Dismiss`, which this substrate has no other
-//! producer for yet either). No `Hero`/`Dismissible`/swipe-to-dismiss — see
-//! `crate::scaffold_messenger`'s module doc for the reachable
-//! [`crate::SnackBarClosedReason`] set. `SnackBarThemeData` — no such
-//! component-theme extension slot exists in [`crate::ThemeData`] yet (same
-//! deferral shape as `crate::drawer`'s `DrawerTheme` note); every value below
-//! is the hand-coded M3 default with no theme/instance override lens beyond
-//! [`SnackBar::background_color`]/[`SnackBar::elevation`].
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -73,22 +31,22 @@ use crate::text_button::TextButton;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// `_snackBarDisplayDuration` (`snack_bar.dart:29`) — the default
+/// `_snackBarDisplayDuration` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:29`) — the default
 /// [`SnackBar::duration`].
 const DEFAULT_DISPLAY_DURATION: Duration = Duration::from_secs(4);
-/// `_singleLineVerticalPadding` (`snack_bar.dart:27`).
+/// `_singleLineVerticalPadding` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:27`).
 const SINGLE_LINE_VERTICAL_PADDING: f64 = 14.0;
-/// `_SnackbarDefaultsM3.elevation` (`snack_bar.dart:980`).
+/// `_SnackbarDefaultsM3.elevation` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:980`).
 const DEFAULT_ELEVATION: f64 = 6.0;
 /// Fixed behavior's content horizontal padding — `isFloatingSnackBar ? 16.0 :
-/// 24.0` (`snack_bar.dart:687`), always the `false` branch here.
+/// 24.0` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:687`), always the `false` branch here.
 const HORIZONTAL_PADDING: f64 = 24.0;
 
 /// A lightweight message with an optional action, briefly shown near the
 /// bottom of the screen via
 /// [`crate::ScaffoldMessengerHandle::show_snack_bar`].
 ///
-/// See the module docs for the fixed-only V1 scope.
+/// See [`SnackBar`]'s docs for the fixed-only scope.
 ///
 /// # Examples
 ///
@@ -98,6 +56,48 @@ const HORIZONTAL_PADDING: f64 = 24.0;
 ///
 /// let _snack_bar = SnackBar::new(Text::new("Saved")).duration(std::time::Duration::from_secs(2));
 /// ```
+///
+/// # Scope
+///
+/// Narrowed to `SnackBarBehavior.fixed`; the second "Scope" section below lists
+/// what that leaves out. M3 token values are cited per value below.
+///
+/// ## Entrance animation
+///
+/// Fixed behavior always takes Flutter's LAST transition branch
+/// (`_SnackBarState.build`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:851-875`): `accessibleNavigation` is not ported
+/// (no `MediaQuery.accessibleNavigation` consumer exists yet), and
+/// `isFloatingSnackBar` is always `false` (fixed-only), so the
+/// `ValueListenableBuilder`-over-`_heightAnimation` branch is the only one
+/// this crate ever takes — an `Align(alignment: topStart, heightFactor:
+/// value)` grown by [`curves::FAST_OUT_SLOW_IN`] (`_snackBarHeightCurve`,
+/// `flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:30`), applied symmetrically on entrance and exit (Flutter sets no
+/// `reverseCurve` on `_heightAnimation`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:576`). Wrapped in
+/// [`AnimatedBuilder`] rather than a `ValueListenableBuilder`+`CurvedAnimation`
+/// pair — this crate applies the curve inline in the builder closure,
+/// which is equivalent and needs no extra `CurvedAnimation` object.
+/// **`FadeTransition` is never used**: Flutter's inner `Material`-wrapping
+/// fade (`_fadeOutAnimation`) is skipped whenever `accessibleNavigation ||
+/// useMaterial3` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:809`) — this crate is M3-only, so that condition is
+/// always true.
+///
+/// ## Scope
+///
+/// `SnackBarBehavior` is **not exposed** — fixed only, wrapped in
+/// `SafeArea(top: false)` unconditionally (Flutter: `flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:790-792`), no
+/// `width`/`margin`/floating positioning, no action-overflow-to-a-second-row
+/// layout (`actionOverflowThreshold`, `flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:735-740` — the action always shares
+/// the content's row; a very long label may visually crowd the content,
+/// which Flutter avoids by wrapping — a named, cosmetic-only
+/// simplification). No close icon (`showCloseIcon` — pulls in
+/// `SnackBarClosedReason::Dismiss`, which this crate has no other
+/// producer for yet either). No `Hero`/`Dismissible`/swipe-to-dismiss — see
+/// [`ScaffoldMessengerHandle`](crate::ScaffoldMessengerHandle)'s docs for the reachable
+/// [`crate::SnackBarClosedReason`] set. `SnackBarThemeData` — no such
+/// component-theme extension slot exists in [`crate::ThemeData`] yet (same
+/// deferral shape as `crate::drawer`'s `DrawerTheme` note); every value below
+/// is the hand-coded M3 default with no theme/instance override lens beyond
+/// [`SnackBar::background_color`]/[`SnackBar::elevation`].
 #[derive(Clone)]
 pub struct SnackBar {
     content: BoxedView,
@@ -235,10 +235,10 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
         let theme = Theme::of(ctx);
         let colors = theme.color_scheme;
         // `_SnackbarDefaultsM3.actionTextColor`/`.disabledActionTextColor`
-        // (`snack_bar.dart:952-970`) both resolve to `inversePrimary` — the
+        // (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/snack_bar.dart:952-970`) both resolve to `inversePrimary` — the
         // disabled state is distinguished visually by the button becoming
-        // unpressable, not by a different disabled color, matching the
-        // oracle's own (slightly surprising, but verbatim) token table.
+        // unpressable, not by a different disabled color, matching
+        // Flutter's own (slightly surprising, but verbatim) token table.
         let foreground_color = WidgetStateProperty::all(Some(colors.inverse_primary));
         let style = ButtonStyle {
             foreground_color: Some(foreground_color),
@@ -269,7 +269,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
 
 /// Builds the static (non-animated) visual content of a [`SnackBar`]:
 /// `Material(color, elevation) > SafeArea(top: false) > Padding > Row[content,
-/// action?]`, narrowed to the fixed-behavior branches (see the module docs).
+/// action?]`, narrowed to the fixed-behavior branches (see [`SnackBar`]'s docs).
 fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
     let colors = theme.color_scheme;
     let background_color = snack_bar.background_color.unwrap_or(colors.inverse_surface);
@@ -326,7 +326,7 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
 /// The [`SnackBar`] presenter mounted at `crate::scaffold::SLOT_SNACK_BAR` —
 /// wraps [`build_content`] in the [`curves::FAST_OUT_SLOW_IN`] `heightFactor`
 /// entrance/exit animation, re-rendering on every `animation` tick via
-/// [`AnimatedBuilder`]. See the module docs' "Entrance animation" section.
+/// [`AnimatedBuilder`]. See [`SnackBar`]'s "Entrance animation" section.
 #[derive(Clone, StatefulView)]
 pub(crate) struct SnackBarPresenter {
     snack_bar: SnackBar,

@@ -1,42 +1,5 @@
 //! [`Radio`] — a mutually-exclusive-group M3 selection control.
 //!
-//! # API shape: the direct `value`/`group_value`/`on_changed` triple, not a
-//! `RadioGroup` ancestor
-//!
-//! `Radio<T>` takes the direct triple (`value`/`group_value`/`on_changed`),
-//! matching Checkbox's/Switch's own self-contained (no ambient-registry)
-//! shape. An ancestor `RadioGroup` that centralizes group value + change
-//! routing for every `Radio<T>` beneath it is a separate, larger feature
-//! (an `InheritedModel`-shaped group registry this crate has no precedent
-//! for yet), not a narrowing of this type's own scope.
-//!
-//! # Generics: `Radio<T>` ships as written, not a monomorphic fallback
-//!
-//! `#[derive(StatefulView)]` (`flui-macros`) forwards the struct's generics
-//! through `syn::Generics::split_for_impl` into the generated `impl View`
-//! block, so a generic `Radio<T>` mounts through the same `StatefulView`
-//! machinery as every non-generic control in this crate — no fight with the
-//! view macros materialized. [`RadioState`] itself stays a single
-//! non-generic type (it holds no `T`-typed data — `value`/`group_value` live
-//! on the view, re-read fresh each `build`), implementing
-//! `ViewState<Radio<T>>` once per `T` via a generic `impl` block; this
-//! avoids a `PhantomData<T>` marker field entirely. Required bounds: `T:
-//! PartialEq + Clone + 'static` (equality for `selected = value ==
-//! group_value`, `Clone` to hand an owned value to
-//! [`Radio::on_changed`] and to satisfy `#[derive(Clone)]`/`StatefulView`'s
-//! own `Clone + 'static` supertrait bound).
-//!
-//! # V1 scope: static states, no toggle/reaction animation
-//!
-//! Same shape as [`crate::Checkbox`]'s V1 scope: no `positionController`
-//! interpolation (the inner dot snaps straight from absent to
-//! `_kInnerRadius`, no `reactionController` radial-splash painting
-//! (substituted by [`InkWell`]'s bounded state layer and ripple, shaped as
-//! [`MaterialShape::Stadium`] over the tap target — the same named
-//! approximation of the oracle's `splashRadius`-sized free circle
-//! [`crate::Checkbox`]/[`crate::Switch`] already document). Tap-only, no
-//! keyboard-arrow group navigation.
-//!
 //! # Composition: same InkWell-sharing shape as `Checkbox`/`Switch`
 //!
 //! [`RadioState`] owns one [`WidgetStatesController`] shared with the
@@ -51,46 +14,21 @@
 //! favorably without any nested-`DecoratedBox` workaround. `RadioPainter`
 //! draws the `8.0`dp outer ring as a **centered stroke**
 //! ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle) with a [`Paint::stroke`]) rather than
-//! [`crate::Checkbox`]'s fill+`drrect`-border approach: the oracle's own
-//! default `activeSide`/`inactiveSide` (`radio.dart` `:749-764`) already use
+//! [`crate::Checkbox`]'s fill+`drrect`-border approach: Flutter's own
+//! default `activeSide`/`inactiveSide` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/radio.dart:749-764`) already use
 //! `BorderSide.strokeAlignCenter`, which a centered stroke paint is a direct
 //! port of (Checkbox's border is inside-aligned instead, hence the
 //! `drrect`). The inner dot ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle), filled) paints only
-//! when selected — the oracle's own `!position.isDismissed` guard
-//! (`radio.dart` `:870`) collapses to exactly that under V1's non-animated
-//! `position ∈ {0.0, 1.0}`. Both rings share ONE resolved color (the
-//! oracle's `activeColor`/`inactiveColor` are themselves just `fillColor`
+//! when selected — Flutter's own `!position.isDismissed` guard
+//! (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/radio.dart:870`) collapses to exactly that under this crate's non-animated
+//! `position ∈ {0.0, 1.0}`. Both rings share ONE resolved color (
+//! Flutter's `activeColor`/`inactiveColor` are themselves just `fillColor`
 //! resolved against the selected/unselected state, and — unlike Checkbox's
 //! independent `checkColor` — there is no second, separately-themeable
 //! color for the dot). The background circle
 //! (`_RadioDefaultsM3.backgroundColor`) is fixed `Colors.transparent` with
-//! no override surface in this V1, so it is not painted at all rather than
+//! no override surface in this crate, so it is not painted at all rather than
 //! drawn as a no-op transparent fill.
-//!
-//! # Deferred (named, not silently dropped)
-//!
-//! - **Toggle/reaction/hover/focus-fade animation, `RadioGroup` ancestor
-//!   routing** — see above.
-//! - **`toggleable`** (tap-to-deselect on an already-selected radio) — V1's
-//!   tap handler is a plain no-op on an already-selected radio, matching
-//!   the oracle's default (`toggleable: false`); no toggle-off path.
-//! - **`Radio.adaptive`** (`CupertinoRadio` platform switch) — no
-//!   `TargetPlatform` substrate.
-//! - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
-//!   `visual_density`, `side`, `inner_radius`, `background_color`
-//!   overrides** — V1 always uses the M3 defaults (`kMinInteractiveDimension`
-//!   = 48dp tap target, ring stroke width `2.0`, inner radius `4.5`,
-//!   background always transparent).
-//! - **Widget-level `fill_color`/`overlay_color` `WidgetStateProperty`
-//!   overrides** — only [`Radio::active_color`] (the oracle's plain-`Color`
-//!   override) ships at the widget tier; the theme tier
-//!   ([`crate::RadioThemeData`]) and the M3 default tier are both fully
-//!   state-resolved.
-//! - **`focus_node`/`autofocus`** — same whole-substrate `InkWell` gap
-//!   [`crate::Checkbox`]/[`crate::Switch`] already name.
-//! - **Platform-conditional `selected`/`hint` accessibility fields** — the
-//!   oracle emits these on some platforms only, and FLUI's semantics surface
-//!   is platform-independent, so neither is wired.
 
 use std::any::Any;
 use std::rc::Rc;
@@ -125,7 +63,7 @@ const INNER_RADIUS: f64 = 4.5;
 const RING_STROKE_WIDTH: f64 = 2.0;
 
 /// The M3 tap-target side length (`48.0`, the minimum interactive
-/// dimension), the `MaterialTapTargetSize.padded` branch this V1 always
+/// dimension), the `MaterialTapTargetSize.padded` branch this crate always
 /// takes — same deferral
 /// [`crate::Checkbox`]/[`crate::Switch`] already make.
 pub(crate) const RADIO_TAP_TARGET_SIZE: f64 = 48.0;
@@ -138,7 +76,7 @@ const _: () = assert!(INNER_RADIUS < OUTER_RADIUS);
 type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, T)>;
 
 /// A Material Design radio button for selecting one value out of a
-/// mutually-exclusive group. See the module docs' "API shape" section for
+/// mutually-exclusive group. See [`Radio`]'s "API shape" section for
 /// why this ships the direct `value`/`group_value`/`on_changed` triple
 /// rather than an ambient `RadioGroup` registry.
 ///
@@ -154,6 +92,68 @@ type RadioChangeCallback<T> = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, T
 /// let _selected = Radio::new(Season::Spring, Some(Season::Spring)).on_changed(|_ctx, _next| { /* ... */ });
 /// let _unselected = Radio::new(Season::Summer, Some(Season::Spring));
 /// ```
+///
+/// # API shape: the direct `value`/`group_value`/`on_changed` triple, not a
+/// `RadioGroup` ancestor
+///
+/// `Radio<T>` takes the direct triple (`value`/`group_value`/`on_changed`),
+/// matching Checkbox's/Switch's own self-contained (no ambient-registry)
+/// shape. An ancestor `RadioGroup` that centralizes group value + change
+/// routing for every `Radio<T>` beneath it is a separate, larger feature
+/// (an `InheritedModel`-shaped group registry this crate has no precedent
+/// for yet), not a narrowing of this type's own scope.
+///
+/// # Generics: `Radio<T>` ships as written, not a monomorphic fallback
+///
+/// `#[derive(StatefulView)]` (`flui-macros`) forwards the struct's generics
+/// through `syn::Generics::split_for_impl` into the generated `impl View`
+/// block, so a generic `Radio<T>` mounts through the same `StatefulView`
+/// machinery as every non-generic control in this crate — no fight with the
+/// view macros materialized. [`RadioState`] itself stays a single
+/// non-generic type (it holds no `T`-typed data — `value`/`group_value` live
+/// on the view, re-read fresh each `build`), implementing
+/// `ViewState<Radio<T>>` once per `T` via a generic `impl` block; this
+/// avoids a `PhantomData<T>` marker field entirely. Required bounds: `T:
+/// PartialEq + Clone + 'static` (equality for `selected = value ==
+/// group_value`, `Clone` to hand an owned value to
+/// [`Radio::on_changed`] and to satisfy `#[derive(Clone)]`/`StatefulView`'s
+/// own `Clone + 'static` supertrait bound).
+///
+/// # Scope: static states, no toggle/reaction animation
+///
+/// Same shape as [`crate::Checkbox`]'s scope: no `positionController`
+/// interpolation (the inner dot snaps straight from absent to
+/// `_kInnerRadius`, no `reactionController` radial-splash painting
+/// (substituted by [`InkWell`]'s bounded state layer and ripple, shaped as
+/// [`MaterialShape::Stadium`] over the tap target — the same named
+/// approximation of Flutter's `splashRadius`-sized free circle
+/// [`crate::Checkbox`]/[`crate::Switch`] already document). Tap-only, no
+/// keyboard-arrow group navigation.
+///
+/// # Deferred (named, not silently dropped)
+///
+/// - **Toggle/reaction/hover/focus-fade animation, `RadioGroup` ancestor
+///   routing** — see above.
+/// - **`toggleable`** (tap-to-deselect on an already-selected radio) — this crate's
+///   tap handler is a plain no-op on an already-selected radio, matching
+///   Flutter's default (`toggleable: false`); no toggle-off path.
+/// - **`Radio.adaptive`** (`CupertinoRadio` platform switch) — no
+///   `TargetPlatform` support.
+/// - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
+///   `visual_density`, `side`, `inner_radius`, `background_color`
+///   overrides** — this crate always uses the M3 defaults (`kMinInteractiveDimension`
+///   = 48dp tap target, ring stroke width `2.0`, inner radius `4.5`,
+///   background always transparent).
+/// - **Widget-level `fill_color`/`overlay_color` `WidgetStateProperty`
+///   overrides** — only [`Radio::active_color`] (Flutter's plain-`Color`
+///   override) ships at the widget tier; the theme tier
+///   ([`crate::RadioThemeData`]) and the M3 default tier are both fully
+///   state-resolved.
+/// - **`focus_node`/`autofocus`** — same crate-wide `InkWell` gap
+///   [`crate::Checkbox`]/[`crate::Switch`] already name.
+/// - **Platform-conditional `selected`/`hint` accessibility fields** —
+///   Flutter emits these on some platforms only, and FLUI's semantics surface
+///   is platform-independent, so neither is wired.
 #[derive(Clone, StatefulView)]
 pub struct Radio<T>
 where
@@ -195,7 +195,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
     /// radio interactive — `None` (the default) renders disabled and
     /// swallows taps. Fires with a clone of [`Self::new`]'s `value` when
     /// tapped while NOT already selected; a no-op tap on an already-selected
-    /// radio (see the module docs' `toggleable` deferral).
+    /// radio (see [`Radio`]'s `toggleable` deferral).
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -237,7 +237,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
 /// [`WidgetStatesController`] shared with the [`InkWell`] this view builds.
 /// Deliberately non-generic: it holds no `T`-typed data (`value`/
 /// `group_value` live on the view, re-read fresh each `build`) — see the
-/// module docs' "Generics" section for why this avoids a `PhantomData<T>`
+/// [`Radio`]'s "Generics" section for why this avoids a `PhantomData<T>`
 /// marker. See [`crate::checkbox::CheckboxState`]'s doc comment for why
 /// `Selected` lives here while `Hovered`/`Focused`/`Pressed`/`Disabled` are
 /// `InkWell`'s to manage.
@@ -386,7 +386,7 @@ fn resolve_radio_ring_color(
         .unwrap_or_else(|| radio_default_fill_color(colors, states))
 }
 
-/// `_RadioDefaultsM3.fillColor` (`radio.dart`, oracle tag `3.44.0`).
+/// `_RadioDefaultsM3.fillColor` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/radio.dart:943`).
 fn radio_default_fill_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Selected) {
         return if states.contains_state(WidgetState::Disabled) {
@@ -407,8 +407,8 @@ fn radio_default_fill_color(colors: &ColorScheme, states: WidgetStates) -> Color
     colors.on_surface_variant
 }
 
-/// `_RadioDefaultsM3.overlayColor` (`radio.dart`, oracle tag `3.44.0`).
-/// Returns `None` where the oracle returns `Colors.transparent`; every such
+/// `_RadioDefaultsM3.overlayColor` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/radio.dart:977`).
+/// Returns `None` where Flutter returns `Colors.transparent`; every such
 /// state set has no active interaction state, so the `InkWell` stays at rest.
 fn radio_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Option<Color> {
     if states.contains_state(WidgetState::Selected) {
@@ -436,7 +436,7 @@ fn radio_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Op
 }
 
 /// Paints the radio's concentric circles, always at the fully-settled shape
-/// (see the module docs' V1-scope section), evaluated at
+/// (see [`Radio`]'s docs' scope section), evaluated at
 /// `position ∈ {0.0, 1.0}` throughout with no radial-reaction paint (the
 /// overlay comes from [`InkWell`] instead).
 #[derive(Debug, Clone, PartialEq)]

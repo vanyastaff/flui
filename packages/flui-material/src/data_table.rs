@@ -1,84 +1,16 @@
 //! [`DataTable`] — a tabular data display with an optional leading
 //! selection checkbox column.
 //!
-//! # M3 defaults
-//!
-//! | Token | Value |
-//! |---|---|
-//! | heading row height | `56.0` |
-//! | horizontal margin | `24.0` |
-//! | column spacing | `56.0` |
-//! | divider thickness | `1.0` |
-//! | data row min/max height | minimum interactive dimension, `48.0` |
-//! | heading text style | `TextTheme.titleSmall` |
-//! | data text style | `TextTheme.bodyMedium` |
-//! | selected row color | `colorScheme.primary` @ `8%` opacity |
-//! | checkbox width (checkbox column formula) | `18.0` |
-//!
-//! There is no separate token-class layer (unlike the button family) — every
-//! default above is a bare literal or a direct `TextTheme`/`ColorScheme` read.
-//! The data row height default is `48.0`, not `52.0`; the heading text style
-//! is `TextTheme.titleSmall`, not `labelLarge`.
-//!
-//! # Layout: genuine per-column intrinsic sizing, not a fallback
-//!
-//! `DataTable` lays out over [`flui_sdk::widgets::Table`] over `RenderTable`
-//! with per-column intrinsic sizing, including
-//! [`TableColumnWidth::Intrinsic`] with its 4-pass grow/shrink algorithm
-//! (in `flui-objects/src/layout/table.rs`). The default heuristic: the single
-//! non-numeric column (if there is exactly one) gets
-//! `Intrinsic { flex: Some(1.0) }`, every other column gets
-//! `Intrinsic { flex: None }`, and [`DataColumn::column_width`] overrides
-//! either with any [`TableColumnWidth`].
-//!
-//! # Direction
-//!
-//! The ambient [`Directionality`] orders the columns from its start edge, so the
-//! checkbox column leads on the right in RTL, and each cell's padding and
-//! alignment name the start and end edges rather than left and right.
-//!
 //! # Composition: per-cell `InkWell`, not a row-spanning ink responder
 //!
 //! A row-rect-spanning ink responder would walk up to the nearest
 //! `RenderTable` to paint one splash across the whole row. FLUI's
-//! `RenderTable` exposes no such row-rect query yet. V1 instead wraps each
+//! `RenderTable` exposes no such row-rect query yet. This crate instead wraps each
 //! selectable cell individually in [`crate::InkWell`] bound to the SAME toggle
 //! callback — tapping any cell (or the checkbox's own padding) still fires
 //! [`DataRow::on_select_changed`] with the same next value, but the overlay
 //! fill is clipped to each cell's own bounds rather than spanning the row. A
 //! named limitation, not a silent one.
-//!
-//! # Selection: tristate heading checkbox
-//!
-//! The heading checkbox (shown when [`DataTable::show_checkbox_column`] is
-//! `true` and at least one row carries [`DataRow::on_select_changed`]) is
-//! checked when every selectable row is selected, unchecked when none are, and
-//! indeterminate (`None`, tristate) when some but not all are.
-//! [`DataTable::on_select_all`] overrides the fan-out; otherwise every
-//! selectable row whose `selected` differs from the new value is toggled.
-//!
-//! # Deferred (named, not silently dropped)
-//!
-//! - **Sorting** — a sort column index and direction, per-column sort
-//!   callbacks, and the animated sort-arrow indicator. No `DataColumn` sort
-//!   surface ships in V1.
-//! - **Paginated tables** — a distinct widget, out of scope.
-//! - **Editable cells** — an edit icon, a placeholder, and double-tap,
-//!   long-press, tap-down and tap-cancel handlers (only [`DataCell::on_tap`]
-//!   ships).
-//! - **Per-row long-press/hover/mouse-cursor/color** — no per-row
-//!   override surface beyond `selected`/`on_select_changed` yet; a row's
-//!   background/overlay always resolves through the table-level
-//!   [`DataTable::data_row_color`] cascade.
-//! - **Per-column tooltip, sort, mouse cursor and heading alignment** —
-//!   tied to the deferred sort feature.
-//! - **`DataTable` border and clip behavior** — the table always composes
-//!   with no clip and no `TableBorder`.
-//! - **Sticky headers** — a `DataTable` never scrolls independently of its
-//!   heading row; this is a property of whatever scrolls a `DataTable`, not
-//!   of the widget itself.
-//! - **Dense/`VisualDensity`** — no consumer wired to this substrate yet,
-//!   matching every other V1 selection control in this crate.
 
 use std::rc::Rc;
 
@@ -130,7 +62,7 @@ type RowColorProperty = WidgetStateProperty<Option<Color>>;
 /// Column configuration for a [`DataTable`].
 ///
 /// Carries a [`label`](Self::new) and [`numeric`](Self::numeric) — see the
-/// module docs for the deferred tooltip, sort, mouse-cursor and
+/// [`DataTable`]'s docs for the deferred tooltip, sort, mouse-cursor and
 /// heading-alignment fields.
 #[derive(Clone, Debug)]
 pub struct DataColumn {
@@ -141,7 +73,7 @@ pub struct DataColumn {
 
 impl DataColumn {
     /// A column headed by `label`, non-numeric, with the default
-    /// intrinsic-width sizing (see the module docs).
+    /// intrinsic-width sizing (see [`DataTable`]'s docs).
     pub fn new(label: impl IntoView) -> Self {
         Self {
             label: label.into_view().boxed(),
@@ -171,7 +103,7 @@ impl DataColumn {
 /// One cell's data within a [`DataRow`].
 ///
 /// Carries a [`child`](Self::new) and an [`on_tap`](Self::on_tap) — see the
-/// module docs for the deferred placeholder, edit-icon and extra gesture
+/// [`DataTable`]'s docs for the deferred placeholder, edit-icon and extra gesture
 /// handler fields.
 #[derive(Clone)]
 pub struct DataCell {
@@ -212,7 +144,7 @@ impl DataCell {
 /// Row configuration and cell data for a [`DataTable`].
 ///
 /// Carries [`cells`](Self::new), [`selected`](Self::selected), and
-/// [`on_select_changed`](Self::on_select_changed) — see the module docs for
+/// [`on_select_changed`](Self::on_select_changed) — see [`DataTable`]'s docs for
 /// the deferred long-press, hover, color and mouse-cursor fields.
 #[derive(Clone)]
 pub struct DataRow {
@@ -252,7 +184,7 @@ impl DataRow {
 
     /// Sets the selection-change handler, fired with the row's next
     /// `selected` value on a checkbox toggle or a row tap. Presence of a
-    /// handler is what makes this row selectable — see the module docs'
+    /// handler is what makes this row selectable — see [`DataTable`]'s
     /// "Selection" section.
     #[must_use]
     pub fn on_select_changed<R: flui_sdk::view::EventOutcome>(
@@ -268,7 +200,7 @@ impl DataRow {
 /// above [`DataRow`]s of [`DataCell`]s, with an optional leading selection
 /// checkbox column.
 ///
-/// See the module docs for the M3 default token table, the layout strategy,
+/// See [`DataTable`]'s docs for the M3 default token table, the layout strategy,
 /// and the named deferrals.
 ///
 /// ```rust
@@ -284,6 +216,74 @@ impl DataRow {
 /// );
 /// let _themed = Theme::new(ThemeData::light(), table);
 /// ```
+///
+/// # M3 defaults
+///
+/// | Token | Value |
+/// |---|---|
+/// | heading row height | `56.0` |
+/// | horizontal margin | `24.0` |
+/// | column spacing | `56.0` |
+/// | divider thickness | `1.0` |
+/// | data row min/max height | minimum interactive dimension, `48.0` |
+/// | heading text style | `TextTheme.titleSmall` |
+/// | data text style | `TextTheme.bodyMedium` |
+/// | selected row color | `colorScheme.primary` @ `8%` opacity |
+/// | checkbox width (checkbox column formula) | `18.0` |
+///
+/// There is no separate token-class layer (unlike the button family) — every
+/// default above is a bare literal or a direct `TextTheme`/`ColorScheme` read.
+/// The data row height default is `48.0`, not `52.0`; the heading text style
+/// is `TextTheme.titleSmall`, not `labelLarge`.
+///
+/// # Layout: genuine per-column intrinsic sizing, not a fallback
+///
+/// `DataTable` lays out over [`flui_sdk::widgets::Table`] over `RenderTable`
+/// with per-column intrinsic sizing, including
+/// [`TableColumnWidth::Intrinsic`] with its 4-pass grow/shrink algorithm
+/// (in `flui-objects/src/layout/table.rs`). The default heuristic: the single
+/// non-numeric column (if there is exactly one) gets
+/// `Intrinsic { flex: Some(1.0) }`, every other column gets
+/// `Intrinsic { flex: None }`, and [`DataColumn::column_width`] overrides
+/// either with any [`TableColumnWidth`].
+///
+/// # Direction
+///
+/// The ambient [`Directionality`] orders the columns from its start edge, so the
+/// checkbox column leads on the right in RTL, and each cell's padding and
+/// alignment name the start and end edges rather than left and right.
+///
+/// # Selection: tristate heading checkbox
+///
+/// The heading checkbox (shown when [`DataTable::show_checkbox_column`] is
+/// `true` and at least one row carries [`DataRow::on_select_changed`]) is
+/// checked when every selectable row is selected, unchecked when none are, and
+/// indeterminate (`None`, tristate) when some but not all are.
+/// [`DataTable::on_select_all`] overrides the fan-out; otherwise every
+/// selectable row whose `selected` differs from the new value is toggled.
+///
+/// # Deferred (named, not silently dropped)
+///
+/// - **Sorting** — a sort column index and direction, per-column sort
+///   callbacks, and the animated sort-arrow indicator. No `DataColumn` sort
+///   surface ships in this crate.
+/// - **Paginated tables** — a distinct widget, out of scope.
+/// - **Editable cells** — an edit icon, a placeholder, and double-tap,
+///   long-press, tap-down and tap-cancel handlers (only [`DataCell::on_tap`]
+///   ships).
+/// - **Per-row long-press/hover/mouse-cursor/color** — no per-row
+///   override surface beyond `selected`/`on_select_changed` yet; a row's
+///   background/overlay always resolves through the table-level
+///   [`DataTable::data_row_color`] cascade.
+/// - **Per-column tooltip, sort, mouse cursor and heading alignment** —
+///   tied to the deferred sort feature.
+/// - **`DataTable` border and clip behavior** — the table always composes
+///   with no clip and no `TableBorder`.
+/// - **Sticky headers** — a `DataTable` never scrolls independently of its
+///   heading row; this is a property of whatever scrolls a `DataTable`, not
+///   of the widget itself.
+/// - **Dense/`VisualDensity`** — no consumer wired to this crate yet,
+///   matching every other selection control in this crate.
 #[derive(Clone, StatelessView)]
 pub struct DataTable {
     columns: Vec<DataColumn>,
@@ -317,7 +317,7 @@ impl std::fmt::Debug for DataTable {
 
 impl DataTable {
     /// A table of `columns` headings above `rows` of data, with every style
-    /// override falling through to the M3 defaults (see the module docs'
+    /// override falling through to the M3 defaults (see [`DataTable`]'s
     /// token table).
     ///
     /// A row that does not match `columns` in length is squared up here —
@@ -479,7 +479,7 @@ struct ResolvedDataTableStyle {
     /// states", which is `Some` wrapping a property that itself returns
     /// `None`). Used BOTH for each row's background (with the M3 selected-row
     /// default layered under it) and for the row `InkWell`'s overlay color
-    /// (WITHOUT that default — see the module docs' overlay note).
+    /// (WITHOUT that default — see [`DataTable`]'s docs' overlay note).
     data_row_color: Option<RowColorProperty>,
     /// The M3 default row-color resolver: `Selected` -> `primary@8%`, else
     /// no color. Always present (unlike `data_row_color`).
@@ -832,7 +832,7 @@ fn row_checkbox_cell(
 
 /// A heading cell: the column's label, end-aligned when [`DataColumn::numeric`]
 /// and start-aligned otherwise, at the resolved heading text style and row
-/// height (sorting arrow omitted — see the module docs).
+/// height (sorting arrow omitted — see [`DataTable`]'s docs).
 fn header_cell(
     label: BoxedView,
     numeric: bool,
@@ -857,7 +857,7 @@ fn header_cell(
 /// A data cell: the cell's child, end-aligned when [`DataColumn::numeric`] and
 /// start-aligned otherwise, at the resolved data text style and row height
 /// range, wrapped in an [`InkWell`] when the cell or its row is tappable
-/// (edit-icon/placeholder omitted — see the module docs).
+/// (edit-icon/placeholder omitted — see [`DataTable`]'s docs).
 #[expect(
     clippy::too_many_arguments,
     reason = "the per-cell parameters are independent resolved values; a patch struct would only relocate the list"

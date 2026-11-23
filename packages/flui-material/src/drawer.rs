@@ -22,39 +22,6 @@
 //! `Arc`/`Send + Sync`: `GlobalKey::with_current_state` resolves against the
 //! owner-thread element-tree registry, and state only the owner thread touches
 //! carries no `Send` (ADR-0323).
-//!
-//! ## Drag extent follows the constrained declared panel width
-//!
-//! `Scaffold` passes `Drawer::configured_width` to the controller. A
-//! [`flui_sdk::widgets::LayoutBuilder`] caps that declared width by the actual
-//! incoming maximum width, matching the standard `Drawer` under its loose
-//! `Align` constraints. Before layout, the configured width remains the fallback.
-//! A custom controller child must declare its panel extent with
-//! [`DrawerController::panel_width`]; this is not arbitrary descendant measurement.
-//! An empty or unusable extent ignores movement and settles by position without
-//! dividing velocity by that extent.
-//!
-//! ## Start and end are reading edges
-//!
-//! `DrawerController::build` resolves its [`DrawerAlignment`] against the
-//! ambient [`flui_sdk::widgets::Directionality`] (left-to-right without one)
-//! into the physical side the drawer is flush with. That side, not the
-//! alignment, places the panel and its closed edge strip, picks the safe-area
-//! inset the strip widens by, signs drag and fling movement, and tells
-//! [`Drawer`] which corners to round. A direction change while the drawer is
-//! open or mid-drag moves it to the other side at the same progress: the
-//! controller's value is the fraction open, which no side changes.
-//!
-//! ## Deferred, and named
-//!
-//! `DrawerTheme` (no such theme-extension slot exists yet in this crate — see
-//! `theme_data.rs`'s scope note), the `AppBar` auto-hamburger,
-//! `BlockSemantics`/`ExcludeSemantics`/modal-barrier
-//! semantics labeling, `FocusScope` (no focus trap inside an open drawer
-//! yet), and local-history back-dismissal (`LocalHistoryEntry` — this
-//! substrate has no `ModalRoute`-integrated history-entry mechanism to hang
-//! it on). `RepaintBoundary` is also skipped — a paint-layer optimization
-//! hint with no observable behavior difference for this substrate's tests.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -180,7 +147,7 @@ fn end_rounded_shape(side: HorizontalSide) -> MaterialShape {
 /// background, elevation `1.0`, a 16dp shape rounded on the corners facing
 /// the scaffold's interior, width 304 by
 /// default. [`crate::theme_data::ThemeData`] has no `DrawerTheme` extension
-/// slot yet — see the module docs.
+/// slot yet — see [`Drawer`]'s docs.
 ///
 /// # Examples
 ///
@@ -190,6 +157,39 @@ fn end_rounded_shape(side: HorizontalSide) -> MaterialShape {
 ///
 /// let _drawer = Drawer::new().child(Text::new("Navigation"));
 /// ```
+///
+/// ## Drag extent follows the constrained declared panel width
+///
+/// `Scaffold` passes `Drawer::configured_width` to the controller. A
+/// [`flui_sdk::widgets::LayoutBuilder`] caps that declared width by the actual
+/// incoming maximum width, matching the standard `Drawer` under its loose
+/// `Align` constraints. Before layout, the configured width remains the fallback.
+/// A custom controller child must declare its panel extent with
+/// [`DrawerController::panel_width`]; this is not arbitrary descendant measurement.
+/// An empty or unusable extent ignores movement and settles by position without
+/// dividing velocity by that extent.
+///
+/// ## Start and end are reading edges
+///
+/// `DrawerController::build` resolves its [`DrawerAlignment`] against the
+/// ambient [`flui_sdk::widgets::Directionality`] (left-to-right without one)
+/// into the physical side the drawer is flush with. That side, not the
+/// alignment, places the panel and its closed edge strip, picks the safe-area
+/// inset the strip widens by, signs drag and fling movement, and tells
+/// [`Drawer`] which corners to round. A direction change while the drawer is
+/// open or mid-drag moves it to the other side at the same progress: the
+/// controller's value is the fraction open, which no side changes.
+///
+/// ## Deferred, and named
+///
+/// `DrawerTheme` (no such theme-extension slot exists yet in this crate — see
+/// `theme_data.rs`'s scope note), the `AppBar` auto-hamburger,
+/// `BlockSemantics`/`ExcludeSemantics`/modal-barrier
+/// semantics labeling, `FocusScope` (no focus trap inside an open drawer
+/// yet), and local-history back-dismissal (`LocalHistoryEntry` — this
+/// support has no `ModalRoute`-integrated history-entry mechanism to hang
+/// it on). `RepaintBoundary` is also skipped — a paint-layer optimization
+/// hint with no observable behavior difference for this crate's tests.
 #[derive(Clone, StatelessView)]
 pub struct Drawer {
     background_color: Option<Color>,
@@ -228,7 +228,7 @@ impl Drawer {
     }
 
     /// Overrides the panel's width. Defaults to 304 (the M3 drawer width) — see the
-    /// module docs on why this value, not a live measurement, is what drives
+    /// [`Drawer`]'s docs on why this value, not a live measurement, is what drives
     /// [`DrawerController`]'s drag math.
     ///
     /// A negative or NaN width is stored as `0.0`, a panel with no extent
@@ -304,7 +304,7 @@ impl StatelessView for Drawer {
 /// An owned, `Rc`-based (owner-affine, **not** `Send`/`Sync`) capability to
 /// open/close a [`crate::Scaffold`]'s drawer/end-drawer from anywhere in its
 /// subtree. Published via `ScaffoldScope` (`crate::ScaffoldScope::of`/
-/// `maybe_of`). See the module docs for why this stays `!Send`.
+/// `maybe_of`). See [`Drawer`]'s docs for why this stays `!Send`.
 #[derive(Clone, Debug)]
 pub struct DrawerHandle {
     shared: Rc<DrawerHandleShared>,
@@ -578,9 +578,9 @@ impl DrawerController {
 
     /// Whether the drawer can be opened with an edge-swipe from closed.
     /// Defaults to `true` on every platform — a **named divergence** from
-    /// the oracle, which disables this on desktop platforms
+    /// Flutter, which disables this on desktop platforms
     /// (`_buildDrawer`'s `isDesktop` check). FLUI has desktop as a primary
-    /// target, not an edge case, so this substrate exposes the choice
+    /// target, not an edge case, so this crate exposes the choice
     /// directly instead of hardcoding a platform gate.
     #[must_use]
     pub fn enable_open_drag_gesture(mut self, enabled: bool) -> Self {

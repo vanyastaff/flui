@@ -1,39 +1,12 @@
 //! [`Material`] — a piece of material: a colored, elevated, shaped surface.
 //!
-//! # Responsibilities
-//!
-//! `Material` is responsible for four things:
-//! clipping to a shape, elevating on the Z axis with a shadow, giving its
-//! subtree the theme's body text style, and hosting ink effects
-//! (splashes/highlights) below its children. This substrate ships the first
-//! three; see "Scope" below for the fourth.
-//!
-//! # Surface color
-//!
-//! A `Material` with no [`color`](Material::color) of its own paints the
-//! theme's `color_scheme.surface`, depending on the `color_scheme` slot
-//! only, so it follows a theme change.
-//!
-//! # Body text style
-//!
-//! Under a [`Theme`], `Material` wraps its child in a
-//! `DefaultTextStyle` carrying `text_theme.body_medium`, so plain `Text` on a
-//! surface reads as body copy instead of `MaterialApp`'s deliberately loud
-//! fallback. `DefaultTextStyle` replaces the enclosing style rather than
-//! merging with it, so a component that publishes its own style inside its
-//! surface (a `ListTile` title, a dialog's content) still wins. The lookup
-//! depends on the `text_theme` slot only. With no `Theme` ancestor nothing is
-//! published, and the subtree keeps whatever style it inherited. The style
-//! is not animated: `AnimatedTheme` already interpolates `text_theme` frame
-//! by frame, and a second animation would trail it.
-//!
 //! # Wraps the existing render object — no new paint code
 //!
 //! `Material` is a thin configuration object over
 //! [`flui_sdk::rendering::objects::RenderPhysicalShape`] (`RenderPhysicalModelBase<PathClip>`,
 //! `crates/flui-objects/src/proxy/physical_model.rs`) — the render object
 //! that already implements clip + `Canvas::draw_shadow` + fill. This mirrors
-//! the oracle directly: `Material.build` constructs a `PhysicalModel` or
+//! Flutter directly: `Material.build` constructs a `PhysicalModel` or
 //! `PhysicalShape` render object (`material.dart`, `_RenderInkFeatures`'s
 //! `createRenderObject`), **not** a `kElevationToShadow` lookup table — that
 //! table belongs to `BoxShadow`-based widgets (`Card`'s pre-M3 fallback,
@@ -48,47 +21,6 @@
 //! (see [`ClipPath`](crate) 's identical pattern in `flui-widgets`) — so
 //! the private surface view's `RenderView::RenderObject` associated type
 //! does not need to vary with which shape is configured.
-//!
-//! # `surfaceTintColor`: verified against 3.44, not ported
-//!
-//! `elevation_overlay.dart` (oracle tag `3.44.0`) confirms
-//! `ElevationOverlay.applySurfaceTint` is still live at this tag — M3
-//! components didn't remove the mechanism, they mostly opt out of it by
-//! passing `surfaceTintColor: Colors.transparent` in their own
-//! `_TokenDefaults` (a per-component default, not a `Material`-level
-//! retirement). `Material.surfaceTintColor` also requires a `BuildContext`
-//! (`Theme.of(context)`) to resolve `useMaterial3`/elevation opacity, which
-//! this substrate does not wire up — `Material` reads only the theme's
-//! `text_theme` and `color_scheme` slots. Not implementing `surfaceTintColor` is therefore a
-//! named deferral (not a "this API is gone" claim), most likely landing
-//! alongside a future button family's token defaults.
-//!
-//! # Scope: no ink-features registry
-//!
-//! A full `Material` also acts as an ink controller: a
-//! render object that ink effects (`InkSplash`,
-//! `InkHighlight`) register onto and paint through, so a splash can bleed
-//! outside its originating `InkWell`'s bounds when the `Material` ancestor
-//! is larger. **FLUI has no such registry**: each [`crate::InkWell`] owns its
-//! state layer and ripple ([`crate::ripple`]) and paints them under its child,
-//! clipped to its own shape. Consequences:
-//!
-//! - No `Material::of`/`maybeOf` lookup, no `MaterialInkController` trait.
-//! - Ink can never visually exceed its own `InkWell`'s bounds, so two
-//!   adjacent wells never bleed into each other.
-//! - M3's splash shader (`InkSparkle`) is not used; the ripple is a
-//!   geometric wave.
-//!
-//! # Scope: no implicit shape/elevation animation
-//!
-//! The oracle's `_MaterialInterior` (`material.dart`) animates `elevation`,
-//! `shadowColor`, `surfaceTintColor`, and `shape` over
-//! `Material.animationDuration` using an implicit `AnimatedWidget`-style
-//! tween. `Material` here applies every prop change immediately (paint-only,
-//! no interpolation) — a named divergence, not an oversight. It can be
-//! layered on later as an `AnimatedMaterial` wrapper (mirroring
-//! `flui-widgets::animated`'s existing `ImplicitController` machinery)
-//! without changing this type's shape.
 
 use flui_sdk::painting::paint::Clip;
 use flui_sdk::painting::styling::Color;
@@ -105,7 +37,7 @@ use crate::theme_data::ThemeData;
 
 /// A colored, elevated, shaped surface.
 ///
-/// See the module docs for what this V1 does and does not implement
+/// See [`Material`]'s docs for what this crate does and does not implement
 /// (clipping + elevation + shadow + the theme's body text style: yes;
 /// ink-feature registry, implicit animation, `surfaceTintColor`: named
 /// deferrals).
@@ -120,6 +52,74 @@ use crate::theme_data::ThemeData;
 /// // Painted a color of its own.
 /// let _tinted = Material::new().color(Color::rgb(30, 60, 90)).elevation(2.0);
 /// ```
+///
+/// # Responsibilities
+///
+/// `Material` is responsible for four things:
+/// clipping to a shape, elevating on the Z axis with a shadow, giving its
+/// subtree the theme's body text style, and hosting ink effects
+/// (splashes/highlights) below its children. This crate ships the first
+/// three; see "Scope" below for the fourth.
+///
+/// # Surface color
+///
+/// A `Material` with no [`color`](Material::color) of its own paints the
+/// theme's `color_scheme.surface`, depending on the `color_scheme` slot
+/// only, so it follows a theme change.
+///
+/// # Body text style
+///
+/// Under a [`Theme`], `Material` wraps its child in a
+/// `DefaultTextStyle` carrying `text_theme.body_medium`, so plain `Text` on a
+/// surface reads as body copy instead of `MaterialApp`'s deliberately loud
+/// fallback. `DefaultTextStyle` replaces the enclosing style rather than
+/// merging with it, so a component that publishes its own style inside its
+/// surface (a `ListTile` title, a dialog's content) still wins. The lookup
+/// depends on the `text_theme` slot only. With no `Theme` ancestor nothing is
+/// published, and the subtree keeps whatever style it inherited. The style
+/// is not animated: `AnimatedTheme` already interpolates `text_theme` frame
+/// by frame, and a second animation would trail it.
+///
+/// # `surfaceTintColor`: not ported
+///
+/// `elevation_overlay.dart` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/elevation_overlay.dart:31`) confirms
+/// `ElevationOverlay.applySurfaceTint` is still live in Flutter 3.50.1 — M3
+/// components didn't remove the mechanism, they mostly opt out of it by
+/// passing `surfaceTintColor: Colors.transparent` in their own
+/// `_TokenDefaults` (a per-component default, not a `Material`-level
+/// retirement). `Material.surfaceTintColor` also requires a `BuildContext`
+/// (`Theme.of(context)`) to resolve `useMaterial3`/elevation opacity, which
+/// this crate does not wire up — `Material` reads only the theme's
+/// `text_theme` and `color_scheme` slots. Not implementing `surfaceTintColor` is therefore a
+/// named deferral (not a "this API is gone" claim), most likely landing
+/// alongside a future button family's token defaults.
+///
+/// # Scope: no ink-features registry
+///
+/// A full `Material` also acts as an ink controller: a
+/// render object that ink effects (`InkSplash`,
+/// `InkHighlight`) register onto and paint through, so a splash can bleed
+/// outside its originating `InkWell`'s bounds when the `Material` ancestor
+/// is larger. **FLUI has no such registry**: each [`crate::InkWell`] owns its
+/// state layer and ripple (`crate::ripple`) and paints them under its child,
+/// clipped to its own shape. Consequences:
+///
+/// - No `Material::of`/`maybeOf` lookup, no `MaterialInkController` trait.
+/// - Ink can never visually exceed its own `InkWell`'s bounds, so two
+///   adjacent wells never bleed into each other.
+/// - M3's splash shader (`InkSparkle`) is not used; the ripple is a
+///   geometric wave.
+///
+/// # Scope: no implicit shape/elevation animation
+///
+/// Flutter's `_MaterialInterior` (`material.dart`) animates `elevation`,
+/// `shadowColor`, `surfaceTintColor`, and `shape` over
+/// `Material.animationDuration` using an implicit `AnimatedWidget`-style
+/// tween. `Material` here applies every prop change immediately (paint-only,
+/// no interpolation) — a named divergence, not an oversight. It can be
+/// layered on later as an `AnimatedMaterial` wrapper (mirroring
+/// `flui-widgets::animated`'s existing `ImplicitController` machinery)
+/// without changing this type's shape.
 #[derive(Clone, Debug, StatelessView)]
 pub struct Material {
     /// `None` paints the theme's `color_scheme.surface`, resolved in `build`.
@@ -165,7 +165,7 @@ impl Material {
     }
 
     /// Sets the elevation. Applied straight to the render object with no
-    /// snapping or curve — a continuous z-depth, matching the oracle's own
+    /// snapping or curve — a continuous z-depth, matching Flutter's own
     /// `double elevation` (M3 has no discrete elevation "levels" at the
     /// `Material` layer; token tables like `_surfaceTintElevationOpacities`
     /// operate on the same continuous value). A negative or non-finite

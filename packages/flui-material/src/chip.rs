@@ -1,77 +1,15 @@
-//! [`Chip`] and [`FilterChip`] — the M3 chip family V1: a compact,
+//! [`Chip`] and [`FilterChip`] — the M3 chip family: a compact,
 //! outlined/filled information element with an optional leading avatar and
 //! trailing delete affordance.
 //! The leading and trailing edges are those of the ambient `Directionality`.
 //!
-//! # V1 scope: a reduced chip family
-//!
-//! The M3 chip family has several kinds (assist, input, choice, filter,
-//! action) that differ only in how one shared state machine is configured.
-//! This V1 ships two shapes, [`Chip`] and [`FilterChip`], each composing the
-//! same reduced primitives ([`Material`], [`InkWell`], shared default-token
-//! functions in this module) directly. Input, choice and action chips are
-//! named deferrals: each is a thin reconfiguration the same shared functions
-//! already support, they just have no constructor yet.
-//!
-//! [`Chip`] uses the generic M3 chip default table and widens it with an
-//! optional [`Chip::on_pressed`], so a tappable "assist-shaped" chip is
-//! available. This is a deliberate, documented widening of `Chip`'s surface,
-//! not a change to the token values.
-//!
-//! Similarly, [`Chip::enabled`] is exposed directly so the M3 default
-//! table's disabled branch is reachable and testable on this V1 type.
-//!
-//! # `ChipThemeData`: plain overrides, not `WidgetStateProperty`
-//!
-//! Unlike [`crate::CheckboxThemeData`]/[`crate::SwitchThemeData`]/
-//! [`crate::RadioThemeData`]/[`crate::NavigationBarThemeData`], whose color
-//! slots are all `Option<WidgetStateProperty<Option<Color>>>`,
-//! [`crate::ChipThemeData`]'s fields are **plain** (`Option<Color>`,
-//! `Option<BorderSide>`, …): every field except `color` (the container
-//! fill, not exposed at the theme tier here — see below) is a plain,
-//! non-resolved value. Per-state
-//! variation for label/icon/delete-icon color is entirely a property of the
-//! M3 *default* tables (each reconstructed fresh per build with the current
-//! enabled/selected state already closed over — so their getters return
-//! already-resolved plain values, not deferred per-state properties); the
-//! theme/widget tiers above that default only ever override with one fixed
-//! value, never a function of state.
-//!
-//! This has a structural benefit: with no
-//! `WidgetStateProperty::Map` anywhere in [`crate::ChipThemeData`], the
-//! first-match-wins map-ordering hazard [`crate::NavigationBar`]'s own
-//! module docs warn about (a `Map` ordered `[Is(Selected), Is(Disabled),
-//! Any]`, queried with a combined `{Selected, Disabled}` set, resolving the
-//! wrong entry) cannot occur here at all — there is no map to order
-//! wrong. The only place this module builds a [`WidgetStates`] query set is
-//! `chip_states` (this module, private), which — like
-//! `navigation_bar::navigation_destination_states` (also private) — returns
-//! a **pure** single-state set (`{Disabled}` xor `{Selected}` xor `{}`,
-//! never both), used solely to walk the M3 default tables' own `disabled >
-//! selected > else` branch order for label/icon/delete-icon color. The
-//! container fill color and the border `side` both have a genuinely
-//! *combined*-state-dependent M3 default (see this module's own
-//! `filter_chip_default_background_color` and `chip_default_side`
-//! functions) that a pure query cannot express — both are implemented as
-//! plain `(bool, bool)`-parameterized functions instead, with no
-//! [`WidgetStates`]/`WidgetStateProperty` involved, sidestepping the hazard
-//! class entirely rather than papering over it.
-//!
-//! `color` (the container fill) is not exposed as a [`crate::ChipThemeData`]
-//! slot in V1: its M3 default has a real three-way branch (disabled-only,
-//! selected-only, and a *third*, distinct disabled-AND-selected value — see
-//! this module's own `filter_chip_default_background_color`) that only a
-//! genuinely combined-state query can reproduce, which is exactly the shape
-//! a caller-supplied `WidgetStateProperty` override could get wrong. Named
-//! deferral, not a silent gap.
-//!
 //! # Container: `CustomPaint` foreground border, `Material` fill
 //!
 //! [`Material`] fills, clips, and elevates but paints no border side (see
-//! that module's shape docs) — the same gap [`crate::OutlinedButton`] left
+//! [`MaterialShape`]'s docs) — the same gap [`crate::OutlinedButton`] left
 //! unpainted. [`Chip`]'s outline is load-bearing (the base chip has no fill
 //! at all — its default color is transparent, so the
-//! stroke is the only visible container boundary), so this V1 draws it
+//! stroke is the only visible container boundary), so this crate draws it
 //! directly: a [`flui_sdk::widgets::CustomPaint`] wraps the [`Material`] subtree
 //! with a `foreground_painter` that strokes the resolved [`MaterialShape`]
 //! as an inset ring (`Canvas::draw_drrect` between the outer shape and an
@@ -81,62 +19,6 @@
 //! child-sized container border. `CustomPaint` sizes to its child when one
 //! is present, so the border painter always strokes at the exact size the
 //! `Material`/`InkWell`/content subtree settles on.
-//!
-//! # Selection: checkmark replaces the avatar, snapped
-//!
-//! A fuller implementation animates a selected [`FilterChip`]'s leading slot
-//! between the avatar and an overlaid checkmark (animated avatar-drawer width
-//! plus a blended darkening scrim under the check). This V1 **snaps**: no
-//! animation, and the checkmark *replaces* the avatar in the leading slot
-//! rather than painting an overlay on top of it (see this module's own
-//! `filter_chip_leading_content`) — chosen because painting a darkening scrim
-//! over an arbitrary caller-supplied avatar widget has no home in this
-//! substrate's paint primitives yet. The checkmark geometry itself
-//! (`ChipCheckmarkPainter`, this module, private) is a real stroked
-//! relative-coordinate path at its fully-settled shape — the same "real
-//! stroked geometry, settled" precedent this crate's
-//! `checkbox::CheckboxPainter`'s own module docs describe.
-//!
-//! # Disabled content: steady-state 38% opacity, no fade
-//!
-//! A chip's avatar and its label/delete icon are drawn at a reduced alpha
-//! (`0x61`) whenever the chip is not fully enabled — and that is true not
-//! only *during* an enable/disable transition but for the entire
-//! steady-state lifetime of a chip that is (and stays) disabled. This V1 has
-//! no enable animation to run at all (see the "Deferred" list below), but the
-//! *steady-state* alpha is still real, observable behavior a disabled chip
-//! must show — not merely a transition artifact safe to snap away. So
-//! [`Chip`]/[`FilterChip`] wrap their composed avatar/label/delete content
-//! (never the container fill or border, which are not drawn through this
-//! opacity layer) in one [`flui_sdk::widgets::Opacity`] at the private
-//! `DISABLED_CONTENT_ALPHA` when disabled, `1.0` when enabled — a single
-//! group wrap, which is equivalent to wrapping each slot separately since
-//! every slot uses the identical alpha value.
-//!
-//! # Deferred (named, not silently dropped)
-//!
-//! - **Avatar/delete/selection/enable animation** — every transition snaps
-//!   directly to its settled end state (including the disabled-content
-//!   opacity — see the "Disabled content" section above: the *value* is
-//!   applied, the *fade into/out of* it is not); see the sections above.
-//! - **Elevated variants** (and any chip's non-zero elevation or press
-//!   elevation) — V1 is flat-only, elevation fixed at `0.0`.
-//! - **Input, choice and action chips** — see the "V1 scope"
-//!   section above.
-//! - **Custom `delete_icon` widget override** — the delete affordance
-//!   always renders the M3 default glyph (`cancel` for [`Chip`], `clear` for
-//!   [`FilterChip`]).
-//! - **Delete-button tooltip and accessible name** — Flutter shows
-//!   `deleteButtonTooltipMessage` as the tooltip and names the delete
-//!   button's node with it; no localization substrate supplies it yet, so
-//!   the delete button is an unnamed button node.
-//! - **`focus_node`/`autofocus`** — [`InkWell`] itself has no `autofocus`
-//!   hook yet, matching every other selection-control's own deferred list.
-//! - **Avatar/delete-icon box constraints** — the avatar
-//!   sizes intrinsically (no forced square constraint); the delete icon is
-//!   fixed at [`CHIP_ICON_SIZE`].
-//! - **Material elevation interplay, press elevation** — elevation is fixed
-//!   at `0.0` for both types in V1 (matches "flat only").
 
 use std::any::Any;
 use std::rc::Rc;
@@ -179,8 +61,8 @@ pub(crate) const CHIP_ICON_SIZE: f64 = 18.0;
 const PADDING: f64 = 8.0;
 
 /// The default label padding (horizontal only), at text scale 1x — the
-/// text-scaler-driven 8px-to-4px interpolation is a named V1
-/// simplification (no `MediaQuery` text-scaling substrate consumed here,
+/// text-scaler-driven 8px-to-4px interpolation is a named
+/// simplification (no `MediaQuery` text-scaling support consumed here,
 /// the same gap [`crate::elevated_button`]'s own `scaled_padding_1x` docs
 /// already name for button padding).
 const LABEL_PADDING_HORIZONTAL: f64 = 8.0;
@@ -194,8 +76,8 @@ const DELETE_ICON_CANCEL_CODEPOINT: u32 = 0xE139;
 const DELETE_ICON_CLEAR_CODEPOINT: u32 = 0xE168;
 
 /// The opacity a disabled chip's avatar/label/delete content settles at
-/// (`0x61`) — see the module docs' "Disabled content" section for why this is
-/// steady-state behavior, not merely a transition artifact this V1 is
+/// (`0x61`) — see [`Chip`]'s "Disabled content" section for why this is
+/// steady-state behavior, not merely a transition artifact this crate is
 /// entitled to snap away.
 const DISABLED_CONTENT_ALPHA: f64 = 0x61 as f64 / 255.0;
 
@@ -313,7 +195,7 @@ fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color 
 /// query would give.
 /// Because of this real branch-order difference, `side` is resolved from
 /// plain `(bool, bool)` parameters rather than a [`WidgetStates`] query —
-/// see the module docs' "`ChipThemeData`: plain overrides" section.
+/// see [`Chip`]'s "`ChipThemeData`: plain overrides" section.
 fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> BorderSide {
     if selected {
         BorderSide::new(Color::TRANSPARENT, 1.0, BorderStyle::Solid)
@@ -351,7 +233,7 @@ fn chip_default_label_padding() -> EdgeInsets {
 /// `label_padding`'s own vertical inset): `CHIP_HEIGHT - padding.vertical +
 /// label_padding.vertical`, floored at `0.0`. Only the floor term is
 /// computed — the label's own intrinsic height is already accommodated by
-/// this substrate's plain `ConstrainedBox` + `Row` composition, which grows
+/// this crate's plain `ConstrainedBox` + `Row` composition, which grows
 /// past the floor when the label needs more room.
 fn chip_content_min_height(padding: EdgeInsets, label_padding: EdgeInsets) -> f64 {
     let floor = CHIP_HEIGHT - padding.vertical_total() + label_padding.vertical_total();
@@ -369,7 +251,7 @@ type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>,
 /// A Material Design chip: a compact label with an optional leading avatar
 /// and trailing delete affordance, outlined and unfilled by default.
 ///
-/// See the module docs for the V1 scope (a reduced chip family, with an
+/// See [`Chip`]'s docs for the scope (a reduced chip family, with an
 /// [`Chip::on_pressed`] widening) and named deferrals.
 ///
 /// ```rust
@@ -380,6 +262,124 @@ type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>,
 /// let _pressable = Chip::new(Text::new("Tag")).on_pressed(|_ctx| {});
 /// let _deletable = Chip::new(Text::new("Tag")).on_deleted(|_ctx| {});
 /// ```
+///
+/// # Scope: a reduced chip family
+///
+/// The M3 chip family has several kinds (assist, input, choice, filter,
+/// action) that differ only in how one shared state machine is configured.
+/// This crate ships two shapes, [`Chip`] and [`FilterChip`], each composing the
+/// same reduced primitives ([`Material`], [`InkWell`], shared default-token
+/// functions in this module) directly. Input, choice and action chips are
+/// named deferrals: each is a thin reconfiguration the same shared functions
+/// already support, they just have no constructor yet.
+///
+/// [`Chip`] uses the generic M3 chip default table and widens it with an
+/// optional [`Chip::on_pressed`], so a tappable "assist-shaped" chip is
+/// available. This is a deliberate, documented widening of `Chip`'s surface,
+/// not a change to the token values.
+///
+/// Similarly, [`Chip::enabled`] is exposed directly so the M3 default
+/// table's disabled branch is reachable and testable on this crate type.
+///
+/// # `ChipThemeData`: plain overrides, not `WidgetStateProperty`
+///
+/// Unlike [`crate::CheckboxThemeData`]/[`crate::SwitchThemeData`]/
+/// [`crate::RadioThemeData`]/[`crate::NavigationBarThemeData`], whose color
+/// slots are all `Option<WidgetStateProperty<Option<Color>>>`,
+/// [`crate::ChipThemeData`]'s fields are **plain** (`Option<Color>`,
+/// `Option<BorderSide>`, …): every field except `color` (the container
+/// fill, not exposed at the theme tier here — see below) is a plain,
+/// non-resolved value. Per-state
+/// variation for label/icon/delete-icon color is entirely a property of the
+/// M3 *default* tables (each reconstructed fresh per build with the current
+/// enabled/selected state already closed over — so their getters return
+/// already-resolved plain values, not deferred per-state properties); the
+/// theme/widget tiers above that default only ever override with one fixed
+/// value, never a function of state.
+///
+/// This has a structural benefit: with no
+/// `WidgetStateProperty::Map` anywhere in [`crate::ChipThemeData`], the
+/// first-match-wins map-ordering hazard [`crate::NavigationBar`]'s own
+/// docs warn about (a `Map` ordered `[Is(Selected), Is(Disabled),
+/// Any]`, queried with a combined `{Selected, Disabled}` set, resolving the
+/// wrong entry) cannot occur here at all — there is no map to order
+/// wrong. The only place this module builds a [`WidgetStates`] query set is
+/// `chip_states` (this module, private), which — like
+/// `navigation_bar::navigation_destination_states` (also private) — returns
+/// a **pure** single-state set (`{Disabled}` xor `{Selected}` xor `{}`,
+/// never both), used solely to walk the M3 default tables' own `disabled >
+/// selected > else` branch order for label/icon/delete-icon color. The
+/// container fill color and the border `side` both have a genuinely
+/// *combined*-state-dependent M3 default (see this module's own
+/// `filter_chip_default_background_color` and `chip_default_side`
+/// functions) that a pure query cannot express — both are implemented as
+/// plain `(bool, bool)`-parameterized functions instead, with no
+/// [`WidgetStates`]/`WidgetStateProperty` involved, sidestepping the hazard
+/// class entirely rather than papering over it.
+///
+/// `color` (the container fill) is not exposed as a [`crate::ChipThemeData`]
+/// slot in this crate: its M3 default has a real three-way branch (disabled-only,
+/// selected-only, and a *third*, distinct disabled-AND-selected value — see
+/// this module's own `filter_chip_default_background_color`) that only a
+/// genuinely combined-state query can reproduce, which is exactly the shape
+/// a caller-supplied `WidgetStateProperty` override could get wrong. Named
+/// deferral, not a silent gap.
+///
+/// # Selection: checkmark replaces the avatar, snapped
+///
+/// A fuller implementation animates a selected [`FilterChip`]'s leading slot
+/// between the avatar and an overlaid checkmark (animated avatar-drawer width
+/// plus a blended darkening scrim under the check). This crate **snaps**: no
+/// animation, and the checkmark *replaces* the avatar in the leading slot
+/// rather than painting an overlay on top of it (see this module's own
+/// `filter_chip_leading_content`) — chosen because painting a darkening scrim
+/// over an arbitrary caller-supplied avatar widget has no home in this
+/// this crate's paint primitives yet. The checkmark geometry itself
+/// (`ChipCheckmarkPainter`, this module, private) is a real stroked
+/// relative-coordinate path at its fully-settled shape — the same "real
+/// stroked geometry, settled" precedent this crate's
+/// `checkbox::CheckboxPainter`'s own docs describe.
+///
+/// # Disabled content: steady-state 38% opacity, no fade
+///
+/// A chip's avatar and its label/delete icon are drawn at a reduced alpha
+/// (`0x61`) whenever the chip is not fully enabled — and that is true not
+/// only *during* an enable/disable transition but for the entire
+/// steady-state lifetime of a chip that is (and stays) disabled. This crate has
+/// no enable animation to run at all (see the "Deferred" list below), but the
+/// *steady-state* alpha is still real, observable behavior a disabled chip
+/// must show — not merely a transition artifact safe to snap away. So
+/// [`Chip`]/[`FilterChip`] wrap their composed avatar/label/delete content
+/// (never the container fill or border, which are not drawn through this
+/// opacity layer) in one [`flui_sdk::widgets::Opacity`] at the private
+/// `DISABLED_CONTENT_ALPHA` when disabled, `1.0` when enabled — a single
+/// group wrap, which is equivalent to wrapping each slot separately since
+/// every slot uses the identical alpha value.
+///
+/// # Deferred (named, not silently dropped)
+///
+/// - **Avatar/delete/selection/enable animation** — every transition snaps
+///   directly to its settled end state (including the disabled-content
+///   opacity — see the "Disabled content" section above: the *value* is
+///   applied, the *fade into/out of* it is not); see the sections above.
+/// - **Elevated variants** (and any chip's non-zero elevation or press
+///   elevation) — this crate is flat-only, elevation fixed at `0.0`.
+/// - **Input, choice and action chips** — see the "Scope"
+///   section above.
+/// - **Custom `delete_icon` widget override** — the delete affordance
+///   always renders the M3 default glyph (`cancel` for [`Chip`], `clear` for
+///   [`FilterChip`]).
+/// - **Delete-button tooltip and accessible name** — Flutter shows
+///   `deleteButtonTooltipMessage` as the tooltip and names the delete
+///   button's node with it; no localization support supplies it yet, so
+///   the delete button is an unnamed button node.
+/// - **`focus_node`/`autofocus`** — [`InkWell`] itself has no `autofocus`
+///   hook yet, matching every other selection-control's own deferred list.
+/// - **Avatar/delete-icon box constraints** — the avatar
+///   sizes intrinsically (no forced square constraint); the delete icon is
+///   fixed at `CHIP_ICON_SIZE`.
+/// - **Material elevation interplay, press elevation** — elevation is fixed
+///   at `0.0` for both types in this crate (matches "flat only").
 #[derive(Clone, StatelessView)]
 pub struct Chip {
     label: BoxedView,
@@ -423,7 +423,7 @@ impl Chip {
     }
 
     /// Sets the press handler. Presence of a handler is what makes this
-    /// chip tappable — see the module docs' "V1 scope" section.
+    /// chip tappable — see [`Chip`]'s "Scope" section.
     #[must_use]
     pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -445,7 +445,7 @@ impl Chip {
     }
 
     /// Sets whether this chip responds to interaction. Defaults to `true`
-    /// (see the module docs).
+    /// (see [`Chip`]'s docs).
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
@@ -588,10 +588,10 @@ impl StatelessView for Chip {
 }
 
 /// The M3 filter chip: a toggleable chip showing a leading checkmark (in
-/// place of the avatar — see the module docs' "Selection" section) when
+/// place of the avatar — see [`Chip`]'s "Selection" section) when
 /// [`FilterChip::selected`].
 ///
-/// See the module docs for the V1 scope (flat variant only) and named
+/// See [`Chip`]'s docs for the scope (flat variant only) and named
 /// deferrals.
 ///
 /// ```rust
@@ -639,7 +639,7 @@ impl FilterChip {
     }
 
     /// Sets the leading avatar shown while unselected. Replaced by a
-    /// checkmark while selected — see the module docs' "Selection" section.
+    /// checkmark while selected — see [`Chip`]'s "Selection" section.
     #[must_use]
     pub fn avatar(mut self, avatar: impl IntoView) -> Self {
         self.avatar = Some(BoxedView::new(avatar.into_view()));
@@ -695,7 +695,7 @@ impl FilterChip {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterChipLeading {
     /// Selected: a checkmark, regardless of whether an avatar is set — see
-    /// the module docs' "Selection" section.
+    /// [`Chip`]'s "Selection" section.
     Checkmark,
     /// Unselected, with an avatar set.
     Avatar,
@@ -705,9 +705,9 @@ enum FilterChipLeading {
 
 /// Decides the leading slot's content — a pure decision function so the
 /// avatar/checkmark swap is unit-testable without mounting a widget tree.
-/// "Checkmark wins outright when selected", per the module docs' "Selection"
+/// "Checkmark wins outright when selected", per [`Chip`]'s "Selection"
 /// section (a fuller implementation keeps both children present and blends
-/// between them; V1 shows exactly one).
+/// between them; this crate shows exactly one).
 fn filter_chip_leading_content(selected: bool, has_avatar: bool) -> FilterChipLeading {
     if selected {
         FilterChipLeading::Checkmark
@@ -719,7 +719,7 @@ fn filter_chip_leading_content(selected: bool, has_avatar: bool) -> FilterChipLe
 }
 
 /// The container fill color default table (flat variant only — see the
-/// module docs).
+/// [`Chip`]'s docs).
 ///
 /// **Genuinely combined-state, not pure**: disabled-and-selected resolves
 /// to its own distinct value (`onSurface@12%`), different from BOTH plain
@@ -727,7 +727,7 @@ fn filter_chip_leading_content(selected: bool, has_avatar: bool) -> FilterChipLe
 /// base [`Chip`] has) and plain `selected` (`secondaryContainer`). A pure
 /// `disabled`-first-then-`selected` query cannot express this third
 /// outcome, which is why this function takes `(bool, bool)` directly
-/// rather than a [`WidgetStates`] set — see the module docs'
+/// rather than a [`WidgetStates`] set — see [`Chip`]'s
 /// `ChipThemeData` section.
 fn filter_chip_default_background_color(
     selected: bool,
@@ -877,7 +877,7 @@ impl StatelessView for FilterChip {
 /// chip never deletes it and the delete button's node does not come and go
 /// with the chip's `on_pressed`. Flutter wraps it in `Semantics(container:
 /// true, button: true, label: deleteButtonTooltipMessage)`; the label waits on
-/// a localization substrate (see the module docs' deferrals). Off, it is a
+/// localization support (see [`Chip`]'s docs' deferrals). Off, it is a
 /// disabled button that takes no tap.
 fn delete_button(
     glyph: IconData,
@@ -976,7 +976,7 @@ impl CustomPainter for ChipBorderPainter {
 /// leading slot while selected — a relative-coordinate stroke path at its
 /// fully-settled shape (the full `start -> mid -> end` polyline, no animated
 /// partial stroke) — the same "real stroked geometry, settled" precedent the
-/// private `CheckboxPainter`'s (`checkbox.rs`) own module docs describe,
+/// private `CheckboxPainter`'s (`checkbox.rs`) own docs describe,
 /// using the identical relative coordinates (`0.15, 0.45` / `0.4, 0.7` /
 /// `0.85, 0.25`) that painter's own `draw_checkmark` uses — but, unlike that
 /// full-cell checkmark, scaled to `avatar height * 0.75` and offset by

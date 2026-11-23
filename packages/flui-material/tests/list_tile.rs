@@ -64,8 +64,8 @@ pub fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
 }
 
 /// `MergeSemantics` over the same tile is the reference's own composition —
-/// `RadioListTile` wraps its `ListTile` in `MergeSemantics` (`material/
-/// radio_list_tile.dart`, oracle tag `3.44.0`) so the whole tile is one
+/// `RadioListTile` wraps its `ListTile` in `MergeSemantics`
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/radio_list_tile.dart:730`) so the whole tile is one
 /// interactive entity — and here the tile and the radio share **one** node,
 /// as `test/material/radio_list_tile_test.dart`'s `testWidgets('RadioListTile
 /// semantics')` asserts of the reference. The forced merge meets the tile's
@@ -77,7 +77,7 @@ pub fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
 /// did not happen, and a `Button` in its place would mean the precedence
 /// regressed. The root's own role is the fallback for a role-free node and is
 /// not this test's claim, so it is split off rather than pinned. What the merged
-/// node still lacks against the oracle — its `'Title'` label, its `tap` action
+/// node still lacks against Flutter — its `'Title'` label, its `tap` action
 /// — is recorded in `crates/flui-semantics/ARCHITECTURE.md`, not asserted here.
 pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
     let mut laid = lay_out(

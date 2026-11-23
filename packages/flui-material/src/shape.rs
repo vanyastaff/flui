@@ -1,26 +1,5 @@
 //! [`MaterialShape`] — the minimal shape vocabulary [`crate::material::Material`]
 //! clips and paints its surface to.
-//!
-//! # Scope
-//!
-//! A surface's shape is resolved (M3's pill-shaped stadium, or a rectangle)
-//! into a path at paint time. FLUI ships the two concrete shapes
-//! `Material` actually needs today — a plain/rounded rectangle and the M3
-//! stadium (pill) shape — rather than the full `ShapeBorder` hierarchy
-//! (`RoundedRectangleBorder`, `CircleBorder`, `ContinuousRectangleBorder`,
-//! `StarBorder`, a user's own `ShapeBorder` subclass, …). [`MaterialShape`]
-//! is `#[non_exhaustive]` so more shapes can be added without a breaking
-//! change; a `ShapeBorder`-equivalent open trait is a larger, deliberately
-//! deferred design (see the crate-level scope note in `material.rs`).
-//!
-//! # Named deferral: `OutlinedBorder` sides
-//!
-//! A full `ShapeBorder`/`OutlinedBorder` hierarchy also carries a
-//! `BorderSide` (stroke color/width/style) rendered on top of the fill.
-//! [`MaterialShape`] is fill-and-clip-only — no
-//! side is drawn. `Material.shape`'s border painting is deferred to when a
-//! component actually needs an outlined surface (M3's `OutlinedButton`,
-//! not yet built).
 
 use flui_sdk::{
     geometry::{Point, RRect, Radius, Rect, Size},
@@ -37,6 +16,27 @@ use flui_sdk::{
 /// size-dependent path so [`crate::material::Material`] can register one
 /// owner-lane path clipper regardless of which variant it holds — see
 /// `material.rs`'s use of `RenderPhysicalShape`.
+///
+/// # Scope
+///
+/// A surface's shape is resolved (M3's pill-shaped stadium, or a rectangle)
+/// into a path at paint time. FLUI ships the two concrete shapes
+/// `Material` actually needs today — a plain/rounded rectangle and the M3
+/// stadium (pill) shape — rather than the full `ShapeBorder` hierarchy
+/// (`RoundedRectangleBorder`, `CircleBorder`, `ContinuousRectangleBorder`,
+/// `StarBorder`, a user's own `ShapeBorder` subclass, …). [`MaterialShape`]
+/// is `#[non_exhaustive]` so more shapes can be added without a breaking
+/// change; a `ShapeBorder`-equivalent open trait is a larger, deliberately
+/// deferred design (see the crate-level scope note in `material.rs`).
+///
+/// # Named deferral: `OutlinedBorder` sides
+///
+/// A full `ShapeBorder`/`OutlinedBorder` hierarchy also carries a
+/// `BorderSide` (stroke color/width/style) rendered on top of the fill.
+/// [`MaterialShape`] is fill-and-clip-only — no
+/// side is drawn. `Material.shape`'s border painting is deferred to when a
+/// component actually needs an outlined surface (M3's `OutlinedButton`,
+/// not yet built).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum MaterialShape {

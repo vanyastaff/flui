@@ -1,75 +1,5 @@
 //! [`OpenContainer`] — the container transform: a closed surface (a card, a
 //! list row, a button) that grows into a full page and shrinks back.
-//!
-//! # How it flies
-//!
-//! The closed surface is the *source*. Tapping it measures where it sits and
-//! pushes a route whose [`PageTransitionBuilder`] (ADR-0221) morphs one surface
-//! from the source's rect to the navigator's rect. The morph's frame is new, so
-//! it can only be measured once it has been laid out: until then the morph
-//! draws nothing and the source shows in place. On that first measurement the
-//! source freezes its [`FlightSeat`] (it keeps its size, its child goes
-//! offstage so its state survives, and nothing under it can be hit or
-//! announced) and the morph takes over, at the source's exact rect whatever
-//! the navigator's offset in the window:
-//!
-//! | Property | Closed → open |
-//! |---|---|
-//! | rect | linear in the eased progress |
-//! | colour, elevation, corner radii | linear in the eased progress ([`BorderRadius::lerp`]) |
-//! | closed content | laid out at its closed size, scaled to the surface width, faded out |
-//! | open page | laid out at the navigator's size, scaled to the surface width, faded in |
-//!
-//! [`ContainerTransition`] picks the fade schedule. The default motion is
-//! 300 ms along `FAST_OUT_SLOW_IN`, and the exit runs the same curve flipped.
-//! Under reduced motion the route animation settles on its first frame, so the
-//! page is simply there.
-//!
-//! # The source is measured again
-//!
-//! The source may move while the page covers it (a list that scrolled, a
-//! layout that changed). The morph re-measures it on every tick of the route
-//! animation, in the morph frame's own coordinates, so the exit lands on where the
-//! source is now. The measurement reads the previous frame's layout and never
-//! the frame being built.
-//!
-//! # The result
-//!
-//! The open page closes with [`CloseAction::close_with`], which pops the route
-//! with a typed value. [`OpenContainer::on_closed`] receives the route's
-//! result: `Ok(Some(value))` for that value, `Ok(None)` when the page was
-//! dismissed without one, and [`RouteResultError::TypeMismatch`] when something
-//! else popped it with a value of another type. The callback runs once the exit morph has left the tree and the source is back
-//! in its seat, never under the closing transform, so it may change or remove
-//! the source freely. A page the navigator accepted reports its result even if
-//! the container unmounted meanwhile.
-//!
-//! # A popup over the page that opens it
-//!
-//! The open page is a [`PopupRoute`] the container pushes through its page's
-//! [`PageHandle`], as a dialog is (ADR-0330 §2):
-//! it has no path, so a [`Router`](flui_sdk::widgets::Router) keeps it out of
-//! its stack and location. The page below stays in the tree while the open
-//! page covers it, as under any popup.
-//!
-//! # Focus and hit testing
-//!
-//! While the page is open the source is frozen offstage: it is not laid out at
-//! its own size, painted, hit tested or announced, so it cannot compete with
-//! the page. The closed copy the morph draws is decoration only: it ignores
-//! pointers and is excluded from semantics. A second [`OpenAction::open`]
-//! while the page is open does nothing, so a key press that still reaches the
-//! hidden source cannot push a second page.
-//!
-//! # Semantics
-//!
-//! The closed container is a button that opens the page, named by
-//! [`OpenContainer::semantic_label`].
-//!
-//! # Not modelled
-//!
-//! Morph shapes other than rounded rectangles, and a morph into a navigator
-//! that is not a bounded rect (an unbounded page shows the page unmorphed).
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -252,6 +182,76 @@ type ClosedCallback<T> = Rc<dyn Fn(Result<Option<T>, RouteResultError>)>;
 /// .on_closed(|saved| println!("closed with {saved:?}"));
 /// # let _ = card;
 /// ```
+///
+/// # How it flies
+///
+/// The closed surface is the *source*. Tapping it measures where it sits and
+/// pushes a route whose [`PageTransitionBuilder`] (ADR-0221) morphs one surface
+/// from the source's rect to the navigator's rect. The morph's frame is new, so
+/// it can only be measured once it has been laid out: until then the morph
+/// draws nothing and the source shows in place. On that first measurement the
+/// source freezes its [`FlightSeat`] (it keeps its size, its child goes
+/// offstage so its state survives, and nothing under it can be hit or
+/// announced) and the morph takes over, at the source's exact rect whatever
+/// the navigator's offset in the window:
+///
+/// | Property | Closed → open |
+/// |---|---|
+/// | rect | linear in the eased progress |
+/// | colour, elevation, corner radii | linear in the eased progress ([`BorderRadius::lerp`]) |
+/// | closed content | laid out at its closed size, scaled to the surface width, faded out |
+/// | open page | laid out at the navigator's size, scaled to the surface width, faded in |
+///
+/// [`ContainerTransition`] picks the fade schedule. The default motion is
+/// 300 ms along `FAST_OUT_SLOW_IN`, and the exit runs the same curve flipped.
+/// Under reduced motion the route animation settles on its first frame, so the
+/// page is simply there.
+///
+/// # The source is measured again
+///
+/// The source may move while the page covers it (a list that scrolled, a
+/// layout that changed). The morph re-measures it on every tick of the route
+/// animation, in the morph frame's own coordinates, so the exit lands on where the
+/// source is now. The measurement reads the previous frame's layout and never
+/// the frame being built.
+///
+/// # The result
+///
+/// The open page closes with [`CloseAction::close_with`], which pops the route
+/// with a typed value. [`OpenContainer::on_closed`] receives the route's
+/// result: `Ok(Some(value))` for that value, `Ok(None)` when the page was
+/// dismissed without one, and [`RouteResultError::TypeMismatch`] when something
+/// else popped it with a value of another type. The callback runs once the exit morph has left the tree and the source is back
+/// in its seat, never under the closing transform, so it may change or remove
+/// the source freely. A page the navigator accepted reports its result even if
+/// the container unmounted meanwhile.
+///
+/// # A popup over the page that opens it
+///
+/// The open page is a [`PopupRoute`] the container pushes through its page's
+/// [`PageHandle`], as a dialog is (ADR-0330 §2):
+/// it has no path, so a [`Router`](flui_sdk::widgets::Router) keeps it out of
+/// its stack and location. The page below stays in the tree while the open
+/// page covers it, as under any popup.
+///
+/// # Focus and hit testing
+///
+/// While the page is open the source is frozen offstage: it is not laid out at
+/// its own size, painted, hit tested or announced, so it cannot compete with
+/// the page. The closed copy the morph draws is decoration only: it ignores
+/// pointers and is excluded from semantics. A second [`OpenAction::open`]
+/// while the page is open does nothing, so a key press that still reaches the
+/// hidden source cannot push a second page.
+///
+/// # Semantics
+///
+/// The closed container is a button that opens the page, named by
+/// [`OpenContainer::semantic_label`].
+///
+/// # Not modelled
+///
+/// Morph shapes other than rounded rectangles, and a morph into a navigator
+/// that is not a bounded rect (an unbounded page shows the page unmorphed).
 pub struct OpenContainer<T> {
     closed: ClosedBuilder,
     open: OpenBuilder<T>,

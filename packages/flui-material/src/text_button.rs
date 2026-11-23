@@ -1,21 +1,5 @@
 //! [`TextButton`] — an M3 button with no outline or fill, the lowest-emphasis
 //! member of the button family.
-//!
-//! # Defaults and scope
-//!
-//! `default_style` holds the M3 text-button defaults, narrowed to the V1
-//! slots [`ButtonStyle`] carries — see that module's docs. Populated:
-//! `text_style`, `background_color` (constant transparent), `foreground_color`,
-//! `overlay_color`, `elevation` (constant `0.0`), `padding`, `minimum_size`,
-//! `maximum_size`, `shape`. The M3 defaults set no `side` or `fixed_size`, so
-//! neither field is populated here.
-//!
-//! `padding` is the one slot that differs in *shape*, not just color, from
-//! its siblings: the M3 text button uses `12px`
-//! horizontal / `8px` vertical at the M3 1x tier, versus `24px`/`0px` for
-//! `ElevatedButton`/`FilledButton`/`OutlinedButton` — text buttons ship
-//! tighter by design (no fill or outline to visually separate from
-//! surrounding content).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -44,6 +28,22 @@ use crate::theme::Theme;
 ///
 /// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|_ctx| {});
 /// ```
+///
+/// # Defaults and scope
+///
+/// `default_style` holds the M3 text-button defaults, narrowed to the
+/// slots [`ButtonStyle`] carries — see [`ButtonStyle`]'s docs. Populated:
+/// `text_style`, `background_color` (constant transparent), `foreground_color`,
+/// `overlay_color`, `elevation` (constant `0.0`), `padding`, `minimum_size`,
+/// `maximum_size`, `shape`. The M3 defaults set no `side` or `fixed_size`, so
+/// neither field is populated here.
+///
+/// `padding` is the one slot that differs in *shape*, not just color, from
+/// its siblings: the M3 text button uses `12px`
+/// horizontal / `8px` vertical at the M3 1x tier, versus `24px`/`0px` for
+/// `ElevatedButton`/`FilledButton`/`OutlinedButton` — text buttons ship
+/// tighter by design (no fill or outline to visually separate from
+/// surrounding content).
 #[derive(Clone, StatelessView)]
 pub struct TextButton {
     on_pressed: Option<PressCallback>,
@@ -123,8 +123,8 @@ impl StatelessView for TextButton {
 }
 
 /// Verbatim, field-by-field port of `_TextButtonDefaultsM3`
-/// (`text_button.dart`, oracle tag `3.44.0`), narrowed to the V1 slots — see
-/// the module docs.
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_button.dart:494`), narrowed to the slots — see
+/// [`TextButton`]'s docs.
 fn default_style(theme: &ThemeData) -> ButtonStyle {
     let colors = theme.color_scheme;
 
@@ -154,7 +154,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
 }
 
 /// `12px` horizontal, `8px` vertical — the M3 1x tier of `TextButton`'s own
-/// `_scaledPadding` (`text_button.dart`, oracle tag `3.44.0`), tighter than
+/// `_scaledPadding` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/text_button.dart:437`), tighter than
 /// the `24px`/`0px` its filled/outlined siblings use. See
 /// `crate::elevated_button`'s docs for the shared `MediaQuery` text-scaler
 /// deferral this narrows to the 1x tier.

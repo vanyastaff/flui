@@ -12,7 +12,7 @@
 //! — the `StatefulView` that owns the interactive-state machinery and the
 //! actual composition. **Named reduction**: there is no standalone
 //! per-button theme widget (so a subtree cannot override just that button's
-//! style without touching the whole `ThemeData`); FLUI V1 has no per-widget
+//! style without touching the whole `ThemeData`); FLUI has no per-widget
 //! inherited-theme wrappers yet, so every concrete button reads only its
 //! `ThemeData` slot via `Theme::of` — see each concrete button's own module
 //! docs for the simplified chain this collapses to.
@@ -106,7 +106,7 @@ pub(crate) use crate::event_callback::PressCallback;
 ///
 /// `default` is `Option`, not a bare reference, because a concrete button's
 /// default table may leave some slots unset (`fixed_size` and `side`, in
-/// every V1 default table).
+/// every default table).
 pub(crate) fn resolve_property<T: Clone + Default>(
     states: &WidgetStates,
     widget: Option<&WidgetStateProperty<Option<T>>>,
@@ -169,7 +169,7 @@ impl ButtonStyleButtonCore {
 
     /// Sets the press handler. Its presence is what makes this button
     /// [`enabled`](Self::is_interactive) (a long-press handler is not part of
-    /// this V1).
+    /// this crate).
     #[must_use]
     pub(crate) fn on_pressed(mut self, callback: PressCallback) -> Self {
         self.on_pressed = Some(callback);
@@ -407,8 +407,8 @@ fn fold_foreground_into_text_style(
 }
 
 /// Builds the [`BoxConstraints`] the button's `ConstrainedBox` enforces from
-/// its three resolved size slots, for the V1 slots only (no `visual_density`
-/// adjustment — see `crate::button_style`'s module docs).
+/// its three resolved size slots, for the slots only (no `visual_density`
+/// adjustment — see [`ButtonStyle`]'s docs).
 ///
 /// `minimum`/`maximum` build the base envelope; `fixed`, if present, is
 /// clamped INTO that already-built envelope before pinning `min == max` on each of its finite

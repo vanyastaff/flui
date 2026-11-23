@@ -1,31 +1,5 @@
 //! [`Switch`] — a binary on/off M3 selection control.
 //!
-//! # Toggle motion: one animated position drives the whole paint
-//!
-//! [`SwitchState`] owns one [`AnimatedValue<f64>`] — the switch's position,
-//! `0.0` off and `1.0` on — bound to the ambient [`VsyncScope`] and
-//! retargeted whenever [`Switch::new`]'s value changes. The painter samples
-//! it at paint time (its repaint listenable), so a toggle repaints without
-//! rebuilding: the thumb centre slides between the track's inner ends, the
-//! thumb radius grows from 8 to 12, and the track fill, track outline and
-//! thumb colours each interpolate between their resolved off and on
-//! colours. Because every quantity follows the one position, a toggle that
-//! interrupts a running one continues from the shown frame with no jump.
-//! Under [`Directionality`] right-to-left the thumb's travel is mirrored:
-//! on sits at the start (left) end. Reduced motion
-//! (`MotionOverride::Reduce`) is the clock's: the new value shows on the
-//! first frame.
-//!
-//! The motion is [`MotionSpec::default`] — 200 ms eased in and out, the
-//! Material 3 toggle duration — and the [`MotionBuilder`] methods replace it.
-//!
-//! No radial-splash reaction painting (substituted by [`InkWell`]'s bounded
-//! state layer and ripple, see [`crate::Checkbox`]'s module docs). Also **no
-//! drag-to-toggle**: a full Material switch flips its value on a horizontal
-//! swipe, not just a tap; [`InkWell`] has no horizontal-drag hook (only
-//! `on_tap`), so this switch is tap-only, matching [`crate::Checkbox`]'s own
-//! tap-only precedent.
-//!
 //! # Composition: same InkWell-sharing shape as `Checkbox`
 //!
 //! [`SwitchState`] owns one [`WidgetStatesController`] shared with the
@@ -48,39 +22,6 @@
 //! motion driven by `Pressed`, which this switch does not animate (the
 //! press feedback comes from [`InkWell`]) — so `Pressed` does not affect
 //! radius here.
-//!
-//! # Overlay shape: the whole tap target, not a per-thumb circle
-//!
-//! The M3 radial reaction is a free
-//! (unclipped) circle **centered on the thumb's current position**, sized
-//! by `splashRadius` (`20.0`). `InkWell`'s ink (see
-//! [`crate::Checkbox`]'s module docs) is clipped to its own shape, not to a
-//! circle around the thumb. This port shapes that ink
-//! as [`MaterialShape::Stadium`] over the FULL tap target (the same
-//! substitution `Checkbox` makes, sized to the whole control rather than
-//! the thumb) — a named, position-independent approximation of the
-//! thumb-following splash.
-//!
-//! # Deferred (named, not silently dropped)
-//!
-//! - **Reaction/hover/focus-fade animation, drag-to-toggle, thumb
-//!   press-grow** — see above. A hover, focus or press colour change snaps;
-//!   only the on/off toggle animates.
-//! - **`Switch.adaptive`** (`CupertinoSwitch` platform switch) — no
-//!   `TargetPlatform` substrate.
-//! - **Thumb icons** (`Switch.thumbIcon`) — no icon painted on the thumb.
-//! - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
-//!   `padding`, `track_outline_width` overrides** — V1 always uses the M3
-//!   defaults (tap target `60×48`dp = the 52×32dp track plus the M3
-//!   default `EdgeInsets.symmetric(horizontal: 4)`, `track_outline_width =
-//!   2.0`).
-//! - **Widget-level `track_color`/`inactive_thumb_color`/
-//!   `inactive_track_color`/thumb images overrides** — only
-//!   [`Switch::active_thumb_color`] (the oracle's `activeThumbColor`) ships
-//!   at the widget tier; the theme tier ([`crate::SwitchThemeData`]) and the
-//!   M3 default tier are both fully state-resolved.
-//! - **`focus_node`/`autofocus`** — same whole-substrate `InkWell` gap
-//!   [`crate::Checkbox`] already names.
 
 use std::any::Any;
 use std::rc::Rc;
@@ -124,12 +65,12 @@ pub(crate) const SWITCH_TAP_TARGET_WIDTH: f64 =
     SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
 
 /// The tap target's height: the minimum interactive dimension, `48.0`
-/// (`40.0 + 8.0`) — the `MaterialTapTargetSize.padded` branch this V1
+/// (`40.0 + 8.0`) — the `MaterialTapTargetSize.padded` branch this crate
 /// always takes (no override yet, matching [`crate::Checkbox`]'s own
 /// deferral).
 pub(crate) const SWITCH_TAP_TARGET_HEIGHT: f64 = 48.0;
 
-/// The thumb radius when selected (or thumb-iconed, which V1 doesn't
+/// The thumb radius when selected (or thumb-iconed, which this crate doesn't
 /// paint): `24.0 / 2`.
 const ACTIVE_THUMB_RADIUS: f64 = 12.0;
 
@@ -169,6 +110,65 @@ type SwitchChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, boo
 ///
 /// let _slow = Switch::new(true).duration(Duration::from_millis(400));
 /// ```
+///
+/// # Toggle motion: one animated position drives the whole paint
+///
+/// [`SwitchState`] owns one [`AnimatedValue<f64>`] — the switch's position,
+/// `0.0` off and `1.0` on — bound to the ambient [`VsyncScope`] and
+/// retargeted whenever [`Switch::new`]'s value changes. The painter samples
+/// it at paint time (its repaint listenable), so a toggle repaints without
+/// rebuilding: the thumb centre slides between the track's inner ends, the
+/// thumb radius grows from 8 to 12, and the track fill, track outline and
+/// thumb colours each interpolate between their resolved off and on
+/// colours. Because every quantity follows the one position, a toggle that
+/// interrupts a running one continues from the shown frame with no jump.
+/// Under [`Directionality`] right-to-left the thumb's travel is mirrored:
+/// on sits at the start (left) end. Reduced motion
+/// (`MotionOverride::Reduce`) is the clock's: the new value shows on the
+/// first frame.
+///
+/// The motion is [`MotionSpec::default`] — 200 ms eased in and out, the
+/// Material 3 toggle duration — and the [`MotionBuilder`] methods replace it.
+///
+/// No radial-splash reaction painting (substituted by [`InkWell`]'s bounded
+/// state layer and ripple, see [`Checkbox`](crate::Checkbox)'s docs). Also **no
+/// drag-to-toggle**: a full Material switch flips its value on a horizontal
+/// swipe, not just a tap; [`InkWell`] has no horizontal-drag hook (only
+/// `on_tap`), so this switch is tap-only, matching [`crate::Checkbox`]'s own
+/// tap-only precedent.
+///
+/// # Overlay shape: the whole tap target, not a per-thumb circle
+///
+/// The M3 radial reaction is a free
+/// (unclipped) circle **centered on the thumb's current position**, sized
+/// by `splashRadius` (`20.0`). `InkWell`'s ink (see
+/// [`Checkbox`](crate::Checkbox)'s docs) is clipped to its own shape, not to a
+/// circle around the thumb. This port shapes that ink
+/// as [`MaterialShape::Stadium`] over the FULL tap target (the same
+/// substitution `Checkbox` makes, sized to the whole control rather than
+/// the thumb) — a named, position-independent approximation of the
+/// thumb-following splash.
+///
+/// # Deferred (named, not silently dropped)
+///
+/// - **Reaction/hover/focus-fade animation, drag-to-toggle, thumb
+///   press-grow** — see above. A hover, focus or press colour change snaps;
+///   only the on/off toggle animates.
+/// - **`Switch.adaptive`** (`CupertinoSwitch` platform switch) — no
+///   `TargetPlatform` support.
+/// - **Thumb icons** (`Switch.thumbIcon`) — no icon painted on the thumb.
+/// - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
+///   `padding`, `track_outline_width` overrides** — this crate always uses the M3
+///   defaults (tap target `60×48`dp = the 52×32dp track plus the M3
+///   default `EdgeInsets.symmetric(horizontal: 4)`, `track_outline_width =
+///   2.0`).
+/// - **Widget-level `track_color`/`inactive_thumb_color`/
+///   `inactive_track_color`/thumb images overrides** — only
+///   [`Switch::active_thumb_color`] (Flutter's `activeThumbColor`) ships
+///   at the widget tier; the theme tier ([`crate::SwitchThemeData`]) and the
+///   M3 default tier are both fully state-resolved.
+/// - **`focus_node`/`autofocus`** — same crate-wide `InkWell` gap
+///   [`crate::Checkbox`] already names.
 #[derive(Clone, StatefulView)]
 pub struct Switch {
     value: bool,
@@ -246,7 +246,7 @@ impl Switch {
 /// shared with the [`InkWell`] this view builds. See [`crate::checkbox::CheckboxState`]'s
 /// doc comment for why `Selected` lives here while
 /// `Hovered`/`Focused`/`Pressed`/`Disabled` are `InkWell`'s to manage.
-/// It also owns the animated toggle position (see the module docs).
+/// It also owns the animated toggle position (see [`Switch`]'s docs).
 pub struct SwitchState {
     states: WidgetStatesController,
     /// Rebuilds the switch on every change of `states`; detaches when the
@@ -458,7 +458,7 @@ fn resolve_switch_thumb_color(
     resolved.blend_over(colors.surface)
 }
 
-/// `_SwitchDefaultsM3.thumbColor` (`switch.dart`, oracle tag `3.44.0`).
+/// `_SwitchDefaultsM3.thumbColor` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/switch.dart:2184`).
 fn switch_default_thumb_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Disabled) {
         return if states.contains_state(WidgetState::Selected) {
@@ -485,7 +485,7 @@ fn switch_default_thumb_color(colors: &ColorScheme, states: WidgetStates) -> Col
     colors.outline
 }
 
-/// `_SwitchDefaultsM3.trackColor` (`switch.dart`, oracle tag `3.44.0`).
+/// `_SwitchDefaultsM3.trackColor` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/switch.dart:2218`).
 fn switch_default_track_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Disabled) {
         return if states.contains_state(WidgetState::Selected) {
@@ -500,8 +500,7 @@ fn switch_default_track_color(colors: &ColorScheme, states: WidgetStates) -> Col
     colors.surface_container_highest
 }
 
-/// `_SwitchDefaultsM3.trackOutlineColor` (`switch.dart`, oracle tag
-/// `3.44.0`).
+/// `_SwitchDefaultsM3.trackOutlineColor` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/switch.dart:2252`).
 fn switch_default_track_outline_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Selected) {
         return Color::TRANSPARENT;
@@ -512,8 +511,8 @@ fn switch_default_track_outline_color(colors: &ColorScheme, states: WidgetStates
     colors.outline
 }
 
-/// `_SwitchDefaultsM3.overlayColor` (`switch.dart`, oracle tag `3.44.0`).
-/// Returns `None` where the oracle returns `null`; every such state set has
+/// `_SwitchDefaultsM3.overlayColor` (`flutter/flutter@3.50.1 packages/flutter/lib/src/material/switch.dart:2265`).
+/// Returns `None` where Flutter returns `null`; every such state set has
 /// no active interaction state, so the `InkWell` stays at rest.
 fn switch_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Option<Color> {
     if states.contains_state(WidgetState::Selected) {
@@ -551,7 +550,7 @@ struct SwitchColors {
 
 /// Paints the switch's track (fill + border) and thumb at the animated
 /// toggle position, sampled at paint time, with no radial-reaction paint
-/// (the overlay comes from [`InkWell`] instead — see the module docs'
+/// (the overlay comes from [`InkWell`] instead — see [`Switch`]'s
 /// "Overlay shape" section).
 #[derive(Debug, Clone)]
 struct SwitchPainter {
