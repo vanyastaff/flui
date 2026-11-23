@@ -108,6 +108,13 @@ pub enum RenderError {
     #[error("the runtime's text context is already lent")]
     TextContextBusy,
 
+    /// The context has no text context to lend: a
+    /// [`CustomPaintContext`](crate::delegates::CustomPaintContext) built
+    /// apart from a paint pass, with
+    /// [`without_text`](crate::delegates::CustomPaintContext::without_text).
+    #[error("this context has no text context to lend")]
+    TextContextUnavailable,
+
     /// Text preparation or shaping refused the current layout request.
     /// This is an ordinary input/geometry error, not a caught render panic.
     #[error(transparent)]

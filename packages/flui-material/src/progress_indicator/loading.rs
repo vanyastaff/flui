@@ -15,10 +15,9 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Matrix4, Point, Size};
-use flui_sdk::painting::Canvas;
-use flui_sdk::painting::CustomPainter;
 use flui_sdk::painting::paint::{Morph, Paint, Path, PathCommand, material_shapes};
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{CustomPaintContext, CustomPainter};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::CustomPaint;
@@ -432,7 +431,9 @@ struct ShapePainter {
 }
 
 impl CustomPainter for ShapePainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         let side = size.width.min(size.height);
         if !side.is_finite() || side <= 0.0 {
             return;

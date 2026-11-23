@@ -56,6 +56,7 @@ impl LayoutFailureKind {
             | RenderError::InvalidGeometry { .. }
             | RenderError::UnboundedConstraint { .. }
             | RenderError::ProtocolMismatch { .. }
+            | RenderError::TextContextUnavailable
             | RenderError::Poisoned { .. } => Self::Structural,
             RenderError::NodeNotFound(..)
             | RenderError::InvalidConstraints { .. }

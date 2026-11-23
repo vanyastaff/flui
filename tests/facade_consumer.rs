@@ -255,6 +255,8 @@ fn external_consumers_extend_and_test_through_the_facade() {
             "nested_custom_motion_repaints_and_retargets_through_the_facade",
             "custom_render_view_mounts_lays_out_and_paints",
             "proxy_macros_forward_live_and_dry_layout",
+            "custom_render_object_shapes_and_paints_text_through_the_facade",
+            "custom_painter_draws_text_through_the_facade",
             "gesture_recognizer_uses_headless_virtual_time",
             "pointer_input_schedules_a_widget_rebuild",
             "typed_drag_down_callback_is_available_from_the_widget_surface",

@@ -264,9 +264,16 @@ pub trait RenderObject<P: Protocol>: Inspect + Any {
     /// owner of geometry — and hands it in, so paint code reads
     /// `ctx.size()` instead of a per-object `size` field (2B field
     /// dedup: render objects no longer cache their own geometry).
+    ///
+    /// `text` is the UI runtime's text context as the walk carries it to
+    /// this node: the blanket hands it to the context, whose
+    /// [`PaintContext::text`](crate::context::PaintContext::text) lends it
+    /// only when the render object asks, recording the node for a font
+    /// change.
     fn paint_raw(
         &self,
         recorder: &mut crate::context::FragmentRecorder,
+        text: crate::pipeline::TextSource<'_>,
         child_count: usize,
         size: flui_foundation::geometry::Size,
     );

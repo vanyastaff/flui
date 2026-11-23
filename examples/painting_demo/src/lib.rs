@@ -18,10 +18,10 @@ use std::any::Any;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 use flui::geometry::{Offset, Point, RRect, Rect, Size};
-use flui::painting::Canvas;
 use flui::painting::paint::{Paint, Path, Shader};
 use flui::painting::styling::Color;
 use flui::painting::typography::TextStyle;
+use flui::painting::{Canvas, CustomPaintContext};
 use flui::prelude::*;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -276,7 +276,9 @@ enum Drawing {
 struct DrawingPainter(Drawing);
 
 impl CustomPainter for DrawingPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         match self.0 {
             Drawing::BasicShapes => draw_basic_shapes(canvas, size),
             Drawing::RoundedRects => draw_rounded_rects(canvas, size),

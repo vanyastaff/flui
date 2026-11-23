@@ -752,6 +752,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::text::store::TextInputPurpose;",
         "pub use flui_platform::transfer::data::TransferActions;",
         "pub use flui_rendering::constraints::BoxConstraints;",
+        "pub use flui_rendering::delegates::CustomPaintContext;",
         "pub use flui_rendering::delegates::CustomPainter;",
         "pub use flui_rendering::delegates::FlowDelegate;",
         "pub use flui_rendering::delegates::FlowPaintingContext;",

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui::animation::{Curve, MotionSpec, Simulation};
 use flui::geometry::{Offset, Size};
-use flui::painting::{Canvas, CustomPainter};
+use flui::painting::{CustomPaintContext, CustomPainter};
 use flui::rendering::{
     BoxConstraints, FlowDelegate, FlowPaintingContext, MultiChildLayoutContext,
     MultiChildLayoutDelegate, RenderResult, SingleChildLayoutDelegate,
@@ -58,7 +58,7 @@ impl ScrollPhysics for ClampingWithState {
 struct PainterWithState(Shared);
 
 impl CustomPainter for PainterWithState {
-    fn paint(&self, _canvas: &mut Canvas, _size: Size) {
+    fn paint(&self, _ctx: &mut CustomPaintContext<'_>) {
         self.0.set(self.0.get() + 1);
     }
 

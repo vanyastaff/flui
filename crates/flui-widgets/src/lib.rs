@@ -420,7 +420,7 @@ pub mod prelude {
     pub use flui_platform::{Brightness, InvalidLocale, Locale};
     pub use flui_rendering::constraints::{AxisDirection, BoxConstraints};
     pub use flui_rendering::delegates::{
-        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
+        AspectRatioDelegate, CenterLayoutDelegate, CustomPaintContext, CustomPainter, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
         SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,

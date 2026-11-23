@@ -11,9 +11,9 @@ use flui_interaction::{
     events::{Key, KeyState, NamedKey},
     focus::{FocusNode, KeyEventResult},
 };
-use flui_painting::{Canvas, paint::Paint, styling::Color};
+use flui_painting::{paint::Paint, styling::Color};
 use flui_platform::input::keyboard::ImeComposition;
-use flui_rendering::delegates::CustomPainter;
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_semantics::NumericRange;
 use flui_view::prelude::*;
 use std::{
@@ -418,7 +418,9 @@ struct SliderPainter {
     focused: bool,
 }
 impl CustomPainter for SliderPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
+    fn paint(&self, ctx: &mut CustomPaintContext<'_>) {
+        let size = ctx.size();
+        let canvas = ctx.canvas();
         if !size.width.is_finite()
             || !size.height.is_finite()
             || size.width <= 0.0

@@ -799,6 +799,7 @@ where
     fn paint_raw(
         &self,
         recorder: &mut crate::context::FragmentRecorder,
+        text: crate::pipeline::TextSource<'_>,
         child_count: usize,
         size: flui_foundation::geometry::Size,
     ) {
@@ -809,7 +810,8 @@ where
         // re-typing is a zero-cost PhantomData re-tag. `size` is the
         // node's committed `RenderState` geometry, threaded by the
         // pipeline so paint reads `ctx.size()` (2B field dedup).
-        let mut ctx = crate::context::PaintContext::<T::Arity>::new(recorder, child_count, size);
+        let mut ctx =
+            crate::context::PaintContext::<T::Arity>::new(recorder, text, child_count, size);
         T::paint(self, &mut ctx);
     }
 

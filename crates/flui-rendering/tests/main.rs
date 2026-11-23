@@ -18,6 +18,8 @@ mod animation_pipeline;
 mod attach_detach_lifecycle;
 #[path = "cross_protocol_layout.rs"]
 mod cross_protocol_layout;
+#[path = "custom_paint_text.rs"]
+mod custom_paint_text;
 #[path = "dispose_eviction.rs"]
 mod dispose_eviction;
 #[path = "dpr_pipeline.rs"]

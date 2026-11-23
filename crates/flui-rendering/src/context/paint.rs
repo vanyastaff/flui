@@ -16,8 +16,8 @@
 //!   render objects cannot observe or corrupt it.
 //! * **No live recursion.** `paint_child` records a marker instead of
 //!   re-entering the pipeline, so `paint` borrows nothing but the
-//!   recorder — a self-contained encode that a later change can run
-//!   per-boundary on the data plane.
+//!   recorder and, when it asks, the text context — a self-contained
+//!   encode that a later change can run per-boundary on the data plane.
 //! * **Local coordinates.** The recorder pre-translates every run to
 //!   the node's origin, so paint code draws in the node's own space —
 //!   no manual offset arithmetic (a recurring paint-bug class).
@@ -53,6 +53,7 @@ use flui_layer::{FollowerLayer, LayerLink};
 use flui_painting::paint::{BlendMode, Clip, ImageFilter, Shader};
 use flui_painting::{Canvas, DisplayList};
 
+use crate::pipeline::{TextContextMut, TextSource, lend_text};
 use crate::traits::{PaintClip, PaintOpacity};
 
 // ============================================================================
@@ -463,9 +464,13 @@ impl FragmentRecorder {
 
 /// Typed paint context handed to `RenderBox::paint`.
 ///
-/// Wraps a [`FragmentRecorder`] with the node's child count and an
-/// arity parameter that gates the child-painting surface at compile
-/// time: `Leaf` objects have **no** `paint_child` method at all.
+/// Wraps a [`FragmentRecorder`] with the node's child count, its text
+/// source and an arity parameter that gates the child-painting surface at
+/// compile time: `Leaf` objects have **no** `paint_child` method at all.
+///
+/// A render object that shapes text while it paints borrows the UI runtime's
+/// text context through [`Self::text`], as layout does; the loan records the
+/// node, so registering a font paints it again.
 ///
 /// ```compile_fail
 /// use flui_rendering::context::PaintContext;
@@ -488,6 +493,9 @@ impl FragmentRecorder {
 /// ```
 pub struct PaintContext<'a, A: Arity> {
     rec: &'a mut FragmentRecorder,
+    /// The UI runtime's text context as the paint walk carries it to this
+    /// node; lent only when the render object asks.
+    text: TextSource<'a>,
     child_count: usize,
     size: Size,
     _arity: PhantomData<fn() -> A>,
@@ -510,14 +518,46 @@ impl<'a, A: Arity> PaintContext<'a, A> {
     /// objects never construct their own context. `size` is the node's
     /// laid-out paint size, resolved by the pipeline from
     /// [`RenderState`](crate::storage::RenderState) (geometry's sole
-    /// owner) — paint code reads it via [`Self::size`].
-    pub fn new(rec: &'a mut FragmentRecorder, child_count: usize, size: Size) -> Self {
+    /// owner) — paint code reads it via [`Self::size`]. `text` is the
+    /// source [`Self::text`] lends from: the pipeline's for the node, or a
+    /// test's (`TextContextHandle::source`, under the `testing` feature).
+    pub fn new(
+        rec: &'a mut FragmentRecorder,
+        text: TextSource<'a>,
+        child_count: usize,
+        size: Size,
+    ) -> Self {
         Self {
             rec,
+            text,
             child_count,
             size,
             _arity: PhantomData,
         }
+    }
+
+    /// The UI runtime's text context, lent for as long as the returned
+    /// [`TextContextMut`] lives, to shape text this node paints.
+    ///
+    /// Asking records the node as one that measured text, so registering a
+    /// font lays it out and paints it again
+    /// (`PipelineOwner::apply_font_change`). A render object that never asks
+    /// is not recorded. The loan borrows the context, so it ends before the
+    /// next [`Self::canvas`] call: shape first, then draw.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::RenderError::TextContextBusy`] when an
+    /// independently held loan already uses the runtime's shared resource.
+    pub fn text(&mut self) -> crate::error::RenderResult<TextContextMut<'_>> {
+        lend_text(self.text)
+    }
+
+    /// The recording canvas and the node's text source, apart, so a
+    /// [`CustomPaintContext`](crate::delegates::CustomPaintContext) can hand
+    /// a painter both.
+    pub(crate) fn canvas_and_text(&mut self) -> (&mut Canvas, TextSource<'a>) {
+        (self.rec.canvas(), self.text)
     }
 
     /// The recording canvas, pre-translated to this node's origin —
@@ -845,7 +885,8 @@ mod tests {
 
     fn draws_between_child_markers_split_into_ordered_runs() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, DevicePixelRatio::ONE);
-        let mut ctx = PaintContext::<Variable>::new(&mut rec, 2, Size::ZERO);
+        let text = crate::pipeline::TextContextHandle::standalone();
+        let mut ctx = PaintContext::<Variable>::new(&mut rec, text.source(), 2, Size::ZERO);
 
         ctx.canvas().draw_rect(rect(10.0, 10.0), &fill()); // background
         ctx.paint_child(0);
@@ -883,7 +924,8 @@ mod tests {
 
     fn origin_is_baked_into_run_transforms() {
         let mut rec = FragmentRecorder::new(Offset::new(7.0, 3.0), DevicePixelRatio::ONE);
-        let mut ctx = PaintContext::<Leaf>::new(&mut rec, 0, Size::ZERO);
+        let text = crate::pipeline::TextContextHandle::standalone();
+        let mut ctx = PaintContext::<Leaf>::new(&mut rec, text.source(), 0, Size::ZERO);
         ctx.canvas().draw_rect(rect(10.0, 10.0), &fill());
 
         let frag = rec.finish();

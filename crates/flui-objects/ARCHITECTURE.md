@@ -525,7 +525,7 @@ real element tree and checks preserved render IDs and child state.
 `RenderParagraph` and `RenderEditable` acquire fallible `ctx.text()?` loans for every
 `TextPainter` measurement: `perform_layout`, the four intrinsics,
 `compute_dry_layout` and `compute_dry_baseline`. The context is the UI runtime's
-`TextContext`, lent by the pipeline (flui-rendering's "Layout contexts lend the
+`TextContext`, lent by the pipeline (flui-rendering's "Layout and paint contexts lend the
 UI runtime's text context"), so a paragraph measures with its own UI runtime's fonts
 rather than an ambient collection (ADR-0092 §10 step 3; flui-painting mapping decision 14), and
 paints the runs of the layout that measured (step 4). Every
