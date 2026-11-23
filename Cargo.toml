@@ -245,6 +245,10 @@ slab = "0.4.12"
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+# Heap profiles by allocation site for benches and perf tests (flui-testing's `dhat`).
+dhat = "0.3"
+# Symbols of the addresses a DHAT profile records, resolved in the process that recorded them.
+backtrace = "0.3.77"
 # JSON schemas for the agent-protocol vocabulary (flui-protocol's `schemars`
 # feature) and the desktop agent server's tool parameters.
 schemars = "1.0"

@@ -16,7 +16,17 @@
 //! work between them. In a binary that does not install the allocator every
 //! reading is zero.
 
-use std::alloc::{GlobalAlloc, Layout, System};
+pub mod sites;
+
+use std::alloc::{GlobalAlloc, Layout};
+
+/// The allocator [`CountingAllocator`] forwards to: `dhat::Alloc`, which records the stack
+/// of each allocation while a [`sites::SiteProfiler`] runs, with the `dhat` feature, and
+/// [`std::alloc::System`] without it.
+#[cfg(feature = "dhat")]
+const INNER: dhat::Alloc = dhat::Alloc;
+#[cfg(not(feature = "dhat"))]
+const INNER: std::alloc::System = std::alloc::System;
 use std::cell::Cell;
 
 // `Cell<u64>` in a const-initialised thread-local has no drop glue and no
@@ -72,7 +82,8 @@ impl HeapCounts {
     }
 }
 
-/// A global allocator that forwards to [`System`] and counts, per thread,
+/// A global allocator that forwards to `INNER` ([`std::alloc::System`], or `dhat::Alloc`
+/// with the `dhat` feature) and counts, per thread,
 /// what it is asked: see the module docs for how a test target installs it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CountingAllocator;
@@ -81,30 +92,76 @@ fn bump(counter: &'static std::thread::LocalKey<Cell<u64>>, by: u64) {
     let _ = counter.try_with(|count| count.set(count.get().saturating_add(by)));
 }
 
-// SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
+thread_local! {
+    /// Set while this thread is inside `INNER`. DHAT's allocator allocates for its own
+    /// records (the stack it captures, its tables) through the global allocator, so those
+    /// requests come back here nested; they are DHAT's, not the program's, and are not counted.
+    static IN_INNER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The outermost allocator call of this thread, which counts; `enter` answers `None` for a
+/// call nested inside `INNER`, and when the thread's TLS is gone.
+struct InnerCall;
+
+impl InnerCall {
+    fn enter() -> Option<Self> {
+        // A nested call builds no guard: its `Drop` would clear the outer call's flag.
+        let outermost = IN_INNER.try_with(|inside| !inside.replace(true));
+        if outermost == Ok(true) {
+            Some(Self)
+        } else {
+            None
+        }
+    }
+
+    /// Whether this thread is inside `INNER` now.
+    fn nested() -> bool {
+        IN_INNER.try_with(Cell::get).unwrap_or(true)
+    }
+}
+
+impl Drop for InnerCall {
+    fn drop(&mut self) {
+        let _ = IN_INNER.try_with(|inside| inside.set(false));
+    }
+}
+
+// SAFETY: `alloc`/`dealloc` forward unchanged to `INNER`, so every pointer
 // is freed by the allocator that produced it. `realloc` is `GlobalAlloc`'s
 // default spelled out so it can be counted: `self.alloc` + copy +
-// `self.dealloc`, still `System`. `alloc_zeroed` keeps the default, through
+// `self.dealloc`, still `INNER`. `alloc_zeroed` keeps the default, through
 // `self.alloc`.
-#[expect(unsafe_code, reason = "a counting global allocator forwards to System")]
+#[expect(unsafe_code, reason = "a counting allocator forwards to System or DHAT")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // Held across `INNER`, so the allocations DHAT makes inside it are not counted.
+        let Some(_inner) = InnerCall::enter() else {
+            // SAFETY: `layout` is the caller's own, forwarded unchanged.
+            return unsafe { INNER.alloc(layout) };
+        };
         let size = layout.size() as u64;
         bump(&ALLOCATIONS, 1);
         bump(&ALLOCATED_BYTES, size);
         let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_add(size)));
         // SAFETY: `layout` is the caller's own, forwarded unchanged.
-        unsafe { System.alloc(layout) }
+        unsafe { INNER.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let _ = LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_sub(layout.size() as u64)));
+        // Held across `INNER`, so the frees DHAT makes inside it are not counted.
+        let inner = InnerCall::enter();
+        if inner.is_some() {
+            let _ =
+                LIVE_BYTES.try_with(|live| live.set(live.get().wrapping_sub(layout.size() as u64)));
+        }
         // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) }
+        unsafe { INNER.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        bump(&REALLOCATIONS, 1);
+        if !InnerCall::nested() {
+            bump(&REALLOCATIONS, 1);
+        }
         // SAFETY: `realloc`'s contract makes `new_size` with `layout.align()`
         // a valid layout (non-zero, not overflowing `isize` once rounded).
         let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
