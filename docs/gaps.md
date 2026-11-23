@@ -778,6 +778,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `ColorFilterLayer` and `ImageFilterLayer` are lowered by `flui-engine` (`layers/render.rs`) and a hand-built scene composites them, but no render object pushes either: Flutter's `ColorFiltered` and `ImageFiltered` have no FLUI counterpart. `BackdropFilter` filters what lies behind its child, not the child.
 - The entry closes when a widget for each pushes its layer over its child, with a readback row per filter.
 
+### Two copies of the font parser ship in every app
+
+> **Environments:** all · **Who it hurts:** Every app's binary size and build time · **Parity:** none (size)
+
+- Parley 0.13 shapes with `skrifa` 0.49 and `read-fonts` 0.46, while `swash` 0.2.10, the latest release, which rasterizes FLUI's glyphs (`crates/flui-painting/src/glyphs/swash.rs`), caps `skrifa` at 0.44 and so brings `read-fonts` 0.41 too. The facade's graph holds both pairs (`perf/size.toml`'s `crates_*` counts them).
+- The entry closes when one `skrifa` serves both: a `swash` release that takes `skrifa` 0.49, or glyph rasterization moved onto `skrifa`'s outlines, with `perf/size.toml` lowered by the two packages and the `size` job's bytes by what they cost.
+
 ### Most crates still hash ids with SipHash
 
 > **Environments:** all · **Who it hurts:** Every frame that looks up an id in a std `HashMap` · **Parity:** none (performance)
