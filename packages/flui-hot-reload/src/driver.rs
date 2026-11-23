@@ -39,6 +39,7 @@ use std::{
 use flui_sdk::hooks::Scene;
 
 use crate::{
+    dynlib::LoadRefusal,
     host::{PluginKind, ScenePlugin},
     strategy::timing,
 };
@@ -61,6 +62,8 @@ pub struct HotReloadDriver {
     poll_interval: Duration,
     last_poll: Instant,
     reload_count: u32,
+    /// The plugin file that last failed to load, not reopened until rebuilt.
+    refusal: LoadRefusal,
 }
 
 impl HotReloadDriver {
@@ -70,7 +73,8 @@ impl HotReloadDriver {
     /// the driver will retry on each [`poll()`](Self::poll) call.
     pub fn new(lib_path: impl AsRef<Path>) -> Self {
         let lib_path = lib_path.as_ref().to_path_buf();
-        let plugin = ScenePlugin::load(&lib_path);
+        let mut refusal = LoadRefusal::default();
+        let plugin = refusal.load(&lib_path, |path| ScenePlugin::load(path));
 
         if plugin.is_some() {
             tracing::info!("HotReloadDriver: plugin loaded from {}", lib_path.display());
@@ -87,6 +91,7 @@ impl HotReloadDriver {
             poll_interval: timing::ARTIFACT_POLL,
             last_poll: Instant::now(),
             reload_count: 0,
+            refusal,
         }
     }
 
@@ -117,7 +122,9 @@ impl HotReloadDriver {
                 let kind = old.kind();
                 old.unload();
 
-                self.plugin = ScenePlugin::load(&self.lib_path);
+                self.plugin = self
+                    .refusal
+                    .load(&self.lib_path, |path| ScenePlugin::load(path));
                 if self.plugin.is_some() {
                     self.reload_count += 1;
                     tracing::info!(
@@ -130,8 +137,11 @@ impl HotReloadDriver {
                 tracing::warn!("HotReloadDriver: reload failed — plugin not available");
             }
         } else {
-            // No plugin loaded — try to load (file may have appeared on disk)
-            self.plugin = ScenePlugin::load(&self.lib_path);
+            // No plugin loaded: try to load a file that appeared or was
+            // rebuilt since the last refusal.
+            self.plugin = self
+                .refusal
+                .load(&self.lib_path, |path| ScenePlugin::load(path));
             if self.plugin.is_some() {
                 tracing::info!(
                     "HotReloadDriver: plugin now available — loaded from {}",

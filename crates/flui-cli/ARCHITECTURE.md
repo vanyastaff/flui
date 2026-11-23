@@ -139,7 +139,8 @@ stays the application when a crate of its build depends on it
 compiled (`BuildArtifacts::package`), not the member's siblings
 (`a_desktop_entry_registers_what_the_built_member_opens`,
 `an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk rustc
---lib --crate-type cdylib` in the project's directory without naming a package, so it reads the default selection.
+-p <package> --lib --crate-type cdylib`, naming the package whose manifest is in the project's
+directory, since `cargo rustc` compiles exactly one target.
 `flui run` selects the binary plain `cargo run` would run, as `flui build` selects a desktop
 binary (a root package's default members; among several default members, the one `default-run`
 when exactly one names one: `a_run_without_a_package_selects_the_binary_cargo_runs`), and names

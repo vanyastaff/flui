@@ -71,9 +71,10 @@ pub mod env {
 }
 
 /// How often a host reads its plugin artifact. A reload waits for the next
-/// read, so the interval is part of every edit's latency; one `stat` per
-/// read is all it costs, and only a development host with a reload hook
-/// installed reads at all. Source watching and its debounce are the CLI's
+/// read, so the interval is part of every edit's latency; a read is a few
+/// `stat` calls (and the worker's sidecar manifest), and only a development
+/// host with a reload hook installed reads at all. Source watching and its
+/// debounce are the CLI's
 /// (`flui run`), not the host's.
 pub mod timing {
     use super::Duration;

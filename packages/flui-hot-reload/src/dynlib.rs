@@ -106,6 +106,39 @@ pub(crate) fn file_revision(path: &Path) -> Option<std::time::SystemTime> {
         .ok()
 }
 
+/// The artifact a reload driver last failed to load, by path and
+/// [`file_revision`], so a driver polling every frame opens a refused file
+/// once rather than on every poll until the next build replaces it.
+#[derive(Debug, Default)]
+pub(crate) struct LoadRefusal(Option<(PathBuf, Option<std::time::SystemTime>)>);
+
+impl LoadRefusal {
+    /// Load `path` with `load`, unless it is the artifact that was refused
+    /// and unchanged since. A failure is remembered by the revision read
+    /// before the load, so a build that lands while `load` runs is not taken
+    /// for the refused file.
+    pub(crate) fn load<T>(
+        &mut self,
+        path: &Path,
+        load: impl FnOnce(&Path) -> Option<T>,
+    ) -> Option<T> {
+        let revision = file_revision(path);
+        if self
+            .0
+            .as_ref()
+            .is_some_and(|(refused, at)| refused == path && *at == revision)
+        {
+            return None;
+        }
+        let loaded = load(path);
+        self.0 = match loaded {
+            Some(_) => None,
+            None => Some((path.to_path_buf(), revision)),
+        };
+        loaded
+    }
+}
+
 // ── Platform-specific implementations ──────────────────────────────────
 
 #[cfg(unix)]
@@ -231,5 +264,59 @@ mod sys {
             let module = HMODULE(handle.cast());
             let _ = FreeLibrary(module);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::LoadRefusal;
+
+    /// A refused artifact is opened again only once it changes, and a
+    /// successful load forgets the refusal.
+    #[test]
+    fn a_refused_artifact_is_reopened_only_once_it_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("flui-hot-reload-refusal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let artifact = dir.join("libworker.so");
+        std::fs::write(&artifact, b"not a library").expect("a broken build");
+        let opened = Cell::new(0_u32);
+        let mut refusal = LoadRefusal::default();
+        let refuse = |_: &std::path::Path| {
+            opened.set(opened.get() + 1);
+            None::<()>
+        };
+
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(
+            opened.get(),
+            1,
+            "the unchanged refused file is not reopened"
+        );
+
+        // A later revision of the same path, as the next build writes it.
+        let later = std::fs::metadata(&artifact)
+            .and_then(|metadata| metadata.modified())
+            .expect("a revision")
+            + std::time::Duration::from_secs(1);
+        std::fs::File::options()
+            .write(true)
+            .open(&artifact)
+            .and_then(|file| file.set_modified(later))
+            .expect("a new revision");
+        assert_eq!(
+            refusal.load(&artifact, |_| {
+                opened.set(opened.get() + 1);
+                Some(())
+            }),
+            Some(())
+        );
+        assert_eq!(opened.get(), 2, "the rebuilt file is opened");
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(opened.get(), 3, "a loaded file leaves no refusal behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

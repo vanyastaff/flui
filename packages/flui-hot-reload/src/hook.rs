@@ -99,6 +99,11 @@ impl DevReloadHook for WorkerReloadHook {
                 rebuild_wake.wake();
             }));
         }
+        // The driver last read the artifact when the hook was made, maybe long
+        // before: the first poll after attach reads it again, so a rebuild
+        // between the two, which the watcher's baseline below already holds,
+        // is not missed.
+        self.artifact_changed.store(true, Ordering::Release);
         self.watcher = ArtifactWatcher::spawn(
             &self.watch_path,
             self.watch_interval,

@@ -158,8 +158,8 @@ flui run --profile bench
 flui run --register-associations            # Windows: register the URL schemes and file types from a debug build
 ```
 
-On Android the project's `cdylib` is compiled with `cargo ndk`, packaged
-into an APK by the SDK's own build-tools (no Gradle, no Java project: see
+On Android the project's library is compiled as a `cdylib` with `cargo ndk`,
+packaged into an APK by the SDK's own build-tools (no Gradle, no Java project: see
 [Building](#building)), installed with `adb install -r`, and its
 `FluiActivity` started; `adb logcat --pid` of the app is the session's
 output. A change rebuilds, reinstalls and restarts; `q` or Ctrl-C
@@ -184,7 +184,9 @@ While the app runs and stdin is a terminal:
 Hot reload works in two modes, chosen automatically:
 
 - **Process restart**: `src/` and `Cargo.toml` are watched; on change the app
-  is stopped, rebuilt and restarted.
+  is rebuilt while it keeps running and replaced only by a build that
+  succeeded (on Windows, which cannot overwrite a running executable, it is
+  stopped first). The changes saved while a build runs are one rebuild.
 - **Worker host** (projects created with `--hot-reload`): the host keeps
   running and only the worker `cdylib` is rebuilt, so widget state survives a
   reload. A change to the shared types crate triggers a host restart.
@@ -300,7 +302,7 @@ Selector conflicts (`--lib` with `--example`, `--simulator` on a non-iOS
 target, `--universal` without `--lib` on iOS) are rejected before any build
 starts. Every build ends with the artifact list and `Built in N.Ns`.
 
-An Android build compiles the project's `cdylib` with `cargo ndk` (the
+An Android build compiles the project's library as a `cdylib` with `cargo ndk` (the
 `android_main` that `#[flui::main]` writes in `src/lib.rs`) and packages it with the SDK's build-tools:
 `aapt2 link` on the scaffolded manifest (with the version from `[app] version`
 and `extractNativeLibs="false"`), the library stored under `lib/<abi>/`,
@@ -405,7 +407,7 @@ object with an `event` field; human text, if any, goes to stderr.
 | `device`, `devices.summary` | `devices` |
 | `emulator`, `emulators.summary`, `emulator.launch` | `emulators` |
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
-| `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
+| `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.watch {paths}`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
 | `run.web.serve {url, dir}`, `run.web.open {browser, url, agent?}`, `run.reload {kind: "page"}` | `run --device browser:…` |
 | `run.agent.ready {endpoint, session, forwarded?, relayed?}` | `run --agent` (`forwarded` on Android, `relayed` in a browser) |
 | `build.start`, `build.phase`, `build.done` | `build` |

@@ -130,7 +130,10 @@ fn the_poll_a_watcher_wakes_reads_the_artifact_inside_the_poll_interval() {
     assert_eq!(hook.poll(), ReloadEvent::Unchanged);
     let read_before = hook.driver.last_poll;
 
-    std::fs::write(&path, b"a rebuilt worker").expect("write the artifact");
+    // Renamed into place, as a build lands it: the watcher sees one change.
+    let staged = path.with_extension("staged");
+    std::fs::write(&staged, b"a rebuilt worker").expect("write the artifact");
+    std::fs::rename(&staged, &path).expect("land the artifact");
     wakes
         .recv_timeout(Duration::from_secs(10))
         .expect("the watcher woke the host after the artifact appeared");
@@ -144,6 +147,30 @@ fn the_poll_a_watcher_wakes_reads_the_artifact_inside_the_poll_interval() {
     assert_eq!(
         hook.driver.last_poll, read_on_wake,
         "a later poll with no new change keeps to the interval"
+    );
+
+    hook.detach();
+    let _ = std::fs::remove_dir_all(path.parent().expect("scratch dir"));
+}
+
+/// A rebuild that lands between the hook being made and attached, which the
+/// watcher's baseline already holds, is read by the first poll after attach.
+#[test]
+fn the_first_poll_after_attach_reads_a_rebuild_made_before_it() {
+    #[cfg(feature = "app-plugin")]
+    let _registry = crate::dispatch::REBUILD_HOOK_TEST_LOCK.lock();
+    let path = scratch_worker("before-attach");
+    let mut hook = fast_hook(&path);
+    hook.driver = WorkerReloadDriver::new(&path).with_poll_interval(Duration::from_secs(3600));
+    let made = hook.driver.last_poll;
+    std::fs::write(&path, b"a rebuilt worker").expect("write the artifact");
+
+    let (wake, _wakes) = channel_wake();
+    hook.attach(wake);
+    hook.poll();
+    assert!(
+        hook.driver.last_poll > made,
+        "the first poll after attach read the artifact inside the poll interval"
     );
 
     hook.detach();

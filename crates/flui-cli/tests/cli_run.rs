@@ -44,6 +44,8 @@ fn android_run_builds_the_selected_device_native_abi() {
         "app",
         "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
     );
+    // A library with no declared crate types, as `flui create` writes it.
+    std::fs::write(app.join("src/lib.rs"), "").expect("application library");
     std::fs::write(
         app.join("flui.toml"),
         "[app]\nname = \"app\"\nversion = \"0.1.0\"\nid = \"com.example.app\"\n",
@@ -185,6 +187,10 @@ fn main() {
         "the emulator's first native ABI must win over its ARM translation compatibility: {command}"
     );
     assert!(
+        command.contains("\"rustc\", \"-p\", \"app\", \"--lib\", \"--crate-type\", \"cdylib\""),
+        "the application's library is compiled as the cdylib NativeActivity loads: {command}"
+    );
+    assert!(
         !browser_started.exists(),
         "a device named by its serial is found without starting the installed browsers"
     );
@@ -300,13 +306,40 @@ fn json_mode_streams_the_app_lifecycle_as_ndjson() {
 
 /// A restart rebuilds beside the running application and replaces it only
 /// with a build that succeeded: after a compile error the previous build is
-/// still running, its window still up while the author fixes the error.
-/// Windows cannot overwrite a running executable and stops the app first.
+/// still running, its window still up while the author fixes the error; the
+/// fix replaces it; and an app that exits while a rebuild runs is reported as
+/// that exit before its successor starts. Windows cannot overwrite a running
+/// executable and stops the app first.
 #[cfg(not(windows))]
 #[test]
-fn a_failed_rebuild_leaves_the_previous_build_running() {
+fn a_restart_replaces_the_running_build_only_with_one_that_succeeded() {
     use std::io::BufRead as _;
     use std::time::{Duration, Instant};
+
+    /// `flui run` and its app, stopped when the test ends on any path: the
+    /// app runs until a `stop` file appears in its directory, which a test
+    /// that panicked would otherwise never write.
+    struct Session {
+        cli: std::process::Child,
+        stop: std::path::PathBuf,
+    }
+    impl Drop for Session {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.stop, "");
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = self.cli.kill();
+            let _ = self.cli.wait();
+        }
+    }
+
+    /// An app that prints `marker` and runs until the `stop` file exists.
+    fn app_main(marker: &str) -> String {
+        format!(
+            "use flui as _;\n\nfn main() {{\n    println!(\"{marker}\");\n    \
+             while !std::path::Path::new(\"stop\").exists() {{\n        \
+             std::thread::sleep(std::time::Duration::from_millis(20));\n    }}\n}}\n"
+        )
+    }
 
     let tmp = TempDir::new().expect("fixture");
     let dependency = tmp.path().join("facade");
@@ -318,15 +351,9 @@ fn a_failed_rebuild_leaves_the_previous_build_running() {
         "app",
         "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
     );
-    // The app runs until the test drops a `stop` file in its directory, the
-    // working directory `cargo run` starts it in.
-    std::fs::write(
-        app.join("src/main.rs"),
-        "use flui as _;\n\nfn main() {\n    println!(\"FLUI_APP_RUNNING\");\n    \
-         while !std::path::Path::new(\"stop\").exists() {\n        \
-         std::thread::sleep(std::time::Duration::from_millis(20));\n    }\n}\n",
-    )
-    .expect("main that keeps running");
+    // `cargo run` starts the app in the package directory.
+    let stop = app.join("stop");
+    std::fs::write(app.join("src/main.rs"), app_main("FLUI_APP_FIRST")).expect("first build");
 
     let mut cli = std::process::Command::new(assert_cmd::cargo::cargo_bin!("flui"));
     cli.current_dir(&app)
@@ -336,8 +363,11 @@ fn a_failed_rebuild_leaves_the_previous_build_running() {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    let mut cli = cli.spawn().expect("flui run");
-    let stdout = cli.stdout.take().expect("piped stdout");
+    let mut session = Session {
+        cli: cli.spawn().expect("flui run"),
+        stop: stop.clone(),
+    };
+    let stdout = session.cli.stdout.take().expect("piped stdout");
     let (sender, events) = std::sync::mpsc::channel::<serde_json::Value>();
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(stdout)
@@ -352,8 +382,9 @@ fn a_failed_rebuild_leaves_the_previous_build_running() {
         }
     });
     let mut seen = Vec::new();
-    // Waits for the first event `wanted` accepts. Every event received so far
-    // stays in `seen`, for the assertions and for the failure messages.
+    // Waits for the first event `wanted` accepts, unless one already came.
+    // Every event received stays in `seen`, for the assertions and for the
+    // failure messages.
     fn wait_for(
         events: &std::sync::mpsc::Receiver<serde_json::Value>,
         seen: &mut Vec<serde_json::Value>,
@@ -374,17 +405,37 @@ fn a_failed_rebuild_leaves_the_previous_build_running() {
         }
     }
     let named = |name: &'static str| move |event: &serde_json::Value| event["event"] == name;
+    let says = |marker: &'static str| {
+        move |event: &serde_json::Value| event["event"] == "run.app.log" && event["line"] == marker
+    };
+    let names = |seen: &[serde_json::Value]| -> Vec<String> {
+        seen.iter()
+            .filter_map(|event| event["event"].as_str())
+            .filter(|name| name.starts_with("run.app.") && *name != "run.app.log")
+            .map(str::to_owned)
+            .collect()
+    };
 
-    // The app is running once it says so: `cargo run` compiles before it
-    // starts the binary, so an edit before then would be in its build.
+    // An edit counts once the sources are watched and the app is up: `cargo
+    // run` checks the sources again before it starts the binary.
     wait_for(
         &events,
         &mut seen,
-        |event| event["event"] == "run.app.log" && event["line"] == "FLUI_APP_RUNNING",
+        named("run.watch"),
         Duration::from_secs(300),
     );
+    if !seen.iter().any(says("FLUI_APP_FIRST")) {
+        wait_for(
+            &events,
+            &mut seen,
+            says("FLUI_APP_FIRST"),
+            Duration::from_secs(60),
+        );
+    }
+
     std::fs::write(app.join("src/main.rs"), "fn main() { this is not rust }\n")
         .expect("a compile error");
+    let mark = seen.len();
     let reload = wait_for(
         &events,
         &mut seen,
@@ -392,26 +443,67 @@ fn a_failed_rebuild_leaves_the_previous_build_running() {
         Duration::from_secs(300),
     );
     assert_eq!(reload["ok"], false, "the broken build failed: {seen:?}");
-    assert!(
-        !seen
-            .iter()
-            .any(|event| event["event"] == "run.app.stop" || event["event"] == "run.app.exit"),
+    assert_eq!(
+        names(&seen[mark..]),
+        Vec::<String>::new(),
         "the previous build was stopped for a build that failed: {seen:?}"
     );
 
-    std::fs::write(app.join("stop"), "").expect("stop the app");
-    let exit = wait_for(
+    std::fs::write(app.join("src/main.rs"), app_main("FLUI_APP_SECOND")).expect("the fix");
+    let mark = seen.len();
+    let reload = wait_for(
         &events,
         &mut seen,
-        named("run.app.exit"),
-        Duration::from_secs(30),
+        named("run.reload"),
+        Duration::from_secs(300),
+    );
+    assert_eq!(reload["ok"], true, "the fixed build succeeded: {seen:?}");
+    wait_for(
+        &events,
+        &mut seen,
+        says("FLUI_APP_SECOND"),
+        Duration::from_secs(60),
     );
     assert_eq!(
-        exit["code"], 0,
-        "the previous build ran on until asked to stop"
+        names(&seen[mark..]),
+        ["run.app.stop", "run.app.start"],
+        "the fixed build replaced the previous one: {seen:?}"
     );
-    let _ = cli.kill();
-    let _ = cli.wait();
+
+    // The app exits on its own while the next rebuild runs beside it.
+    std::fs::write(app.join("src/main.rs"), app_main("FLUI_APP_THIRD")).expect("another edit");
+    let mark = seen.len();
+    wait_for(
+        &events,
+        &mut seen,
+        named("run.build.start"),
+        Duration::from_secs(60),
+    );
+    std::fs::write(&stop, "").expect("stop the running app");
+    let reload = wait_for(
+        &events,
+        &mut seen,
+        named("run.reload"),
+        Duration::from_secs(300),
+    );
+    assert_eq!(reload["ok"], true, "{seen:?}");
+    let reported = names(&seen[mark..]);
+    assert_eq!(
+        reported.first().map(String::as_str),
+        Some("run.app.exit"),
+        "the app that exited during the build is reported before its successor: {seen:?}"
+    );
+    assert_eq!(
+        reported.get(1).map(String::as_str),
+        Some("run.app.start"),
+        "{seen:?}"
+    );
+    let exit = seen[mark..]
+        .iter()
+        .find(|event| event["event"] == "run.app.exit")
+        .expect("the exit");
+    assert_eq!(exit["code"], 0, "it exited as asked: {seen:?}");
+    drop(session);
 }
 
 /// A worker hot-reload project builds and starts its host under the

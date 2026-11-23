@@ -387,6 +387,8 @@ pub struct WorkerReloadDriver {
     pub(crate) last_poll: std::time::Instant,
     reload_count: u32,
     last_fingerprint: u64,
+    /// The artifact that last failed to load, not reopened until rebuilt.
+    refusal: crate::dynlib::LoadRefusal,
 }
 
 impl WorkerReloadDriver {
@@ -394,7 +396,8 @@ impl WorkerReloadDriver {
     pub fn new(lib_path: impl AsRef<Path>) -> Self {
         let lib_path = lib_path.as_ref().to_path_buf();
         let load_path = resolve_worker_path(&lib_path);
-        let plugin = WorkerPlugin::load(&load_path);
+        let mut refusal = crate::dynlib::LoadRefusal::default();
+        let plugin = refusal.load(&load_path, |path| WorkerPlugin::load(path));
         let last_fingerprint = plugin.as_ref().map_or(0, WorkerPlugin::fingerprint);
         let reload_count = u32::from(plugin.is_some());
 
@@ -413,6 +416,7 @@ impl WorkerReloadDriver {
             last_poll: std::time::Instant::now(),
             reload_count,
             last_fingerprint,
+            refusal,
         }
     }
 
@@ -477,7 +481,9 @@ impl WorkerReloadDriver {
                 .expect("BUG: self.plugin just matched Some above and nothing else can clear it before this take() runs");
             old.unload();
 
-            self.plugin = WorkerPlugin::load(&load_path);
+            self.plugin = self
+                .refusal
+                .load(&load_path, |path| WorkerPlugin::load(path));
             if let Some(ref plugin) = self.plugin {
                 self.loaded_path = load_path;
                 self.reload_count += 1;
@@ -519,8 +525,11 @@ impl WorkerReloadDriver {
             return WorkerPollOutcome::ReloadFailed;
         }
 
-        // Lazy load — worker may appear after `cargo build -p logic`.
-        self.plugin = WorkerPlugin::load(&load_path);
+        // Lazy load: the worker may appear after `cargo build -p logic`, or a
+        // refused one be rebuilt.
+        self.plugin = self
+            .refusal
+            .load(&load_path, |path| WorkerPlugin::load(path));
         if self.plugin.is_some() {
             self.loaded_path = load_path;
         }

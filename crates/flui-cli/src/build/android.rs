@@ -202,7 +202,16 @@ impl AndroidBuilder {
     }
 }
 
-/// The `cargo ndk` arguments that build the application's library for `abi`
+/// The refusal of a project whose own package has no library target.
+fn no_library() -> BuildError {
+    BuildError::invalid_config(
+        "Cargo.toml",
+        "the application has no library, which NativeActivity loads as a \
+         `cdylib`; `flui create` puts the application in `src/lib.rs`",
+    )
+}
+
+/// The `cargo ndk` arguments that build the library of `package` for `abi`
 /// against `api_level` and copy it into `out_dir` as `<abi>/lib<name>.so`.
 ///
 /// The library is compiled as a `cdylib`, the form `NativeActivity` loads,
@@ -212,6 +221,7 @@ impl AndroidBuilder {
 /// whole framework per edit that no desktop run loads. A manifest that still
 /// declares it builds the same library.
 fn app_build_args<'a>(
+    package: &'a str,
     abi: &'a str,
     api_level: &'a str,
     out_dir: &'a str,
@@ -226,6 +236,8 @@ fn app_build_args<'a>(
         "-o",
         out_dir,
         "rustc",
+        "-p",
+        package,
         "--lib",
         "--crate-type",
         "cdylib",
@@ -416,12 +428,21 @@ impl AndroidBuilder {
         // The API level the NDK links against is the floor the APK declares,
         // so the library calls nothing newer than the manifest promises.
         let platform = ctx.floors.android_api().to_string();
+        // `cargo rustc` compiles one target, so the package is named: a root
+        // package whose workspace lists other default members is not refused.
+        // By its name, which is how cargo-ndk looks up the manifest whose
+        // artifacts it copies (it refuses a package id).
+        let project = super::util::cargo::cargo_project(&self.workspace_root)?;
+        let (Some(package), Some(_)) = (project.package, project.library) else {
+            return Err(no_library());
+        };
         let mut rust_libs = Vec::new();
 
         for target in targets {
             crate::ui::debug(format!("Building for Android target: {target}"));
 
             let args = app_build_args(
+                &package,
                 target,
                 &platform,
                 jni_libs_str,
@@ -666,13 +687,7 @@ impl AndroidBuilder {
     ) -> BuildResult<()> {
         let lib_name = super::util::cargo::cargo_project(&self.workspace_root)?
             .library
-            .ok_or_else(|| {
-                BuildError::invalid_config(
-                    "Cargo.toml",
-                    "the application has no library, which NativeActivity loads as a \
-                     `cdylib`; `flui create` puts the application in `src/lib.rs`",
-                )
-            })?;
+            .ok_or_else(no_library)?;
         super::android_manifest::write(
             &super::android_manifest::path_in(&self.workspace_root),
             &super::android_manifest::ManifestFacts {
@@ -801,14 +816,21 @@ mod tests {
         );
     }
 
-    /// The scene crate is built against the application's floor and its
-    /// library copied where the build reads it, the crate named as
-    /// cargo-ndk finds it.
+    /// The application's library is compiled as the `cdylib` `NativeActivity`
+    /// loads, whatever crate types its manifest declares, and its package is
+    /// named, since `cargo rustc` compiles exactly one target.
     #[test]
     fn the_application_library_is_compiled_as_the_cdylib_android_loads() {
         let features = ["driver".to_owned()];
         assert_eq!(
-            app_build_args("arm64-v8a", "26", "jniLibs", Some("--release"), &features),
+            app_build_args(
+                "my-app",
+                "arm64-v8a",
+                "26",
+                "jniLibs",
+                Some("--release"),
+                &features
+            ),
             [
                 "-t",
                 "arm64-v8a",
@@ -817,6 +839,8 @@ mod tests {
                 "-o",
                 "jniLibs",
                 "rustc",
+                "-p",
+                "my-app",
                 "--lib",
                 "--crate-type",
                 "cdylib",
@@ -826,7 +850,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            app_build_args("x86_64", "26", "jniLibs", None, &[]),
+            app_build_args("my-app", "x86_64", "26", "jniLibs", None, &[]),
             [
                 "-t",
                 "x86_64",
@@ -835,6 +859,8 @@ mod tests {
                 "-o",
                 "jniLibs",
                 "rustc",
+                "-p",
+                "my-app",
                 "--lib",
                 "--crate-type",
                 "cdylib"
@@ -842,6 +868,9 @@ mod tests {
         );
     }
 
+    /// The scene crate is built against the application's floor and its
+    /// library copied where the build reads it, the crate named as
+    /// cargo-ndk finds it.
     #[test]
     fn the_scene_plugin_is_built_at_the_floor_into_its_own_directory() {
         assert_eq!(

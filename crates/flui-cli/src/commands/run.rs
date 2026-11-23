@@ -2,7 +2,8 @@
 //!
 //! Two hot-reload modes share one development loop ([`dev_loop`]):
 //!
-//! - **Process restart** (default): watch `src/`, kill + `cargo run` on change.
+//! - **Process restart** (default): watch `src/`; on change rebuild beside
+//!   the running app and replace it with `cargo run` once the build succeeds.
 //! - **Worker host** (`flui.toml` `[hot_reload]`): watch worker UI sources,
 //!   rebuild `cdylib` only; host applies `HotReloadTier::HotReload` in-process.
 //!
@@ -861,16 +862,9 @@ fn drive(
             LoopEvent::WatcherClosed => return Ok(()),
             LoopEvent::ChildExited(status) => {
                 if let Some(exited) = child.as_mut() {
-                    exited.drain_output();
+                    report_exit(exited, status);
                 }
-                ui::emit(
-                    "run.app.exit",
-                    &serde_json::json!({ "code": status.code() }),
-                );
-                ui::info(format!(
-                    "Application exited ({}). Watching for changes to restart...",
-                    describe_exit(status)
-                ))?;
+                ui::info("Watching for changes to restart...")?;
                 *child = None;
             }
             LoopEvent::Changed(paths) => {
@@ -928,16 +922,19 @@ fn next_event(
             }
         }
         match watcher.recv_timeout(Duration::from_millis(100)) {
-            Ok(Some(paths)) => return LoopEvent::Changed(paths),
-            Ok(None) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(paths) => return LoopEvent::Changed(paths),
+            Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return LoopEvent::WatcherClosed,
         }
     }
 }
 
+/// Watch `paths` and report them (`run.watch {paths}`): a save made after
+/// that event is a change the loop sees.
 fn start_watcher(paths: Vec<(PathBuf, bool)>) -> CliResult<SourceWatcher> {
     let mut watcher = SourceWatcher::try_new()
         .map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
+    let mut watched = Vec::new();
     for (path, recursive) in paths {
         if !path.exists() {
             ui::debug(format!(
@@ -950,7 +947,9 @@ fn start_watcher(paths: Vec<(PathBuf, bool)>) -> CliResult<SourceWatcher> {
             .watch(&path, recursive)
             .map_err(|e| CliError::context(e, format!("failed to watch {}", path.display())))?;
         ui::info(format!("Watching {}", style(path.display()).dim()))?;
+        watched.push(path);
     }
+    ui::emit("run.watch", &serde_json::json!({ "paths": watched }));
     Ok(watcher)
 }
 
@@ -1139,11 +1138,42 @@ mod raw_mode {
 
 /// Stop the app if it is running and report it (`run.app.stop`), so every
 /// `run.app.start` a consumer saw is closed by exactly one stop or exit.
+///
+/// An app that already exited on its own is reported as that exit
+/// (`run.app.exit`), so its code and its last output lines are not lost.
 fn stop_and_report(child: &mut Option<AppChild>) {
+    if reap_exited(child) {
+        return;
+    }
     if stop_child(child.as_mut()) {
         ui::emit("run.app.stop", &serde_json::json!({}));
     }
     *child = None;
+}
+
+/// Report and clear the app if it has exited on its own since it was last
+/// polled, as when it was closed while a rebuild ran beside it. Returns
+/// whether it had.
+fn reap_exited(child: &mut Option<AppChild>) -> bool {
+    let Some(running) = child.as_mut() else {
+        return false;
+    };
+    let Ok(Some(status)) = running.try_wait() else {
+        return false;
+    };
+    report_exit(running, status);
+    *child = None;
+    true
+}
+
+/// Forward the exited app's last output, then its exit (`run.app.exit`).
+fn report_exit(exited: &mut AppChild, status: ExitStatus) {
+    exited.drain_output();
+    ui::emit(
+        "run.app.exit",
+        &serde_json::json!({ "code": status.code() }),
+    );
+    let _ = ui::info(format!("Application exited ({}).", describe_exit(status)));
 }
 
 /// Kill and reap the app if it is still running (bounded wait).
@@ -1384,6 +1414,8 @@ impl ReloadStrategy for ProcessRestart {
             &serde_json::json!({ "kind": "restart", "ok": built }),
         );
         if !built {
+            // The app was not polled while the build ran.
+            reap_exited(child);
             if self.is_running(child.as_ref()) {
                 ui::warning(
                     "Build failed. The application keeps running its previous build... \
@@ -2300,7 +2332,8 @@ impl ReloadStrategy for WorkerHost {
         let staged = self.publish()?;
         let host_alive = matches!(child.as_mut().map(|host| host.try_wait()), Some(Ok(None)));
         if host_alive {
-            ui::success("Worker rebuilt — host will hot-reload on next frame (~500ms)")?;
+            // The host's artifact watcher wakes it for the new worker.
+            ui::success("Worker rebuilt — the running host is reloading it")?;
             ui::emit(
                 "run.reload",
                 &serde_json::json!({ "kind": "hot", "ok": true, "worker": staged }),
@@ -2946,8 +2979,8 @@ pub(crate) fn execute_scene(
     let interrupted = install_interrupt_flag();
     loop {
         let paths = match watcher.recv_timeout(Duration::from_millis(200)) {
-            Ok(Some(paths)) => paths,
-            Ok(None) | Err(RecvTimeoutError::Timeout) => {
+            Ok(paths) => paths,
+            Err(RecvTimeoutError::Timeout) => {
                 if interrupted.swap(false, Ordering::SeqCst) {
                     return Err(CliError::Interrupted);
                 }
