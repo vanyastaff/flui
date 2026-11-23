@@ -11,6 +11,10 @@
   [ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md) for §4's `DevSceneHook` column
   and its sentence on a desktop scene plugin's own driver only: every native host asks the scene
   hook for each presentation's frame.
+  [ADR-0393](ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md)
+  for §1's two-variant `ReloadEvent` and the sentences of §1 and §7 that a restart event arrives
+  with a code patcher only: the event has `Restart`, the hook lends the root a restart mounts, and
+  the tier follows the shape of the edit.
 - **Related:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond
   record this one takes the seam from); [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md)
   (the scene callback's lifetime contract); [ADR-0111](ADR-0111-worker-image-lifetime.md) (worker

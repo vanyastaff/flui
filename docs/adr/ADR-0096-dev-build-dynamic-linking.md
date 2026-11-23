@@ -6,17 +6,22 @@
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (where a `flui-dylib` crate sits),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) (the facade's feature set),
   [ADR-0311](ADR-0311-development-reload-is-a-hook-the-application-installs.md) (hot reload),
+  [ADR-0394](ADR-0394-application-code-reloads-as-an-image-the-element-tree-adopts.md) (the reload
+  whose images link this dylib),
   [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond record),
   [ADR-0097](ADR-0097-no-process-global-state-gate.md) (process-global state)
+- **Revised:** 2026-11-23 — §3 puts every crate the facade re-exports, the official packages
+  included, inside the dylib, because an application image (ADR-0394) links whatever is beside the
+  dylib once per image; §2 and §5 follow it and no longer wait for a milestone or a code patcher;
+  §4's count is a test of the crate, since `tools/xtask` is gone (ADR-0371).
 - **Refs:** decision L in the [decision index](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/decisions.md); the study, with every
   number, command and error, in [`design/dynamic-linking.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/design/dynamic-linking.md)
 
 Nothing in `crates/` has changed as part of this ADR.
 
-**Deferred (owner, 2026-09-25).** Not now; the record stays Proposed with §2's preconditions. The
-problem the owner actually has is framework test and build time, disk use and memory growth, and
-dynamic linking does not address it (§1). That problem goes to a separate build-footprint study,
-done together with the CI redesign (see "Not decided here").
+The record stays Proposed with §2's preconditions. Dynamic linking does not address framework
+test and build time, disk use or memory growth (§1); those go to a separate build-footprint study
+(see "Not decided here"). The application side is built when the reload of ADR-0394 needs it.
 
 ## Context
 
@@ -76,54 +81,66 @@ CHANGELOG's "next lever" is withdrawn: the measurement shows framework edits get
 binaries cannot use it, and CI builds without incremental compilation
 (`Cargo.toml:788-791`), where the dylib is only extra output.
 
-### 2. App-side dynamic linking is deferred to H1 or later
+### 2. App-side dynamic linking waits for its preconditions
 
-No `dynamic-linking` feature exists before H1, and it is not a beta item. It may be added later
-as a desktop-only, dev-only convenience for application authors, in the shape of §3, and only
-when all of these hold:
+No `dynamic-linking` feature exists yet. It is added as a desktop-only, dev-only convenience for
+application authors, in the shape of §3, when all of these hold:
 
-- the export-count gate of §4 exists and runs on Windows on the merge path;
+- the export count of §4 is measured by its test, and the nightly Windows run executes it;
 - the profile `flui create` writes keeps the dylib's crates at opt-level ≥ 2, and the export
-  count with every facade feature at that opt-level is measured under the budget;
-- the shape of §3 (core crates in the dylib; the facade and official packages linked
-  statically beside it) has been built once and runs;
-- the app-edit gain is re-measured on Windows and Linux on an otherwise idle host and still
-  saves at least 30% of the rebuild;
-- a code patcher's spike, when one returns under ADR-0311 §7, has been run once with the feature
-  on.
+  count with every feature of `flui-dylib` at that opt-level, the official packages included, is
+  measured under the budget;
+- the shape of §3 (the core crates and every crate the facade re-exports in the dylib; the facade
+  linked statically beside it) has been built once and runs;
+- the rebuild of an app edit is re-measured on Windows and Linux on an otherwise idle host and,
+  as the relink of an executable or as an image of ADR-0394, is at least 30% shorter than the
+  static build's;
+- where it is built for the reload of ADR-0394, two images of one application have been loaded
+  against it in one process.
 
 ### 3. The shape, if adopted
 
-- A crate `flui-dylib` with `crate-type = ["dylib"]`. It depends on the core crates the facade
-  re-exports, never on the facade and never on an official package, so no cycle forms. Its
-  source is one `use <crate> as _;` per direct dependency. It is published in lockstep with the
-  facade and declares `wasm = false`.
+- A crate `flui-dylib` with `crate-type = ["dylib"]`. It depends on every crate the facade
+  re-exports, never on the facade, so no cycle forms: the core crates always, and each optional
+  one under a feature that has the facade's name for it: the official packages (`material`,
+  `cupertino`, `devtools`) and the capability crates (`system`, `images`). An official package
+  builds on `flui-sdk` alone (ADR-0088), so the dylib can hold it. The dylib's source is one
+  `use <crate> as _;` per direct dependency. It is published in lockstep with the facade and
+  declares `wasm = false`.
+- Whatever is linked beside the dylib is linked once into every artifact that uses it: the
+  executable, and each image of ADR-0394. A package left there would be compiled into every image,
+  and its statics and `TypeId`-keyed tables would start over with each. So the crates outside the
+  dylib are the facade, the reload package (in the executable alone) and the application's own
+  dependencies (ADR-0394 §5).
 - A facade feature `dynamic-linking = ["dep:flui-dylib"]`, with the dependency only under
   `cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))`, and
-  `#[cfg(feature = "dynamic-linking")] use flui_dylib as _;` in the facade. No
-  `-C prefer-dynamic`.
+  `#[cfg(feature = "dynamic-linking")] use flui_dylib as _;` in the facade. A facade feature that
+  re-exports an optional crate turns on the dylib's feature of the same name
+  (`material = ["dep:flui-material", "flui-dylib?/material"]`), so a crate is in the dylib exactly
+  when the application can name it. No `-C prefer-dynamic`.
+- §4's count decides whether the optional crates share the core crates' dylib or take a second
+  one ("Alternatives considered").
 - `flui create` writes `[profile.dev.package."*"] opt-level = 3`; the feature stays off by
-  default. `flui run` adds the feature on desktop targets on request, never with `--release`, a
-  device or the browser; it launches through `cargo run`
-  (`crates/flui-cli/src/commands/run.rs:318-319`), which puts the std DLL on the search path.
-  `flui build` never adds it.
+  default. `flui run` adds the feature on desktop targets on request and whenever it reloads by
+  image, never with `--release`, a device or the browser; it launches through `cargo run`, which
+  puts the std DLL on the search path. `flui build` never adds it, so a built application links
+  the framework and its packages statically.
 
 ### 4. The guard ships with the feature
 
-- A `cargo xtask` command builds `flui-dylib` on Windows with every facade feature in the
-  template's profile, counts the export table and fails above 55,000 exports. It runs as a step
-  in a Windows CI job that the `ci` aggregator gates.
+- A test of `flui-dylib` builds it on Windows with every feature in the template's profile, counts
+  the export table and fails above 55,000 exports. The nightly Windows run executes it
+  (`nightly-platforms.yml`).
 - The facade refuses a release build with the feature
   (`compile_error!` under `all(feature = "dynamic-linking", not(debug_assertions))`).
-- A reach fact (ADR-0081 §2, beside the hot-reload facts in `tools/xtask/src/workspace/reach.rs`)
-  states that `flui-dylib` is absent from the facade's normal graph under default
-  features.
+- `flui-dylib` is an optional dependency of the facade that no default feature turns on; the
+  facade's manifest states it and its reader confirms it (ADR-0371).
 
-### 5. Hot reload is not a dynamic-linking concern
+### 5. The dylib is not a reload boundary
 
-Hot reload stays with ADR-0311. The framework dylib is not a reload boundary: it is loaded once
-and never unloaded. Windows keeps MSVC's PDB output (`.cargo/config.toml:19-21`), which
-Subsecond reads there should it return (ADR-0311 §7).
+It is loaded once and never unloaded. Which code is loaded again, and how, is ADR-0311's hook and
+the mechanism behind it: an image of ADR-0394 links this dylib, which is why one copy of the
+framework's code and statics serves the executable and every image.
 
 ## Consequences
 
@@ -132,7 +149,7 @@ Subsecond reads there should it return (ADR-0311 §7).
 - Contributors keep the static build, which already relinks in 1.4-3.9 s on the dev host.
   Faster linking remains a per-machine choice (`.cargo/config.toml:11-24`).
 - If the feature is adopted: one more crate published in lockstep (Bevy's `bevy_dylib` has
-  lagged its releases, bevy#17723 and bevy#22654); a Windows CI step; a documented `PATH` step
+  lagged its releases, bevy#17723 and bevy#22654); a test the nightly Windows run executes; a documented `PATH` step
   for doctests and for launching the executable outside `cargo run`; and every facade
   combination that builds in release with `--all-features` must leave the feature out.
 - rustc links each crate once per artifact, so a dylib holds exactly one copy of every
@@ -156,6 +173,9 @@ Subsecond reads there should it return (ADR-0311 §7).
   Cranelift has no unwinding on Windows or macOS.
 - **Two dylibs (engine stack and framework).** Not measured; halves the export pressure but
   doubles the lockstep artifacts and needs `prefer-dynamic` to keep one copy of std.
+- **The official packages linked statically beside the dylib.** Rejected: it serves an executable
+  that is the only artifact, and an application image is a second one. Material would be compiled
+  into every image and its statics would start over with each reload.
 - **A third-party-only dylib for test targets** (wgpu, naga, `windows`, the font crates). Not
   measured. Worth a `cargo build --timings` run before it is considered; it is outside this
   decision.

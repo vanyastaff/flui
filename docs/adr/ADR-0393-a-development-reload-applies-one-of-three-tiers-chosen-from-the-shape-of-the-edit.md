@@ -13,8 +13,8 @@
   hash is option 3 here); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (the
   runtime applies a tier and names no tool);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (containment of the user
-  code a restart runs); [ADR-0304](ADR-0304-the-layer-tree-is-a-retained-scene-updated-by-damage.md)
-  §10 (the scene's lineage is renewed by a reload)
+  code a restart runs); [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
+  §7 (`renew`, which a restart calls)
 - **Sources:** `flutter/flutter@3.50.1`
   `packages/flutter/lib/src/foundation/binding.dart:742` (`reassembleApplication`),
   `packages/flutter/lib/src/widgets/binding.dart:1715` (`performReassemble`),
@@ -141,7 +141,7 @@ pub trait DevReloadHook: 'static {
 `ReloadTier::Restart`:
 
 1. unmounts the root, so every `State` is disposed in tree order by the code that created it;
-2. renews the scene's lineage (ADR-0304 §10);
+2. renews the scene's lineage (ADR-0304 §7), so no recording of the old tree is replayed;
 3. mounts the root from `DevReloadHook::root`, or a clone of the root the host was started with.
 
 It keeps what the framework made without application code: the window, the surface, the GPU
@@ -170,7 +170,7 @@ stands for it, and says so.
 - Bad, because the shape is conservative: an edit to an attribute or to a `const` initialiser
   restarts where a finer rule could reassemble.
 - Bad, because a statement macro inside a body that declares a type is outside the shape; the
-  mechanism's record names what guards that case (ADR-0394 §3).
+  mechanism's record says how far that case is guarded (ADR-0394 §3).
 - Bad, because `Restart` has no producer until a mechanism can load a whole application's code
   again: the worker path links `State` types into the host and cannot.
 - Neutral, because `ReloadTier` keeps its three variants.
