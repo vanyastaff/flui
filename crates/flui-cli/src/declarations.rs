@@ -1687,7 +1687,7 @@ mod tests {
             .expect("a member that opens nothing builds");
     }
 
-    /// The default selection (`flui build android`, `flui doctor`) reads
+    /// The default selection (`flui doctor`) reads
     /// what plain `cargo build` compiles where it runs: a member that opens
     /// nothing passes the one-instance check beside a sibling that opens
     /// `notes:` links without one instance, as does the root whose default

@@ -442,7 +442,7 @@ struct Look {
 }
 
 /// One open page: the source's seat, the rects the morph runs between, and
-/// the bookkeeping that decides when the source freezes and when it comes back.
+/// the phase that decides when the source freezes and when it comes back.
 struct Flight {
     seat: Rc<FlightSeat>,
     claim: SeatClaim,
@@ -457,21 +457,145 @@ struct Flight {
     /// shows it displaced. Mapped through the render root, so a transform
     /// above the navigator (a scale, a rotation) is not applied twice.
     closed_in_frame: Cell<Option<Rect>>,
-    /// The source is frozen under this flight's claim.
-    airborne: Cell<bool>,
-    /// The page's morph is in the tree.
-    mounted: Cell<bool>,
-    /// The page's route has completed.
-    completed: Cell<bool>,
-    /// Whether a completion will ever be reported; without it the source
-    /// returns as soon as the morph leaves the tree.
-    tracks_completion: Cell<bool>,
-    /// The flight has landed: the source is back. Shared with the container,
-    /// which opens no second page while a flight is in the air.
-    landed: Rc<Landing>,
+    /// Changed only by [`Flight::take_off`], [`Flight::watch_result`],
+    /// [`Flight::abort`] and the landing they and
+    /// [`Flight::set_morph`] lead to.
+    phase: Cell<FlightPhase>,
+    /// Whether the page's morph is in the tree: an input to the phase, which
+    /// the morph reports for the flight's whole life.
+    morph: Cell<MorphPresence>,
+    /// The task that delivers the result, waiting for the landing.
+    landing_waker: RefCell<Option<Waker>>,
+}
+
+/// Where one flight is in its life. The container opens no second page
+/// before its latest flight has landed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FlightPhase {
+    /// The page is pushed and the source has not come back yet.
+    Underway {
+        source: SourcePlace,
+        result: ResultWatch,
+    },
+    /// The source is back in its seat, and the task waiting for the landing
+    /// may deliver the result. Final.
+    Landed,
+}
+
+/// Where the source of a flight that is underway is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourcePlace {
+    /// In its seat: the morph has not measured its frame yet.
+    InSeat,
+    /// Frozen under the flight's claim while the morph draws it.
+    Frozen,
+}
+
+/// The page's morph, as its flight knows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MorphPresence {
+    /// The route is pushed and its morph not mounted yet.
+    Expected,
+    /// The morph is in the tree.
+    Mounted,
+    /// The morph left the tree. It mounts again when its route is shown
+    /// again (a covered page built with `maintain_state: false`).
+    Left,
+}
+
+/// Whether the route's completion is reported to the flight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResultWatch {
+    /// No completion will be reported (no async driver, one that refused the
+    /// task, or a task dropped before the route completed): the source comes
+    /// back as soon as the morph leaves the tree.
+    Unwatched,
+    /// The task waits for the route's result.
+    Awaited,
+    /// The route has completed.
+    Arrived,
+}
+
+impl ResultWatch {
+    /// Whether nothing keeps the source frozen any longer while the morph is
+    /// `morph`. A morph in the tree holds it; so does a completion still to
+    /// come, so that a morph which leaves the tree while its route lives
+    /// keeps the source frozen. Once the route has completed, a morph that
+    /// never mounted holds nothing.
+    fn releases(self, morph: MorphPresence) -> bool {
+        match (morph, self) {
+            (MorphPresence::Mounted, _)
+            | (_, Self::Awaited)
+            | (MorphPresence::Expected, Self::Unwatched) => false,
+            (MorphPresence::Expected | MorphPresence::Left, Self::Arrived)
+            | (MorphPresence::Left, Self::Unwatched) => true,
+        }
+    }
+}
+
+/// The task's watch over its flight's result, for as long as the task's
+/// future lives. A future the driver drops before the route completes (its
+/// runtime retired, or a poll that panicked) reports the watch ended, so the
+/// source comes back once the morph has left the tree instead of staying
+/// frozen with no completion ever to come.
+struct ResultWatcher(Rc<Flight>);
+
+impl ResultWatcher {
+    /// The route has completed: hands the flight on, its result arrived.
+    fn arrived(self) -> Rc<Flight> {
+        let flight = Rc::clone(&self.0);
+        flight.watch_result(ResultWatch::Arrived);
+        flight
+    }
+}
+
+impl Drop for ResultWatcher {
+    fn drop(&mut self) {
+        if let FlightPhase::Underway {
+            result: ResultWatch::Awaited,
+            ..
+        } = self.0.phase.get()
+        {
+            self.0.watch_result(ResultWatch::Unwatched);
+        }
+    }
 }
 
 impl Flight {
+    /// A flight for a page about to be pushed: the source in its seat, the
+    /// morph expected, no completion watched yet.
+    fn new(
+        seat: Rc<FlightSeat>,
+        rebuild: Option<RebuildHandle>,
+        look: Look,
+        closed: ClosedBuilder,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            seat,
+            claim: SeatClaim::default(),
+            rebuild,
+            look,
+            closed,
+            duration,
+            closed_in_frame: Cell::new(None),
+            phase: Cell::new(FlightPhase::Underway {
+                source: SourcePlace::InSeat,
+                result: ResultWatch::Unwatched,
+            }),
+            morph: Cell::new(MorphPresence::Expected),
+            landing_waker: RefCell::new(None),
+        }
+    }
+
+    fn is_landed(&self) -> bool {
+        self.phase.get() == FlightPhase::Landed
+    }
+
+    fn is_morph_mounted(&self) -> bool {
+        self.morph.get() == MorphPresence::Mounted
+    }
+
     /// Measure the source and the frame again. A measurement that is not
     /// available (not laid out, or a layout pass in progress) keeps the last
     /// good one. The first frame measurement is when the source takes off.
@@ -482,13 +606,20 @@ impl Flight {
         }
     }
 
-    /// Freeze the source once the morph can draw it where it sits. Inert once
-    /// airborne or landed.
+    /// Freeze the source once the morph can draw it where it sits.
     fn take_off(&self) {
-        if self.airborne.get() || self.landed.is_landed() {
+        let FlightPhase::Underway {
+            source: SourcePlace::InSeat,
+            result,
+        } = self.phase.get()
+        else {
+            // Already frozen, or back in its seat for good.
             return;
-        }
-        self.airborne.set(true);
+        };
+        self.phase.set(FlightPhase::Underway {
+            source: SourcePlace::Frozen,
+            result,
+        });
         if self
             .seat
             .freeze(SeatHold::Claimed(self.claim.clone()), true)
@@ -499,65 +630,70 @@ impl Flight {
         }
     }
 
-    /// The source goes back to its place when the page is both gone and
-    /// completed, so a morph that leaves the tree while the route is still
-    /// alive (a page covered with `maintain_state: false`) keeps it frozen.
-    /// Landing wakes the result's delivery; it never runs user code itself,
-    /// because it can be reached from the morph's `dispose`.
-    fn settle(&self) {
-        if self.landed.is_landed()
-            || self.mounted.get()
-            || (self.tracks_completion.get() && !self.completed.get())
-        {
-            return;
+    /// The morph mounted or left the tree; a flight underway lands once
+    /// nothing holds its source.
+    fn set_morph(&self, presence: MorphPresence) {
+        self.morph.set(presence);
+        self.settle();
+    }
+
+    /// Whether, from now on, the route's completion is reported.
+    fn watch_result(&self, watch: ResultWatch) {
+        match self.phase.get() {
+            FlightPhase::Underway { source, .. } => {
+                self.phase.set(FlightPhase::Underway {
+                    source,
+                    result: watch,
+                });
+                self.settle();
+            }
+            // A landed flight holds nothing a completion could release.
+            FlightPhase::Landed => {}
         }
+    }
+
+    /// The page was not pushed: nothing will mount or complete, so the
+    /// source lands at once.
+    fn abort(&self) {
+        match self.phase.get() {
+            FlightPhase::Underway { .. } => self.land(),
+            FlightPhase::Landed => {}
+        }
+    }
+
+    /// Land if nothing holds the source any longer.
+    fn settle(&self) {
+        match self.phase.get() {
+            FlightPhase::Underway { result, .. } if result.releases(self.morph.get()) => {
+                self.land();
+            }
+            FlightPhase::Underway { .. } | FlightPhase::Landed => {}
+        }
+    }
+
+    /// Bring the source back and wake the task waiting for the landing. It
+    /// runs no user code itself, because it can be reached from the morph's
+    /// `dispose`.
+    fn land(&self) {
+        self.phase.set(FlightPhase::Landed);
         if self.seat.release_for(&self.claim, false)
             && let Some(rebuild) = &self.rebuild
         {
             rebuild.schedule(RebuildReason::StateChange);
         }
-        self.landed.land();
-    }
-
-    fn set_mounted(&self, mounted: bool) {
-        self.mounted.set(mounted);
-        self.settle();
-    }
-
-    fn complete(&self) {
-        self.completed.set(true);
-        self.settle();
-    }
-}
-
-/// A one-shot signal that a flight has landed, awaitable by the task that
-/// delivers its result.
-#[derive(Default)]
-struct Landing {
-    landed: Cell<bool>,
-    waker: RefCell<Option<Waker>>,
-}
-
-impl Landing {
-    fn is_landed(&self) -> bool {
-        self.landed.get()
-    }
-
-    fn land(&self) {
-        self.landed.set(true);
-        let waker = self.waker.take();
+        let waker = self.landing_waker.take();
         if let Some(waker) = waker {
             waker.wake();
         }
     }
 
-    /// Resolves once [`land`](Self::land) has run.
-    fn wait(self: Rc<Self>) -> impl Future<Output = ()> {
+    /// Resolves once the flight has landed.
+    fn landed(self: Rc<Self>) -> impl Future<Output = ()> {
         std::future::poll_fn(move |ctx| {
-            if self.landed.get() {
+            if self.is_landed() {
                 Poll::Ready(())
             } else {
-                let previous = self.waker.replace(Some(ctx.waker().clone()));
+                let previous = self.landing_waker.replace(Some(ctx.waker().clone()));
                 drop(previous);
                 Poll::Pending
             }
@@ -579,8 +715,8 @@ struct Shared<T> {
     /// outlives the container neither rebuilds it nor spawns on its driver.
     rebuild: RefCell<Option<RebuildHandle>>,
     driver: RefCell<Option<AsyncDriver>>,
-    /// The landing of the latest flight; no second page opens before it.
-    flight: RefCell<Option<Rc<Landing>>>,
+    /// The latest flight; no second page opens before it has landed.
+    flight: RefCell<Option<Rc<Flight>>>,
 }
 
 impl<T: 'static> Shared<T> {
@@ -592,7 +728,7 @@ impl<T: 'static> Shared<T> {
             .flight
             .borrow()
             .as_ref()
-            .is_some_and(|landing| !landing.is_landed());
+            .is_some_and(|flight| !flight.is_landed());
         if in_flight {
             return;
         }
@@ -601,23 +737,15 @@ impl<T: 'static> Shared<T> {
         }
 
         let config = self.config.borrow().clone();
-        let landed = Rc::new(Landing::default());
-        let previous = self.flight.replace(Some(Rc::clone(&landed)));
+        let flight = Rc::new(Flight::new(
+            Rc::clone(&self.seat),
+            self.rebuild.borrow().clone(),
+            look.clone(),
+            Rc::clone(&config.closed),
+            config.duration,
+        ));
+        let previous = self.flight.replace(Some(Rc::clone(&flight)));
         drop(previous);
-        let flight = Rc::new(Flight {
-            seat: Rc::clone(&self.seat),
-            claim: SeatClaim::default(),
-            rebuild: self.rebuild.borrow().clone(),
-            look: look.clone(),
-            closed: Rc::clone(&config.closed),
-            duration: config.duration,
-            closed_in_frame: Cell::new(None),
-            airborne: Cell::new(false),
-            mounted: Cell::new(false),
-            completed: Cell::new(false),
-            tracks_completion: Cell::new(false),
-            landed: Rc::clone(&landed),
-        });
 
         let open = Rc::clone(&config.open);
         let page =
@@ -635,8 +763,7 @@ impl<T: 'static> Shared<T> {
             Ok(result) => result,
             Err(refused) => {
                 tracing::warn!(%refused, "OpenContainer: the page was not opened");
-                // Nothing will mount or complete: the source lands at once.
-                flight.settle();
+                flight.abort();
                 return;
             }
         };
@@ -648,7 +775,7 @@ impl<T: 'static> Shared<T> {
             );
             return;
         };
-        flight.tracks_completion.set(true);
+        flight.watch_result(ResultWatch::Awaited);
         let on_closed = config.on_closed.clone();
         let task_flight = Rc::clone(&flight);
         // The task owns its own token: the result of a page the navigator has
@@ -658,19 +785,18 @@ impl<T: 'static> Shared<T> {
         // is back, so `on_closed` never runs under the closing transform.
         let token_slot = Rc::new(RefCell::new(None));
         let task_slot = Rc::clone(&token_slot);
+        let watcher = ResultWatcher(task_flight);
         let token = driver.spawn_local(Box::pin(async move {
             let value = result.await;
-            task_flight.complete();
-            let landing = Rc::clone(&task_flight.landed);
-            drop(task_flight);
-            landing.wait().await;
+            let task_flight = watcher.arrived();
+            task_flight.landed().await;
             if let Some(on_closed) = on_closed {
                 on_closed(value);
             }
             drop(task_slot);
         }));
         if token.is_cancelled() {
-            flight.tracks_completion.set(false);
+            flight.watch_result(ResultWatch::Unwatched);
         }
         *token_slot.borrow_mut() = Some(token);
     }
@@ -699,9 +825,11 @@ impl<T: 'static> StatefulView for OpenContainer<T> {
     type State = OpenContainerState<T>;
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let seat = FlightSeat::new();
+        seat.bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
         OpenContainerState {
             shared: Rc::new(Shared {
-                seat: Rc::new(FlightSeat::new()),
+                seat: Rc::new(seat),
                 config: RefCell::new(self.clone()),
                 rebuild: RefCell::new(Some(ctx.rebuild_handle())),
                 driver: RefCell::new(ctx.async_driver()),
@@ -712,12 +840,6 @@ impl<T: 'static> StatefulView for OpenContainer<T> {
 }
 
 impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.shared
-            .seat
-            .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
-    }
-
     fn did_update_view(&mut self, _old: &OpenContainer<T>, new_view: &OpenContainer<T>) {
         let previous = self.shared.config.replace(new_view.clone());
         drop(previous);
@@ -830,7 +952,9 @@ struct MorphState {
     primary: RouteAnimation,
     /// The morph's own frame: where the navigator's page area sits.
     frame: Rc<FlightSeat>,
-    listener: Option<Subscription>,
+    /// Re-measures on every tick of `primary`; re-made on the animation
+    /// `did_update_view` swaps in.
+    listener: Subscription,
 }
 
 impl fmt::Debug for MorphState {
@@ -839,19 +963,18 @@ impl fmt::Debug for MorphState {
     }
 }
 
+/// Re-measure `frame` for `flight` on every tick of `primary`.
+fn listen_for_ticks(
+    primary: &RouteAnimation,
+    flight: &Rc<Flight>,
+    frame: &Rc<FlightSeat>,
+) -> Subscription {
+    let flight = Rc::clone(flight);
+    let frame = Rc::clone(frame);
+    primary.listen(Rc::new(move || flight.measure(&frame)))
+}
+
 impl MorphState {
-    /// Re-measure on every tick of the primary animation.
-    fn listen(&mut self) {
-        self.unlisten();
-        let flight = Rc::clone(&self.flight);
-        let frame = Rc::clone(&self.frame);
-        self.listener = Some(self.primary.listen(Rc::new(move || flight.measure(&frame))));
-    }
-
-    fn unlisten(&mut self) {
-        drop(self.listener.take());
-    }
-
     /// Measure the frame once the frame it was mounted in has laid it out,
     /// then redraw. A route whose animation is already settled when the morph
     /// mounts (a zero duration) never ticks again, so the tick listener alone
@@ -864,7 +987,7 @@ impl MorphState {
         let frame = Rc::clone(&self.frame);
         let rebuild = ctx.rebuild_handle();
         let scheduled = post_frame.schedule(move |_timing| {
-            if !flight.mounted.get() || flight.closed_in_frame.get().is_some() {
+            if !flight.is_morph_mounted() || flight.closed_in_frame.get().is_some() {
                 return;
             }
             flight.measure(&frame);
@@ -884,29 +1007,30 @@ impl MorphState {
 impl StatefulView for ContainerMorph {
     type State = MorphState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let frame = FlightSeat::new();
+        frame.bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
+        let frame = Rc::new(frame);
         MorphState {
+            listener: listen_for_ticks(&self.primary, &self.flight, &frame),
             flight: Rc::clone(&self.flight),
             primary: Rc::clone(&self.primary),
-            frame: Rc::new(FlightSeat::new()),
-            listener: None,
+            frame,
         }
     }
 }
 
 impl ViewState<ContainerMorph> for MorphState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.frame
-            .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
-        self.listen();
-        self.flight.set_mounted(true);
+        self.flight.set_morph(MorphPresence::Mounted);
         self.measure_after_first_frame(ctx);
     }
 
     fn did_update_view(&mut self, _old: &ContainerMorph, new_view: &ContainerMorph) {
         if !Rc::ptr_eq(&self.primary, &new_view.primary) {
+            std::mem::replace(&mut self.listener, Subscription::inert()).detach();
             self.primary = Rc::clone(&new_view.primary);
-            self.listen();
+            self.listener = listen_for_ticks(&self.primary, &self.flight, &self.frame);
         }
     }
 
@@ -933,8 +1057,7 @@ impl ViewState<ContainerMorph> for MorphState {
     }
 
     fn dispose(&mut self) {
-        self.unlisten();
-        self.flight.set_mounted(false);
+        self.flight.set_morph(MorphPresence::Left);
     }
 }
 

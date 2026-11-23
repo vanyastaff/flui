@@ -306,7 +306,9 @@ impl Checkbox {
 /// `Hovered`/`Focused`/`Pressed`/`Disabled` are `InkWell`'s to manage.
 pub struct CheckboxState {
     states: WidgetStatesController,
-    states_listener: Option<Subscription>,
+    /// Rebuilds the checkbox on every change of `states`; detaches when the
+    /// state drops.
+    _states_listener: Subscription,
 }
 
 impl std::fmt::Debug for CheckboxState {
@@ -320,7 +322,7 @@ impl std::fmt::Debug for CheckboxState {
 impl StatefulView for Checkbox {
     type State = CheckboxState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         // `Selected` is seeded from the initial view (`&self` here IS that
         // initial view; an indeterminate value counts as selected), so it is
         // correct before the first `build` rather than needing a same-frame
@@ -337,25 +339,21 @@ impl StatefulView for Checkbox {
         } else {
             initial.with_state(WidgetState::Disabled)
         };
+        let states = WidgetStatesController::new(initial);
+        // ADR-0018: fired only from the states-controller listener, never
+        // from `build`. Mirrors `InkWellState`.
+        let rebuild = ctx.rebuild_handle();
+        let states_listener = states.listen(std::rc::Rc::new(move || {
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        }));
         CheckboxState {
-            states: WidgetStatesController::new(initial),
-            states_listener: None,
+            states,
+            _states_listener: states_listener,
         }
     }
 }
 
 impl ViewState<Checkbox> for CheckboxState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // ADR-0018: acquired here, fired only from the states-controller
-        // listener below — never from `build`. Mirrors `InkWellState`. The
-        // handle is consumed directly by the listener closure; nothing else
-        // needs to re-read it later, so it is not stored on `self`.
-        let rebuild = ctx.rebuild_handle();
-        self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
-    }
-
     fn did_update_view(&mut self, old_view: &Checkbox, new_view: &Checkbox) {
         // Seeded before this build reads it, from the switch the well is
         // given; the well's node writes the same value (ADR-0322 §3).
@@ -467,10 +465,6 @@ impl ViewState<Checkbox> for CheckboxState {
             });
         }
         ink_well
-    }
-
-    fn dispose(&mut self) {
-        drop(self.states_listener.take());
     }
 }
 

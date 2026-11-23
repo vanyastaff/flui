@@ -434,7 +434,7 @@ impl ElementTree {
             node.set_depth(depth);
             node.element_mut().set_parent_render_id(parent_render_id);
             node.element_mut().set_sliver_slot(sliver_slot);
-            stack.extend(self.owned_children(id, registry));
+            self.extend_owned_children(id, registry, &mut stack);
         }
     }
 }

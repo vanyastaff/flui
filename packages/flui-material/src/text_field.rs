@@ -334,11 +334,17 @@ impl View for TextField {
 /// Persistent state behind [`TextField`] — owns the effective focus node and
 /// the live controller/focus listeners described in the module docs.
 pub struct MaterialTextFieldState {
+    // The subscriptions are declared first so that they detach before the
+    // controller and the node they listen to drop with the state.
+    /// Rebuilds on every edit of `controller`; re-made on the controller
+    /// `did_update_view` swaps in.
+    controller_listener: Subscription,
+    /// Rebuilds on every focus change of `focus_node`; re-made on the node
+    /// `did_update_view` swaps in.
+    focus_subscription: Subscription,
     controller: TextEditingController,
     focus_node: Rc<FocusNode>,
     rebuild: RebuildHandle,
-    controller_listener_id: Option<Subscription>,
-    focus_subscription: Option<Subscription>,
 }
 
 impl std::fmt::Debug for MaterialTextFieldState {
@@ -354,46 +360,45 @@ impl StatefulView for TextField {
     type State = MaterialTextFieldState;
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        // ADR-0018: the rebuild handle is fired from the listeners, never
+        // from `build`.
+        let rebuild = ctx.rebuild_handle();
+        let controller = self.controller.clone();
+        // The effective node is the single source of focus truth for the
+        // decorated field and its EditableText child.
+        let focus_node = self.external_focus_node.as_ref().map_or_else(
+            || FocusNode::with_debug_label("MaterialTextField"),
+            Rc::clone,
+        );
         MaterialTextFieldState {
-            controller: self.controller.clone(),
-            focus_node: self.external_focus_node.as_ref().map_or_else(
-                || FocusNode::with_debug_label("MaterialTextField"),
-                Rc::clone,
-            ),
-            rebuild: ctx.rebuild_handle(),
-            controller_listener_id: None,
-            focus_subscription: None,
+            controller_listener: listen_for_edits(&controller, &rebuild),
+            focus_subscription: subscribe_focus(&focus_node, &rebuild),
+            controller,
+            focus_node,
+            rebuild,
         }
     }
 }
 
-impl MaterialTextFieldState {
-    fn subscribe_focus(&self, node: &Rc<FocusNode>) -> Subscription {
-        let rebuild = self.rebuild.clone();
-        node.subscribe(move || {
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })
-    }
+/// Rebuild on every edit of `controller`: `is_empty` (fed to
+/// `InputDecorator`) is recomputed fresh in `build`, so a text change must
+/// trigger one.
+fn listen_for_edits(controller: &TextEditingController, rebuild: &RebuildHandle) -> Subscription {
+    let rebuild = rebuild.clone();
+    controller.listen(std::rc::Rc::new(move || {
+        rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+    }))
+}
+
+/// Rebuild on every focus change of `node`.
+fn subscribe_focus(node: &Rc<FocusNode>, rebuild: &RebuildHandle) -> Subscription {
+    let rebuild = rebuild.clone();
+    node.subscribe(move || {
+        rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+    })
 }
 
 impl ViewState<TextField> for MaterialTextFieldState {
-    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
-        // ADR-0018: the rebuild handle `create_state` took is fired from
-        // the listeners below — never called from `build`.
-        let rebuild = self.rebuild.clone();
-
-        // Rebuild on every edit — `is_empty` (fed to `InputDecorator`) is
-        // recomputed fresh in `build`, so a text change must trigger one.
-        let rebuild_on_edit = rebuild;
-        self.controller_listener_id = Some(self.controller.listen(std::rc::Rc::new(move || {
-            rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
-
-        // The effective node is the single source of focus truth for the
-        // decorated field and its EditableText child.
-        self.focus_subscription = Some(self.subscribe_focus(&self.focus_node));
-    }
-
     fn did_update_view(&mut self, old_view: &TextField, new_view: &TextField) {
         // The controller half, mirroring `EditableTextState`'s: drop the
         // listener from the old, adopt the replacement, add it to the new.
@@ -402,13 +407,9 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // the interior does the rest, and does it through a shared cell.
         if !self.controller.is_same_controller(&new_view.controller) {
             // The subscription withdraws through its own channel.
-            drop(self.controller_listener_id.take());
+            std::mem::replace(&mut self.controller_listener, Subscription::inert()).detach();
             self.controller = new_view.controller.clone();
-            let rebuild_on_edit = self.rebuild.clone();
-            self.controller_listener_id =
-                Some(self.controller.listen(std::rc::Rc::new(move || {
-                    rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
-                })));
+            self.controller_listener = listen_for_edits(&self.controller, &self.rebuild);
             // `is_empty` feeds the decoration's floating label and is
             // recomputed in `build`; the replacement has not changed since
             // it was handed over, so nothing else would ask for that pass.
@@ -432,17 +433,13 @@ impl ViewState<TextField> for MaterialTextFieldState {
             || FocusNode::with_debug_label("MaterialTextField"),
             Rc::clone,
         );
-        let replacement_subscription = self.subscribe_focus(&replacement);
-        let previous_subscription = self.focus_subscription.replace(replacement_subscription);
+        let replacement_subscription = subscribe_focus(&replacement, &self.rebuild);
+        let previous_subscription =
+            std::mem::replace(&mut self.focus_subscription, replacement_subscription);
         let previous_node = std::mem::replace(&mut self.focus_node, replacement);
         // Commit effective ownership before retiring the outgoing listener.
         drop(previous_subscription);
         drop(previous_node);
-    }
-
-    fn dispose(&mut self) {
-        drop(self.controller_listener_id.take());
-        drop(self.focus_subscription.take());
     }
 
     fn build(&self, view: &TextField, ctx: &dyn BuildContext) -> impl IntoView {

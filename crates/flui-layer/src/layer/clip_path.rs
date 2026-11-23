@@ -1,7 +1,5 @@
 //! `ClipPathLayer` — clips its subtree to a path.
 
-use std::sync::Arc;
-
 use flui_foundation::geometry::Rect;
 use flui_painting::paint::{Clip, Path};
 
@@ -42,9 +40,9 @@ use flui_painting::paint::{Clip, Path};
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipPathLayer {
-    /// The path to clip to, shared with the render object that produced it
-    /// so a coordinate query never copies a command buffer.
-    clip_path: Arc<Path>,
+    /// The path to clip to. A clone shares its built curves, so the layer and
+    /// the render object that produced it hold one copy of a long path.
+    clip_path: Path,
 
     /// Clip behavior (HardEdge, AntiAlias, etc.)
     clip_behavior: Clip,
@@ -53,9 +51,9 @@ pub struct ClipPathLayer {
 impl ClipPathLayer {
     /// Clips the subtree to a path; `Clip::None` is accepted and lowered as no clip.
     #[inline]
-    pub fn new(clip_path: impl Into<Arc<Path>>, clip_behavior: Clip) -> Self {
+    pub fn new(clip_path: Path, clip_behavior: Clip) -> Self {
         Self {
-            clip_path: clip_path.into(),
+            clip_path,
             clip_behavior,
         }
     }

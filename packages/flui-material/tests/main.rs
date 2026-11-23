@@ -525,6 +525,8 @@ fn overlay_contracts() {
         ("snack_bar_keeps_its_display_duration_under_reduced_motion", snack_bar::snack_bar_keeps_its_display_duration_under_reduced_motion),
         ("unmounting_a_hovered_snack_bar_releases_its_timer_pause", snack_bar::unmounting_a_hovered_snack_bar_releases_its_timer_pause),
         ("snack_bar_display_timer_pauses_while_hovered", snack_bar::snack_bar_display_timer_pauses_while_hovered),
+        ("snack_bar::a_resting_snack_bar_schedules_no_frame_until_its_timeout", snack_bar::a_resting_snack_bar_schedules_no_frame_until_its_timeout),
+        ("snack_bar::a_nested_scaffold_leaves_the_snack_bar_to_the_outer_one", snack_bar::a_nested_scaffold_leaves_the_snack_bar_to_the_outer_one),
         ("drawer::drawer_settling_uses_the_captured_fling_profile", drawer::drawer_settling_uses_the_captured_fling_profile),
         ("drawer::open_drawer_settling_uses_the_captured_fling_profile", drawer::open_drawer_settling_uses_the_captured_fling_profile),
         ("drawer::a_drawer_release_keeps_finger_speed", drawer::a_drawer_release_keeps_finger_speed),
@@ -585,6 +587,14 @@ fn overlay_contracts() {
         (
             "drawer::scrim mounts when open and a tap closes the drawer",
             drawer::scrim_mounts_when_open_and_a_tap_closes_the_drawer,
+        ),
+        (
+            "drawer::a_drawer_removed_while_open_comes_back_closed",
+            drawer::a_drawer_removed_while_open_comes_back_closed,
+        ),
+        (
+            "drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed",
+            drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed,
         ),
     ]);
 }
@@ -768,6 +778,10 @@ fn navigation_and_layout_contracts() {
         (
             "tab_bar_view::unmounting the view mid drag keeps the index",
             tab_bar_view::unmounting_the_view_mid_drag_keeps_the_index,
+        ),
+        (
+            "tab_bar_view::a_view_mounted_again_commits_a_released_drag",
+            tab_bar_view::a_view_mounted_again_commits_a_released_drag,
         ),
         (
             "tab_bar_view::a refused view does not change the holders motion policy",

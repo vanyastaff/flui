@@ -23,9 +23,13 @@ use std::path::Path;
 
 /// `src/main.rs` of a single-crate template: the entry of the desktop, iOS
 /// and the web, calling the library's `#[flui::main]` function. Everything
-/// else lives in `src/lib.rs`, which `cargo ndk` builds as a `cdylib` (where
-/// that attribute writes the Android entry) and the binary and the tests link
-/// as an rlib.
+/// else lives in `src/lib.rs`, which the binary and the tests link as an rlib.
+///
+/// The manifest declares no `cdylib`: only Android loads the library as one
+/// (where `#[flui::main]` writes its entry), and `flui build android` asks
+/// cargo for that crate type itself (`cargo rustc --crate-type cdylib`).
+/// A declared `cdylib` would be linked on every desktop build too, a second
+/// link of the whole framework per edit that nothing runs.
 ///
 /// A debug build also serves the app to an AI agent (`flui mcp`) when
 /// `flui run --agent` launched it; that takes no code here (ADR-0239).
@@ -36,14 +40,6 @@ pub(super) fn main_rs(lib_name: &str) -> String {
          }}\n"
     )
 }
-
-/// The `[lib]` table every single-crate template writes.
-pub(super) const LIB_TABLE: &str = r#"# The rlib feeds the binary and the tests; the cdylib is what `cargo ndk`
-# builds for Android (`flui build android`), entered through the
-# `#[flui::main]` function in src/lib.rs.
-[lib]
-crate-type = ["rlib", "cdylib"]
-"#;
 
 /// The profiles every template's workspace root writes. Dependencies are
 /// optimized in debug builds too: wgpu and naga's shader translation, Parley's

@@ -10,8 +10,6 @@
 //! and opens a layer to do so. This object changes hit-testing only: layout,
 //! paint and semantics geometry are the child's.
 
-use std::sync::Arc;
-
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
 use flui_painting::{paint::Path, styling::BorderRadius};
@@ -33,7 +31,7 @@ pub enum HitShape {
     Oval,
     /// An arbitrary path in local coordinates, filled by its fill rule. It is
     /// not scaled to the box; parts outside the box are not hittable.
-    Path(Arc<Path>),
+    Path(Path),
 }
 
 impl HitShape {

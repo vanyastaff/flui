@@ -67,21 +67,35 @@ on both sides of halfway, dragging to zero, mounting an opening run at zero,
 a fresh closing gesture and unmount withdrawal. The existing
 `drawer_slides_without_rebuilding_per_frame` pins retained frame publication.
 
-### Replacing a display timer retires its outgoing owner
+### A snack bar's display timer sleeps on the UI runtime's clock
 
-The messenger installs and starts the new display owner before retiring the
-outgoing one. Retirement withdraws its registry seat, cancels its run and
-releases status captures outside state borrows. Saved controller observers
-cannot revive the retired timer or deliver its old timeout.
+Once an entry's entrance settles, the messenger spawns a task on the UI
+runtime's `AsyncDriver` that sleeps for the entry's display duration on the
+runtime's clock (`TimerHandle`) and then hides it with `Timeout`. Nothing
+ticks while the bar rests, so the UI runtime asks for no frame between the
+entrance and the timeout. The task's `TaskToken` is the timer: hide, remove,
+clear, the pop of its entry and dispose drop it, which cancels the task. A
+timer names the entry it counts for and hides only that entry while it is
+still the front, so an earlier entry's deadline cannot close the next one, and
+an entry gets one timer however often its entrance is seen to settle.
 
-`a_second_display_timer_retires_the_first` exercises the existing mounted
-Messenger fault seam in the completion-recovery table. It delivers a second
-entrance completion without an intervening timer cancellation, observes
-registry reentry from cancellation, capture retirement, one replacement
-timeout and unmount withdrawal. This replacement seam is private: public
-queue advancement cancels before the next entrance. The public
-`snack_bar_keeps_its_display_duration_under_reduced_motion` separately checks
-the mounted presentation's visible interval and Timeout delivery.
+`a_resting_snack_bar_schedules_no_frame_until_its_timeout` records the frames
+of a resting bar through `MotionRun`, sees none of them ask for another
+frame, then carries the clock past the deadline in one frame and observes the
+`Timeout` completion. `a_display_timer_counts_for_one_entry`, a row of the
+private Messenger fault table, checks the single task per entry, its
+cancellation on removal and the next entry's own timeout.
+`snack_bar_keeps_its_display_duration_under_reduced_motion` checks the
+mounted presentation's visible interval and Timeout delivery.
+
+### Only the root scaffold of a nested set shows the snack bar
+
+A `Scaffold` registers with its messenger only when no ancestor scaffold
+belongs to the same messenger (Flutter's `_isRoot`), so a scaffold nested in
+another's body shows no snack bar of its own. A scaffold under a messenger of
+its own is the root of that messenger's set.
+`a_nested_scaffold_leaves_the_snack_bar_to_the_outer_one` mounts a scaffold in
+a scaffold's body and finds one bar, below the inner scaffold.
 
 ### Typography presets retain explicit numeric growth profiles
 
@@ -110,11 +124,11 @@ Each mounted presenter holds a hover lease for its exact queued entry.
 The lease counts hovered presenters, so one scaffold's exit cannot resume a
 timer another scaffold still holds. The entry and messenger are weakly
 addressed; an old entry's callbacks cannot change the next entry's timer.
-Hover uses the controller's playback rate and retains the display run and its
-completion. Replacing or disposing a presenter withdraws its hover admission
-before retiring its captures; retired callbacks cannot acquire it again.
-Playback-rate changes request their sample through the timer's registry seat;
-hover does not rebuild the tree merely to wake that sample.
+The first hover cancels the timer's task and keeps the time left; the last
+hover to end spawns a new task for that remainder. An entry hovered when its
+entrance settles starts its timer paused. Replacing or disposing a presenter
+withdraws its hover admission before retiring its captures; retired callbacks
+cannot acquire it again. Hover does not rebuild the tree.
 
 `snack_bar_display_timer_pauses_while_hovered` drives real pointer hover and
 observes the preserved remainder and one Timeout completion.
@@ -255,10 +269,18 @@ jumps it. A swipe moves the pager directly and the index commits only when the
 pager's scroll activity stops, to the page it rests on. The owned value runs on
 the `VsyncScope` clock that a `TabBar` or `DefaultTabController` binds, so
 reduced motion settles it on the next frame; a drag is direct manipulation and
-follows the finger under reduced motion too. While the controller itself moves
-the pager, a stop it causes (a jump interrupting a running tab animation) does
-not commit the interrupted page; a jump goes through the scroll controller so it
-stops that run instead of being overtaken by it. A controller has one position
+follows the finger under reduced motion too. Who moves the pager is one
+`PagerDriver` on the link an attachment makes: nobody, the user (a drag or its
+fling) or the controller, for the length of the call that moves it. Only the
+user letting go commits a page. While the controller itself moves the pager, a
+stop it causes (a jump interrupting a running tab animation) does not commit
+the interrupted page; a jump goes through the scroll controller so it stops
+that run instead of being overtaken by it. Beside the driver the link keeps
+whether the view that owns the pager is leaving, which its lifecycle sets: a
+drag the teardown ends commits nothing. A view mounted again on the controller
+makes a new link, so the leaving of the last one does not stop its swipes from
+committing; `a_view_mounted_again_commits_a_released_drag` fails with the
+leaving mark kept on the controller. A controller has one position
 source, so it drives at most one mounted `TabBarView`: a second view on it is
 refused at build (an `ErrorView`) and the first keeps the pager. The owned value is taken out of its
 cell while it is driven, so a position listener that re-enters the controller
@@ -333,6 +355,13 @@ post-frame measurement is what brings it onstage. On that first measurement the 
 at its committed size with its child offstage, so neighbours do not move and
 the child's state survives; it is released only once the morph has left the tree *and* the route
 has completed, so a page dropped while covered keeps the source frozen.
+A flight's phase is one `FlightPhase`: underway, with the source in its seat or
+frozen and the route's result unwatched, awaited or arrived, then landed for
+good. Whether the morph is expected, mounted or has left sits beside it, as an
+input the morph reports; `ResultWatch::releases` is the one rule that lands the
+flight. With no async driver no result is watched, and the source comes back as
+soon as the morph leaves the tree; a result that arrives before the morph ever
+mounted lands the flight at once.
 
 The source is measured in the morph frame's coordinates (both mapped through the
 render root, so a scale or rotation above the navigator cancels instead of being
@@ -604,19 +633,19 @@ size and actual loose-parent layout, with bottom indicator-band coordinates.
 
 ### Completion failure does not strand the accepted snack-bar queue
 
-After a dismissed entry is popped, its completion, the next entrance and
-scaffold rebuild delivery are independent attempts. The earliest caught failure
-propagates after the advancement guard is released; a later payload is
-discarded. Scaffold rebuild handles are snapshotted before host callbacks,
-so those callbacks cannot run under the registration RefCell borrow. After a
-caught failure the completed entry and each delivered handle are still
-destroyed, one at a time under containment, so a panicking destructor is
-discarded behind the first failure (ADR-0281 §3).
+After a dismissed entry is popped, the cancellation of its display timer, its
+completion, the next entrance and scaffold rebuild delivery are independent
+attempts under one `FirstPanic`. The earliest caught failure propagates after
+the drain's advancing guard is released; a later payload is discarded.
+Scaffold rebuild handles are snapshotted before host callbacks, so those
+callbacks cannot run under the registration RefCell borrow. The completed
+entry and each delivered handle are destroyed one at a time under the same
+containment, so after a caught failure a panicking destructor is discarded
+behind the first one (ADR-0281 §3).
 
 This does not contain a callback body's panic competing with its consumed
 `FnOnce` captures' destruction before control returns: that destructor runs
 during the callback's unwind and aborts, as in std (ADR-0281 §1).
-Display-timer cancellation before the pop keeps its separate failure boundary.
 
 `overlay_contracts` row
 `a_completion_panic_still_advances_the_accepted_snack_bar_queue` observes the
@@ -657,7 +686,18 @@ after resizing to 100 pixels.
 ### A drawer threshold changes scaffold structure only when two slots reorder
 
 Drawer callbacks commit the handle's opened state and forward the application
-callback independently of rebuilding Scaffold. Its child order depends only
+callback independently of rebuilding Scaffold. The handle holds one
+`DrawerSlot` per side: absent, closed or open. Scaffold's build moves a slot
+to absent when the drawer is not configured, which drops its open state, so a
+drawer configured again starts closed; a report that reaches an absent slot is
+dropped. The controller reports through three paths (`open`/`close`, a fling,
+a drag crossing halfway), and each records the state it reported; a drag
+reports a crossing only when it differs from that record, so a drawer opened by
+its handle reports closed the moment a drag carries it past halfway, and never
+reports open twice on the way. `a_drawer_removed_while_open_comes_back_closed`
+fails with the open state kept beside a separate "configured" flag, and
+`dragging_an_opened_drawer_past_halfway_reports_it_closed` with a record only
+the drag path writes. Its child order depends only
 on the end drawer's opened state when both drawer slots exist. Only a change
 to that ordering schedules a scaffold rebuild; a single drawer crossing its
 halfway threshold updates render-owned slide and scrim geometry directly.

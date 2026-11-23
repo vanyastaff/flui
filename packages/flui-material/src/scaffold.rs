@@ -116,16 +116,20 @@
 //!
 //! ## `ScaffoldMessenger` wiring
 //!
-//! `ScaffoldState` registers with the nearest ancestor
-//! [`crate::ScaffoldMessengerScope`] (if any) during `init_state`, outside
-//! `build`. The scope's handle lookup itself is untracked, while Scaffold's
+//! `ScaffoldState` belongs to the nearest ancestor
+//! [`crate::ScaffoldMessengerScope`] (if any) and, during `init_state`,
+//! outside `build`, registers with it when it is the root of the messenger's
+//! nested scaffolds: when no ancestor `ScaffoldState` belongs to the same
+//! messenger (Flutter's `_isRoot`). Only a registered scaffold shows the
+//! messenger's snack bar, so a scaffold nested in another's body shows none.
+//! The scope's handle lookup itself is untracked, while Scaffold's
 //! Theme and MediaQuery lookups establish inherited dependencies. Reactivating
 //! a retained GlobalKey scaffold therefore schedules `did_change_dependencies`,
 //! which re-runs `sync_messenger_registration` against its current ancestry.
 //! An ordinary same-type messenger rebuild keeps the same handle identity.
-//! Registration is keyed by the scaffold's `ElementId` and idempotent; an
-//! identity change unregisters from the old messenger before registering anew,
-//! and `dispose` unregisters unconditionally. `build` reads
+//! Registration is keyed by the scaffold's `ElementId` and idempotent; a
+//! change of messenger or of root unregisters from the old messenger before
+//! registering anew, and `dispose` unregisters unconditionally. `build` reads
 //! `crate::ScaffoldMessengerHandle::current_entry` (private) fresh every call and, if
 //! `Some`, mounts a `SnackBarPresenter` at `SLOT_SNACK_BAR` — see
 //! `crate::snack_bar`'s module docs for what that presenter renders.
@@ -461,9 +465,13 @@ pub struct ScaffoldState {
     /// This scaffold's own `ElementId`, held because `dispose` receives no
     /// context and unregisters from [`Self::messenger`] by it.
     element_id: ElementId,
-    /// The currently-registered [`ScaffoldMessengerHandle`] (if any) — see
-    /// the module docs' "`ScaffoldMessenger` wiring" section.
+    /// The nearest ancestor messenger's [`ScaffoldMessengerHandle`] (if any)
+    /// — see the module docs' "`ScaffoldMessenger` wiring" section.
     messenger: Option<ScaffoldMessengerHandle>,
+    /// Whether this scaffold presents [`Self::messenger`]'s snack bars and is
+    /// registered with it: no ancestor scaffold belongs to the same
+    /// messenger.
+    presents_snack_bars: bool,
 }
 
 impl std::fmt::Debug for ScaffoldState {
@@ -485,6 +493,7 @@ impl StatefulView for Scaffold {
             rebuild: ctx.rebuild_handle(),
             element_id: ctx.element_id(),
             messenger: None,
+            presents_snack_bars: false,
         }
     }
 }
@@ -505,9 +514,11 @@ impl ViewState<Scaffold> for ScaffoldState {
     }
 
     fn dispose(&mut self) {
-        if let Some(messenger) = self.messenger.take() {
+        if let Some(messenger) = self.registered() {
             messenger.unregister_scaffold(self.element_id);
         }
+        self.messenger = None;
+        self.presents_snack_bars = false;
     }
 
     fn build(&self, view: &Scaffold, ctx: &dyn BuildContext) -> impl IntoView {
@@ -577,8 +588,7 @@ impl ViewState<Scaffold> for ScaffoldState {
         }
 
         if let Some((snack_bar, animation, hover)) = self
-            .messenger
-            .as_ref()
+            .registered()
             .and_then(ScaffoldMessengerHandle::current_entry)
         {
             children.push(LayoutId::new(
@@ -710,32 +720,41 @@ impl ScaffoldState {
         controller
     }
 
-    /// Compares the nearest ancestor [`ScaffoldMessengerScope`]'s handle
-    /// (if any) against [`Self::messenger`] by [`ScaffoldMessengerHandle::ptr_eq`]
-    /// identity and, if it changed, unregisters from the old messenger and
-    /// registers with the new one. A no-op when the identity is unchanged
-    /// (including the common "both `None`" and "same handle, called again"
-    /// cases) — see [`ViewState::init_state`]/[`ViewState::did_change_dependencies`]'s
+    /// Belongs to the nearest ancestor [`ScaffoldMessengerScope`]'s messenger
+    /// (if any) and registers with it when this scaffold presents its snack
+    /// bars: when no ancestor scaffold belongs to the same messenger
+    /// (Flutter's `_isRoot`,
+    /// `flutter/flutter@3.50.1 packages/flutter/lib/src/material/scaffold.dart:242`).
+    /// Unregisters from a messenger it no longer presents for. A no-op when
+    /// neither changed — see [`ViewState::init_state`]/[`ViewState::did_change_dependencies`]'s
     /// own doc comments for why this runs from both hooks.
     fn sync_messenger_registration(&mut self, ctx: &dyn BuildContext) {
-        let new_messenger = ScaffoldMessengerScope::maybe_of(ctx);
-        let identity_changed = match (&self.messenger, &new_messenger) {
-            (Some(old), Some(new)) => old != new,
-            (None, None) => false,
-            _ => true,
-        };
-        if !identity_changed {
+        let messenger = ScaffoldMessengerScope::maybe_of(ctx);
+        let presents = messenger.as_ref().is_some_and(|messenger| {
+            let outer = ctx
+                .find_state::<ScaffoldState, _>(|outer| outer.messenger.clone())
+                .flatten();
+            outer.as_ref() != Some(messenger)
+        });
+        let registered = self.registered().cloned();
+        self.messenger = messenger;
+        self.presents_snack_bars = presents;
+        let registering = self.registered().cloned();
+        if registered == registering {
             return;
         }
-        let element_id = self.element_id;
-        if let Some(old) = &self.messenger {
-            old.unregister_scaffold(element_id);
+        if let Some(old) = &registered {
+            old.unregister_scaffold(self.element_id);
         }
-        if let Some(new) = &new_messenger {
-            let rebuild = self.rebuild.clone();
-            new.register_scaffold(element_id, rebuild);
+        if let Some(new) = &registering {
+            new.register_scaffold(self.element_id, self.rebuild.clone());
         }
-        self.messenger = new_messenger;
+    }
+
+    /// The messenger this scaffold is registered with: its own, when it
+    /// presents that messenger's snack bars.
+    fn registered(&self) -> Option<&ScaffoldMessengerHandle> {
+        self.messenger.as_ref().filter(|_| self.presents_snack_bars)
     }
 }
 

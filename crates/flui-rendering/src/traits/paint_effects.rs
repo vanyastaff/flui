@@ -10,8 +10,6 @@
 //! producer-facing contract is the same: describe the layer, don't
 //! imperatively push and pop it.
 
-use std::sync::Arc;
-
 use flui_foundation::geometry::{Matrix4, Point, RRect, RSuperellipse, Rect, Size};
 use flui_painting::paint::{Clip, Path};
 
@@ -128,8 +126,8 @@ impl PaintEffects {
 
     /// Returns `self` with [`Self::clip`] set.
     ///
-    /// Not `const fn`: [`PaintClip::Path`] carries an `Arc<Path>`, which
-    /// needs drop glue a `const fn` builder cannot have.
+    /// Not `const fn`: [`PaintClip::Path`] carries a [`Path`], whose shared curves
+    /// need drop glue a `const fn` builder cannot have.
     #[must_use]
     pub fn with_clip(mut self, clip: PaintClip) -> Self {
         self.clip = Some(clip);
@@ -228,11 +226,10 @@ pub enum PaintClip {
     },
     /// Arbitrary path clip with a statically known shape.
     Path {
-        /// Shared, not copied: the producer boxes the path once and every
-        /// reader — including a coordinate query building this value just
-        /// to read [`PaintEffects::transform`] — bumps a refcount instead
-        /// of cloning a command buffer.
-        path: Arc<Path>,
+        /// A clone shares the path's built curves, so every reader (including a
+        /// coordinate query building this value just to read
+        /// [`PaintEffects::transform`]) bumps a refcount instead of copying them.
+        path: Path,
         /// How to handle content outside the clip boundary.
         behavior: Clip,
     },

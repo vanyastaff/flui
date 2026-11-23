@@ -106,6 +106,74 @@ pub(crate) fn file_revision(path: &Path) -> Option<std::time::SystemTime> {
         .ok()
 }
 
+/// The artifact a reload driver last failed to load, by path and
+/// [`file_revision`], so a driver polling every frame does not reopen a
+/// refused file on every poll. The same file is tried again after
+/// [`LoadRefusal::RETRY`]: a load can fail for a reason outside its bytes
+/// (a scanner or the linker still holding the file, a descriptor limit), and
+/// a rebuild with the same bytes lands under the same name and revision.
+#[derive(Debug)]
+pub(crate) struct LoadRefusal {
+    refused: Option<Refused>,
+    retry: std::time::Duration,
+}
+
+#[derive(Debug)]
+struct Refused {
+    path: PathBuf,
+    revision: Option<std::time::SystemTime>,
+    at: std::time::Instant,
+}
+
+impl Default for LoadRefusal {
+    fn default() -> Self {
+        Self::with_retry(Self::RETRY)
+    }
+}
+
+impl LoadRefusal {
+    /// How long an unchanged refused artifact waits before it is opened again.
+    pub(crate) const RETRY: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// A refusal that tries an unchanged refused artifact again after `retry`.
+    pub(crate) fn with_retry(retry: std::time::Duration) -> Self {
+        Self {
+            refused: None,
+            retry,
+        }
+    }
+
+    /// Load `path` with `load`, unless it is the artifact that was refused,
+    /// unchanged since and refused less than the retry interval ago. A
+    /// failure is remembered by the revision read before the load, so a
+    /// build that lands while `load` runs is not taken for the refused file.
+    pub(crate) fn load<T>(
+        &mut self,
+        path: &Path,
+        load: impl FnOnce(&Path) -> Option<T>,
+    ) -> Option<T> {
+        let revision = file_revision(path);
+        if self.refused.as_ref().is_some_and(|refused| {
+            refused.path == path
+                && refused.revision == revision
+                && refused.at.elapsed() < self.retry
+        }) {
+            return None;
+        }
+        let at = std::time::Instant::now();
+        let loaded = load(path);
+        self.refused = match loaded {
+            Some(_) => None,
+            None => Some(Refused {
+                path: path.to_path_buf(),
+                revision,
+                at,
+            }),
+        };
+        loaded
+    }
+}
+
 // ── Platform-specific implementations ──────────────────────────────────
 
 #[cfg(unix)]
@@ -231,5 +299,72 @@ mod sys {
             let module = HMODULE(handle.cast());
             let _ = FreeLibrary(module);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::LoadRefusal;
+
+    /// A refused artifact is opened again only once it changes, and a
+    /// successful load forgets the refusal.
+    #[test]
+    fn a_refused_artifact_is_reopened_once_it_changes_or_after_a_wait() {
+        let dir =
+            std::env::temp_dir().join(format!("flui-hot-reload-refusal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let artifact = dir.join("libworker.so");
+        std::fs::write(&artifact, b"not a library").expect("a broken build");
+        let opened = Cell::new(0_u32);
+        let mut refusal = LoadRefusal::default();
+        let refuse = |_: &std::path::Path| {
+            opened.set(opened.get() + 1);
+            None::<()>
+        };
+
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(
+            opened.get(),
+            1,
+            "the unchanged refused file is not reopened"
+        );
+
+        // A later revision of the same path, as the next build writes it.
+        let later = std::fs::metadata(&artifact)
+            .and_then(|metadata| metadata.modified())
+            .expect("a revision")
+            + std::time::Duration::from_secs(1);
+        std::fs::File::options()
+            .write(true)
+            .open(&artifact)
+            .and_then(|file| file.set_modified(later))
+            .expect("a new revision");
+        assert_eq!(
+            refusal.load(&artifact, |_| {
+                opened.set(opened.get() + 1);
+                Some(())
+            }),
+            Some(())
+        );
+        assert_eq!(opened.get(), 2, "the rebuilt file is opened");
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(opened.get(), 3, "a loaded file leaves no refusal behind");
+
+        // A failure outside the bytes clears without a new revision.
+        let mut refusal = LoadRefusal::with_retry(std::time::Duration::from_millis(50));
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(opened.get(), 4, "not reopened inside the retry interval");
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        assert_eq!(refusal.load(&artifact, refuse), None);
+        assert_eq!(
+            opened.get(),
+            5,
+            "the unchanged file is tried again after it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

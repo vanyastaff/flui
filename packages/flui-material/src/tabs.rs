@@ -477,7 +477,8 @@ pub struct TabBarState {
     controller: RefCell<Option<TabController>>,
     listener_id: RefCell<Option<Subscription>>,
     rebuild: RebuildHandle,
-    /// The ambient clock the controller's position runs on.
+    /// The ambient clock the controller's position runs on, `None` with no
+    /// `VsyncScope` above; re-read in `did_change_dependencies`.
     vsync: Option<Vsync>,
     /// This bar's registration of that clock with the subscribed controller.
     clock: RefCell<Option<ClockLease>>,
@@ -510,7 +511,7 @@ impl StatefulView for TabBar {
             controller: RefCell::new(None),
             listener_id: RefCell::new(None),
             rebuild: ctx.rebuild_handle(),
-            vsync: None,
+            vsync: VsyncScope::maybe_of(ctx),
             clock: RefCell::new(None),
             companion: RefCell::new(None),
         }
@@ -581,10 +582,6 @@ impl TabBarState {
 }
 
 impl ViewState<TabBar> for TabBarState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.vsync = VsyncScope::maybe_of(ctx);
-    }
-
     /// Follows a replaced ambient clock, rebinding the subscribed
     /// controller's position to it.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -594,15 +591,9 @@ impl ViewState<TabBar> for TabBarState {
         }
     }
 
-    /// Unregisters this bar's listener from whatever controller it's
-    /// currently subscribed to. Without this, a controller that outlives the bar (an explicit
-    /// `TabBar::controller` shared with a sibling, or any
-    /// `DefaultTabController` ancestor that itself outlives one particular
-    /// `TabBar` child) keeps firing an `Rc` closure that calls
-    /// `rebuild.schedule(reason)` on a `RebuildHandle` whose element no longer
-    /// exists — a leaked listener per unmount, the same class of lifecycle
-    /// bug `MaterialTextFieldState::dispose` guards against for its exact
-    /// `FocusNode` listener.
+    /// Releases the companion, the clock lease and the listener before the
+    /// controller they hang from, the reverse of the order `build` took them
+    /// in; field order would drop the controller first.
     ///
     /// `&mut self` here (unlike `resolve_controller`, called from `build`'s
     /// `&self`) means the `RefCell`s can be read via `get_mut` — a plain

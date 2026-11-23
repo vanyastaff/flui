@@ -128,7 +128,14 @@ the window, in the observed failure). `WorkerReloadHook` therefore runs a small
 worker artifact's `(path, mtime)` stamp — the same identity the driver resolves
 through the sidecar — and calls the host's `wake` on a change. `wake` requests a
 frame; that frame's poll then performs the actual owner-thread
-`dlopen`, exactly as before.
+`dlopen`, exactly as before. The woken poll reads the artifact even when a frame
+polled moments before, inside the driver's poll interval: an idle host draws no
+later frame to pick the rebuild up. Both the watcher and the frame-boundary poll
+read every 50 ms (`flui_hot_reload::strategy::timing`), since a reload waits for
+the next read. The first poll after `attach` reads the artifact too, so a rebuild
+that landed between making the hook and attaching it is not missed, and an
+artifact that failed to load is opened again once its stamp changes, or after a
+second.
 
 This is still layer 2: the watcher watches the **artifact**, never `src/` (layer
 1, the CLI, owns source watching and the rebuild), and it adds no second
@@ -167,12 +174,13 @@ producing.
 
 | Strategy | Command / setup | Layer 1 | Layer 2 | Host process |
 |----------|-----------------|---------|---------|--------------|
-| `ProcessRestart` | `flui run` (default) | watch `src/` → `cargo build` → kill + respawn | — | restarted |
+| `ProcessRestart` | `flui run` (default) | watch `src/` → `cargo build` beside the running app → kill + respawn once it succeeds | — | restarted |
 | `PluginDylib` | `FLUI_SCENE_PLUGIN=…` + host loop | manual / `cargo watch` | `HotReloadDriver::poll()` | kept alive |
 | `BuildAndDeploy` | `flui run --scene` (Android) | watch scene `src/` → ndk build → `adb push` | host polls mtime on device | kept alive |
 | `None` | `flui run --release`, WASM | — | — | — |
 
-Constants and debounce intervals live in `flui_hot_reload::strategy::{env, timing}`.
+The host's constants live in `flui_hot_reload::strategy::{env, timing}`; the
+source debounce is `flui run`'s (`crates/flui-cli/src/watch.rs`).
 
 ## Host / Plugin Split
 
