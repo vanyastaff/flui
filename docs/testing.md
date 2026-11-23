@@ -714,6 +714,10 @@ cargo bench -p flui-engine
 
 Benchmark results are written under `target/criterion/` as HTML reports.
 
+`cargo bench -p flui-material --bench app_scenarios` is not a criterion bench:
+it times whole application scenarios and prints its own table (see
+[Phase counters and the perf baseline](#phase-counters-and-the-perf-baseline)).
+
 `cargo bench -p flui-widgets --bench signals_rebuilds -- --noplot`
 (`crates/flui-widgets/benches/signals_rebuilds.rs`) runs ADR-0074's go/no-go: `setState` against UI runtime-scoped signals on
 the same widget tree, printing a table of elements rebuilt per `RebuildReason` and
@@ -850,12 +854,15 @@ through it, a screen of wrapped paragraphs started, scrolled and edited, a page
 pushed and popped through the `Router`, a form started and toggled, and an
 idle frame. `cargo bench -p flui-material --bench app_scenarios` prints, per
 scenario, the median and 90th percentile of one step and what the step asked of
-the heap; `FLUI_SCENARIO=<name>` runs one scenario and
+the heap; `FLUI_SCENARIO=<name>` runs one scenario (a name it does not know
+fails) and
 `FLUI_SCENARIO_SAMPLES=1` prints every step. Under
 `valgrind --tool=callgrind --toggle-collect='*scenario_measured*'` only the
-measured steps are counted, which is how a phase's share of a step is read. The
-bench asserts nothing and no job runs it: it is where a cost is found and a fix
-is measured, and what a fix changes is then held by a count above.
+measured steps are counted, which is how a phase's share of a step is read. A
+start scenario mounts twelve times in one process, so what only the first
+mount pays (loading fonts) is one sample of the twelve. The bench asserts
+nothing and no job runs it: it is where a cost is found and a fix is measured,
+and what a fix changes is held by a test of its own or by a count above.
 
 `perf/size.toml` holds what an application costs before it does anything, and
 two CI jobs hold it on Linux x86_64. The `deps` job, on every PR, counts the

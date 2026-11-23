@@ -84,7 +84,7 @@ pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
 }
 
 /// Every `Theme::of` below one `Theme` hands out the allocation the `Theme`
-/// was given, not a copy of the 14 KB `ThemeData`.
+/// was given, not a copy of the `ThemeData`.
 pub fn theme_of_shares_the_ancestor_data_instead_of_copying_it() {
     use flui_sdk::widgets::Column;
 

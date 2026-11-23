@@ -566,12 +566,20 @@ const SCENARIOS: [Scenario; 10] = [
 
 fn main() {
     let only = std::env::var("FLUI_SCENARIO").ok();
+    if let Some(only) = &only {
+        assert!(
+            SCENARIOS.iter().any(|(name, _)| name == only),
+            "FLUI_SCENARIO={only} names no scenario; the scenarios are {:?}",
+            SCENARIOS.map(|(name, _)| name)
+        );
+    }
+    let every_step = std::env::var("FLUI_SCENARIO_SAMPLES").is_ok_and(|value| value == "1");
     for (name, scenario) in SCENARIOS {
         if only.as_deref().is_some_and(|only| only != name) {
             continue;
         }
         let samples = scenario();
-        if std::env::var_os("FLUI_SCENARIO_SAMPLES").is_some() {
+        if every_step {
             for (step, sample) in samples.iter().enumerate() {
                 println!(
                     "{name} step={step} µs={:.1} allocs={} bytes={}",

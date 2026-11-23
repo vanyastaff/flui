@@ -30,7 +30,7 @@ use crate::theme_data::ThemeData;
 #[derive(Clone)]
 pub struct Theme {
     /// The style data this node provides to descendants, shared: a
-    /// `ThemeData` is over 14 KB, and every [`Theme::of`] hands out this
+    /// `ThemeData` holds every component theme, and every [`Theme::of`] hands out this
     /// allocation instead of a copy.
     data: Rc<ThemeData>,
     /// The single child subtree this node wraps.
