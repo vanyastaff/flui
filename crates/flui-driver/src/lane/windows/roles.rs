@@ -12,7 +12,7 @@ use flui_protocol::semantics::SemanticsRole;
 use flui_protocol::wire::Role;
 
 /// The `accesskit_windows` version [`ROLES`] was transcribed from.
-pub const ADAPTER_CHECKED_AGAINST: &str = "0.35.1";
+pub const ADAPTER_CHECKED_AGAINST: &str = "0.35.2";
 
 /// A UI Automation control type, by the name of its `UIA_*ControlTypeId`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

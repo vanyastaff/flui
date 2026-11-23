@@ -655,7 +655,7 @@ known sets above an unknown set, or above a member numbered for another set, are
 Anything past what the adapters convert to an `i32` (a position, a level, a count, a row, a
 column, a span) is not published either.
 
-**Reach.** `accesskit_windows` 0.35.1 reads the position and size, a level and a sort into UI
+**Reach.** `accesskit_windows` 0.35.2 reads the position and size, a level and a sort into UI
 Automation (`PositionInSet`, `SizeOfSet`, `Level`, `AriaProperties`), and not a table's counts,
 a cell's indexes and spans or a selection rule (upstream marks tables TODO). Those are published
 and pinned through `accesskit_consumer`; a UI Automation fixture for them waits for the adapter.

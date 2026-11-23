@@ -770,6 +770,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `ColorFilterLayer` and `ImageFilterLayer` are lowered by `flui-engine` (`layers/render.rs`) and a hand-built scene composites them, but no render object pushes either: Flutter's `ColorFiltered` and `ImageFiltered` have no FLUI counterpart. `BackdropFilter` filters what lies behind its child, not the child.
 - The entry closes when a widget for each pushes its layer over its child, with a readback row per filter.
 
+### Text stays on Parley 0.11
+
+> **Environments:** all · **Who it hurts:** Apps that want Parley's later shaping and line-breaking fixes · **Parity:** none (dependency)
+
+- `parley` is held at 0.11 because 0.13 allocates more on every shape: its line breaker clones its per-line state on each line, keeps the strut's box metrics in a fresh buffer, and every layout builds a new `style_metrics` vector, and none of them can be reused from FLUI. Measured on the 0.13 migration: 23 → 28 allocations per reshape of a one-span paragraph, and `label_change_small` in `crates/flui-widgets/perf/baseline/` 196 → 208.
+- The entry closes when a Parley release reuses that state across layouts and the bump holds every perf baseline.
+
 ### Most crates still hash ids with SipHash
 
 > **Environments:** all · **Who it hurts:** Every frame that looks up an id in a std `HashMap` · **Parity:** none (performance)

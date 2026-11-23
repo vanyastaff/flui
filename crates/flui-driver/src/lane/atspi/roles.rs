@@ -18,7 +18,7 @@ use flui_protocol::semantics::SemanticsRole;
 use flui_protocol::wire::Role;
 
 /// The `accesskit_atspi_common` version [`ROLES`] was transcribed from.
-pub const ADAPTER_CHECKED_AGAINST: &str = "0.21.0";
+pub const ADAPTER_CHECKED_AGAINST: &str = "0.21.1";
 
 /// An AT-SPI role, by its number in `AtspiRole` (`atspi-constants.h`), as `GetRole` answers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
