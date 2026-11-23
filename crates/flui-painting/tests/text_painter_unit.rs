@@ -823,8 +823,7 @@ pub(crate) mod parley_measurement {
             through_b.width
         );
 
-        let style = probe_style();
-        let spans = vec![("AAAA".to_owned(), Some(style.clone()))];
+        let spans = vec![("AAAA".to_owned(), Some(probe_style()))];
         #[expect(
             clippy::cast_possible_truncation,
             reason = "the probe size is exact in f32"
@@ -833,9 +832,7 @@ pub(crate) mod parley_measurement {
             .shape(&ParagraphSpec {
                 font_weight_adjustment: 0,
                 spans: &spans,
-                // The painter shapes its root span's style as the paragraph's, which sizes
-                // every line box (Parley's CSS line-box model), so this shape names it too.
-                default_style: Some(&style),
+                default_style: None,
                 font_size: SIZE as f32,
                 max_width: None,
                 min_width: 0.0,
@@ -857,6 +854,60 @@ pub(crate) mod parley_measurement {
             painter.size().height,
             shaped.height
         );
+    }
+
+    /// A line is as tall as its runs make it, as in Flutter: a paragraph's
+    /// root style whose font and size no span uses adds no height, though
+    /// Parley starts each line with the root's box (CSS's strut). A root
+    /// three times the span's size, in another family, leaves the line the
+    /// probe's 1.2 em, as does no root style at all.
+    pub(crate) fn a_root_style_no_span_uses_adds_no_line_height() {
+        let with_probe = FontCollection::new();
+        with_probe
+            .register_font(PROBE_MONO)
+            .expect("the probe face loads");
+        let mut ctx = TextContext::new(&with_probe);
+        let spans = vec![
+            ("AAAA".to_owned(), Some(probe_style())),
+            ("AA".to_owned(), Some(probe_style())),
+        ];
+        let unused_root = TextStyle {
+            font_family: Some("FLUI Absent Serif".to_owned()),
+            font_size: Some(SIZE * 3.0),
+            ..TextStyle::default()
+        };
+        for (root, label) in [
+            (None, "no root style"),
+            (Some(&unused_root), "a root no span uses"),
+            (Some(&probe_style()), "the span's own root"),
+        ] {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the probe size is exact in f32"
+            )]
+            let shaped = ctx
+                .shape(&ParagraphSpec {
+                    font_weight_adjustment: 0,
+                    spans: &spans,
+                    default_style: root,
+                    font_size: SIZE as f32,
+                    max_width: None,
+                    min_width: 0.0,
+                    text_align: flui_painting::typography::TextAlign::Start,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .expect("valid fixture shapes")
+                .metrics();
+            assert!(
+                (shaped.height - 1.2 * SIZE).abs() < 1e-3,
+                "{label}: the line is the probe's 1.2 em, {} px, got {}",
+                1.2 * SIZE,
+                shaped.height
+            );
+        }
     }
 
     /// The intrinsic widths a layout cached answer only for the context that
