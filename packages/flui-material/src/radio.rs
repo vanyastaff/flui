@@ -46,16 +46,16 @@
 //!
 //! # Painting: concentric circles, no dedicated `Circle` decoration needed
 //!
-//! `flui-painting`'s [`Canvas::draw_circle`] draws both rings directly — the
+//! `flui-painting`'s [`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle) draws both rings directly — the
 //! painting-reality-check this control's own module doc calls for resolves
 //! favorably without any nested-`DecoratedBox` workaround. `RadioPainter`
 //! draws the `8.0`dp outer ring as a **centered stroke**
-//! ([`Canvas::draw_circle`] with a [`Paint::stroke`]) rather than
+//! ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle) with a [`Paint::stroke`]) rather than
 //! [`crate::Checkbox`]'s fill+`drrect`-border approach: the oracle's own
 //! default `activeSide`/`inactiveSide` (`radio.dart` `:749-764`) already use
 //! `BorderSide.strokeAlignCenter`, which a centered stroke paint is a direct
 //! port of (Checkbox's border is inside-aligned instead, hence the
-//! `drrect`). The inner dot ([`Canvas::draw_circle`], filled) paints only
+//! `drrect`). The inner dot ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle), filled) paints only
 //! when selected — the oracle's own `!position.isDismissed` guard
 //! (`radio.dart` `:870`) collapses to exactly that under V1's non-animated
 //! `position ∈ {0.0, 1.0}`. Both rings share ONE resolved color (the

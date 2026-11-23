@@ -36,9 +36,9 @@
 //! # Painting: track pill + thumb circle, both real `Canvas` shapes
 //!
 //! `SwitchPainter` draws the 52×32dp track as a stadium-shaped fill +
-//! optional 2dp outline ([`Canvas::draw_rrect`]/[`Canvas::draw_drrect`],
+//! optional 2dp outline ([`Canvas::draw_rrect`](flui_sdk::painting::Canvas::draw_rrect)/[`Canvas::draw_drrect`](flui_sdk::painting::Canvas::draw_drrect),
 //! the same shape math `CheckboxPainter`'s box border already established)
-//! and the thumb as a filled circle ([`Canvas::draw_circle`]) at the
+//! and the thumb as a filled circle ([`Canvas::draw_circle`](flui_sdk::painting::Canvas::draw_circle)) at the
 //! animated position.
 //!
 //! **Named deferral**: the M3 thumb radius follows the position from
