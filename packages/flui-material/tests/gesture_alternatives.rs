@@ -28,7 +28,7 @@ const SIZE: f64 = 400.0;
 fn three_tabs() -> Vec<Tab> {
     ["One", "Two", "Three"]
         .into_iter()
-        .map(|label| Tab::new().text(label))
+        .map(|label| Tab::text(label))
         .collect()
 }
 

@@ -124,7 +124,7 @@ use crate::theme_data::ThemeData;
 /// A `Tab` with no icon's height.
 pub(crate) const TAB_HEIGHT: f64 = 46.0;
 
-/// A `Tab` with both an icon and text/child's height.
+/// The height of a `Tab` with both an icon and a label.
 pub(crate) const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
 
 /// The horizontal padding every tab label gets, both sides
@@ -132,82 +132,111 @@ pub(crate) const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
 /// for it yet.
 pub(crate) const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
 
-/// One [`TabBar`] tab's label content: some combination of `text`/`child`
-/// and `icon`.
+/// One [`TabBar`] tab: a text label, a label view or an icon alone, with an
+/// optional icon above a label.
+///
+/// Each constructor names the content a tab cannot do without, so a tab
+/// with nothing to show, or with both a text and a view label, does not
+/// compile (the constraint Flutter states as two constructor asserts,
+/// `flutter/flutter@3.50.1 packages/flutter/lib/src/material/tabs.dart:122`).
 ///
 /// ```
 /// use flui_material::Tab;
+/// use flui_sdk::widgets::Text;
 ///
-/// let _text_tab = Tab::new().text("Home");
-/// let _custom_height_tab = Tab::new().text("Settings").height(56.0);
+/// let _text_tab = Tab::text("Home");
+/// let _custom_height_tab = Tab::text("Settings").height(56.0);
+/// let _view_tab = Tab::child(Text::new("Inbox"));
+/// let _icon_tab = Tab::icon_only(Text::new("★"));
+/// let _text_and_icon_tab = Tab::text("Starred").icon(Text::new("★"));
 /// ```
-#[derive(Clone, Debug, Default, StatelessView)]
+#[derive(Clone, Debug, StatelessView)]
 pub struct Tab {
-    text: Option<String>,
-    child: Option<BoxedView>,
-    icon: Option<BoxedView>,
+    content: TabContent,
     height: Option<f64>,
 }
 
+/// What a [`Tab`] shows: a label with an optional icon above it, or an icon
+/// alone.
+#[derive(Clone, Debug)]
+enum TabContent {
+    Label {
+        label: TabLabel,
+        icon: Option<BoxedView>,
+    },
+    Icon(BoxedView),
+}
+
+/// A [`Tab`]'s label: plain text, or a view in its place.
+#[derive(Clone, Debug)]
+enum TabLabel {
+    Text(String),
+    View(BoxedView),
+}
+
 impl Tab {
-    /// An empty tab — set `text`, `child`, and/or `icon` before using it (at
-    /// least one is required; a tab with none debug-asserts in `build`).
+    /// A tab labelled with `text`.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::labelled(TabLabel::Text(text.into()))
     }
 
-    /// Sets the tab's text label. Mutually exclusive with
-    /// [`child`](Self::child) — the last one set wins (a builder has no
-    /// single constructor call to assert against).
+    /// A tab labelled with an arbitrary view in place of text.
     #[must_use]
-    pub fn text(mut self, text: impl Into<String>) -> Self {
-        self.text = Some(text.into());
-        self.child = None;
-        self
+    pub fn child(child: impl IntoView) -> Self {
+        Self::labelled(TabLabel::View(child.into_view().boxed()))
     }
 
-    /// Sets an arbitrary label widget in place of [`text`](Self::text).
+    /// A tab that shows `icon` and no label.
     #[must_use]
-    pub fn child(mut self, child: impl IntoView) -> Self {
-        self.child = Some(child.into_view().boxed());
-        self.text = None;
-        self
+    pub fn icon_only(icon: impl IntoView) -> Self {
+        Self {
+            content: TabContent::Icon(icon.into_view().boxed()),
+            height: None,
+        }
     }
 
-    /// Adds an icon above the text/child label (or, alone, makes this an
-    /// icon-only tab).
+    fn labelled(label: TabLabel) -> Self {
+        Self {
+            content: TabContent::Label { label, icon: None },
+            height: None,
+        }
+    }
+
+    /// Shows `icon` above this tab's label; on an icon-only tab, replaces
+    /// its icon.
     #[must_use]
     pub fn icon(mut self, icon: impl IntoView) -> Self {
-        self.icon = Some(icon.into_view().boxed());
+        let icon = icon.into_view().boxed();
+        match &mut self.content {
+            TabContent::Label { icon: slot, .. } => *slot = Some(icon),
+            TabContent::Icon(slot) => *slot = icon,
+        }
         self
     }
 
     /// Overrides the computed height (`46.0`, or `72.0` when both an icon
-    /// and text/child are present).
+    /// and a label are present).
     #[must_use]
     pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
 
-    fn has_icon(&self) -> bool {
-        self.icon.is_some()
-    }
-
-    fn has_text_or_child(&self) -> bool {
-        self.text.is_some() || self.child.is_some()
+    /// Whether this tab shows both an icon and a label.
+    fn has_label_and_icon(&self) -> bool {
+        matches!(self.content, TabContent::Label { icon: Some(_), .. })
     }
 }
 
 /// This tab's content height: `height` override first, else `72.0` when
-/// both an icon and text/child are present, else `46.0`. One function here
+/// both an icon and a label are present, else `46.0`. One function here
 /// serves both [`Tab::preferred_size`] and [`TabBar`]'s own height math.
 fn tab_content_height(tab: &Tab) -> f64 {
     if let Some(height) = tab.height {
         return height;
     }
-    if tab.has_icon() && tab.has_text_or_child() {
+    if tab.has_label_and_icon() {
         TEXT_AND_ICON_TAB_HEIGHT
     } else {
         TAB_HEIGHT
@@ -223,48 +252,28 @@ fn icon_margin() -> Padding {
 
 impl StatelessView for Tab {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        debug_assert!(
-            self.has_text_or_child() || self.has_icon(),
-            "Tab requires at least one of text, child, or icon"
-        );
-
-        let label: BoxedView = if !self.has_icon() {
-            label_content(self)
-        } else if !self.has_text_or_child() {
-            self.icon
-                .clone()
-                .expect("has_icon() checked above guarantees this")
-        } else {
-            Column::new(vec![
-                icon_margin()
-                    .child(
-                        self.icon
-                            .clone()
-                            .expect("has_icon() checked above guarantees this"),
-                    )
-                    .boxed(),
-                label_content(self).boxed(),
+        let content: BoxedView = match &self.content {
+            TabContent::Label { label, icon: None } => label_view(label),
+            TabContent::Label {
+                label,
+                icon: Some(icon),
+            } => Column::new(vec![
+                icon_margin().child(icon.clone()).boxed(),
+                label_view(label),
             ])
-            .boxed()
+            .boxed(),
+            TabContent::Icon(icon) => icon.clone(),
         };
 
-        SizedBox::height(tab_content_height(self)).child(Center::new().child(label))
+        SizedBox::height(tab_content_height(self)).child(Center::new().child(content))
     }
 }
 
-/// The text/child label alone (no icon) — `child` if set, else a plain
-/// `Text(text)`. Only called where `has_text_or_child()` is already known
-/// true.
-fn label_content(tab: &Tab) -> BoxedView {
-    if let Some(child) = &tab.child {
-        child.clone()
-    } else {
-        Text::new(
-            tab.text
-                .clone()
-                .expect("caller guarantees text or child is set"),
-        )
-        .boxed()
+/// The label alone: the view if one was given, else a plain `Text`.
+fn label_view(label: &TabLabel) -> BoxedView {
+    match label {
+        TabLabel::Text(text) => Text::new(text.clone()).boxed(),
+        TabLabel::View(view) => view.clone(),
     }
 }
 
@@ -286,7 +295,7 @@ impl PreferredSizeView for Tab {
 /// ```
 /// use flui_material::{DefaultTabController, Tab, TabBar};
 ///
-/// let tabs = vec![Tab::new().text("One"), Tab::new().text("Two")];
+/// let tabs = vec![Tab::text("One"), Tab::text("Two")];
 /// let bar = DefaultTabController::new(tabs.len(), TabBar::secondary(tabs));
 /// ```
 #[derive(Clone, StatefulView)]
@@ -369,7 +378,7 @@ fn bar_height(tabs: &[Tab], indicator_weight: f64) -> f64 {
     max_content_height + indicator_weight
 }
 
-/// Whether any tab in `tabs` has both an icon and text/child (i.e. its
+/// Whether any tab in `tabs` has both an icon and a label (i.e. its
 /// content height is `TEXT_AND_ICON_TAB_HEIGHT`).
 fn tab_has_text_and_icon(tabs: &[Tab]) -> bool {
     tabs.iter()

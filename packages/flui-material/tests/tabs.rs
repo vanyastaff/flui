@@ -26,10 +26,10 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::{IntoView as _, ViewExt as _};
-use flui_sdk::widgets::{Column, Directionality, SizedBox};
+use flui_sdk::widgets::{Column, Directionality, SizedBox, Text};
 
 fn two_tabs() -> Vec<Tab> {
-    vec![Tab::new().text("One"), Tab::new().text("Two")]
+    vec![Tab::text("One"), Tab::text("Two")]
 }
 
 /// A position observer that panics once, on its first notification.
@@ -362,11 +362,7 @@ pub fn a_tap_on_the_indicator_band_reaches_the_tab() {
 /// through a real root swap: mounting does not panic, and a subsequent tap
 /// still dispatches correctly through the re-created controller.
 pub fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
-    let three_tabs = vec![
-        Tab::new().text("One"),
-        Tab::new().text("Two"),
-        Tab::new().text("Three"),
-    ];
+    let three_tabs = vec![Tab::text("One"), Tab::text("Two"), Tab::text("Three")];
     let mut laid = lay_out(
         themed(
             ThemeData::light(),
@@ -414,25 +410,34 @@ pub fn default_tab_controller_survives_a_length_shrink_past_the_selected_index()
 /// forcing the expected size from the parent.
 pub fn small_tab_height_overrides_determine_the_mounted_bar_height() {
     assert_mounted_tab_height(
-        vec![
-            Tab::new().text("One").height(20.0),
-            Tab::new().text("Two").height(28.0),
-        ],
+        vec![Tab::text("One").height(20.0), Tab::text("Two").height(28.0)],
         30.0,
     );
 }
 
 pub fn mixed_and_empty_tab_bars_keep_their_content_height_rules() {
+    assert_mounted_tab_height(vec![Tab::text("One").height(20.0), Tab::text("Two")], 48.0);
     assert_mounted_tab_height(
-        vec![Tab::new().text("One").height(20.0), Tab::new().text("Two")],
+        vec![Tab::text("One").height(60.0), Tab::text("Two").height(28.0)],
+        62.0,
+    );
+    assert_mounted_tab_height(
+        vec![Tab::icon_only(SizedBox::new(24.0, 24.0)), Tab::text("Two")],
         48.0,
     );
     assert_mounted_tab_height(
         vec![
-            Tab::new().text("One").height(60.0),
-            Tab::new().text("Two").height(28.0),
+            Tab::text("One").icon(SizedBox::new(24.0, 24.0)),
+            Tab::text("Two"),
         ],
-        62.0,
+        74.0,
+    );
+    assert_mounted_tab_height(
+        vec![
+            Tab::child(Text::new("One")).icon(SizedBox::new(24.0, 24.0)),
+            Tab::icon_only(SizedBox::new(24.0, 24.0)).icon(SizedBox::new(16.0, 16.0)),
+        ],
+        74.0,
     );
     assert_mounted_tab_height(Vec::new(), 48.0);
 }
@@ -473,7 +478,7 @@ const TAB_WIDTH: f64 = BAR_WIDTH / 4.0;
 pub(crate) fn four_tabs() -> Vec<Tab> {
     ["One", "Two", "Three", "Four"]
         .into_iter()
-        .map(|label| Tab::new().text(label))
+        .map(|label| Tab::text(label))
         .collect()
 }
 
@@ -842,8 +847,8 @@ pub fn a_tab_is_one_node_that_takes_its_contents_and_their_actions() {
         Theme::new(
             ThemeData::light(),
             TabBar::secondary(vec![
-                Tab::new().text("One"),
-                Tab::new().child(
+                Tab::text("One"),
+                Tab::child(
                     Semantics::new()
                         .container(true)
                         .label("Starred")
