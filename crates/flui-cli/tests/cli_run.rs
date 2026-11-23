@@ -344,10 +344,10 @@ fn a_failed_rebuild_leaves_the_previous_build_running() {
             .lines()
             .map_while(Result::ok)
         {
-            if let Ok(event) = serde_json::from_str(&line) {
-                if sender.send(event).is_err() {
-                    break;
-                }
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
+                && sender.send(event).is_err()
+            {
+                break;
             }
         }
     });
@@ -392,12 +392,10 @@ fn a_failed_rebuild_leaves_the_previous_build_running() {
         Duration::from_secs(300),
     );
     assert_eq!(reload["ok"], false, "the broken build failed: {seen:?}");
-    let replaced: Vec<&serde_json::Value> = seen
-        .iter()
-        .filter(|event| event["event"] == "run.app.stop" || event["event"] == "run.app.exit")
-        .collect();
     assert!(
-        replaced.is_empty(),
+        !seen
+            .iter()
+            .any(|event| event["event"] == "run.app.stop" || event["event"] == "run.app.exit"),
         "the previous build was stopped for a build that failed: {seen:?}"
     );
 
