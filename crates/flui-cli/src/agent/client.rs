@@ -15,6 +15,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -330,8 +331,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 fn open(endpoint: &Endpoint) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
     match endpoint {
         Endpoint::Local(address) => {
-            let (receiving, sending) = Stream::connect(name(address)?)?.split();
-            Ok((Box::new(receiving), Box::new(sending)))
+            let stream = Arc::new(Stream::connect(name(address)?)?);
+            Ok((
+                Box::new(SharedStream(Arc::clone(&stream))),
+                Box::new(SharedStream(stream)),
+            ))
         }
         Endpoint::Forwarded(address) => {
             let stream = TcpStream::connect_timeout(address, CONNECT_TIMEOUT)?;
@@ -339,6 +343,26 @@ fn open(endpoint: &Endpoint) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write 
             stream.set_nodelay(true)?;
             Ok((Box::new(stream.try_clone()?), Box::new(stream)))
         }
+    }
+}
+
+/// One local-socket connection read by one owner and written by another. `&Stream` reads and
+/// writes, so both owners share the stream; the socket closes when the last one drops.
+struct SharedStream(Arc<Stream>);
+
+impl Read for SharedStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        (&*self.0).read(buf)
+    }
+}
+
+impl Write for SharedStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (&*self.0).write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&*self.0).flush()
     }
 }
 

@@ -119,7 +119,9 @@ impl UiDump {
             ));
         }
         let options = roxmltree::ParsingOptions {
+            // No DTD and no resolver: a dump that declares or references an entity is refused.
             allow_dtd: false,
+            entity_resolver: None,
             nodes_limit: MAX_NODES,
         };
         let document = roxmltree::Document::parse_with_options(xml, options)
