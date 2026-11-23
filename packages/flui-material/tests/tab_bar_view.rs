@@ -525,3 +525,36 @@ pub fn a_failed_view_does_not_claim_the_controller() {
         "the matching view mounts its pager"
     );
 }
+
+/// A view removed from a controller and mounted on it again commits a
+/// released drag: the leaving of the first view's pager does not carry over
+/// to the next view's.
+pub fn a_view_mounted_again_commits_a_released_drag() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let mut laid = mount_tabs_over_pages(&controller, &vsync);
+    laid.pump_for(Duration::ZERO);
+
+    laid.pump_widget(tabs_tree(&controller, &vsync, false));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_widget(tabs_tree(&controller, &vsync, true));
+    laid.pump_for(Duration::ZERO);
+
+    drag_left(&mut laid, 0.75 * WIDTH);
+    assert_eq!(controller.index(), 0, "still dragging");
+    laid.dispatch_pointer_up(350.0 - 0.75 * WIDTH, 200.0);
+    for _ in 0..60 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+
+    assert_eq!(
+        controller.position().value(),
+        1.0,
+        "the pager rests on page 1"
+    );
+    assert_eq!(
+        controller.index(),
+        1,
+        "the second view's settled page commits"
+    );
+}

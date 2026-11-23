@@ -310,26 +310,63 @@ pub struct DrawerHandle {
 struct DrawerHandleShared {
     drawer_key: GlobalKey<DrawerControllerState>,
     end_drawer_key: GlobalKey<DrawerControllerState>,
-    has_drawer: Cell<bool>,
-    has_end_drawer: Cell<bool>,
-    drawer_opened: Cell<bool>,
-    end_drawer_opened: Cell<bool>,
+    drawer: Cell<DrawerSlot>,
+    end_drawer: Cell<DrawerSlot>,
+}
+
+/// One drawer slot of a [`crate::Scaffold`], as its [`DrawerHandle`] records
+/// it: whether the scaffold configures a drawer there and, if it does,
+/// whether that drawer last reported itself open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrawerSlot {
+    /// The scaffold configures no drawer on this side.
+    Absent,
+    /// A drawer is configured and closed.
+    Closed,
+    /// A drawer is configured and open.
+    Open,
+}
+
+impl DrawerSlot {
+    /// The slot once the scaffold's build says whether it configures a
+    /// drawer here. A drawer that appears starts closed; one that goes takes
+    /// its open state with it, so a drawer configured again starts closed.
+    fn configured(self, present: bool) -> Self {
+        match (self, present) {
+            (_, false) => Self::Absent,
+            (Self::Absent, true) => Self::Closed,
+            (slot @ (Self::Closed | Self::Open), true) => slot,
+        }
+    }
+
+    /// The slot once its drawer reports `opened`. A report that reaches an
+    /// absent slot is dropped: no drawer is configured there to be open.
+    fn reported(self, opened: bool) -> Self {
+        match self {
+            Self::Absent => Self::Absent,
+            Self::Closed | Self::Open if opened => Self::Open,
+            Self::Closed | Self::Open => Self::Closed,
+        }
+    }
+}
+
+/// Moves `slot` to `next(slot)`.
+fn update_slot(slot: &Cell<DrawerSlot>, next: impl FnOnce(DrawerSlot) -> DrawerSlot) {
+    slot.set(next(slot.get()));
 }
 
 impl DrawerHandle {
-    /// A handle to an as-yet-unconfigured scaffold: no drawer, no end
-    /// drawer, both closed. [`crate::Scaffold`]'s own state creates one of
-    /// these once and keeps it for its whole life.
+    /// A handle to an as-yet-unconfigured scaffold: both slots absent.
+    /// [`crate::Scaffold`]'s own state creates one of these once and keeps
+    /// it for its whole life.
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
             shared: Rc::new(DrawerHandleShared {
                 drawer_key: GlobalKey::new(),
                 end_drawer_key: GlobalKey::new(),
-                has_drawer: Cell::new(false),
-                has_end_drawer: Cell::new(false),
-                drawer_opened: Cell::new(false),
-                end_drawer_opened: Cell::new(false),
+                drawer: Cell::new(DrawerSlot::Absent),
+                end_drawer: Cell::new(DrawerSlot::Absent),
             }),
         }
     }
@@ -346,51 +383,56 @@ impl DrawerHandle {
         self.shared.end_drawer_key.clone()
     }
 
-    /// Records whether `Scaffold.drawer` is currently configured. Called
-    /// once per `Scaffold` build.
+    /// Records whether `Scaffold.drawer` is currently configured (see
+    /// `DrawerSlot::configured`). Called once per `Scaffold` build.
     pub(crate) fn set_has_drawer(&self, has_drawer: bool) {
-        self.shared.has_drawer.set(has_drawer);
+        update_slot(&self.shared.drawer, |slot| slot.configured(has_drawer));
     }
 
     /// Records whether `Scaffold.end_drawer` is currently configured.
     pub(crate) fn set_has_end_drawer(&self, has_end_drawer: bool) {
-        self.shared.has_end_drawer.set(has_end_drawer);
+        update_slot(&self.shared.end_drawer, |slot| {
+            slot.configured(has_end_drawer)
+        });
     }
 
-    /// Records the drawer's current opened state — the single source of
-    /// truth `crate::Scaffold`'s dynamic slot order and `on_drawer_changed`
-    /// relay both read.
+    /// Records the drawer's report that it opened or closed (see
+    /// `DrawerSlot::reported`) — the single source of truth
+    /// `crate::Scaffold`'s dynamic slot order and `on_drawer_changed` relay
+    /// both read.
     pub(crate) fn set_drawer_opened(&self, opened: bool) {
-        self.shared.drawer_opened.set(opened);
+        update_slot(&self.shared.drawer, |slot| slot.reported(opened));
     }
 
     /// The end-drawer counterpart of [`Self::set_drawer_opened`].
     pub(crate) fn set_end_drawer_opened(&self, opened: bool) {
-        self.shared.end_drawer_opened.set(opened);
+        update_slot(&self.shared.end_drawer, |slot| slot.reported(opened));
     }
 
     /// Whether [`crate::Scaffold::drawer`] is currently configured.
     #[must_use]
     pub fn has_drawer(&self) -> bool {
-        self.shared.has_drawer.get()
+        self.shared.drawer.get() != DrawerSlot::Absent
     }
 
     /// Whether [`crate::Scaffold::end_drawer`] is currently configured.
     #[must_use]
     pub fn has_end_drawer(&self) -> bool {
-        self.shared.has_end_drawer.get()
+        self.shared.end_drawer.get() != DrawerSlot::Absent
     }
 
-    /// Whether the start-side drawer is currently open.
+    /// Whether the start-side drawer is currently open: never while
+    /// [`crate::Scaffold::drawer`] is not configured.
     #[must_use]
     pub fn is_drawer_open(&self) -> bool {
-        self.shared.drawer_opened.get()
+        self.shared.drawer.get() == DrawerSlot::Open
     }
 
-    /// Whether the end-side drawer is currently open.
+    /// Whether the end-side drawer is currently open: never while
+    /// [`crate::Scaffold::end_drawer`] is not configured.
     #[must_use]
     pub fn is_end_drawer_open(&self) -> bool {
-        self.shared.end_drawer_opened.get()
+        self.shared.end_drawer.get() == DrawerSlot::Open
     }
 
     /// Opens the start-side drawer, closing the end-side drawer first if it
@@ -568,11 +610,11 @@ impl std::fmt::Debug for DrawerController {
 /// [`GlobalKey`] bridge and `ViewState` lifecycle both operate on.
 struct DrawerControllerCore {
     controller: AnimationController,
-    /// Starts `false` regardless of the controller's initial value (a
-    /// drawer that starts open still fires one on-changed(true) the first
-    /// time its value is nudged, since nothing has "previously" been
-    /// recorded as opened yet).
-    previously_opened: Cell<bool>,
+    /// The open state `on_open_changed` was last called with, recorded by
+    /// every report. It starts `false` regardless of the controller's initial
+    /// value, so a drawer that starts open reports `true` the first time a
+    /// drag nudges it.
+    reported_open: Cell<bool>,
     /// The side the drawer is flush with, resolved in every `build` from the
     /// view's alignment and the ambient direction, so a gesture signs its
     /// movement by the side the panel is painted on.
@@ -605,7 +647,9 @@ impl DrawerControllerCore {
         self.controller.value() == 0.0 && !self.controller.is_animating()
     }
 
+    /// Records `opened` as reported, then calls `on_open_changed` with it.
     fn notify_open_changed(&self, opened: bool) {
+        self.reported_open.set(opened);
         let callback = self.on_open_changed.borrow().clone();
         if let Some(callback) = callback {
             callback(opened);
@@ -618,9 +662,9 @@ impl DrawerControllerCore {
         self.side.get().inward()
     }
 
-    /// Fires `on_open_changed` the instant the value crosses `0.5`,
-    /// independent of `open()`/`close()`'s own immediate firing — the second
-    /// of the three firing paths.
+    /// Fires `on_open_changed` the instant the value lands on the other side
+    /// of `0.5` from the state last reported by any of the three firing
+    /// paths — this is the second.
     fn move_by(&self, primary_delta: f64) {
         let width = self.panel_width.get();
         if !width.is_finite() || width <= 0.0 {
@@ -630,8 +674,7 @@ impl DrawerControllerCore {
         let _ = self.controller.set_value(new_value);
 
         let opened = self.controller.value() > 0.5;
-        if opened != self.previously_opened.get() {
-            self.previously_opened.set(opened);
+        if opened != self.reported_open.get() {
             self.notify_open_changed(opened);
         }
     }
@@ -734,7 +777,7 @@ impl StatefulView for DrawerController {
             writer: ctx.writer_source(),
             core: Rc::new(DrawerControllerCore {
                 controller: controller.controller().clone(),
-                previously_opened: Cell::new(false),
+                reported_open: Cell::new(false),
                 // `build` resolves the ambient direction before the first
                 // gesture can reach the core.
                 side: Cell::new(self.alignment.side(TextDirection::Ltr)),

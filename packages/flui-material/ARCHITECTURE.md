@@ -269,10 +269,18 @@ jumps it. A swipe moves the pager directly and the index commits only when the
 pager's scroll activity stops, to the page it rests on. The owned value runs on
 the `VsyncScope` clock that a `TabBar` or `DefaultTabController` binds, so
 reduced motion settles it on the next frame; a drag is direct manipulation and
-follows the finger under reduced motion too. While the controller itself moves
-the pager, a stop it causes (a jump interrupting a running tab animation) does
-not commit the interrupted page; a jump goes through the scroll controller so it
-stops that run instead of being overtaken by it. A controller has one position
+follows the finger under reduced motion too. Who moves the pager is one
+`PagerDriver` on the link an attachment makes: nobody, the user (a drag or its
+fling) or the controller, for the length of the call that moves it. Only the
+user letting go commits a page. While the controller itself moves the pager, a
+stop it causes (a jump interrupting a running tab animation) does not commit
+the interrupted page; a jump goes through the scroll controller so it stops
+that run instead of being overtaken by it. Beside the driver the link keeps
+whether the view that owns the pager is leaving, which its lifecycle sets: a
+drag the teardown ends commits nothing. A view mounted again on the controller
+makes a new link, so the leaving of the last one does not stop its swipes from
+committing; `a_view_mounted_again_commits_a_released_drag` fails with the
+leaving mark kept on the controller. A controller has one position
 source, so it drives at most one mounted `TabBarView`: a second view on it is
 refused at build (an `ErrorView`) and the first keeps the pager. The owned value is taken out of its
 cell while it is driven, so a position listener that re-enters the controller
@@ -347,6 +355,13 @@ post-frame measurement is what brings it onstage. On that first measurement the 
 at its committed size with its child offstage, so neighbours do not move and
 the child's state survives; it is released only once the morph has left the tree *and* the route
 has completed, so a page dropped while covered keeps the source frozen.
+A flight's phase is one `FlightPhase`: underway, with the source in its seat or
+frozen and the route's result unwatched, awaited or arrived, then landed for
+good. Whether the morph is expected, mounted or has left sits beside it, as an
+input the morph reports; `ResultWatch::releases` is the one rule that lands the
+flight. With no async driver no result is watched, and the source comes back as
+soon as the morph leaves the tree; a result that arrives before the morph ever
+mounted lands the flight at once.
 
 The source is measured in the morph frame's coordinates (both mapped through the
 render root, so a scale or rotation above the navigator cancels instead of being
@@ -671,7 +686,18 @@ after resizing to 100 pixels.
 ### A drawer threshold changes scaffold structure only when two slots reorder
 
 Drawer callbacks commit the handle's opened state and forward the application
-callback independently of rebuilding Scaffold. Its child order depends only
+callback independently of rebuilding Scaffold. The handle holds one
+`DrawerSlot` per side: absent, closed or open. Scaffold's build moves a slot
+to absent when the drawer is not configured, which drops its open state, so a
+drawer configured again starts closed; a report that reaches an absent slot is
+dropped. The controller reports through three paths (`open`/`close`, a fling,
+a drag crossing halfway), and each records the state it reported; a drag
+reports a crossing only when it differs from that record, so a drawer opened by
+its handle reports closed the moment a drag carries it past halfway, and never
+reports open twice on the way. `a_drawer_removed_while_open_comes_back_closed`
+fails with the open state kept beside a separate "configured" flag, and
+`dragging_an_opened_drawer_past_halfway_reports_it_closed` with a record only
+the drag path writes. Its child order depends only
 on the end drawer's opened state when both drawer slots exist. Only a change
 to that ordering schedules a scaffold rebuild; a single drawer crossing its
 halfway threshold updates render-owned slide and scrim geometry directly.
