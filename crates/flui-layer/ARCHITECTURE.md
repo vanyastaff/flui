@@ -39,9 +39,10 @@ is the contract with `flui-engine`, whose wgpu backend matches every variant. A 
 that match and lands its GPU lowering in the same change. There is no third-party `impl Layer`
 extension point, and plugin authors cannot define layer types — the accepted trade-off.
 
-Every payload is inline: `Picture` (`Arc` + `Rect`) and `ClipPath` (`Arc<Path>`) are small, so a
-sealed picture run costs no heap allocation beyond its `Arc`. The budget is
-128 B; re-measure before boxing anything. **Unasserted:** no test pins this.
+Every payload is inline: `Picture` (`Arc` + `Rect`) and `ClipPath` (a `Path`, whose clones share its
+built curves) are small, so a sealed picture run costs no heap allocation beyond its `Arc`. A
+`Layer` is 160 B on x86_64, the size of its largest effect; re-measure before boxing anything.
+**Unasserted:** no test pins this.
 
 ### 2. Append-only `LayerTree` with a leader index, not a mutable tree plus a side registry
 

@@ -45,7 +45,6 @@
 
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use flui_foundation::geometry::{DevicePixelRatio, Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{Arity, Optional, Single, Variable};
@@ -650,13 +649,7 @@ impl<'a, A: Arity> PaintContext<'a, A> {
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
-        self.with_clip(
-            PaintClip::Path {
-                path: Arc::new(path),
-                behavior,
-            },
-            f,
-        );
+        self.with_clip(PaintClip::Path { path, behavior }, f);
     }
 
     /// Applies `shader` as a mask over everything recorded inside `f` —

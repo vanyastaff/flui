@@ -791,7 +791,7 @@ enclosing boundary's content, through `RenderClip<S>::paint_effects` /
   `PaintClip::PathTarget` (`ClipGeometry::path_target_descriptor`) and
   resolved exactly once, by the walk, never by the setter and never on a
   coordinate query: building the descriptor runs no caller code, and a
-  fixed `clip_shape`'s `Arc<Path>` is shared into the descriptor by
+  fixed `clip_shape`'s `Path` is cloned into the descriptor, sharing its built curves by
   refcount, never copied.
 - `RenderFlow`: its clip is gated on `clip_behavior == Clip::None`
   (`paint_effects` returns `PaintEffects::NONE` there, a whole-box

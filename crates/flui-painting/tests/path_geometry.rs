@@ -823,6 +823,46 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
     );
 }
 
+/// A rounded rectangle whose curves a fill or a shadow already built moves into a clip
+/// layer without copying them: the moved copy records the offset and reads as the curves
+/// moved. An edited path has no shape to defer to, so its move copies the curves.
+pub(crate) fn a_drawn_rounded_rectangle_moves_without_copying_its_curves() {
+    let rrect = RRect::from_rect_circular(Rect::from_ltrb(0.0, 0.0, 120.0, 48.0), 12.0);
+    let offset = Offset::new(16.0, 340.0);
+    let drawn = Path::from_rrect(rrect);
+    let built: Vec<PathCommand> = drawn.commands().collect();
+
+    let (allocations, moved) = crate::foreign_image::allocations_during(|| drawn.translate(offset));
+    assert_eq!(allocations, 0, "the move copied the built curves");
+    let expected: Vec<PathCommand> = Path::from_rrect(rrect)
+        .translate(offset)
+        .commands()
+        .collect();
+    assert_eq!(moved.commands().collect::<Vec<PathCommand>>(), expected);
+    assert_ne!(built, expected, "the move moved nothing");
+    assert_eq!(
+        moved.rrect_hint(),
+        Some(RRect::from_rect_circular(
+            Rect::from_ltrb(16.0, 340.0, 136.0, 388.0),
+            12.0
+        ))
+    );
+
+    let mut edited = Path::from_rrect(rrect);
+    edited.line_to(Point::new(60.0, 24.0));
+    let (allocations, moved) =
+        crate::foreign_image::allocations_during(|| edited.translate(offset));
+    assert!(
+        allocations > 0,
+        "an edited path's move shares curves it must not"
+    );
+    assert_eq!(moved.rrect_hint(), None);
+    assert_eq!(
+        moved.commands().last(),
+        Some(PathCommand::LineTo(Point::new(76.0, 364.0)))
+    );
+}
+
 /// A rectangle, oval or rounded rectangle leaves its curves unbuilt until they are read,
 /// and a move of it only records the offset. Whether its curves were built before a move,
 /// after it or never, it is the same path: equal, with the same elements to the bit, so a

@@ -1,8 +1,6 @@
 //! Mapping of recorded effect scopes and clips onto `flui-layer` layers, and the effect entries a
 //! node pushed in a content.
 
-use std::sync::Arc;
-
 use flui_foundation::geometry::Offset;
 use flui_layer::{
     AnnotatedRegionLayer, BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
@@ -173,18 +171,22 @@ pub(super) fn scope_layer(scope: FragmentScope, origin: Offset) -> Effect {
 /// Maps a recorded [`PaintClip`] onto its `flui-layer` clip layer.
 ///
 /// Shifted by `origin` for the same reason every [`scope_layer`] variant
-/// is (see its doc): `Rect`/`RRect` translate their shape directly.
-/// `Path` is the one case worth spelling out — at `origin == Offset::ZERO`
-/// (the node sits at the layer-space origin, directly under its boundary)
-/// the already-owned `Arc<Path>` moves through untouched, no clone and no
-/// copy of the command buffer; only a non-zero origin pays for a
-/// translated path in a freshly allocated `Arc`. `PathTarget` resolves
-/// through [`resolve_path_clip`] first (never by the producer, and inside
-/// the walk that calls this function), then follows the same
-/// translate-then-box shape as `Path` — the one difference is that its
-/// `Arc::new` is unavoidable either way, since the resolver always hands
-/// back a freshly built owned `Path`, not a pre-existing `Arc`.
+/// is (see its doc): each shape is translated into layer space. A `Path`
+/// moves into the layer as it is at a zero origin; elsewhere
+/// [`Path::translate`](flui_painting::paint::Path::translate) records the
+/// move without building curves for a constructor's shape (a card's rounded
+/// rectangle) and copies them only for a path that has them. `PathTarget`
+/// resolves through [`resolve_path_clip`] first (never by the producer, and
+/// inside the walk that calls this function), then takes the same route.
 fn clip_layer(clip: PaintClip, origin: Offset) -> Effect {
+    let path_layer = |path: flui_painting::paint::Path, behavior| {
+        let path = if origin == Offset::ZERO {
+            path
+        } else {
+            path.translate(origin)
+        };
+        Effect::from(ClipPathLayer::new(path, behavior))
+    };
     match clip {
         PaintClip::Rect { rect, behavior } => {
             Effect::from(ClipRectLayer::new(rect.translate_offset(origin), behavior))
@@ -200,32 +202,11 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Effect {
             rsuperellipse.translate_offset(origin),
             behavior,
         )),
-        PaintClip::Path { path, behavior } => {
-            let path = if origin == Offset::ZERO {
-                path
-            } else {
-                Arc::new(path.translate(origin))
-            };
-            Effect::from(ClipPathLayer::new(path, behavior))
-        }
+        PaintClip::Path { path, behavior } => path_layer(path, behavior),
         PaintClip::PathTarget {
             target,
             size,
             behavior,
-        } => {
-            // The path arm above shares its already-owned `Arc<Path>` for
-            // free at zero origin; there is no pre-existing `Arc` to share
-            // here — `resolve_path_clip` hands back a freshly built owned
-            // `Path` every time, so the single `Arc::new` below is the one
-            // allocation this arm ever pays, made AFTER the translate so a
-            // non-zero origin never boxes a path it is about to discard.
-            let path = resolve_path_clip(target, size);
-            let path = if origin == Offset::ZERO {
-                path
-            } else {
-                path.translate(origin)
-            };
-            Effect::from(ClipPathLayer::new(Arc::new(path), behavior))
-        }
+        } => path_layer(resolve_path_clip(target, size), behavior),
     }
 }
