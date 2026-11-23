@@ -710,7 +710,9 @@ as `to_shaped` positions glyphs. This includes justified whitespace and lines
 narrower than the allocated box.
 Parley metrics are unquantized, so a baseline reaches the device grid once,
 when its glyphs are placed (`round(baseline × scale)`). Parley's width
-excludes trailing whitespace, and so does a line's `width` in the line
+excludes trailing whitespace that hangs (`LineMetrics::hanging_advance`:
+collapsible whitespace, the default, hangs; preserved whitespace that does not
+wrap does not), and so does a line's `width` in the line
 metrics; Flutter's max intrinsic width includes it (recalled, not checked
 against a clone).
 
