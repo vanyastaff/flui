@@ -1,12 +1,12 @@
-error[E0277]: `Rc<tab_controller::Shared>` cannot be sent between threads safely
+error[E0277]: `Rc<material::tab_controller::Shared>` cannot be sent between threads safely
  --> tests/ui/thread_boundary/material/tab_controller_stays_on_its_thread.rs:6:30
   |
 6 |     require_thread_spawnable(controller);
-  |     ------------------------ ^^^^^^^^^^ `Rc<tab_controller::Shared>` cannot be sent between threads safely
+  |     ------------------------ ^^^^^^^^^^ `Rc<material::tab_controller::Shared>` cannot be sent between threads safely
   |     |
   |     required by a bound introduced by this call
   |
-  = help: within `TabController`, the trait `Send` is not implemented for `Rc<tab_controller::Shared>`
+  = help: within `TabController`, the trait `Send` is not implemented for `Rc<material::tab_controller::Shared>`
 note: required because it appears within the type `TabController`
  --> packages/flui-material/src/tab_controller.rs
   |
