@@ -130,7 +130,8 @@ impl ShapeHint {
 /// A rounded rectangle made by its constructor that the GPU fills from its hint (circular
 /// corners that fit, see `ShapeHint::may_defer`), and an empty path, leave their curves
 /// unbuilt until something reads them ([`Self::commands`], [`Self::contains`], a stroke or
-/// an edit), and a [`Self::translate`] of such a path only records the move. Reading builds
+/// an edit), and a [`Self::translate`] of such a path only records the move, even once the
+/// original has built its curves: the moved copy builds its own if read. Reading builds
 /// the curves an eager build would have laid down, moved the same way; a clone taken before
 /// that builds its own on its own read. A shape recorded, moved and drawn through
 /// its analytic route ([`Self::rrect_hint`]) never builds them at all. Any other shape,
@@ -880,7 +881,10 @@ impl Path {
     #[must_use]
     pub fn translate(&self, offset: Offset<f64>) -> Self {
         let shape = self.shape().translate(offset);
-        if self.curves.get().is_none() && self.offset == Offset::ZERO && shape.may_defer() {
+        // An edit drops the hint, so built curves under a hint are still the hint's own and
+        // the copy may leave them unbuilt; built curves without one are an edited path's.
+        let unedited = self.curves.get().is_none() || !matches!(self.hint, ShapeHint::None);
+        if unedited && self.offset == Offset::ZERO && shape.may_defer() {
             // Still the constructor's shape: the move is recorded, and the curves built when
             // read are this shape's curves moved, as below.
             return Self {

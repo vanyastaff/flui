@@ -250,6 +250,10 @@ fn path_geometry_contract() {
                 path_geometry::lerp_morphs_compatible_paths_only,
             ),
             (
+                "a_drawn_rounded_rectangle_moves_without_copying_its_curves",
+                path_geometry::a_drawn_rounded_rectangle_moves_without_copying_its_curves,
+            ),
+            (
                 "a_shape_reads_alike_before_and_after_its_curves_are_built",
                 path_geometry::a_shape_reads_alike_before_and_after_its_curves_are_built,
             ),

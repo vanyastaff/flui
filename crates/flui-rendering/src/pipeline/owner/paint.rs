@@ -962,12 +962,12 @@ impl PipelineOwner<PaintPhase> {
                     // Layer::Follower — `node_id` is already in scope from
                     // this fragment-op replay loop, and `push_layer` hands
                     // back the freshly-minted LayerId.
-                    let is_follower = matches!(*scope, FragmentScope::Follower(_));
-                    scope_opacity.push(match &*scope {
+                    let is_follower = matches!(scope, FragmentScope::Follower(_));
+                    scope_opacity.push(match &scope {
                         FragmentScope::Opacity(opacity) => opacity.alpha(),
                         _ => 1.0,
                     });
-                    let layer_id = composer.push_layer(node_id, scope_layer(*scope, origin));
+                    let layer_id = composer.push_layer(node_id, scope_layer(scope, origin));
                     if is_follower {
                         composer.record_follower_correlation(node_id, layer_id, origin);
                     }
@@ -976,7 +976,7 @@ impl PipelineOwner<PaintPhase> {
                     scope_opacity.push(1.0);
                     composer.push_layer(
                         node_id,
-                        Effect::from(TransformLayer::new(conjugate(*matrix, origin))),
+                        Effect::from(TransformLayer::new(conjugate(matrix, origin))),
                     );
                 }
                 FragmentOp::Pop => {
