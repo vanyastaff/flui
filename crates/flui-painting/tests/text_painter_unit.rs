@@ -872,7 +872,7 @@ pub(crate) mod parley_measurement {
             ("AA".to_owned(), Some(probe_style())),
         ];
         let unused_root = TextStyle {
-            font_family: Some("FLUI Absent Serif".to_owned()),
+            font_family: Some("FLUI Absent Serif".into()),
             font_size: Some(SIZE * 3.0),
             ..TextStyle::default()
         };
