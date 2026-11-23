@@ -150,7 +150,7 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
     // from its dismissed-entry boundary, without an earlier dismissal wake: the
     // status listener stays quiet while the setup settles the controller.
     {
-        let _quiet = handle.shared.enter_reconcile();
+        let _quiet = handle.shared.enter(Drain::Reconciling);
         handle
             .shared
             .entry_controller
@@ -234,146 +234,100 @@ fn forward_then_fanout() {
 fn fanout_then_fanout() {
     exercise(false, false, 2);
 }
-fn a_second_display_timer_retires_the_first() {
-    use flui_sdk::animation::{Animation as _, MotionClock};
-
-    struct RetiredCapture(Rc<Cell<usize>>);
-    impl Drop for RetiredCapture {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() + 1);
-        }
-    }
-
-    let (mut harness, handle, driver) = mounted_handle();
+/// A display timer counts for one entry: a second settle of the same
+/// entrance keeps the one task, removing the entry cancels it, and its old
+/// deadline cannot close the next entry, which times out on its own.
+fn a_display_timer_counts_for_one_entry() {
+    let (mut harness, handle, _driver) = mounted_handle();
+    let driver = handle
+        .shared
+        .clock
+        .as_ref()
+        .expect("a mounted messenger has its UI runtime's driver")
+        .driver
+        .clone();
     let closed = Rc::new(RefCell::new(Vec::new()));
-    let seen = Rc::clone(&closed);
-    handle
-        .show_snack_bar(snack_bar("replacement").duration(Duration::from_millis(800)))
-        .on_closed(move |_ctx, reason| seen.borrow_mut().push(reason));
+    for label in ["first", "second"] {
+        let seen = Rc::clone(&closed);
+        handle
+            .show_snack_bar(snack_bar(label).duration(Duration::from_millis(800)))
+            .on_closed(move |_ctx, reason| seen.borrow_mut().push((label, reason)));
+    }
+    let tasks_before = driver.pending_task_count();
+    // The entrance settles outside any queue operation, as a tick settles
+    // it: the status listener starts the first entry's timer.
     handle
         .shared
         .entry_controller
         .set_value(1.0)
         .expect("no build is running");
-    harness.tick();
-    let registry = handle
-        .shared
-        .vsync
-        .borrow()
-        .clone()
-        .expect("mounted registry");
-    let first = handle
-        .shared
-        .duration_controller
-        .borrow()
-        .as_ref()
-        .expect("first display timer")
-        .controller()
-        .clone();
-    let first_run = first.forward().expect("first timer remains live");
-    let retired_callbacks = Rc::new(Cell::new(0));
-    first
-        .listen_status(Rc::new({
-            let capture = RetiredCapture(Rc::clone(&retired_callbacks));
-            move |_| {
-                let _ = &capture;
-            }
-        }))
-        .forget();
-    let seats = registry.len();
-    let mut clock = MotionClock::new();
-    driver.tick_all(&clock.frame(Duration::ZERO));
-    driver.tick_all(&clock.frame(Duration::from_millis(400)));
-    assert!((first.value() - 0.5).abs() < 1e-9);
-    let canceled = Rc::new(Cell::new(0));
-    let seats_at_cancel = Rc::new(Cell::new(None));
-    first_run.when_complete_or_cancel({
-        let canceled = Rc::clone(&canceled);
-        let seats_at_cancel = Rc::clone(&seats_at_cancel);
-        let driver = Rc::clone(&driver);
-        let registry = registry.clone();
-        let tick = clock.frame(Duration::from_millis(400));
-        move |outcome| {
-            assert!(outcome.is_err());
-            seats_at_cancel.set(Some(registry.len()));
-            driver.tick_all(&tick);
-            canceled.set(canceled.get() + 1);
-        }
-    });
-    // The public queue cancels before starting another entry. This private
-    // mounted seam delivers a second ForwardSettled without that cancellation.
+    assert_eq!(driver.pending_task_count(), tasks_before + 1);
+    assert!(
+        !handle.shared.start_display_timer(),
+        "a second settle of the same entrance starts no second timer"
+    );
+    assert_eq!(driver.pending_task_count(), tasks_before + 1);
+    harness.pump_for(Duration::from_millis(400));
+    assert!(closed.borrow().is_empty());
+
+    handle.remove_current_snack_bar();
+    assert_eq!(
+        &*closed.borrow(),
+        &[("first", SnackBarClosedReason::Remove)]
+    );
+    assert_eq!(
+        driver.pending_task_count(),
+        tasks_before,
+        "removing the entry cancels its timer's task"
+    );
     handle
         .shared
-        .handle_entry_status(AnimationStatus::ForwardSettled, ReconcileOrigin::Direct);
-    assert!(
-        first_run.is_canceled(),
-        "replacement cancels the old accepted run"
-    );
-    assert!(
-        first.forward().is_err(),
-        "a saved observer cannot revive its retired owner"
-    );
-    assert!(!first.is_animating());
+        .entry_controller
+        .set_value(1.0)
+        .expect("no build is running");
+    assert_eq!(driver.pending_task_count(), tasks_before + 1);
+    // Past the first entry's deadline, short of the second's.
+    harness.pump_for(Duration::from_millis(500));
     assert_eq!(
-        retired_callbacks.get(),
-        1,
-        "retirement releases status captures while an observer survives"
+        handle.shared.entry_controller.status(),
+        AnimationStatus::ForwardSettled,
+        "the removed entry's deadline cannot close the next entry"
     );
+    harness.pump_for(Duration::from_millis(400));
     assert_eq!(
-        canceled.get(),
-        1,
-        "cancellation can reenter the same registry once"
+        handle.shared.entry_controller.status(),
+        AnimationStatus::Reverse,
+        "the second entry's own deadline hides it"
     );
-    assert_eq!(
-        seats_at_cancel.get(),
-        Some(seats),
-        "the old seat is withdrawn before cancellation"
-    );
-    assert_eq!(
-        registry.len(),
-        seats,
-        "replacement retains one display registration"
-    );
-    driver.tick_all(&clock.frame(Duration::from_millis(400)));
-    driver.tick_all(&clock.frame(Duration::from_millis(800)));
-    harness.tick();
-    assert!(
-        closed.borrow().is_empty(),
-        "the retired timer's old deadline cannot close the entry"
-    );
-    driver.tick_all(&clock.frame(Duration::from_millis(1200)));
-    harness.tick();
-    driver.tick_all(&clock.frame(Duration::from_millis(1200)));
-    driver.tick_all(&clock.frame(Duration::from_millis(1450)));
-    // The registry is ticked by hand, outside a frame, so the frame the
-    // closing callback runs after is asked for, as a ticked frame would run.
+    assert_eq!(driver.pending_task_count(), tasks_before);
+    handle
+        .shared
+        .entry_controller
+        .set_value(0.0)
+        .expect("no build is running");
+    // The exit settled as a tick settles it, but outside a frame: the frame
+    // its completion runs after is asked for, as a ticked frame would run.
     harness
         .post_frame_handle()
         .schedule_frame()
         .expect("the messenger's presentation is alive");
     harness.tick();
-    assert_eq!(&*closed.borrow(), &[SnackBarClosedReason::Timeout]);
-    driver.tick_all(&clock.frame(Duration::from_secs(3)));
-    harness.tick();
     assert_eq!(
         &*closed.borrow(),
-        &[SnackBarClosedReason::Timeout],
-        "no retired completion replay"
+        &[
+            ("first", SnackBarClosedReason::Remove),
+            ("second", SnackBarClosedReason::Timeout)
+        ]
     );
-    assert_eq!(canceled.get(), 1);
-    drop(harness);
-    assert!(
-        registry.is_empty(),
-        "unmount withdraws the remaining mounted owners"
-    );
+    assert!(handle.shared.queue.borrow().is_empty());
 }
 
 pub(super) fn run() {
     let mut failures = Vec::new();
     for (name, row) in [
         (
-            "replacement retires the first display timer",
-            a_second_display_timer_retires_the_first as fn(),
+            "a display timer counts for one entry",
+            a_display_timer_counts_for_one_entry as fn(),
         ),
         ("completion alone", completion_alone as fn()),
         ("forward wake alone", forward_alone),

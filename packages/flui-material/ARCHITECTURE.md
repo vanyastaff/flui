@@ -67,21 +67,35 @@ on both sides of halfway, dragging to zero, mounting an opening run at zero,
 a fresh closing gesture and unmount withdrawal. The existing
 `drawer_slides_without_rebuilding_per_frame` pins retained frame publication.
 
-### Replacing a display timer retires its outgoing owner
+### A snack bar's display timer sleeps on the UI runtime's clock
 
-The messenger installs and starts the new display owner before retiring the
-outgoing one. Retirement withdraws its registry seat, cancels its run and
-releases status captures outside state borrows. Saved controller observers
-cannot revive the retired timer or deliver its old timeout.
+Once an entry's entrance settles, the messenger spawns a task on the UI
+runtime's `AsyncDriver` that sleeps for the entry's display duration on the
+runtime's clock (`TimerHandle`) and then hides it with `Timeout`. Nothing
+ticks while the bar rests, so the UI runtime asks for no frame between the
+entrance and the timeout. The task's `TaskToken` is the timer: hide, remove,
+clear, the pop of its entry and dispose drop it, which cancels the task. A
+timer names the entry it counts for and hides only that entry while it is
+still the front, so an earlier entry's deadline cannot close the next one, and
+an entry gets one timer however often its entrance is seen to settle.
 
-`a_second_display_timer_retires_the_first` exercises the existing mounted
-Messenger fault seam in the completion-recovery table. It delivers a second
-entrance completion without an intervening timer cancellation, observes
-registry reentry from cancellation, capture retirement, one replacement
-timeout and unmount withdrawal. This replacement seam is private: public
-queue advancement cancels before the next entrance. The public
-`snack_bar_keeps_its_display_duration_under_reduced_motion` separately checks
-the mounted presentation's visible interval and Timeout delivery.
+`a_resting_snack_bar_schedules_no_frame_until_its_timeout` records the frames
+of a resting bar through `MotionRun`, sees none of them ask for another
+frame, then carries the clock past the deadline in one frame and observes the
+`Timeout` completion. `a_display_timer_counts_for_one_entry`, a row of the
+private Messenger fault table, checks the single task per entry, its
+cancellation on removal and the next entry's own timeout.
+`snack_bar_keeps_its_display_duration_under_reduced_motion` checks the
+mounted presentation's visible interval and Timeout delivery.
+
+### Only the root scaffold of a nested set shows the snack bar
+
+A `Scaffold` registers with its messenger only when no ancestor scaffold
+belongs to the same messenger (Flutter's `_isRoot`), so a scaffold nested in
+another's body shows no snack bar of its own. A scaffold under a messenger of
+its own is the root of that messenger's set.
+`a_nested_scaffold_leaves_the_snack_bar_to_the_outer_one` mounts a scaffold in
+a scaffold's body and finds one bar, below the inner scaffold.
 
 ### Typography presets retain explicit numeric growth profiles
 
@@ -110,11 +124,11 @@ Each mounted presenter holds a hover lease for its exact queued entry.
 The lease counts hovered presenters, so one scaffold's exit cannot resume a
 timer another scaffold still holds. The entry and messenger are weakly
 addressed; an old entry's callbacks cannot change the next entry's timer.
-Hover uses the controller's playback rate and retains the display run and its
-completion. Replacing or disposing a presenter withdraws its hover admission
-before retiring its captures; retired callbacks cannot acquire it again.
-Playback-rate changes request their sample through the timer's registry seat;
-hover does not rebuild the tree merely to wake that sample.
+The first hover cancels the timer's task and keeps the time left; the last
+hover to end spawns a new task for that remainder. An entry hovered when its
+entrance settles starts its timer paused. Replacing or disposing a presenter
+withdraws its hover admission before retiring its captures; retired callbacks
+cannot acquire it again. Hover does not rebuild the tree.
 
 `snack_bar_display_timer_pauses_while_hovered` drives real pointer hover and
 observes the preserved remainder and one Timeout completion.
@@ -604,19 +618,19 @@ size and actual loose-parent layout, with bottom indicator-band coordinates.
 
 ### Completion failure does not strand the accepted snack-bar queue
 
-After a dismissed entry is popped, its completion, the next entrance and
-scaffold rebuild delivery are independent attempts. The earliest caught failure
-propagates after the advancement guard is released; a later payload is
-discarded. Scaffold rebuild handles are snapshotted before host callbacks,
-so those callbacks cannot run under the registration RefCell borrow. After a
-caught failure the completed entry and each delivered handle are still
-destroyed, one at a time under containment, so a panicking destructor is
-discarded behind the first failure (ADR-0281 §3).
+After a dismissed entry is popped, the cancellation of its display timer, its
+completion, the next entrance and scaffold rebuild delivery are independent
+attempts under one `FirstPanic`. The earliest caught failure propagates after
+the drain's advancing guard is released; a later payload is discarded.
+Scaffold rebuild handles are snapshotted before host callbacks, so those
+callbacks cannot run under the registration RefCell borrow. The completed
+entry and each delivered handle are destroyed one at a time under the same
+containment, so after a caught failure a panicking destructor is discarded
+behind the first one (ADR-0281 §3).
 
 This does not contain a callback body's panic competing with its consumed
 `FnOnce` captures' destruction before control returns: that destructor runs
 during the callback's unwind and aborts, as in std (ADR-0281 §1).
-Display-timer cancellation before the pop keeps its separate failure boundary.
 
 `overlay_contracts` row
 `a_completion_panic_still_advances_the_accepted_snack_bar_queue` observes the

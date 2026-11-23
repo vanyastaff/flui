@@ -153,9 +153,8 @@ impl SnackBar {
         self
     }
 
-    /// The configured display duration — what
-    /// `crate::scaffold_messenger::MessengerCore::start_display_timer` drives
-    /// the per-snackbar timer controller with.
+    /// The configured display duration, which the messenger's display timer
+    /// sleeps for once the entrance has settled.
     #[must_use]
     pub(crate) fn configured_duration(&self) -> Duration {
         self.duration

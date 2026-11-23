@@ -1,9 +1,9 @@
 //! `SnackBar`/`ScaffoldMessenger`/`Scaffold` snack-bar-slot end-to-end
-//! coverage — a real [`Vsync`] clock drives both the 250ms entrance/exit
-//! controller and each snack bar's own display-duration timer, matching
-//! `tests/drawer.rs`'s established harness pattern (see that file's module
-//! doc for the `themed`/`themed_animated` `VsyncScope` distinction, which
-//! this file mirrors).
+//! coverage — a real [`Vsync`] clock drives the 250ms entrance/exit
+//! controller, matching `tests/drawer.rs`'s established harness pattern (see
+//! that file's module doc for the `themed`/`themed_animated` `VsyncScope`
+//! distinction, which this file mirrors), and each snack bar's display timer
+//! sleeps on the harness's virtual clock.
 //!
 //! Pure queue/state-machine mechanics (FIFO drain, the wedge pin, reason
 //! once-only, `clearSnackBars` semantics) are covered synchronously at the
@@ -11,8 +11,8 @@
 //! `packages/flui-material/src/scaffold_messenger.rs`'s own test module — this
 //! file additionally covers what only a real mounted tree proves: the
 //! `Scaffold` slot mounting/unmounting on a real clock, the FAB-lift layout
-//! interaction, real pointer dispatch through `SnackBarAction`, and
-//! multi-scaffold fan-out.
+//! interaction, real pointer dispatch through `SnackBarAction`, the frames a
+//! resting snack bar asks for, and which of several scaffolds shows the bar.
 
 use crate::common;
 
@@ -576,5 +576,80 @@ pub fn a_shown_snack_bar_is_announced_as_a_polite_status() {
         !tree.find_all_by_label("Saved").is_empty(),
         "the bar's text is announced\n{}",
         tree.describe()
+    );
+}
+
+/// A snack bar at rest asks for no frame: once its entrance has settled,
+/// nothing on screen changes until its display timer fires, so the UI
+/// runtime schedules no frame between the two. The timer still fires on the
+/// virtual clock and closes the bar with `Timeout`.
+pub fn a_resting_snack_bar_schedules_no_frame_until_its_timeout() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+    let closed = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&closed);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("Saved")).duration(Duration::from_millis(4_000)))
+        .on_closed(move |_ctx, reason| recorded.borrow_mut().push(reason));
+    // The entrance settles within its 250 ms; the frame after it polls the
+    // display timer's task once, which arms its deadline.
+    pump_ms(&mut laid, 300);
+    assert_eq!(snack_bar_material_count(&laid), 1, "the entrance settled");
+    // `wants_frame` is whether the host would run another frame at once:
+    // an animation ticking, a scheduled frame or pending work asks for one.
+    let mut run = flui_testing::motion::MotionRun::new(&mut laid);
+    run.play(Duration::from_secs(3), Duration::from_millis(100));
+    let rest = run.finish();
+    let asked: Vec<Duration> = rest
+        .frames()
+        .iter()
+        .filter(|frame| frame.wants_frame)
+        .map(|frame| frame.time)
+        .collect();
+    assert!(
+        asked.is_empty(),
+        "a resting snack bar asked for frames at {asked:?}"
+    );
+    assert_eq!(snack_bar_material_count(&laid), 1);
+    assert!(
+        closed.borrow().is_empty(),
+        "the display duration has not passed"
+    );
+    // One frame carries the clock past the deadline: the timer fires on the
+    // clock, not on a count of frames.
+    laid.pump_for(Duration::from_millis(1_000));
+    pump_ms(&mut laid, ENTRY.as_millis() as u64);
+    assert_eq!(snack_bar_material_count(&laid), 0);
+    assert_eq!(
+        &*closed.borrow(),
+        &[flui_material::SnackBarClosedReason::Timeout]
+    );
+}
+
+/// A scaffold nested in another scaffold's body shows a shown snack bar
+/// once, in the outer scaffold: only the root of a messenger's nested
+/// scaffolds presents its snack bars.
+pub fn a_nested_scaffold_leaves_the_snack_bar_to_the_outer_one() {
+    const INNER_HEIGHT: f64 = 300.0;
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(
+            &vsync,
+            vec![Scaffold::new().body(
+                SizedBox::new(400.0, INNER_HEIGHT).child(Scaffold::new().body(body_marker())),
+            )],
+        );
+    let _controller = handle.show_snack_bar(SnackBar::new(Text::new("Saved")));
+    pump_ms(&mut laid, 300);
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        1,
+        "one scaffold of the nested pair shows the snack bar"
+    );
+    let bar = find_snack_bar_material(&laid).expect("the shown bar");
+    assert!(
+        laid.absolute_offset(bar).dy > INNER_HEIGHT,
+        "the bar sits at the outer scaffold's bottom edge, below the inner scaffold"
     );
 }
