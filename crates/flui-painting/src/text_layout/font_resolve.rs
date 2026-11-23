@@ -21,7 +21,7 @@
 //!   at families it found that can set Latin text, so that degrade lands on
 //!   a text face. A generic already naming a found family is kept.
 
-use crate::typography::TextStyle;
+use crate::typography::{FontFamilyName, TextStyle};
 
 use super::fallback_tables;
 
@@ -29,8 +29,9 @@ use super::fallback_tables;
 /// generic, whose binding in the collection applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Family<'a> {
-    /// A family the collection holds, spelled as it holds it.
-    Name(&'a str),
+    /// A family the style names and the collection holds, spelled as both spell it: the
+    /// style's own name, so a span shaped in it shares that name instead of copying it.
+    Name(&'a FontFamilyName),
     /// The `serif` generic.
     Serif,
     /// The `sans-serif` generic.
@@ -200,7 +201,7 @@ pub(crate) fn resolve_family_name(
     style: Option<&TextStyle>,
     mut carries: impl FnMut(&str) -> bool,
 ) -> Family<'_> {
-    let Some(requested) = style.and_then(|style| style.font_family.as_deref()) else {
+    let Some(requested) = style.and_then(|style| style.font_family.as_ref()) else {
         return Family::SansSerif;
     };
 

@@ -77,7 +77,7 @@ fn feature_probe(features: Vec<FontFeature>) {
         .expect("the generated Arabic face loads");
     let text = "\u{0627}\u{0644}\u{0627}\u{0633}\u{0645}";
     let style = TextStyle {
-        font_family: Some("FLUI Probe Arabic".to_owned()),
+        font_family: Some("FLUI Probe Arabic".into()),
         font_size: Some(32.0),
         font_features: features,
         ..TextStyle::default()
@@ -134,7 +134,7 @@ fn weighted_variation_coords(
         &fonts,
         "AA",
         TextStyle {
-            font_family: Some("FLUI Probe Variable".to_owned()),
+            font_family: Some("FLUI Probe Variable".into()),
             font_weight: weight,
             font_variations: variations,
             ..TextStyle::default()
@@ -397,7 +397,7 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             &fonts,
             "AA",
             TextStyle {
-                font_family: Some("FLUI Probe Variable".to_owned()),
+                font_family: Some("FLUI Probe Variable".into()),
                 font_weight: Some(weight),
                 font_variations: axes,
                 ..TextStyle::default()
@@ -701,7 +701,7 @@ pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
     let probe = |size: f64| TextStyle {
-        font_family: Some("FLUI Probe Mono".to_owned()),
+        font_family: Some("FLUI Probe Mono".into()),
         font_weight: Some(FontWeight::W100),
         font_size: Some(size),
         ..TextStyle::default()
@@ -774,7 +774,7 @@ pub(crate) mod parley_measurement {
     /// Roboto, whose `A` is narrower.
     fn probe_style() -> TextStyle {
         TextStyle {
-            font_family: Some("FLUI Probe Mono".to_owned()),
+            font_family: Some("FLUI Probe Mono".into()),
             font_weight: Some(FontWeight::W100),
             font_size: Some(SIZE),
             ..TextStyle::default()

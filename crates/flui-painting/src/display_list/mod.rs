@@ -30,7 +30,7 @@ pub use finite::NonFiniteOps;
 pub(crate) use finite::paint_finite;
 use finite::{NonFinite, Refused, matrix_finite, payload_finite};
 pub use paragraph::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph, ShapedRun};
-pub(crate) use paragraph::{RunData, SpanDescription};
+pub(crate) use paragraph::{GenericFamily, RunData, ShapedFamily, SpanDescription};
 use payload::StoredPayload;
 pub use payload::{ImageRegionPlacement, NestedRRects, Payload, PayloadId};
 // The paint vocabulary the commands carry; defined in `crate::paint`.

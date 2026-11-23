@@ -3,7 +3,9 @@
 use std::num::NonZeroU16;
 
 use crate::styling::{Color, Shadow};
-use crate::typography::{FontFeature, FontVariation, TextDecoration};
+use crate::typography::{
+    FontFamilyFallback, FontFamilyName, FontFeature, FontVariation, TextDecoration,
+};
 
 /// The thickness of glyphs, on the CSS Fonts 4 scale of 1 to 1000.
 ///
@@ -142,9 +144,9 @@ pub enum FontStyle {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StrutStyle {
     /// Font family name.
-    pub font_family: Option<String>,
+    pub font_family: Option<FontFamilyName>,
     /// Font families to fall back to.
-    pub font_family_fallback: Vec<String>,
+    pub font_family_fallback: FontFamilyFallback,
     /// Font size.
     pub font_size: Option<f64>,
     /// Line height multiplier.
@@ -168,7 +170,7 @@ impl StrutStyle {
 
     /// Sets the font family.
     #[inline]
-    pub fn with_font_family(mut self, font_family: impl Into<String>) -> Self {
+    pub fn with_font_family(mut self, font_family: impl Into<FontFamilyName>) -> Self {
         self.font_family = Some(font_family.into());
         self
     }
@@ -224,9 +226,9 @@ pub struct TextStyle {
     /// Line height multiplier.
     pub height: Option<f64>,
     /// Font family name.
-    pub font_family: Option<String>,
+    pub font_family: Option<FontFamilyName>,
     /// Font families to fall back to.
-    pub font_family_fallback: Vec<String>,
+    pub font_family_fallback: FontFamilyFallback,
     /// Font features.
     pub font_features: Vec<FontFeature>,
     /// Font variations.
@@ -332,7 +334,7 @@ impl TextStyle {
 
     /// Sets the font family.
     #[inline]
-    pub fn with_font_family(mut self, font_family: impl Into<String>) -> Self {
+    pub fn with_font_family(mut self, font_family: impl Into<FontFamilyName>) -> Self {
         self.font_family = Some(font_family.into());
         self
     }

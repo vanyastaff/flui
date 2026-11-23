@@ -28,7 +28,7 @@
 
 use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
 use flui_sdk::painting::styling::Color;
-use flui_sdk::painting::typography::{FontWeight, TextStyle};
+use flui_sdk::painting::typography::{FontFamilyFallback, FontWeight, TextStyle};
 use flui_sdk::view::prelude::BuildContext;
 
 use crate::colors::{CupertinoColors, CupertinoDynamicColor};
@@ -37,7 +37,7 @@ use crate::colors::{CupertinoColors, CupertinoDynamicColor};
 fn default_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Body)),
-        font_family: Some("CupertinoSystemText".to_string()),
+        font_family: Some("CupertinoSystemText".into()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(17.0),
         letter_spacing: Some(-0.41),
@@ -50,7 +50,7 @@ fn default_text_style() -> TextStyle {
 fn default_action_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Body)),
-        font_family: Some("CupertinoSystemText".to_string()),
+        font_family: Some("CupertinoSystemText".into()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(17.0),
         letter_spacing: Some(-0.41),
@@ -63,7 +63,7 @@ fn default_action_text_style() -> TextStyle {
 fn default_action_small_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Callout)),
-        font_family: Some("CupertinoSystemText".to_string()),
+        font_family: Some("CupertinoSystemText".into()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(15.0),
         letter_spacing: Some(-0.23),
@@ -76,7 +76,7 @@ fn default_action_small_text_style() -> TextStyle {
 fn default_tab_label_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Caption2)),
-        font_family: Some("CupertinoSystemText".to_string()),
+        font_family: Some("CupertinoSystemText".into()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(10.0),
         font_weight: Some(FontWeight::W500),
@@ -90,7 +90,7 @@ fn default_tab_label_text_style() -> TextStyle {
 fn default_middle_title_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Headline)),
-        font_family: Some("CupertinoSystemText".to_string()),
+        font_family: Some("CupertinoSystemText".into()),
         font_family_fallback: system_text_fallback(),
         font_size: Some(17.0),
         font_weight: Some(FontWeight::W600),
@@ -104,7 +104,7 @@ fn default_middle_title_text_style() -> TextStyle {
 fn default_large_title_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::LargeTitle)),
-        font_family: Some("CupertinoSystemDisplay".to_string()),
+        font_family: Some("CupertinoSystemDisplay".into()),
         font_family_fallback: system_display_fallback(),
         font_size: Some(34.0),
         font_weight: Some(FontWeight::W700),
@@ -118,7 +118,7 @@ fn default_large_title_text_style() -> TextStyle {
 fn default_picker_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Title2)),
-        font_family: Some("CupertinoSystemDisplay".to_string()),
+        font_family: Some("CupertinoSystemDisplay".into()),
         font_family_fallback: system_display_fallback(),
         font_size: Some(21.0),
         font_weight: Some(FontWeight::W400),
@@ -132,7 +132,7 @@ fn default_picker_text_style() -> TextStyle {
 fn default_date_time_picker_text_style() -> TextStyle {
     TextStyle {
         sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Title2)),
-        font_family: Some("CupertinoSystemDisplay".to_string()),
+        font_family: Some("CupertinoSystemDisplay".into()),
         font_family_fallback: system_display_fallback(),
         font_size: Some(21.0),
         letter_spacing: Some(0.4),
@@ -144,7 +144,7 @@ fn default_date_time_picker_text_style() -> TextStyle {
 
 /// Named, documented fallback chain for `'CupertinoSystemText'` — see the
 /// module doc's "Font family" section.
-fn system_text_fallback() -> Vec<String> {
+fn system_text_fallback() -> FontFamilyFallback {
     [
         "-apple-system",
         "system-ui",
@@ -153,15 +153,13 @@ fn system_text_fallback() -> Vec<String> {
         "Arial",
         "sans-serif",
     ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
+    .into()
 }
 
 /// Same fallback chain as [`system_text_fallback`] — the Text/Display split
 /// exists only because San Francisco ships as two optical sizes; a family
 /// fallback chain has no such split to mirror.
-fn system_display_fallback() -> Vec<String> {
+fn system_display_fallback() -> FontFamilyFallback {
     system_text_fallback()
 }
 

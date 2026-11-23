@@ -1,6 +1,7 @@
 //! Typography values: text styles, alignment, baselines, decoration, metrics
 //! and the inline span tree a `TextPainter` lays out.
 
+mod font_family;
 mod font_settings;
 mod text_alignment;
 mod text_baseline;
@@ -9,6 +10,7 @@ mod text_metrics;
 mod text_spans;
 mod text_style;
 
+pub use font_family::*;
 pub use font_settings::*;
 pub use text_alignment::*;
 pub use text_baseline::*;

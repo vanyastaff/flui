@@ -531,7 +531,7 @@ pub(crate) fn a_lam_alef_ligature_is_one_glyph_and_two_caret_stops() {
     // Alef, lam, alef, seen, meem: bytes 0, 2, 4, 6 and 8.
     let text = "\u{0627}\u{0644}\u{0627}\u{0633}\u{0645}";
     let style = TextStyle {
-        font_family: Some("FLUI Probe Arabic".to_owned()),
+        font_family: Some("FLUI Probe Arabic".into()),
         font_size: Some(SIZE),
         ..TextStyle::default()
     };

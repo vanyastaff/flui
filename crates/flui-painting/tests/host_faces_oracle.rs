@@ -27,7 +27,7 @@ const SIZES: [f64; 2] = [16.0, 32.0];
 /// names each platform aliases, then the generic that ends it.
 fn system_ui_chain(weight: FontWeight) -> TextStyle {
     TextStyle {
-        font_family: Some("CupertinoSystemText".to_owned()),
+        font_family: Some("CupertinoSystemText".into()),
         font_family_fallback: [
             "-apple-system",
             "system-ui",
@@ -36,8 +36,7 @@ fn system_ui_chain(weight: FontWeight) -> TextStyle {
             "Arial",
             "sans-serif",
         ]
-        .map(str::to_owned)
-        .to_vec(),
+        .into(),
         font_weight: Some(weight),
         ..TextStyle::default()
     }
@@ -45,7 +44,7 @@ fn system_ui_chain(weight: FontWeight) -> TextStyle {
 
 fn weighted(family: Option<&str>, weight: FontWeight) -> TextStyle {
     TextStyle {
-        font_family: family.map(str::to_owned),
+        font_family: family.map(Into::into),
         font_weight: Some(weight),
         ..TextStyle::default()
     }

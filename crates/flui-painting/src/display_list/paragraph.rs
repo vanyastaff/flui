@@ -16,6 +16,7 @@ use flui_foundation::geometry::{Rect, Size};
 
 use crate::glyphs::{FaceKey, FontBytes, GlyphKey, PlacedGlyph, RunKey, SubpixelBin, Synthesis};
 use crate::styling::Color;
+use crate::typography::FontFamilyName;
 
 /// A font file's bytes and the id that names them in a [`FaceKey`].
 ///
@@ -119,13 +120,44 @@ pub(crate) struct RunData {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpanDescription {
     pub(crate) len: usize,
-    /// The resolved family as a snapshot prints it.
-    pub(crate) family: std::sync::Arc<str>,
+    /// The resolved family, printed when a snapshot asks.
+    pub(crate) family: ShapedFamily,
     pub(crate) weight: f32,
     pub(crate) italic: bool,
     pub(crate) size: Option<f32>,
     /// The span's colour where it is not the paragraph command's.
     pub(crate) color: Option<Color>,
+}
+
+/// The family a span was shaped in, by the family rule (`resolve_family_name`). A paragraph
+/// records one per span every time it is shaped, so it holds the style's own shared name or
+/// a one-byte generic, and its text is made only when a snapshot prints it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ShapedFamily {
+    /// The family's name when it is one the collection holds; `None` for a generic.
+    pub(crate) name: Option<FontFamilyName>,
+    /// Which generic, when `name` is `None`.
+    pub(crate) generic: GenericFamily,
+}
+
+/// A CSS generic family, one byte beside [`ShapedFamily::name`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GenericFamily {
+    Serif,
+    SansSerif,
+    Cursive,
+    Fantasy,
+    Monospace,
+}
+
+impl fmt::Display for ShapedFamily {
+    /// `Name("Roboto")` for a held family, the generic's name (`SansSerif`) otherwise.
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(out, "Name({:?})", name.as_str()),
+            None => fmt::Debug::fmt(&self.generic, out),
+        }
+    }
 }
 
 impl fmt::Display for SpanDescription {

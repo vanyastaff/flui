@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use flui_painting::typography::{FontFamilyFallback, FontFamilyName};
+
 /// Describes a glyph in an icon font, ready to be painted by
 /// [`Icon`](crate::Icon).
 ///
@@ -17,7 +19,7 @@ pub struct IconData {
     /// The font family to resolve `code_point` against. `None` defers to
     /// whatever family the ambient [`TextStyle`](flui_painting::typography::TextStyle)
     /// resolves to.
-    pub font_family: Option<String>,
+    pub font_family: Option<FontFamilyName>,
 
     /// The package that bundles `font_family`, used to select a package font
     /// asset rather than an app-level one.
@@ -31,7 +33,7 @@ pub struct IconData {
 
     /// Additional font families to try, in order, when `font_family` doesn't
     /// cover `code_point`.
-    pub font_family_fallback: Vec<String>,
+    pub font_family_fallback: FontFamilyFallback,
 }
 
 impl IconData {
@@ -45,13 +47,13 @@ impl IconData {
             font_family: None,
             font_package: None,
             match_text_direction: false,
-            font_family_fallback: Vec::new(),
+            font_family_fallback: FontFamilyFallback::new(),
         }
     }
 
     /// Set the font family to resolve `code_point` against.
     #[must_use]
-    pub fn with_font_family(mut self, font_family: impl Into<String>) -> Self {
+    pub fn with_font_family(mut self, font_family: impl Into<FontFamilyName>) -> Self {
         self.font_family = Some(font_family.into());
         self
     }

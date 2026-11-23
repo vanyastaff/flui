@@ -1391,7 +1391,7 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         font_size: Some(10.0),
         font_weight: Some(FontWeight::W400),
         letter_spacing: Some(0.0),
-        font_family: Some("Start".to_owned()),
+        font_family: Some("Start".into()),
         color: Some(Color::rgb(0, 0, 0)),
         ..TextStyle::default()
     };
@@ -1400,7 +1400,7 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         font_weight: Some(FontWeight::W700),
         letter_spacing: Some(2.0),
         height: Some(1.5),
-        font_family: Some("End".to_owned()),
+        font_family: Some("End".into()),
         color: Some(Color::rgb(0, 0, 0)),
         ..TextStyle::default()
     };

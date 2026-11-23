@@ -92,7 +92,7 @@ fn parley_metrics_round_to_todays_baseline() {
         })
     {
         let style = TextStyle {
-            font_family: family.map(str::to_owned),
+            font_family: family.map(Into::into),
             font_weight: Some(weight),
             font_size: Some(size),
             height,

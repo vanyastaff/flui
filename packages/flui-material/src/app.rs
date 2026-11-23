@@ -129,7 +129,7 @@ impl ThemeMode {
 fn error_text_style() -> TextStyle {
     TextStyle {
         color: Some(Color::from_argb(0xD0FF_0000)),
-        font_family: Some("monospace".to_owned()),
+        font_family: Some("monospace".into()),
         font_size: Some(48.0),
         font_weight: Some(FontWeight::W900),
         ..TextStyle::default()

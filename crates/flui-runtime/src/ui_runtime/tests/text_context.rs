@@ -169,7 +169,7 @@ const PROBE_MONO: &[u8] = flui_painting::testing::PROBE_MONO_100;
 /// probe family at 20 px, centred so the paragraph takes its own width.
 fn probe_paragraph_width(ui_runtime: &UiRuntime) -> f64 {
     let style = flui_painting::typography::TextStyle {
-        font_family: Some("FLUI Probe Mono".to_owned()),
+        font_family: Some("FLUI Probe Mono".into()),
         font_weight: Some(flui_painting::typography::FontWeight::W100),
         font_size: Some(20.0),
         ..flui_painting::typography::TextStyle::default()
