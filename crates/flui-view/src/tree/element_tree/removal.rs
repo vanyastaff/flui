@@ -97,19 +97,35 @@ impl ElementTree {
         owner.keep_alive.forget_holder(dependent);
     }
 
-    /// Snapshot the complete owned child graph without exposing sparse rows to
-    /// dense reconciliation. Internal manager guards end before lifecycle work.
-    pub(crate) fn owned_children(
+    /// Appends `id`'s complete owned child graph to `out`, in child order:
+    /// its dense children, then the sparse ones its child manager holds,
+    /// without exposing sparse rows to dense reconciliation. Internal manager
+    /// guards end before lifecycle work. Appending into the caller's buffer
+    /// lets a subtree walk reuse one stack instead of a list per node.
+    pub(crate) fn extend_owned_children(
         &self,
         id: ElementId,
         registry: &crate::element::child_manager::ChildManagerRegistry,
-    ) -> Vec<ElementId> {
+        out: &mut Vec<ElementId>,
+    ) {
         let Some(node) = self.get(id) else {
-            return Vec::new();
+            return;
         };
-        let mut children = node.child_ids().to_vec();
-        children.extend(self.sparse_children(id, registry));
-        children
+        out.extend_from_slice(node.child_ids());
+        out.extend(self.sparse_children(id, registry));
+    }
+
+    /// Pushes `id`'s owned children onto a pre-order work `stack` reversed, so
+    /// that popping visits them in child order.
+    pub(crate) fn stack_owned_children(
+        &self,
+        id: ElementId,
+        registry: &crate::element::child_manager::ChildManagerRegistry,
+        stack: &mut Vec<ElementId>,
+    ) {
+        let start = stack.len();
+        self.extend_owned_children(id, registry, stack);
+        stack[start..].reverse();
     }
 
     /// The lazy children a child manager registered under `id`'s render
@@ -363,11 +379,7 @@ impl ElementTree {
                     continue;
                 }
                 subtree.push(node_id);
-                work_stack.extend(
-                    self.owned_children(node_id, owner.child_manager_registry)
-                        .into_iter()
-                        .rev(),
-                );
+                self.stack_owned_children(node_id, owner.child_manager_registry, &mut work_stack);
             }
         }
 

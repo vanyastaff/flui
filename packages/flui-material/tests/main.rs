@@ -588,6 +588,14 @@ fn overlay_contracts() {
             "drawer::scrim mounts when open and a tap closes the drawer",
             drawer::scrim_mounts_when_open_and_a_tap_closes_the_drawer,
         ),
+        (
+            "drawer::a_drawer_removed_while_open_comes_back_closed",
+            drawer::a_drawer_removed_while_open_comes_back_closed,
+        ),
+        (
+            "drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed",
+            drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed,
+        ),
     ]);
 }
 
@@ -770,6 +778,10 @@ fn navigation_and_layout_contracts() {
         (
             "tab_bar_view::unmounting the view mid drag keeps the index",
             tab_bar_view::unmounting_the_view_mid_drag_keeps_the_index,
+        ),
+        (
+            "tab_bar_view::a_view_mounted_again_commits_a_released_drag",
+            tab_bar_view::a_view_mounted_again_commits_a_released_drag,
         ),
         (
             "tab_bar_view::a refused view does not change the holders motion policy",

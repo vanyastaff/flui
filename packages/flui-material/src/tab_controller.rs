@@ -125,11 +125,35 @@ enum Change {
     Animate,
 }
 
-/// The attached `TabBarView`'s pager and this controller's subscriptions to
-/// it. Both subscriptions detach when the link is dropped.
+/// Who is moving an attached pager, as far as committing a page goes: only
+/// the user letting go of the pager commits the page it rests on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PagerDriver {
+    /// Nobody this controller tracks: the pager rests, runs a motion this
+    /// controller started in an earlier call, or stops because it is torn
+    /// down.
+    Idle,
+    /// The user: a drag or its fling, which sets a user scroll direction.
+    User,
+    /// This controller, for the length of one `Shared::follow`. Moving the
+    /// pager can stop its current activity synchronously, and that stop must
+    /// not commit the page it was interrupted on over the index just
+    /// committed.
+    Controller,
+}
+
+/// The attached `TabBarView`'s pager, this controller's subscriptions to it,
+/// and who is moving it. Both subscriptions detach when the link is dropped.
+/// Each attachment makes its own link, so nothing one view's pager recorded
+/// reaches the next view's.
 struct PagerLink {
     pager: PageController,
-    pixels: Rc<dyn Listenable>,
+    driver: Cell<PagerDriver>,
+    /// Set while the view that owns the pager is deactivated or being torn
+    /// down: the pager's activity then ends because its owner is leaving, not
+    /// because the user let go. The view's lifecycle sets it, independently
+    /// of who is moving the pager.
+    suspended: Cell<bool>,
     /// Both held only to detach at the link's drop; no read.
     #[expect(dead_code, reason = "the subscriptions detach at the link's drop")]
     pixel_listener: Subscription,
@@ -138,8 +162,32 @@ struct PagerLink {
 }
 
 impl PagerLink {
-    fn is(&self, pager: &PageController) -> bool {
-        Rc::ptr_eq(&self.pixels, &pager.listenable())
+    /// Whether this link is to the pager that publishes `pixels`.
+    fn is(&self, pixels: &Rc<dyn Listenable>) -> bool {
+        Rc::ptr_eq(&self.pager.listenable(), pixels)
+    }
+
+    /// Records that the pager's scroll activity changed: it is `scrolling`
+    /// or not, `by_user` when its user scroll direction is not idle. Returns
+    /// whether this is the user letting go of the pager, which commits the
+    /// page it rests on.
+    fn activity_changed(&self, scrolling: bool, by_user: bool) -> bool {
+        match (self.driver.get(), scrolling) {
+            (PagerDriver::Idle | PagerDriver::User, true) => {
+                if by_user {
+                    self.driver.set(PagerDriver::User);
+                }
+                false
+            }
+            // What the controller's own move starts or stops is its own; an
+            // idle stop ends a run the controller started, or one teardown
+            // stopped.
+            (PagerDriver::Controller, _) | (PagerDriver::Idle, false) => false,
+            (PagerDriver::User, false) => {
+                self.driver.set(PagerDriver::Idle);
+                !self.suspended.get()
+            }
+        }
     }
 }
 
@@ -166,20 +214,9 @@ struct Shared {
     )]
     position_forwarding: Cell<Option<Subscription>>,
     motion: RefCell<MotionSpec>,
+    /// Borrowed only for a read or a write of the link, never across code
+    /// that may reach the pager's listeners.
     pager: RefCell<Option<PagerLink>>,
-    /// Set while this controller moves the pager. Moving it can stop the
-    /// pager's current activity synchronously, and that stop must not commit
-    /// the page it was interrupted on over the index just committed.
-    driving_pager: Cell<bool>,
-    /// Whether the pager's current scroll activity is the user's: a drag or
-    /// its fling, which sets a user scroll direction, as opposed to a run this
-    /// controller started or a stop caused by teardown. Only a user activity
-    /// commits the page it settles on.
-    user_scrolling: Cell<bool>,
-    /// Set while the attached view is deactivated or being torn down: the
-    /// pager's activity then ends because its owner is leaving, not because
-    /// the user let go.
-    suspended: Cell<bool>,
     /// Whether controller-driven pager changes settle at once (reduced
     /// motion), as the owned position does.
     reduce_pager: Cell<bool>,
@@ -226,6 +263,21 @@ impl Shared {
         self.pager.borrow().as_ref().map(|link| link.pager.clone())
     }
 
+    /// Runs `f` on the link to the pager that publishes `pixels`, if that
+    /// pager is still the attached one. `f` must not reach the pager's
+    /// listeners: the link is borrowed while it runs.
+    fn with_link<R>(
+        &self,
+        pixels: &Rc<dyn Listenable>,
+        f: impl FnOnce(&PagerLink) -> R,
+    ) -> Option<R> {
+        self.pager
+            .borrow()
+            .as_ref()
+            .filter(|link| link.is(pixels))
+            .map(f)
+    }
+
     fn position(&self) -> f64 {
         match self.pager() {
             Some(pager) => pager.page().unwrap_or(self.index() as f64),
@@ -252,9 +304,7 @@ impl Shared {
             self.drive_owner(index as f64, change);
             return;
         };
-        // The controller takes the pager over from whatever the user was doing.
-        self.user_scrolling.set(false);
-        let _driving = DrivingPager::enter(&self.driving_pager);
+        let _driving = DrivingPager::enter(self, &pager);
         let (duration, curve) = match change {
             // A zero-duration run jumps through the scroll controller, which
             // stops whatever run is driving the pager.
@@ -347,23 +397,22 @@ impl Shared {
         });
     }
 
-    /// The pager's scroll activity changed. While the user scrolls it, note
-    /// that; when that activity stops, commit the page it rests on. A stop
-    /// the controller causes while moving the pager, or one from teardown
-    /// interrupting a run of its own, is not the user settling a page.
+    /// The pager's scroll activity changed. When the user lets go of it,
+    /// commit the page it rests on; see [`PagerLink::activity_changed`] for
+    /// what else a change can be.
     fn pager_activity_changed(&self) {
         let Some(pager) = self.pager() else {
             return;
         };
         let position = pager.position();
-        if position.is_scrolling() {
-            if position.user_scroll_direction() != ScrollDirection::Idle {
-                self.user_scrolling.set(true);
-            }
-            return;
-        }
-        let user_stopped = self.user_scrolling.replace(false);
-        if self.driving_pager.get() || self.suspended.get() || !user_stopped {
+        let scrolling = position.is_scrolling();
+        let by_user = position.user_scroll_direction() != ScrollDirection::Idle;
+        let user_let_go = self
+            .with_link(&pager.listenable(), |link| {
+                link.activity_changed(scrolling, by_user)
+            })
+            .unwrap_or(false);
+        if !user_let_go {
             return;
         }
         let Some(page) = pager.page().filter(|page| page.is_finite()) else {
@@ -454,23 +503,37 @@ fn pager_motion(motion: &MotionSpec) -> (Duration, SharedCurve) {
     }
 }
 
-/// Marks the controller as moving its pager for one call, clearing the mark
-/// also when the call unwinds. Nested entries keep the outer mark.
+/// Makes the controller the attached pager's driver for one call. On return
+/// and on unwind the driver is the controller again if an outer call still
+/// drives, and otherwise nobody: the controller took the pager over from
+/// whatever the user was doing. A link that was replaced meanwhile is left
+/// alone.
 struct DrivingPager<'a> {
-    flag: &'a Cell<bool>,
-    outer: bool,
+    shared: &'a Shared,
+    pixels: Rc<dyn Listenable>,
+    after: PagerDriver,
 }
 
 impl<'a> DrivingPager<'a> {
-    fn enter(flag: &'a Cell<bool>) -> Self {
-        let outer = flag.replace(true);
-        Self { flag, outer }
+    fn enter(shared: &'a Shared, pager: &PageController) -> Self {
+        let pixels = pager.listenable();
+        let outer = shared.with_link(&pixels, |link| link.driver.replace(PagerDriver::Controller));
+        let after = match outer {
+            Some(PagerDriver::Controller) => PagerDriver::Controller,
+            Some(PagerDriver::Idle | PagerDriver::User) | None => PagerDriver::Idle,
+        };
+        Self {
+            shared,
+            pixels,
+            after,
+        }
     }
 }
 
 impl Drop for DrivingPager<'_> {
     fn drop(&mut self) {
-        self.flag.set(self.outer);
+        self.shared
+            .with_link(&self.pixels, |link| link.driver.set(self.after));
     }
 }
 
@@ -601,9 +664,6 @@ impl TabController {
                 position_forwarding: Cell::new(Some(forwarding)),
                 motion: RefCell::new(motion),
                 pager: RefCell::new(None),
-                driving_pager: Cell::new(false),
-                user_scrolling: Cell::new(false),
-                suspended: Cell::new(false),
                 reduce_pager: Cell::new(false),
                 clocks: RefCell::new(Vec::new()),
                 next_clock: Cell::new(0),
@@ -809,7 +869,8 @@ impl TabController {
         }));
         *self.shared.pager.borrow_mut() = Some(PagerLink {
             pager: pager.clone(),
-            pixels,
+            driver: Cell::new(PagerDriver::Idle),
+            suspended: Cell::new(false),
             pixel_listener,
             activity_listener,
         });
@@ -837,6 +898,7 @@ impl PagerAttachment {
     pub(crate) fn suspender(&self) -> PagerSuspender {
         PagerSuspender {
             shared: self.shared.clone(),
+            pixels: self.pager.listenable(),
         }
     }
 }
@@ -845,15 +907,20 @@ impl PagerAttachment {
 /// taken for the user settling a page. Unmounting runs deepest first, so the
 /// scrollable stops its activity before the view that owns the attachment is
 /// told anything; the pages, which sit below it, are told first.
+///
+/// It marks only the link of the attachment that made it: once that
+/// attachment has dropped, a mark from the leaving view reaches no later
+/// view's pager.
 #[derive(Clone)]
 pub(crate) struct PagerSuspender {
     shared: Weak<Shared>,
+    pixels: Rc<dyn Listenable>,
 }
 
 impl PagerSuspender {
     pub(crate) fn set(&self, suspended: bool) {
         if let Some(shared) = self.shared.upgrade() {
-            shared.suspended.set(suspended);
+            shared.with_link(&self.pixels, |link| link.suspended.set(suspended));
         }
     }
 }
@@ -863,9 +930,10 @@ impl Drop for PagerAttachment {
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
+        let pixels = self.pager.listenable();
         let link = {
             let mut slot = shared.pager.borrow_mut();
-            if slot.as_ref().is_some_and(|link| link.is(&self.pager)) {
+            if slot.as_ref().is_some_and(|link| link.is(&pixels)) {
                 slot.take()
             } else {
                 None

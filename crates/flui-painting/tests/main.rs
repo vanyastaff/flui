@@ -403,6 +403,10 @@ fn value_contract() {
                 values::a_style_copy_and_merge_share_its_font_lists,
             ),
             (
+                "spoken_text_compares_without_being_built",
+                values::spoken_text_compares_without_being_built,
+            ),
+            (
                 "image_transforms_refuse_what_they_cannot_invert",
                 values::image_transforms_refuse_what_they_cannot_invert,
             ),

@@ -138,8 +138,9 @@ stays the application when a crate of its build depends on it
 (`only_the_application_declares_the_links_it_opens`). A packager reads the member its build
 compiled (`BuildArtifacts::package`), not the member's siblings
 (`a_desktop_entry_registers_what_the_built_member_opens`,
-`an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk build
---lib` in the project's directory without naming a package, so it reads the default selection.
+`an_ios_bundle_reads_the_declarations_of_the_built_member`). Android builds `cargo ndk rustc
+-p <package> --lib --crate-type cdylib`, naming the package whose manifest is in the project's
+directory, since `cargo rustc` compiles exactly one target.
 `flui run` selects the binary plain `cargo run` would run, as `flui build` selects a desktop
 binary (a root package's default members; among several default members, the one `default-run`
 when exactly one names one: `a_run_without_a_package_selects_the_binary_cargo_runs`), and names
@@ -640,6 +641,17 @@ nothing in a running app does. Keeping it here is what lets
 reload, `flui-hot-reload`, is linked by the app, and the two halves share
 only a pair of environment-variable names.
 
+A change is a write, a creation, a removal or a rename, never an open or a
+close: a build reads every source and the manifest, and Linux reports each read
+(`reading_the_sources_is_no_change`). A change is reported once no other has
+come for the debounce window, at most two seconds after it began, and the
+events that waited while the caller rebuilt join it, so one rebuild answers
+them (`the_batches_waiting_for_a_busy_caller_are_one_change`). A file is
+watched through its directory, filtered to its name, since an editor that
+saves by rename replaces the inode a file watch sits on
+(`a_watched_file_saved_by_rename_stays_watched`); a backend that lost events
+reports every watched path.
+
 ### Finishing a probe transfers its captured output
 
 The pipe reader owns a mutex-protected byte buffer shared with its drain thread.
@@ -653,7 +665,7 @@ no allocation-count claim is inferred from those behavior tests.
 ### Build selectors reach the selected platform unit
 
 Web builds forward `--example` and `--package` through the existing Cargo target
-resolver. Android APK builds currently require the current package's cdylib;
+resolver. Android APK builds compile the current package's library as its cdylib;
 unsupported selectors are rejected before SDK probing rather than ignored.
 `platform_build_selectors_reach_the_selected_cargo_unit_or_refuse` drives the
 public CLI. Its portable fixture delegates metadata and project discovery to

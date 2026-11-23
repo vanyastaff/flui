@@ -274,11 +274,7 @@ impl BuildOwner {
             result.push(id);
             // The `tree.get` shared borrow ends with the statement; the
             // extend writes only into the local stack, never the slab.
-            stack.extend(
-                tree.owned_children(id, &self.child_manager_registry)
-                    .into_iter()
-                    .rev(),
-            );
+            tree.stack_owned_children(id, &self.child_manager_registry, &mut stack);
         }
     }
 }

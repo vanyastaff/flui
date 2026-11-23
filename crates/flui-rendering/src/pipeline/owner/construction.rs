@@ -149,6 +149,8 @@ impl PipelineOwner<Idle> {
             staged_scene: None,
             paint_scratch: None,
             orphaned_nodes: Vec::new(),
+            subtree_buffers: crate::storage::SubtreeBuffers::default(),
+            removed_nodes: Vec::new(),
             abandoned_nodes: Vec::new(),
             retained_pixel_ratio: flui_foundation::geometry::DevicePixelRatio::ONE,
             unrecorded_paint: false,

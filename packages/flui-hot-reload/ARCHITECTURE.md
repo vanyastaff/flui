@@ -158,6 +158,13 @@ truncated timestamp.
 The test invokes the public stamp without loading an image; loader and watcher
 share its native timestamp detector. It does not reconstruct the stamp predicate.
 
+A driver that failed to load an artifact remembers it by that stamp
+(`dynlib::LoadRefusal`) and opens the same unchanged file again only after
+`LoadRefusal::RETRY`, one second, rather than on every 50 ms read: a broken
+build is not reopened twenty times a second on the owner thread, and a failure
+outside the bytes (a scanner holding the file, a descriptor limit) still clears
+without a rebuild (`a_refused_artifact_is_reopened_once_it_changes_or_after_a_wait`).
+
 ### Plugin image font identities reset until rendering succeeds
 
 A plugin image can issue the same font blob IDs as its predecessor for different

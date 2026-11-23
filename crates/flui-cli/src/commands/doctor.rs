@@ -723,7 +723,7 @@ fn check_android_build_tools(sdk_home: &std::path::Path, promote: bool) -> Check
     }
 }
 
-/// `cargo ndk` compiles the project's `cdylib` for Android.
+/// `cargo ndk` compiles the project's library as a `cdylib` for Android.
 fn check_cargo_ndk(promote: bool) -> Check {
     const ID: &str = "android.cargo-ndk";
     const SECTION: &str = "android";

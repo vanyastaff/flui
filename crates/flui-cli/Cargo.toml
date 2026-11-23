@@ -67,8 +67,9 @@ cargo_metadata = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
 
-# Source watcher for the dev loop.
-notify-debouncer-mini = "0.7"
+# Source watcher for the dev loop (debounced in `watch.rs`, which drops the
+# open and close events a build reading the sources raises).
+notify = "8.2"
 
 # Async runtime — `run` blocks on the async Android build/push pipeline via
 # a multi-thread `Runtime`; `signal` hosts the Ctrl-C listener of the dev loop;
