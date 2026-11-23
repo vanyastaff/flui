@@ -59,6 +59,16 @@ vocabulary! {
     }
 }
 
+impl MethodEffect {
+    /// Whether a call can change the app's own state: an observer may not make it, and one that
+    /// timed out may have run, so it is never resent (ADR-0395). A read and an annotation leave
+    /// the app as it was, and a resend shows what the first call showed.
+    #[must_use]
+    pub const fn changes_app(self) -> bool {
+        matches!(self, Self::Acts | Self::Destructive)
+    }
+}
+
 vocabulary! {
     /// Where MCP lists a method: the core set by default, or a capability group the client
     /// enables with `--caps` (ADR-0238 §9). Every method stays callable; the tier only decides what

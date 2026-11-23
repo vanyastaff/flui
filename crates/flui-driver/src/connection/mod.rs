@@ -138,14 +138,14 @@ pub(crate) fn hear(bytes: &[u8], waiting: Option<u64>) -> Result<Heard> {
     })
 }
 
-/// What a call that got no answer within its budget fails with: an acting call may have run and
-/// is never resent.
+/// What a call that got no answer within its budget fails with: a call that changes the app may
+/// have run and is never resent; a read or an annotation is asked again (ADR-0395).
 pub(crate) fn unanswered(call: &Call) -> Error {
-    let effect = (call.effect != MethodEffect::ReadOnly).then(|| {
+    let effect = call.effect.changes_app().then(|| {
         Effect::new(EffectKind::MayHaveRun)
             .detail("the request was accepted and is still queued; read the tree for its effect")
     });
-    // A read can be asked again; an act is never resent as it stands.
+    // A read or an annotation can be asked again; an act is never resent as it stands.
     let retry = if effect.is_some() {
         Retry::Never
     } else {
@@ -188,5 +188,30 @@ impl Events {
             self.queue.drain(..).collect(),
             std::mem::take(&mut self.dropped),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_protocol::method::{BuildReport, Method as _, MethodEffect};
+
+    use super::*;
+
+    /// A call that timed out may be asked again exactly when it leaves the app as it was: a read
+    /// or an annotation (ADR-0395), never an act.
+    #[test]
+    fn a_timed_out_call_is_resent_only_when_it_leaves_the_app_as_it_was() {
+        for effect in MethodEffect::ALL.iter().copied() {
+            let call = Call {
+                method: BuildReport::NAME,
+                effect,
+                params: Value::Null,
+                budget: Duration::from_millis(5),
+            };
+            let Error::Timeout { effect: ran, .. } = unanswered(&call) else {
+                panic!("a timeout answers Error::Timeout");
+            };
+            assert_eq!(ran.is_some(), effect.changes_app(), "{effect:?}");
+        }
     }
 }
