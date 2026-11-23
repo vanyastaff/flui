@@ -2610,6 +2610,145 @@ pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
     );
 }
 
+/// A `MergeSemantics` node runs the handler of the control whose state it
+/// announces, whichever comes first in reading order, and a plain activation
+/// runs the first handler (ADR-0392).
+pub(crate) fn a_merged_action_runs_the_control_whose_state_it_announces() {
+    use flui_widgets::Column;
+
+    type Ran = Rc<RefCell<Vec<&'static str>>>;
+    let tapper = |ran: &Ran, name: &'static str, semantics: Semantics| {
+        let ran = Rc::clone(ran);
+        semantics
+            .on_click(move |_ctx| ran.borrow_mut().push(name))
+            .child(SizedBox::new(40.0, 20.0))
+    };
+    // A part by name: a header declares a collapsed disclosure, a switch an
+    // off switch, a tab an unselected selectable, any other name a plain tap.
+    let part = |ran: &Ran, name: &'static str| {
+        let semantics = match name {
+            "header" => Semantics::new().expanded(false),
+            "switch" => Semantics::new().switch(false),
+            "tab" => Semantics::new().selected(false),
+            _ => Semantics::new(),
+        };
+        tapper(ran, name, semantics)
+    };
+
+    for (first, second, action, runs, why) in [
+        (
+            "button",
+            "second",
+            Action::Click,
+            "button",
+            "two buttons: the first",
+        ),
+        (
+            "button",
+            "header",
+            Action::Expand,
+            "header",
+            "a disclosure after a button",
+        ),
+        (
+            "header",
+            "button",
+            Action::Expand,
+            "header",
+            "a disclosure before a button",
+        ),
+        (
+            "button",
+            "switch",
+            Action::Click,
+            "switch",
+            "a switch after a tile's tap",
+        ),
+        (
+            "switch",
+            "button",
+            Action::Click,
+            "switch",
+            "a switch before a tile's tap",
+        ),
+        (
+            "header",
+            "switch",
+            Action::Click,
+            "switch",
+            "a switch owns the click a disclosure would route",
+        ),
+        (
+            "button",
+            "tab",
+            Action::Click,
+            "tab",
+            "a selectable after a tap",
+        ),
+    ] {
+        let ran: Ran = Rc::new(RefCell::new(Vec::new()));
+        let (first, second) = (part(&ran, first), part(&ran, second));
+        let (laid, tree, node_id) =
+            pump_labelled(MergeSemantics::new().child(host().child(Column::new((first, second)))));
+        assert!(
+            tree.find_by_label(LABEL)
+                .expect("node was located a moment ago")
+                .supports_action(action),
+            "{why}: the merged node offers {action:?}. Tree was:\n{}",
+            tree.describe()
+        );
+        laid.invoke_semantics_action(request(action, node_id, None))
+            .expect("the merged action resolves");
+        assert_eq!(*ran.borrow(), [runs], "{why}");
+    }
+
+    // Two scrollables, one at an extent, which offers only the direction it
+    // can still move in, as a scrollable's semantics do: the node publishes
+    // the first one's metrics, so it offers only the first one's directions
+    // and runs only its handlers, never the second's.
+    let scrollable = |ran: &Ran, name: &'static str, at_end: bool| {
+        let mut config = flui_semantics::SemanticsConfiguration::new();
+        config.set_scroll_position(if at_end { 900.0 } else { 0.0 });
+        config.set_scroll_extent_min(0.0);
+        config.set_scroll_extent_max(900.0);
+        let semantics = Semantics::from_configuration(config);
+        let ran = Rc::clone(ran);
+        if at_end {
+            semantics.on_scroll_up(move |_ctx, _unit| ran.borrow_mut().push(name))
+        } else {
+            semantics.on_scroll_down(move |_ctx, _unit| ran.borrow_mut().push(name))
+        }
+        .child(SizedBox::new(40.0, 20.0))
+    };
+    for (first_at_end, offered, refused) in [
+        (true, Action::ScrollUp, Action::ScrollDown),
+        (false, Action::ScrollDown, Action::ScrollUp),
+    ] {
+        let ran: Ran = Rc::new(RefCell::new(Vec::new()));
+        let (laid, tree, node_id) =
+            pump_labelled(MergeSemantics::new().child(host().child(Column::new((
+                scrollable(&ran, "first", first_at_end),
+                scrollable(&ran, "second", !first_at_end),
+            )))));
+        let node = tree
+            .find_by_label(LABEL)
+            .expect("node was located a moment ago");
+        assert!(
+            node.supports_action(offered) && !node.supports_action(refused),
+            "the first scrollable's directions. Tree was:\n{}",
+            tree.describe()
+        );
+        assert!(
+            laid.invoke_semantics_action(request(refused, node_id, None))
+                .is_err(),
+            "a direction the first scrollable cannot move in is refused"
+        );
+        laid.invoke_semantics_action(request(offered, node_id, None))
+            .expect("the offered direction resolves");
+        assert_eq!(*ran.borrow(), ["first"], "the first scrollable moves");
+    }
+}
+
 /// A label names one action of a widget: a second `custom_action` with the
 /// same label replaces the first, so the platform is offered one "Delete"
 /// and a request for it runs the latest handler.
