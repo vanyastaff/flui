@@ -5,7 +5,7 @@
 //!
 //! A dedicated integration-test binary (never the crate's `--lib` unit
 //! tests, and never a criterion bench) specifically so installing a
-//! counting `#[global_allocator]` here cannot affect any other test binary
+//! the counting `#[global_allocator]` here cannot affect any other test binary
 //! in this workspace — each `tests/*.rs` file compiles to its own process,
 //! and `#[global_allocator]` is process-wide. Same pattern as
 //! `frame_telemetry_allocation.rs` in this same crate.
@@ -26,63 +26,18 @@
 //! reporting a false allocation. Folding every claim into one test removes
 //! the possibility of cross-test interference structurally.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::task::Poll;
 
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
-
-// Per-thread, not process-global: a `GlobalAlloc` sees every thread's
-// allocations, and libtest runs a test on a spawned thread while its own
-// harness thread lives on, so a process-wide counter would charge any other
-// thread's work to the measured window. `Cell<usize>` in a const-initialised
-// thread-local has no drop glue and no lazy init, so reading it cannot
-// itself allocate or run during TLS teardown.
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-/// Add to the counter without allocating or panicking during TLS teardown.
-fn bump(by: usize) {
-    let _ = ALLOC_COUNT.try_with(|c| c.set(c.get().wrapping_add(by)));
-}
-
-/// Read the counter; `0` if this thread's TLS is already gone.
-fn read() -> usize {
-    ALLOC_COUNT.try_with(Cell::get).unwrap_or(0)
-}
-
-struct CountingAllocator;
-
-#[expect(
-    unsafe_code,
-    reason = "test-only GlobalAlloc wrapper forwarding to System, matching frame_telemetry_allocation.rs's pattern"
-)]
-// SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
-// is freed by the allocator that produced it. `realloc`/`alloc_zeroed` are
-// deliberately NOT overridden: `GlobalAlloc`'s defaults decompose them into
-// `self.alloc` + copy + `self.dealloc`, which still lands in `System` and
-// still counts through this wrapper's `alloc` override — conservative for
-// this harness (an in-place `System::realloc` growth is counted as an
-// alloc), never a miss. The measured region is single-threaded (the test
-// thread drives everything), so the `Relaxed`-equivalent `Cell` counter is
-// sound: nothing else touches it concurrently.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        bump(1);
-        // SAFETY: `layout` is the caller's own, forwarded unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// This thread's allocations so far, a `realloc` counted as one.
+fn read() -> u64 {
+    HeapCounts::now().allocations
+}
 
 /// Dormant tasks and steady self-waking tasks both allocate nothing once warm.
 #[test]

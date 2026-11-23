@@ -1,15 +1,14 @@
 //! Pointer assembly allocates nothing per event once its contacts are open.
 //!
-//! A counting `#[global_allocator]` is process-wide, which is why this file is
+//! The counting `#[global_allocator]` is process-wide, which is why this file is
 //! a test target of its own rather than a module of `tests/main.rs`. Counters
 //! are per-thread, so libtest's harness thread cannot add to the measured
 //! window.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::hint::black_box;
 
 use flui_foundation::geometry::DevicePixelRatio;
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 use flui_native::input::assembly::{
     ContactRegistry, GestureComponent, GestureDelta, GesturePhase, GestureReading, MoveBatch,
     NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
@@ -23,37 +22,11 @@ const TWO: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {
     None => panic!("BUG: 2 is a ratio a screen can have"),
 };
 
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
-}
-
-struct CountingAllocator;
-
-// SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
-// is freed by the allocator that produced it. The default `realloc` and
-// `alloc_zeroed` decompose into these and are counted through `alloc`.
-#[expect(unsafe_code, reason = "`GlobalAlloc` is an unsafe trait")]
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|count| count.set(count.get().wrapping_add(1)));
-        // SAFETY: `layout` is the caller's own, forwarded unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-fn allocations(run: impl FnOnce()) -> usize {
-    let before = ALLOCATIONS.with(Cell::get);
-    run();
-    ALLOCATIONS.with(Cell::get) - before
+fn allocations(run: impl FnOnce()) -> u64 {
+    HeapCounts::during(run).0.allocations
 }
 
 fn reading(contact: u64, kind: PointerKind, action: ReadingAction, ms: u64) -> NativeReading {

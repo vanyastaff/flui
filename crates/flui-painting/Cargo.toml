@@ -57,6 +57,8 @@ rustc-hash = { workspace = true }
 smallvec = { workspace = true }
 
 [dev-dependencies]
+# `testing::heap::CountingAllocator`, the global allocator of the test target and the fuzz target.
+flui-foundation = { workspace = true, features = ["testing"] }
 # Colour property tests and the compile-fail suite.
 proptest = { workspace = true }
 trybuild = { workspace = true }

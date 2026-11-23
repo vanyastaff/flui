@@ -178,7 +178,8 @@ mod foreign_image;
 
 /// The image decode property bounds the largest block a decode asks for.
 #[global_allocator]
-static ALLOCATOR: foreign_image::LargestAllocation = foreign_image::LargestAllocation;
+static ALLOCATOR: flui_foundation::testing::heap::CountingAllocator =
+    flui_foundation::testing::heap::CountingAllocator;
 #[path = "host_faces_oracle.rs"]
 mod host_faces_oracle;
 #[path = "image_decode.rs"]

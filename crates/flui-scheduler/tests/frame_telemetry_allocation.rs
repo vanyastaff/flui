@@ -5,7 +5,7 @@
 //!
 //! A dedicated integration-test binary (never the crate's `--lib` unit
 //! tests, and never a criterion bench) specifically so installing a
-//! counting `#[global_allocator]` here cannot affect any other test binary
+//! the counting `#[global_allocator]` here cannot affect any other test binary
 //! in this workspace — each `tests/*.rs` file compiles to its own process,
 //! and `#[global_allocator]` is process-wide.
 //!
@@ -28,65 +28,12 @@
 //! can run concurrently with itself), so the binary is correct under
 //! either runner, not just the one this workspace standardizes on.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
-
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 use flui_foundation::{FrameEpoch, PresentationAddress, PresentationId, UiRuntimeId};
 use flui_scheduler::{
     ClockSource, DemandKind, FrameClock, FramePhaseDurations, FrameTimes, PollDecision,
     PresentOutcome,
 };
-
-// Per-thread, not process-global: a `GlobalAlloc` sees every thread's
-// allocations, so process-wide counters charge any other thread's work to the
-// measured window. libtest runs a test on a spawned thread while its own
-// harness thread lives on, which made the measurement load-sensitive and
-// intermittently wrong. `Cell<usize>` in a const-initialised thread-local has
-// no drop glue and no lazy init, so reading it cannot itself allocate or run
-// during TLS teardown.
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOC_BYTES: Cell<usize> = const { Cell::new(0) };
-}
-
-/// Add to a counter without allocating or panicking during TLS teardown.
-fn bump(counter: &'static std::thread::LocalKey<Cell<usize>>, by: usize) {
-    let _ = counter.try_with(|c| c.set(c.get().wrapping_add(by)));
-}
-
-/// Read a counter; `0` if this thread's TLS is already gone.
-fn read(counter: &'static std::thread::LocalKey<Cell<usize>>) -> usize {
-    counter.try_with(Cell::get).unwrap_or(0)
-}
-
-struct CountingAllocator;
-
-// SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
-// is freed by the allocator that produced it. `realloc`/`alloc_zeroed` are
-// deliberately NOT overridden: `GlobalAlloc`'s defaults decompose them into
-// `self.alloc` + copy + `self.dealloc`, which still lands in `System` and
-// still counts through this wrapper's `alloc` override — conservative for
-// this harness (an in-place `System::realloc` growth is counted as an
-// alloc), never a miss. The measured region is single-threaded (the test
-// thread drives everything), so the `Relaxed` counters are sound: program
-// order plus per-location coherence make the post-loop load observe every
-// bump.
-#[expect(unsafe_code, reason = "a counting `GlobalAlloc` is an unsafe impl")]
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        bump(&ALLOC_COUNT, 1);
-        bump(&ALLOC_BYTES, layout.size());
-        // SAFETY: `layout` is the caller's own, forwarded unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -130,13 +77,12 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
 
     const CYCLES: usize = 10_000;
     let mut cycles_with_allocation = 0usize;
-    let mut worst_cycle_bytes = 0usize;
-    let mut frame_path_alloc_calls = 0usize;
-    let mut frame_path_alloc_bytes = 0usize;
+    let mut worst_cycle_bytes = 0_u64;
+    let mut frame_path_alloc_calls = 0_u64;
+    let mut frame_path_alloc_bytes = 0_u64;
 
     for _ in 0..CYCLES {
-        let count_before = read(&ALLOC_COUNT);
-        let bytes_before = read(&ALLOC_BYTES);
+        let before = HeapCounts::now();
 
         let arrival = clock.now();
         let _epoch_id = clock.stamp_input_epoch(arrival);
@@ -152,8 +98,8 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
             PresentOutcome::Presented,
         );
 
-        let calls_this_cycle = read(&ALLOC_COUNT) - count_before;
-        let bytes_this_cycle = read(&ALLOC_BYTES) - bytes_before;
+        let spent = HeapCounts::now().since(before);
+        let (calls_this_cycle, bytes_this_cycle) = (spent.allocations, spent.allocated_bytes);
         frame_path_alloc_calls += calls_this_cycle;
         frame_path_alloc_bytes += bytes_this_cycle;
         if calls_this_cycle != 0 {
@@ -179,9 +125,9 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     // Negative control: same clock, right after the measured loop above --
     // if this did NOT allocate, the zero-allocation claim just pinned would
     // be proving nothing (a no-op counting allocator would pass it too).
-    let bytes_before_pull = read(&ALLOC_BYTES);
+    let bytes_before_pull = HeapCounts::now().allocated_bytes;
     let pulled = clock.frames_since(None);
-    let bytes_after_pull = read(&ALLOC_BYTES);
+    let bytes_after_pull = HeapCounts::now().allocated_bytes;
 
     assert!(!pulled.is_empty());
     assert!(

@@ -53,7 +53,9 @@
 //!
 //! - `serde`: Enables serialization support for foundation types
 //! - `creation-site`: Keeps creation sites (`CreationSite`) in release builds
-//! - `testing`: Test support (`testing::CountingWaker`, `testing::panicking_waker`)
+//! - `testing`: Test support (`testing::CountingWaker`, `testing::panicking_waker`,
+//!   `testing::heap`)
+//! - `dhat`: `testing::heap::CountingAllocator` forwards to DHAT's allocator
 //!
 //! ## Architecture
 //!

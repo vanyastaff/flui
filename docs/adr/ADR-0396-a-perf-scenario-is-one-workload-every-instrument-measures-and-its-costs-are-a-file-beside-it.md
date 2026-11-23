@@ -90,6 +90,12 @@ The window is `flui_testing::perf::measure`, which returns what the steps cost; 
 reads a counter around its own code. Until `measure` exists, each target's `perf_measured`
 function is the window.
 
+The heap is counted by one global allocator, `flui_foundation::testing::heap::CountingAllocator`,
+per thread, which every test or bench that counts allocations installs: the foundation layer
+holds it so that a crate below the kit reaches it through `flui-foundation`'s `testing` feature,
+and the kit re-exports it with `HeapCounts` as `flui_testing::heap`. A largest-block question
+(`largest_allocation_during`) is a reading of the same allocator, not a second one.
+
 ### §2. Every gate metric is a checked-in file beside the scenario
 
 `flui_testing::perf::Baselines` is the one holder: a target names its directory and its sorted

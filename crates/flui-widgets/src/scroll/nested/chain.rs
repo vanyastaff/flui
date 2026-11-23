@@ -1290,11 +1290,9 @@ fn clamp_axis(taken: f64, offered: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     //! Steady-state dispatch allocates nothing (ADR-0209 §7). The chain and
-    //! the owner are private seams; a thread-local counting allocator
+    //! the owner are private seams; the counting global allocator
     //! measures one owner's drag steps through a chain of participants.
 
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -1302,6 +1300,7 @@ mod tests {
     use flui_foundation::IdMint;
     use flui_foundation::InputSequenceId;
     use flui_foundation::geometry::{Axis, Point, Vec2};
+    use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
     use flui_interaction::gesture::{GestureArena, RemainderHandoff};
     use flui_platform::EventTime;
     use flui_platform::input::pointer::PointerKind;
@@ -1313,47 +1312,11 @@ mod tests {
     use crate::scroll::scroll_owner::{OwnerConfig, OwnerEnv, ScrollOwner};
     use crate::scroll::{ClampingScrollPhysics, ScrollController};
 
-    thread_local! {
-        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-        static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
-    }
-
-    struct Counting;
-
-    // SAFETY: every operation forwards the caller's exact pointer and layout
-    // to `System`, which owns the allocations and their failure semantics.
-    #[expect(unsafe_code, reason = "a counting allocator wraps System")]
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
-            // SAFETY: the caller's valid layout, forwarded unchanged.
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
-            // SAFETY: the caller's valid layout, forwarded unchanged.
-            unsafe { System.alloc_zeroed(layout) }
-        }
-
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
-            // SAFETY: `ptr` came from System with `layout`; both and `size`
-            // are the caller's valid arguments, forwarded unchanged.
-            unsafe { System.realloc(ptr, layout, size) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            // SAFETY: System allocated `ptr` with `layout`.
-            unsafe { System.dealloc(ptr, layout) }
-        }
-    }
-
     #[global_allocator]
-    static ALLOCATOR: Counting = Counting;
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-    fn allocations() -> usize {
-        ALLOCATIONS.with(Cell::get)
+    fn allocations() -> u64 {
+        HeapCounts::now().allocations
     }
 
     /// Takes a pixel of every step first and leaves the rest.

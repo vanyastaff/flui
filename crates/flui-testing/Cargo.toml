@@ -39,7 +39,7 @@ images = ["flui-runtime/images"]
 # allocation's stack while a `SiteProfiler` runs. A run turns it on from the command line
 # (`--features flui-testing/dhat`); no manifest enables it, and CI's `test-features` job runs
 # `heap_sites` with it.
-dhat = ["dep:dhat", "dep:backtrace"]
+dhat = ["dep:dhat", "dep:backtrace", "flui-foundation/dhat"]
 
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline

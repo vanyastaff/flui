@@ -2,13 +2,11 @@
 //! does (ADR-0242 §1), and a notifier is one allocation with one more per listener.
 //!
 //! A counting sink walks a derived description with every field kind, a sequence and an
-//! untyped field, under a counting `#[global_allocator]`. That allocator is process-wide,
+//! untyped field, under the counting `#[global_allocator]`. That allocator is process-wide,
 //! which is why this file is a test target of its own rather than a module of
 //! `tests/main.rs`. Counters are per-thread, so libtest's other threads add nothing to the
 //! measured window, and the snapshot sink is the positive control.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -18,43 +16,15 @@ use flui_foundation::inspect::{
     Field, Fields, Inspect, InspectId, InspectTree, Links, Meta, NodeView, Rgba, Seq, Sink,
     SnapshotQuery, Value, snapshot,
 };
-
-// `Cell<usize>` in a const-initialised thread-local has no drop glue and no lazy init, so
-// reading it cannot itself allocate or run during TLS teardown.
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-fn bump() {
-    let _ = ALLOC_COUNT.try_with(|count| count.set(count.get().wrapping_add(1)));
-}
-
-fn allocations() -> usize {
-    ALLOC_COUNT.try_with(Cell::get).unwrap_or(0)
-}
-
-struct CountingAllocator;
-
-// SAFETY: `alloc` and `dealloc` forward unchanged to `System`, so every pointer is freed by
-// the allocator that produced it. The default `realloc` and `alloc_zeroed` go through
-// `self.alloc`, so they are counted too.
-#[expect(unsafe_code, reason = "a counting `GlobalAlloc` is an unsafe impl")]
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        bump();
-        // SAFETY: `layout` is the caller's own, forwarded unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr` and `layout` are the caller's own, forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// What this thread has allocated so far, a `realloc` counted as one.
+fn allocations() -> u64 {
+    HeapCounts::now().allocations
+}
 
 #[derive(Debug)]
 struct Opaque;
