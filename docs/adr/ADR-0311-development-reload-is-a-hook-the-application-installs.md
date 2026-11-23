@@ -11,6 +11,10 @@
   [ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md) for §4's `DevSceneHook` column
   and its sentence on a desktop scene plugin's own driver only: every native host asks the scene
   hook for each presentation's frame.
+  [ADR-0393](ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md)
+  for §1's two-variant `ReloadEvent`, §2's rule that a reported reload is always a reassemble and
+  the sentences of §1 and §7 that a restart event arrives with a code patcher only: the hook
+  reports the version loaded, and the loop derives a reassemble or a restart from its own record.
 - **Related:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond
   record this one takes the seam from); [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md)
   (the scene callback's lifetime contract); [ADR-0111](ADR-0111-worker-image-lifetime.md) (worker
@@ -28,6 +32,9 @@
   (the development agent's hooks, which the loop owns the same way); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the `globals`
   entries); [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   §10 (the lent plugin scene is rendered inline)
+- **Revised:** 2026-11-23 — §1, §2, §5 and §7 point to ADR-0393 §3 for the event a hook reports,
+  the record a loop keeps and the hook's restart and outcome methods, in place of the two-variant
+  `ReloadEvent`, the epoch and the restart event left to a code patcher.
 - **Sources:** `DioxusLabs/dioxus@cb27832398e8a3fa30a0fc8d6917c6d8a86fa71a`
   (tag `v0.8.0-alpha.3`)
   [packages/cli/src/build/patch.rs:1036-1046](https://github.com/DioxusLabs/dioxus/blob/cb27832398e8a3fa30a0fc8d6917c6d8a86fa71a/packages/cli/src/build/patch.rs#L1036-L1046)
@@ -96,13 +103,7 @@ pub trait DevReloadHook: 'static {
     fn poll(&mut self) -> ReloadEvent;
 }
 
-/// Exhaustive: a host maps every event to the reload it performs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReloadEvent {
-    Unchanged,
-    /// Every UI runtime of the loop reassembles once; every `State` is kept.
-    Patched,
-}
+// `ReloadEvent`, the `CodeVersion` it carries and the hook's `run_entry` and `applied`: ADR-0393 §3.
 
 /// The one value that crosses threads: a hook's watcher asks for a frame through it.
 #[derive(Clone)]
@@ -112,8 +113,8 @@ pub struct ReloadWake(Arc<dyn Fn() + Send + Sync>);
 Without `Send` the compiler keeps the instance on the thread that built it, and a hook keeps its
 state in `Rc`, `Cell` and `RefCell` instead of locks and atomics. `ReloadWake` stays `Send + Sync`
 because a watcher thread calls it; calling it after its loop has ended does nothing. The trait has
-no per-call seam (`call(entry, data)`) and `ReloadEvent` has no `RestartRequired`: they belong to a
-code patcher and arrive with its record (§7).
+no per-call seam (`call(entry, data)`): it belongs to a code patcher and arrives with its record
+(§7). The event a hook reports, and what a loop does with it, are ADR-0393 §3.
 
 §2. **The application installs a factory; each event loop builds its own instance on its owner
 thread.**
@@ -138,12 +139,12 @@ impl AppConfig {
   opened with, as the development agent's hooks are handed every window (ADR-0288 §7); opening a
   window never calls the factory. Another loop calls the factory for an instance of its own, so no
   instance is ever attached twice.
-- The loop polls the instance at each UI runtime's frame boundary, before the frame's work. A
-  `Patched` advances the loop's epoch, and each UI runtime, keyed by its `UiRuntimeId`, reassembles
-  (`ReloadTier::Reassemble`) once when its own boundary finds it behind the latest patch. A UI
-  runtime is recorded at the current epoch when its root mounts, so one mounted before a patch
-  applies it at its first frame and one mounted after does not replay it; an idle window applies a
-  patch when it next draws.
+- The loop polls the instance at each UI runtime's frame boundary, before the frame's work, and
+  keeps beside the instance the record ADR-0393 §3 describes. Each UI runtime, keyed by its
+  `UiRuntimeId`, reassembles once when its own boundary finds it behind the version loaded. A UI
+  runtime is recorded at that version when its root mounts, so one mounted before a reload applies
+  it at its first frame and one mounted after does not replay it; an idle window applies a reload
+  when it next draws. A version whose layout differs restarts the loop instead (ADR-0393 §4).
 - When the loop ends it detaches the instance and destroys it. A `detach` that arrives while a call
   has the instance lent runs when that call returns.
 - With no factory installed nothing is built, and the frame boundary costs one `Option` check.
@@ -213,7 +214,8 @@ user code:
 - **Each point.** The same holds for the factory (the loop runs without that hook), `attach` (the
   hook is retired without a `detach`), `poll`, `detach`, `scene_frame` and the destruction when the
   loop ends. A later loop calls the factory again. A `scene_frame` whose render panics or returns
-  `false` keeps the font reset pending (ADR-0108).
+  `false` keeps the font reset pending (ADR-0108). `run_entry` is the one call whose panic keeps
+  the hook: it is the application's entry panicking, and it fails that restart (ADR-0393 §3).
 - A destructor that panics while the thread is already unwinding aborts, as in std (ADR-0281 §1);
   nothing guards it.
 
@@ -255,8 +257,9 @@ user code:
   `hot_reload_lifecycle_fixture` examples and the entries above go together, and `cargo xtask
   globals` and `cargo xtask reach` report any that is left as stale. The patcher's record says
   whether the Android scene plugin, and the entries it needs, stay.
-- A code patcher arrives as its own `Proposed` record, with the per-call seam and the restart event
-  it needs. Subsecond is the candidate, under the condition in "More information".
+- A code patcher arrives as its own `Proposed` record, with the per-call seam it needs. Subsecond
+  is the candidate, under the condition in "More information". ADR-0394 proposes an exit that
+  needs no patcher.
 
 ### Consequences
 
@@ -273,8 +276,7 @@ user code:
   inside `AppConfig` (ADR-0323 §2, a `handle`).
 - Bad, because `flui create --hot-reload` stays a three-crate project until a code patcher arrives,
   and Android and the web have no widget reload.
-- Neutral, because the reload tiers stay `flui_runtime::reload::ReloadTier`, and only `Reassemble`
-  has a producer.
+- Neutral, because the reload tiers are ADR-0393's, which a hook reports as versions.
 
 ### Confirmation
 
