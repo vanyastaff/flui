@@ -66,7 +66,8 @@ pub(super) fn serves(method: &MethodRow) -> bool {
 }
 
 /// Whether a connection admitted as `role` may call `method`: the driver anything, an observer
-/// what reads and what only annotates the windows, never what changes the app (ADR-0288 §8).
+/// what reads and what only annotates the windows, never what changes the app (ADR-0288 §8,
+/// ADR-0395).
 ///
 /// An annotating method is served from what the development tools draw over a window and
 /// nothing else (the `Annotate` path of `ui_runtime::agent_serve`), so an observer that calls one

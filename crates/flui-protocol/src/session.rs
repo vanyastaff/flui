@@ -46,8 +46,8 @@ vocabulary! {
         /// driver's disconnect, this is the connection it exits with. The default.
         #[default]
         Driver => "driver",
-        /// Reads and subscribes, beside the driver. A call that acts is refused `not_driver`,
-        /// and its disconnect never ends the app.
+        /// Reads, subscribes and annotates the windows (ADR-0395), beside the driver. A call that
+        /// acts is refused `not_driver`, and its disconnect never ends the app.
         Observer => "observer",
     }
 }

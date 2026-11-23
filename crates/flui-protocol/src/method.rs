@@ -49,7 +49,7 @@ vocabulary! {
         /// Nothing in the app.
         ReadOnly => "read_only",
         /// Only what the development tools draw over the app's windows, never the app's own
-        /// state: an observer may call it (ADR-0288 §8). A window serves it from that drawing
+        /// state: an observer may call it (ADR-0395). A window serves it from that drawing
         /// alone.
         Annotates => "annotates",
         /// The app's state, as a user's input would. Never resent on timeout.

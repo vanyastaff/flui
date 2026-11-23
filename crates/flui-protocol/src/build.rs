@@ -1,5 +1,5 @@
 //! What a development tool tells a window about the build that will replace the running code
-//! (`build.report`, ADR-0288 §8).
+//! (`build.report`, ADR-0395).
 //!
 //! `flui run` reports each rebuild of the application to every window of the running build: that
 //! one started, that it succeeded, or that it failed and with which diagnostics. A window draws
@@ -85,7 +85,8 @@ impl Diagnostic {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct SourceLocation {
-    /// The file, relative to the package the compiler built when it is inside it.
+    /// The file, as the compiler names it: relative to the workspace root for the workspace's own
+    /// files.
     pub file: String,
     /// The line, from 1.
     pub line: u32,

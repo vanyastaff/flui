@@ -14,7 +14,7 @@
 //! # Annotations
 //!
 //! A method whose effect is [`MethodEffect::Annotates`] changes only what the development tools
-//! draw over the window, and an observer may call it (ADR-0288 §8), so it must reach nothing
+//! draw over the window, and an observer may call it (ADR-0395), so it must reach nothing
 //! else. Its row is dispatched to [`Annotate`], whose handler is given the presentation's
 //! [`BuildBanner`] and its parameters, never a [`ServeContext`], the runtime or the
 //! presentation; and `run_window_method` does not build for an annotating method (an assertion

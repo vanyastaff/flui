@@ -1,5 +1,5 @@
 //! The build banner a presentation draws over its scene while a development tool reports a
-//! build of the application (`build.report`, ADR-0288 §8): a chip in the top-right corner while
+//! build of the application (`build.report`, ADR-0395): a chip in the top-right corner while
 //! a build runs, a panel along the bottom with the compiler's errors when it failed.
 //!
 //! The report reaches the presentation's [`BuildBanner`] through the agent's annotate path

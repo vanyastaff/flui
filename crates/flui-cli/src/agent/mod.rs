@@ -21,6 +21,7 @@
 //! reads too.
 
 pub(crate) mod browser;
+pub(crate) mod build_report;
 pub(crate) mod client;
 pub(crate) mod forward;
 pub(crate) mod mcp;
