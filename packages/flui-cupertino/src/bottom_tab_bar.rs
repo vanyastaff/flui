@@ -1,51 +1,7 @@
-//! [`CupertinoTabBar`] — the iOS-style bottom tab bar, and
-//! [`CupertinoTabBarItem`], the per-tab icon/label pair it displays.
+//! The iOS-style bottom tab bar and its items.
 //!
-//! ## What it does
-//!
-//! - A default `height` of `50.0`.
-//! - The hairline top border (`0x4D000000`/`0x29000000` light/dark) — a real
-//!   1.0px stroke, not a literal device-pixel `width: 0.0`, as
-//!   [`crate::CupertinoNavigationBar`] documents.
-//! - `inactive_color` defaults to `CupertinoColors::INACTIVE_GRAY`,
-//!   `active_color` to the theme's `primary_color`, and each item's
-//!   icon/label is recolored based on `current_index`.
-//! - Self-padding against the bottom safe-area inset (`MediaQuery`'s
-//!   `padding.bottom` folded into both the bar's own height and the label
-//!   row's bottom padding), like the top-inset self-padding on
-//!   [`crate::CupertinoNavigationBar`].
-//! - `opaque(ctx)`: whether the resolved background is fully opaque —
-//!   consumed by [`crate::CupertinoTabScaffold`]'s content-padding math (the
-//!   opaque and translucent branches).
-//! - Each item is one node, its interactive node's: the selection and the
-//!   label's text in it, and the click while the bar has `on_tap`.
-//!
-//! ## `CupertinoTabBarItem`, not a shared item type
-//!
-//! A cross-design-system bottom-navigation item type would be one ADR-0028
-//! forbids depending on (`flui-material` is never a dependency of this
-//! crate). This crate ships a narrower, Cupertino-owned type instead: `icon`
-//! (required), `active_icon` (optional, defaults to `icon`), `label`
-//! (optional `String`, rendered as plain [`Text`]). No
-//! `tooltip`/`background_color`: neither the tab bar nor
-//! `CupertinoTabScaffold` consumes them (the tab bar's own `background_color`
-//! is a separate field).
-//!
-//! ## Deferred, named
-//!
-//! - **Blur** (`BackdropFilter` on a translucent background) — same gap
-//!   `CupertinoNavigationBar` documents: `flui-widgets`' `BackdropFilter` is
-//!   not on the `flui-sdk` surface yet. A caller-supplied translucent `background_color`
-//!   does reach the opaque/translucent branch (`opaque(ctx)` is wired), it
-//!   just paints with no blur behind it.
-//! - **The localized `Semantics` hint** (tab index and count) — no
-//!   `CupertinoLocalizations`-equivalent in this crate; `selected` is set,
-//!   the hint is not.
-//! - **A `copy_with` method** — `CupertinoTabBar: Clone` plus its own builder
-//!   methods (`.current_index(...)`, `.on_tap(...)`) already give
-//!   [`crate::CupertinoTabScaffold`] the same capability idiomatically.
-//! - **Mouse-region and text-field tap-region wrappers** — no mouse-cursor or
-//!   text-field tap-region substrate to wire either through.
+//! Implementation notes: each item is one interactive node carrying the
+//! selection, the label's text and, while the bar has `on_tap`, the click.
 
 use std::rc::Rc;
 
@@ -63,22 +19,16 @@ use flui_sdk::widgets::{
     PreferredSizeView, Row, Semantics, SizedBox, Text,
 };
 
+use crate::CupertinoTheme;
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
-use crate::theme::CupertinoTheme;
+use crate::nav_bar::HAIRLINE_BORDER_WIDTH;
 
-/// The standard iOS 10 tab bar height.
-pub const TAB_BAR_HEIGHT: f64 = 50.0;
+/// The standard iOS 10 tab bar height (`_kTabBarHeight`).
+pub(crate) const TAB_BAR_HEIGHT: f64 = 50.0;
 
-/// The stroke width the hairline border is painted at — see
-/// [`crate::nav_bar::HAIRLINE_BORDER_WIDTH`]'s doc for why a literal
-/// `width: 0.0` cannot be used.
-pub const HAIRLINE_BORDER_WIDTH: f64 = crate::nav_bar::HAIRLINE_BORDER_WIDTH;
-
-/// The default border color, `0x4D000000` light / `0x29000000` dark —
-/// genuinely brightness-dependent, unlike
-/// [`crate::CupertinoNavigationBar`]'s own hairline border color (a plain,
-/// non-dynamic `Color`). Resolved fresh in `build` against the
-/// ambient brightness, not baked into a `const` at construction time.
+/// The default border color, `0x4D000000` light / `0x29000000` dark: unlike the
+/// navigation bar's border color it depends on brightness, so it is resolved in
+/// `build` against the ambient brightness.
 fn default_border_color() -> CupertinoDynamicColor {
     CupertinoDynamicColor::with_brightness(
         Color::from_argb(0x4D00_0000),
@@ -86,7 +36,13 @@ fn default_border_color() -> CupertinoDynamicColor {
     )
 }
 
-/// One tab's icon/label pair — a Cupertino-owned type, see the module docs.
+/// One tab's icon and label for a [`CupertinoTabBar`].
+///
+/// `icon` is required, `active_icon` defaults to `icon`, and `label` is
+/// optional text rendered below the icon. Unlike Flutter's
+/// `BottomNavigationBarItem` it has no `tooltip` or `background_color`:
+/// neither the tab bar nor `CupertinoTabScaffold` reads them, and ADR-0028
+/// forbids sharing an item type with `flui-material`.
 ///
 /// ```
 /// use flui_cupertino::CupertinoTabBarItem;
@@ -142,8 +98,37 @@ impl std::fmt::Debug for CupertinoTabBarItem {
 /// ADR-0027) — matches `GestureDetector::on_tap`'s own callback shape.
 type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, usize)>;
 
-/// An iOS-style bottom tab bar — see the module docs for exactly what is and
-/// is not supported.
+/// An iOS-style bottom tab bar.
+///
+/// - The default height is `50.0` ([`height`](Self::height)).
+/// - The default top border is a one-logical-pixel line, `0x4D000000` in
+///   light and `0x29000000` in dark, resolved against the ambient
+///   brightness on each build. See [`CupertinoNavigationBar`](crate::CupertinoNavigationBar)
+///   for why the width is one pixel and not `0.0`.
+/// - `inactive_color` defaults to `CupertinoColors::INACTIVE_GRAY` and
+///   `active_color` to the theme's primary color; each item's icon and label
+///   take the color for `current_index`.
+/// - The bar pads itself against the bottom safe-area inset
+///   (`MediaQuery` `padding.bottom` is added to its height and to the label
+///   row's bottom padding).
+/// - [`opaque`](Self::opaque) reports whether the resolved background is
+///   fully opaque; [`CupertinoTabScaffold`](crate::CupertinoTabScaffold)
+///   uses it to decide whether content extends under the bar.
+/// - [`new`](Self::new) asserts, in debug builds only, that there are at
+///   least two items, as Apple's Human Interface Guidelines require.
+/// - There is no `copy_with`; the bar is `Clone` and its builder methods
+///   serve the same purpose.
+///
+/// # Not implemented
+///
+/// The bar paints no blur: a translucent `background_color` is honoured by
+/// [`opaque`](Self::opaque) and painted, with the page showing through
+/// unblurred. Each item's `Semantics` sets `selected` but carries no
+/// localized hint of tab index and count, since the package has no
+/// localizations. The bar has no mouse-region or text-field tap-region
+/// wrappers.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/bottom_tab_bar.dart`.
 ///
 /// ```
 /// use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem};
@@ -270,7 +255,7 @@ impl CupertinoTabBar {
         self
     }
 
-    /// Overrides the bar's height. Defaults to [`TAB_BAR_HEIGHT`].
+    /// Overrides the bar's height. Defaults to `50.0`.
     #[must_use]
     pub fn height(mut self, height: f64) -> Self {
         self.height = height;
@@ -378,8 +363,8 @@ impl StatelessView for CupertinoTabBar {
                     node = node.tap(ControlTap::new().on_tap(move |ctx| on_tap(ctx, index)));
                 }
 
-                // The localized `hint` is deferred (no
-                // `CupertinoLocalizations`-equivalent tab label in this crate).
+                // No localized `hint` (tab index and count): the package has no
+                // localizations.
                 Expanded::new(node).boxed()
             })
             .collect();

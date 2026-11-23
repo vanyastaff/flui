@@ -27,7 +27,7 @@ fn find_by_size(laid: &LaidOut, width: f64, height: f64) -> RenderId {
 
 /// With a navigation bar present, content is pushed down by exactly
 /// `preferred_size().height + MediaQuery.padding.top` —
-/// `page_scaffold.dart`'s `topPadding` (oracle tag `3.44.0`).
+/// `page_scaffold.dart`'s `topPadding` (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/page_scaffold.dart`).
 ///
 /// Red-check: drop `+ media.padding.top` from `top_padding`'s computation in
 /// `page_scaffold.rs` — this test's offset assertion fails (would read

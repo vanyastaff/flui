@@ -1,51 +1,4 @@
-//! [`CupertinoPageScaffold`] — a single iOS page's layout: a navigation bar
-//! slot on top, content below it.
-//!
-//! See "Deferred, named" below for what this V1 does not carry over.
-//!
-//! ## What it does
-//!
-//! - The `Stack` composition itself: content first, the navigation bar
-//!   `Positioned` on top — not a custom multi-child layout delegate
-//!   (`flui-material`'s `Scaffold` is a different, busier widget with
-//!   a floating-action-button slot this one has no equivalent of).
-//! - The content padding contract: when a navigation bar is present, the
-//!   content is pushed down by exactly
-//!   [`preferred_size`](PreferredSizeView::preferred_size)'s height *plus*
-//!   the ambient `MediaQuery.padding.top` — mirroring
-//!   `flui-material`'s `Scaffold` and its own "the app bar slot's cap is
-//!   `preferred_height + padding.top`, but `content_top` reads the app bar's
-//!   *measured* height only" contract, which this scaffold reproduces with
-//!   `Padding` instead of a layout delegate because there is no second slot
-//!   (a floating action button, a bottom nav bar) competing for the same
-//!   measured geometry.
-//! - `resize_to_avoid_bottom_inset` (default `true`): consumes
-//!   `MediaQuery.view_insets.bottom` into the content's own bottom padding
-//!   and zeroes it out of the `MediaQuery` republished to descendants — the
-//!   same "reduce, don't just pass through" contract `Scaffold`'s module
-//!   docs describe for its own body slot.
-//! - The scaffold background: `DecoratedBox` filled with `background_color`,
-//!   falling back to [`crate::CupertinoThemeData::scaffold_background_color`].
-//!
-//! ## Deferred, named
-//!
-//! - **Publishing the scaffold's resolved background** so a descendant
-//!   `CupertinoNavigationBar` can lerp toward it under automatic background
-//!   visibility. Moot today: [`crate::CupertinoNavigationBar`] does not
-//!   implement that yet either (see that module's own deferred list) —
-//!   nothing would consume the publish.
-//! - **The nav bar's fully-obstructing vs translucent branches.** An opaque
-//!   bar fully consumes `padding.top`; a translucent one keeps it, so content
-//!   sliding underneath still avoids the notch.
-//!   `flui_sdk::widgets::PreferredSizeView` carries no
-//!   `should_fully_obstruct` — this V1 always takes the opaque branch,
-//!   matching `flui-material`'s `AppBar`/`Scaffold` and their own "no translucent
-//!   content-behind-the-bar" contract in this same workspace.
-//! - **Status-bar tap-to-scroll-to-top.** No primary-scroll-controller or
-//!   scroll-notification-observer substrate in FLUI to wire this through.
-//! - **Text-scaling suppression on the navigation bar.** `MediaQueryData` has
-//!   no no-scaling variant to apply yet — `text_sizing` passes through
-//!   unchanged.
+//! The single-page layout: a navigation bar slot above content.
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::styling::BoxDecoration;
@@ -54,12 +7,39 @@ use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{DecoratedBox, Padding, Positioned, PreferredSizeView, Stack};
 
-use crate::colors::CupertinoColor;
-use crate::theme::CupertinoTheme;
+use crate::CupertinoColor;
+use crate::CupertinoTheme;
 
-/// A single iOS page's layout: an optional [`crate::CupertinoNavigationBar`]
-/// (or any other [`PreferredSizeView`]) on top, `child` below it — see the
-/// module docs for exactly what is and is not supported.
+/// A single iOS page's layout: an optional
+/// [`CupertinoNavigationBar`](crate::CupertinoNavigationBar) (or any other
+/// [`PreferredSizeView`]) on top and `child` below it.
+///
+/// - The content is a `Stack` layer under the navigation bar, which is
+///   `Positioned` on top; there is no layout delegate and no
+///   floating-action-button slot.
+/// - With a navigation bar, the content is pushed down by the bar's
+///   [`preferred_size`](PreferredSizeView::preferred_size) height plus the
+///   ambient `MediaQuery` `padding.top`. The scaffold removes that top
+///   padding from the `MediaQuery` it publishes to the content.
+/// - [`resize_to_avoid_bottom_inset`](Self::resize_to_avoid_bottom_inset)
+///   (default `true`) moves `MediaQuery` `view_insets.bottom` into the
+///   content's bottom padding and removes it from the `MediaQuery` published
+///   to descendants, so it is not applied twice.
+/// - The background is a `DecoratedBox` filled with `background_color`, or
+///   [`CupertinoThemeData::scaffold_background_color`](crate::CupertinoThemeData::scaffold_background_color).
+///
+/// # Not implemented
+///
+/// - The scaffold always treats the navigation bar as opaque: it consumes
+///   all of `padding.top`, because `PreferredSizeView` carries no
+///   `should_fully_obstruct`. Content never slides under a translucent bar.
+/// - It does not publish its resolved background for a navigation bar to
+///   lerp toward; the bar has no automatic background visibility.
+/// - Tapping the status bar does not scroll to the top.
+/// - It does not suppress text scaling on the navigation bar, because
+///   `MediaQueryData` has no no-scaling variant.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/page_scaffold.dart`.
 ///
 /// ```
 /// use flui_cupertino::{CupertinoNavigationBar, CupertinoPageScaffold};
@@ -140,9 +120,8 @@ impl StatelessView for CupertinoPageScaffold {
         let media = MediaQuery::maybe_of(ctx).unwrap_or_default();
 
         let padded_content = if self.navigation_bar.is_some() {
-            // The bar's preferred height plus the ambient top inset — always
-            // the "fully obstructing" branch, see the module docs' deferred
-            // list.
+            // The bar's preferred height plus the ambient top inset: always
+            // the "fully obstructing" branch.
             let top_padding = self.navigation_bar_preferred_height + media.padding().top;
             let bottom_padding = if self.resize_to_avoid_bottom_inset {
                 media.view_insets.bottom

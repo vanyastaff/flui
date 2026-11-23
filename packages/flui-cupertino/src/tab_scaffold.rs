@@ -1,50 +1,8 @@
-//! [`CupertinoTabScaffold`] — a tabbed iOS application's root layout: a
-//! [`crate::CupertinoTabBar`] at the bottom, per-tab content built lazily
-//! and kept alive [`Offstage`] once visited — and [`CupertinoTabController`],
-//! the shared selection state driving it.
+//! The tabbed root layout and its selection controller.
 //!
-//! See "Deferred, named" below for exactly what this V1 does not carry over.
-//!
-//! ## What it does
-//!
-//! - The tab-switching mechanic: every tab mounts a slot up front, but
-//!   a tab's content is first built when it becomes active. Visited tabs
-//!   keep their mounted subtrees; subsequent scaffold rebuilds call their
-//!   builders again to reconcile updated configuration. Every non-active tab is
-//!   [`HeroMode`]-disabled + [`Offstage`]-hidden + [`TickerMode`]-disabled
-//!   rather than unmounted — so an inactive tab's own state (a counter, a
-//!   scroll position, a nested `Navigator` stack) survives a switch away and
-//!   back, and its animations genuinely stop advancing while hidden —
-//!   nested as `HeroMode(enabled: active, child: Offstage(offstage: !active,
-//!   child: TickerMode(enabled: active, child: …)))`.
-//! - The content-padding contract: content is pushed up by exactly
-//!   [`preferred_size`](PreferredSizeView::preferred_size)'s height
-//!   *plus* `MediaQuery.padding.bottom`, unless the on-screen keyboard
-//!   inset is already taller than the tab bar (a real edge case: don't
-//!   double-pad).
-//! - `resize_to_avoid_bottom_inset` (default `true`), same contract as
-//!   [`crate::CupertinoPageScaffold`]'s.
-//! - The scaffold background, resolved from
-//!   [`crate::CupertinoThemeData::scaffold_background_color`] the same way.
-//!
-//! ## `CupertinoTabController` is required, not auto-created
-//!
-//! A scaffold could create and own an internal controller when the caller
-//! supplies none. That auto-creation would exist mostly to give state
-//! restoration something to restore — a feature this crate does not have (no
-//! restoration substrate in FLUI at all yet). Without it, an
-//! internally-created controller would just be state a caller can never
-//! reach to drive tab switches programmatically, which is worse than
-//! requiring one explicitly. The scaffold always takes an explicit
-//! [`CupertinoTabController`]; there is no auto-create fallback.
-//!
-//! ## Deferred, named
-//!
-//! - **State restoration** — no restoration substrate in FLUI.
-//! - **Per-tab focus scope** — no per-tab focus-scope wiring; [`Offstage`]
-//!   alone governs visibility.
-//! - **Text-scaling suppression on the tab bar** — `MediaQueryData` has no
-//!   no-scaling variant to apply yet.
+//! Implementation notes: each tab's subtree is nested as
+//! `HeroMode(enabled: active, child: Offstage(offstage: !active,
+//! child: TickerMode(enabled: active, child: …)))`.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -62,9 +20,9 @@ use flui_sdk::widgets::{
     TickerMode,
 };
 
-use crate::bottom_tab_bar::CupertinoTabBar;
-use crate::colors::CupertinoColor;
-use crate::theme::CupertinoTheme;
+use crate::CupertinoColor;
+use crate::CupertinoTabBar;
+use crate::CupertinoTheme;
 
 /// Coordinates tab selection between a [`CupertinoTabBar`] and a
 /// [`CupertinoTabScaffold`]. A `ChangeNotifier` wrapping
@@ -160,9 +118,37 @@ impl Listenable for CupertinoTabController {
 /// (owner-local, per ADR-0027).
 type TabBuilder = Rc<dyn Fn(&dyn BuildContext, usize) -> BoxedView>;
 
-/// A tabbed iOS application's root layout: [`CupertinoTabBar`] at the
-/// bottom, `tab_builder`'s output for the active tab above it — see the module
-/// docs for exactly what is and is not supported.
+/// A tabbed iOS application's root layout: a [`CupertinoTabBar`] at the
+/// bottom and the active tab's content above it.
+///
+/// - Every tab mounts a slot up front, but a tab's content is built the first
+///   time it becomes active. A visited tab keeps its mounted subtree, and
+///   later scaffold rebuilds call its builder again to reconcile updated
+///   configuration.
+/// - A tab that is not active is disabled for heroes and tickers and hidden
+///   with `Offstage`, not unmounted, so its state (a counter, a scroll
+///   position, a nested navigator stack) survives a switch away and back,
+///   and its animations stop advancing while it is hidden.
+/// - Content is padded up by the bar's height plus `MediaQuery`
+///   `padding.bottom`, unless the on-screen keyboard inset is already taller
+///   than the bar, in which case it is not padded twice.
+/// - [`resize_to_avoid_bottom_inset`](Self::resize_to_avoid_bottom_inset)
+///   defaults to `true`, with the same contract as
+///   [`CupertinoPageScaffold`](crate::CupertinoPageScaffold)'s.
+/// - The background resolves from
+///   [`CupertinoThemeData::scaffold_background_color`](crate::CupertinoThemeData::scaffold_background_color)
+///   unless overridden.
+/// - The [`CupertinoTabController`] is required. A scaffold that created its
+///   own would hand callers no way to switch tabs programmatically, and the
+///   package has no state restoration for it to serve.
+///
+/// # Not implemented
+///
+/// The scaffold has no state restoration, no per-tab focus scope (`Offstage`
+/// alone governs visibility) and no text-scaling suppression on the tab bar,
+/// because `MediaQueryData` has no no-scaling variant.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/tab_scaffold.dart`.
 ///
 /// ```
 /// use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold};
@@ -254,8 +240,8 @@ impl StatefulView for CupertinoTabScaffold {
 }
 
 /// Persistent state for [`CupertinoTabScaffold`]: which tabs have ever been
-/// built — grown or truncated to match the tab count on every build (a
-/// partial-invalidation contract), never reset for an index that already
+/// built, grown or truncated to match the tab count on every build and
+/// never reset for an index that already
 /// built once.
 pub struct CupertinoTabScaffoldState {
     should_build_tab: RefCell<Vec<bool>>,
@@ -368,9 +354,8 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
             .resolve(ctx);
 
         // The tab bar's own `current_index`/`on_tap` are overridden here via
-        // `Clone` + builder methods rather than a hand-written `copy_with` —
-        // see `bottom_tab_bar.rs`'s module docs. The original handler is
-        // captured first so the override can still chain into it.
+        // `Clone` + builder methods; the tab bar has no `copy_with`. The
+        // original handler is captured first so the override can still chain into it.
         let original_on_tap = view.tab_bar.on_tap_handler();
         let controller = view.controller.clone();
         let bar = view

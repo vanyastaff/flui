@@ -1,43 +1,12 @@
-//! [`CupertinoApp`] — the iOS-style application shell.
+//! The iOS-style application shell.
 //!
-//! Composed over `flui-widgets`' design-neutral `WidgetsApp`
-//! (ADR-0042 §5, ADR-0028): `WidgetsApp`
-//! knows nothing about this widget; this widget resolves the
-//! [`CupertinoThemeData`] and publishes it through [`CupertinoTheme`],
-//! **above** the `WidgetsApp` (unlike `MaterialApp`,
-//! which resolves inside the `WidgetsApp` builder), and installs the iOS
-//! parallax slide, [`ParallaxPageTransition`], as the ambient page transition
-//! (ADR-0221), so a [`Router`]'s pages slide in as `CupertinoPage`s do: they
-//! pop on a swipe from the leading edge, and the page below dims under the
-//! incoming one while it slides.
-//!
-//! ## Brightness — Apple's model, no `ThemeMode` (ADR-0042 §2)
-//!
-//! There is deliberately no selection enum here. The theme's optional
-//! [`brightness`](CupertinoThemeData::with_brightness) override wins when
-//! set; otherwise every dynamic color resolves against the ambient
-//! `MediaQueryData::platform_brightness`.
-//! Resolution happens in this widget's own `build`
-//! (`CupertinoThemeData::resolve_from`),
-//! which registers a `MediaQuery` dependency — a platform-brightness
-//! republish from the UI runtime's root `MediaQuery` rebuilds this element and
-//! re-resolves the theme.
-//!
-//! ## Deferred (named gaps, not silent ones)
-//!
-//! - **`CupertinoUserInterfaceLevel`** — no elevation ambient exists in FLUI
-//!   yet; dynamic colors already resolve elevation as their base variant
-//!   (see `colors.rs`).
-//! - **`DefaultSelectionStyle`** — the app does not install one yet.
-//! - **`CupertinoScrollBehavior`** — the app installs no `ScrollConfiguration`,
-//!   so its scroll views follow `DefaultScrollBehavior` until the Cupertino
-//!   behavior lands with its scrollbar and overscroll indicator.
-//! - **`HeroControllerScope`** — FLUI's `Navigator` auto-installs a default
-//!   hero controller, so no explicit scope is needed here.
-//! - **`CupertinoLocalizations`** — FLUI ships no Cupertino resource set
-//!   yet; when one lands its delegate is appended here.
-//! - **`Title`/`color`, restoration, debug overlays**
-//!   — deferred at the `WidgetsApp` layer; see its module docs.
+//! Implementation notes: the shell composes `flui-widgets`' design-neutral
+//! `WidgetsApp` (ADR-0042 §5, ADR-0028), which knows nothing about it. The
+//! theme is resolved in this widget's own `build`, so the `MediaQuery`
+//! dependency that dynamic-color resolution registers rebuilds the shell when
+//! the platform brightness changes, and the published [`CupertinoTheme`] and
+//! the page transition sit above the `WidgetsApp` so its navigator and a
+//! `Router` read them.
 
 use std::fmt;
 use std::rc::Rc;
@@ -54,14 +23,46 @@ use flui_sdk::widgets::{
 use crate::theme::{CupertinoTheme, CupertinoThemeData};
 
 /// The dim under a page while the next one slides over it
-/// (`_kCupertinoPageTransitionBarrierColor`, `route.dart`, oracle tag `3.44.0`).
+/// (`_kCupertinoPageTransitionBarrierColor`,
+/// `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/route.dart:48`).
 const PAGE_BARRIER: Color = Color::from_argb(0x1800_0000);
 
-/// An iOS-style application shell: [`WidgetsApp`] under a published,
+/// An iOS-style application shell: `WidgetsApp` under a published,
 /// brightness-resolved [`CupertinoTheme`].
 ///
-/// See the module docs for the brightness model, named deferrals, and
-/// ordering.
+/// # Brightness
+///
+/// There is no `ThemeMode` (ADR-0042 §2). The theme's optional
+/// [`brightness`](CupertinoThemeData::with_brightness) override wins when
+/// set; otherwise every dynamic color resolves against the ambient
+/// `MediaQueryData::platform_brightness`, and a platform-brightness change
+/// re-resolves the theme.
+///
+/// # Page transition
+///
+/// The app installs `ParallaxPageTransition` (ADR-0221) as the ambient page
+/// transition, so a [`Router`]'s pages slide in as Flutter's `CupertinoPage`
+/// does: a page pops on a swipe from the leading edge, and the page below
+/// dims under the incoming one (barrier color `0x18000000`) while it slides.
+/// A page is a router route value, so `CupertinoPageRoute`'s `title`,
+/// `previousTitle`, `fullscreenDialog` and `delegatedTransition` have no
+/// counterpart.
+///
+/// # Not implemented
+///
+/// - `CupertinoUserInterfaceLevel`: FLUI has no elevation ambient, so dynamic
+///   colors resolve their base-elevation variant.
+/// - `DefaultSelectionStyle` is not installed.
+/// - `CupertinoScrollBehavior`: the app installs no `ScrollConfiguration`, so
+///   scroll views follow `DefaultScrollBehavior`.
+/// - `HeroControllerScope` is not needed: the navigator installs a default
+///   hero controller.
+/// - `CupertinoLocalizations`: FLUI ships no Cupertino resource set, so the
+///   app adds no localizations delegate of its own.
+/// - `Title`, `color`, restoration and debug overlays are not provided by the
+///   `WidgetsApp` layer either.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/app.dart`.
 ///
 /// # Example
 ///
@@ -156,7 +157,7 @@ impl CupertinoApp {
 
     /// The app-wide theme, default
     /// [`CupertinoThemeData::default`]. Its optional brightness override is
-    /// the only brightness knob (no `ThemeMode` — see the module docs).
+    /// the only brightness knob (there is no `ThemeMode`).
     #[must_use]
     pub fn theme(mut self, theme: CupertinoThemeData) -> Self {
         self.theme = Some(theme);
@@ -197,7 +198,7 @@ impl CupertinoApp {
         debug_assert!(
             !locales.is_empty(),
             "BUG: supported_locales requires at least one locale \
-             (the oracle asserts supportedLocales.isNotEmpty)"
+             (Flutter asserts supportedLocales.isNotEmpty)"
         );
         self.supported_locales = locales;
         self

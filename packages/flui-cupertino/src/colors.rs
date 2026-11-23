@@ -1,5 +1,5 @@
-//! [`CupertinoDynamicColor`] and [`CupertinoColors`] — the iOS
-//! brightness/contrast/elevation-adaptive color system.
+//! The iOS brightness/contrast-adaptive color system:
+//! [`CupertinoColor`], [`CupertinoDynamicColor`] and [`CupertinoColors`].
 
 use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
@@ -71,7 +71,8 @@ impl From<CupertinoDynamicColor> for CupertinoColor {
 /// ancestor sets one. Contrast follows [`MediaQuery::high_contrast_of`],
 /// defaulting to normal contrast without an ancestor. Explicit theme brightness
 /// does not mask the contrast preference. Interface elevation remains at base
-/// elevation because no interface-level ambient is implemented yet.
+/// elevation: FLUI has no interface-level ambient, so the elevated variants
+/// are stored and never selected.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CupertinoDynamicColor {
     /// Light mode, normal contrast, base elevation.
@@ -213,7 +214,7 @@ impl<'a> ColorResolver<'a> {
     pub(crate) fn dynamic(&self, color: CupertinoDynamicColor) -> Color {
         let brightness = if color.is_platform_brightness_dependent() {
             self.brightness
-                .or_else(|| crate::theme::CupertinoTheme::maybe_brightness_of(self.context))
+                .or_else(|| crate::CupertinoTheme::maybe_brightness_of(self.context))
                 .unwrap_or(Brightness::Light)
         } else {
             Brightness::Light
@@ -235,12 +236,7 @@ impl<'a> ColorResolver<'a> {
 // =============================================================================
 
 /// The System, Label, Fill, and Background color palettes from the iOS 13+
-/// UIKit `UIColor` catalog, scoped to this crate's V1 consumers
-/// ([`crate::theme`]'s defaults, [`crate::text_theme`]'s label/action colors,
-/// [`crate::button`]'s fill/disabled/foreground colors).
-///
-/// Mounted resolution is exercised in `tests/colors.rs`; application-level
-/// publication of the blue variants is exercised in `tests/cupertino_app.rs`.
+/// UIKit `UIColor` catalog, the subset this package uses.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CupertinoColors;

@@ -1,18 +1,8 @@
-//! [`CupertinoTheme`] — publishes [`CupertinoThemeData`] to a subtree via
-//! FLUI's inherited-data mechanism.
+//! The inherited theme and its data.
 //!
-//! Like `flui-material`'s `Theme`, this is one `InheritedView` type. It does
-//! not also imply an `IconTheme`, which this crate's V1 doesn't yet wire (no
-//! icon-family component consumes it).
-//!
-//! ## Material-interop seam (nothing owed here)
-//!
-//! `CupertinoTheme::of` never reads Material. A Material theme that wants to
-//! also drive Cupertino widgets underneath it would have to inject a
-//! `CupertinoTheme` from *its* side. Per ADR-0028, that injection seam belongs
-//! to a future `flui-material` increment, not this crate — `flui-cupertino`
-//! has no dependency on `flui-material` and nothing here needs to change to
-//! support it later.
+//! `CupertinoTheme::of` never reads Material: ADR-0028 keeps the two design
+//! systems independent, so a Material theme that should also drive Cupertino
+//! widgets installs a `CupertinoTheme` from its own side.
 
 use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
@@ -21,8 +11,8 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::InheritedTheme;
 
+use crate::CupertinoTextThemeData;
 use crate::colors::{ColorResolver, CupertinoColor, CupertinoColors, CupertinoDynamicColor};
-use crate::text_theme::CupertinoTextThemeData;
 
 /// The default bar background — `0xF0F9F9F9` / `0xF01D1D1D` (navigation-bar
 /// translucent background; toolbars and tab bars could use a darker
@@ -55,11 +45,10 @@ fn as_dynamic(color: CupertinoColor) -> CupertinoDynamicColor {
 /// (system blue primary, white contrasting, system background scaffold, a
 /// translucent navigation-bar background).
 ///
-/// Scoped to this crate's V1 consumers. **Named deferral**: a selection
-/// handle color and an apply-theme-to-all flag are dropped — no
-/// `CupertinoTextField`/Material-interop consumer exists yet in this crate to
-/// pin their shape against; add them alongside whichever component first
-/// needs them (see `flui-material::ThemeData`'s equivalent note).
+/// The theme has no selection handle color and no apply-theme-to-all flag,
+/// and it does not imply an `IconTheme`.
+///
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/theme.dart`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CupertinoThemeData {
     brightness: Option<Brightness>,
@@ -173,13 +162,9 @@ impl CupertinoThemeData {
     /// [`CupertinoTheme::of`]'s doc for why ordinary consumers never call
     /// this directly.
     ///
-    /// **Named simplification**: this resolves each getter's current effective
-    /// value once and stores it as the new override, rather than keeping the
-    /// override/default distinction alive (so a still-unset field's *default*
-    /// also resolves, without materializing an override). Externally
-    /// equivalent (every getter reads the same resolved color either way),
-    /// simpler internally, at the cost of `PartialEq`-visible "was this
-    /// explicitly set" round-tripping this crate has no consumer for yet.
+    /// Each getter's effective value (override or default) is resolved once and
+    /// stored as the new override, so the copy is fully resolved and no longer
+    /// distinguishes an explicitly set field from a default one.
     ///
     /// An unset primary colour resolves to the system's accent when the host
     /// observes one ([`MediaQuery::accent_color_of`]: macOS's control accent,
@@ -289,7 +274,7 @@ impl CupertinoTheme {
     /// present.
     ///
     /// This follows the same light-default fallback
-    /// [`crate::colors::CupertinoDynamicColor::resolve_from`] already uses for
+    /// [`crate::CupertinoDynamicColor::resolve_from`] already uses for
     /// the identical missing-context case, rather than introducing a panic
     /// path a caller has to specifically avoid.
     #[must_use]
