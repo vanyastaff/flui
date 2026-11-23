@@ -12,7 +12,10 @@
   [ADR-0238](ADR-0238-flui-driver-protocol.md) §3, the error codes: `not_driver` (§8).
 - **Superseded-by:** [ADR-0390](ADR-0390-a-page-journals-its-native-layer-as-a-native-host-does.md)
   for §11's sentence "A page records the input layer only" and the capture's "debug build of a
-  native host" only: a page's debug build journals its backend for the `native` layer too.
+  native host" only: a page's debug build journals its backend for the `native` layer too; and
+  [ADR-0395](ADR-0395-a-rebuild-is-shown-over-the-app-it-will-replace.md) for §8's sentence on
+  what an observer may call only: an observer may also call a method whose effect is
+  `annotates`.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what
