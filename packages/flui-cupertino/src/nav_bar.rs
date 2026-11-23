@@ -165,14 +165,13 @@ impl StatelessView for CupertinoNavigationBar {
         let theme = CupertinoTheme::of(ctx);
         let background = self
             .background_color
-            .unwrap_or_else(|| theme.bar_background_color())
-            .resolve(ctx);
+            .map_or(theme.bar_background_color, |color| color.resolve(ctx));
         let top_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding().top);
 
         let mut layers: Vec<BoxedView> = Vec::new();
         if let Some(middle) = &self.middle {
             let styled_middle = DefaultTextStyle::new(
-                theme.text_theme().nav_title_text_style(),
+                theme.text_theme.nav_title_text_style.clone(),
                 Semantics::new()
                     .heading_level(HeadingLevel::H1)
                     .child(middle.clone()),
@@ -205,7 +204,8 @@ impl StatelessView for CupertinoNavigationBar {
             );
         }
 
-        let toolbar = DefaultTextStyle::new(theme.text_theme().text_style(), Stack::new(layers));
+        let toolbar =
+            DefaultTextStyle::new(theme.text_theme.text_style.clone(), Stack::new(layers));
 
         let decorated =
             DecoratedBox::new(BoxDecoration::with_color(background).set_border(self.border))

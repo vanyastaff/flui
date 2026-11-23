@@ -4,8 +4,11 @@
 //!
 //! - Color and theme: [`CupertinoColors`], [`CupertinoColor`] and
 //!   [`CupertinoDynamicColor`] (the brightness- and contrast-adaptive color
-//!   system), [`CupertinoTextThemeData`], [`CupertinoThemeData`] and the
-//!   [`CupertinoTheme`] inherited widget that publishes it to a subtree.
+//!   system), [`CupertinoThemeData`] and [`CupertinoTextThemeData`] (what an
+//!   author writes), the [`CupertinoTheme`] inherited widget that publishes
+//!   them to a subtree, and [`ResolvedCupertinoTheme`] with
+//!   [`ResolvedCupertinoTextTheme`] (what widgets read, resolved for their
+//!   context).
 //! - Application shell: [`CupertinoApp`] (ADR-0042) over `flui-widgets`'
 //!   design-neutral `WidgetsApp`, which also installs the iOS parallax page
 //!   slide for its routes.
@@ -44,10 +47,26 @@
 //! ## Example
 //!
 //! ```rust
-//! use flui_cupertino::{CupertinoTheme, CupertinoThemeData};
-//! use flui_sdk::widgets::SizedBox;
+//! use flui_cupertino::{CupertinoColors, CupertinoTheme, CupertinoThemeData};
+//! use flui_sdk::platform::Brightness;
+//! use flui_sdk::view::prelude::*;
+//! use flui_sdk::widgets::Text;
 //!
-//! let _themed = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
+//! #[derive(Clone, StatelessView)]
+//! struct Greeting;
+//!
+//! impl StatelessView for Greeting {
+//!     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+//!         // Every colour of the resolved theme is concrete for this context.
+//!         let theme = CupertinoTheme::of(ctx);
+//!         Text::new("Hello").style(theme.text_theme.nav_title_text_style.clone())
+//!     }
+//! }
+//!
+//! let mut data = CupertinoThemeData::default();
+//! data.brightness = Some(Brightness::Dark);
+//! data.primary_color = Some(CupertinoColors::SYSTEM_RED.into());
+//! let _themed = CupertinoTheme::new(data, Greeting);
 //! ```
 
 #![deny(missing_docs)]
@@ -73,5 +92,5 @@ pub use nav_bar::CupertinoNavigationBar;
 pub use page_control::CupertinoPageControl;
 pub use page_scaffold::CupertinoPageScaffold;
 pub use tab_scaffold::{CupertinoTabController, CupertinoTabScaffold, CupertinoTabScaffoldState};
-pub use text_theme::CupertinoTextThemeData;
-pub use theme::{CupertinoTheme, CupertinoThemeData};
+pub use text_theme::{CupertinoTextThemeData, ResolvedCupertinoTextTheme};
+pub use theme::{CupertinoTheme, CupertinoThemeData, ResolvedCupertinoTheme};
