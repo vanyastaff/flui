@@ -467,7 +467,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         let colors = theme.color_scheme;
         let text_theme = theme.text_theme.clone();
         let decoration_theme: InputDecorationThemeData =
-            theme.input_decoration_theme.unwrap_or_default();
+            theme.input_decoration_theme.clone().unwrap_or_default();
         let decoration = &view.decoration;
 
         // Widget state set: disabled, focused, hovering (already

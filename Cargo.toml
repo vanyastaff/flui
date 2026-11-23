@@ -887,8 +887,8 @@ single-instance = ["flui-app/single-instance"]
 
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
-# (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
-# `PointerKindSet`) and the second haptic tier (`flui::platform::haptics`,
+# (`flui::platform::input_capabilities`: `InputCapabilities` and its builder)
+# and the second haptic tier (`flui::platform::haptics`,
 # `flui::interaction::HapticsHandle`), until every backend passes its
 # conformance rows (ADR-0213 §5, ADR-0210 §9); `flui-sdk` has the matching
 # feature for packages. The platform crates build the types regardless.
@@ -904,8 +904,8 @@ unstable-input = []
 native = ["flui-app/native"]
 
 # === Windows beyond the first ===
-# Additive and unstable. Publishes `flui::open_window`, `flui::open_secondary_window`
-# and `flui::WindowPolicy` (and their `flui::app` paths) until ADR-0091 §3–§5 are
+# Additive and unstable. Publishes `flui::app::open_window`, `flui::app::open_secondary_window`
+# and `flui::app::WindowPolicy` until ADR-0091 §3–§5 are
 # built: a `Shared` window is refused and an open answers only that it was
 # admitted (`docs/gaps.md`). Without it an application has one window.
 unstable-windows = ["flui-app/unstable-windows"]

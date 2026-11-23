@@ -43,7 +43,7 @@
 //! or the first window fails.
 //!
 //! An application that configures its run builds an [`Application`]: the
-//! [`AppConfig`] (window configuration and application services) and the
+//! [`app::AppConfig`] (window configuration and application services) and the
 //! capability providers it registers (overrides of the built-in providers and
 //! plugins, ADR-0152), ended by [`Application::run`]. `run_app(root)` is
 //! `Application::new().run(root)`.
@@ -75,7 +75,7 @@
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ),
-    doc = "On the desktop, [`Application::on_ready`] gives an [`AppHandle`] for
+    doc = "On the desktop, [`Application::on_ready`] gives an [`app::AppHandle`] for
 cross-thread show and quit requests, and [`Application::run_resident`] starts an
 application without a window, building each main window it later shows from a
 factory. A successful show-command admission is not window completion: await its
@@ -99,7 +99,7 @@ returned request or poll `try_result` to obtain the window result."
 //! | `devtools` | off | re-exports `flui-devtools` as `devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
 //! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving) |
-//! | `unstable-windows` | off | `open_window`, `open_secondary_window` and `WindowPolicy`: windows beyond the first (unstable) |
+//! | `unstable-windows` | off | `app::open_window`, `app::open_secondary_window` and `app::WindowPolicy`: windows beyond the first (unstable) |
 //!
 //! Nothing is on by default (ADR-0088 §6): an application names the catalog it
 //! uses, e.g. `features = ["material"]`; with no feature the facade still gives
@@ -109,7 +109,7 @@ returned request or poll `try_result` to obtain the window result."
 //! want.
 //! Hot reload is the official package `flui-hot-reload`, which an application
 //! adds as a dependency of its own and installs with
-//! `AppConfig::dev_reload`; the facade re-exports no package for it
+//! `app::AppConfig::dev_reload`; the facade re-exports no package for it
 //! (ADR-0311 §6).
 //!
 //! Additional opt-in capabilities are `testing` (the `flui::testing` headless
@@ -128,14 +128,14 @@ returned request or poll `try_result` to obtain the window result."
 //! use flui::native::HostWindow;
 //! ```
 //!
-//! `unstable-windows` publishes the windows beyond the first: `open_window`,
-//! `open_secondary_window` and `WindowPolicy`. An application has one window
+//! `unstable-windows` publishes the windows beyond the first: `app::open_window`,
+//! `app::open_secondary_window` and `app::WindowPolicy`. An application has one window
 //! until ADR-0091 §3–§5 are built (`docs/gaps.md`), so they are absent without
 //! the feature:
 //!
 #![cfg_attr(not(feature = "unstable-windows"), doc = "```compile_fail,E0432")]
 #![cfg_attr(feature = "unstable-windows", doc = "```no_run")]
-//! use flui::WindowPolicy;
+//! use flui::app::WindowPolicy;
 //! ```
 //!
 //! # Using a design system
@@ -256,16 +256,16 @@ pub use flui_devtools as devtools;
 /// geometry in [`geometry`].
 pub mod foundation {
     pub use flui_foundation::{
-        AppId, AppIdError, AsViewKey, BuildPhase, BuildPhaseGuard, ChangeNotifier, CreationSite,
-        DataTransferId, DragSessionId, ElementId, FrameCallbackId, FrameEpoch, FrameStamp, GenId,
-        Id, IdExhausted, Identifier, InputSequenceId, LayerId, Listenable, ListenerCallback,
-        ListenerId, ListenerObserver, ManualClock, Marker, MintedId, MonotonicClock,
-        MutatedDuringBuild, NotificationCallback, Notifier, NotifierCallback, PathEntry,
-        PresentationAddress, PresentationId, PressId, RawId, RebuildReason, RebuildReasons,
-        RecoveryCallback, RenderId, SemanticsId, Subscription, SurfaceGeneration, TextDirection,
-        TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent, TreeContext,
-        TreeError, TreeId, UiRuntimeId, UniqueKey, ValueKey, ValueListenable, ValueNotifier,
-        ViewId, ViewKey, inspect, markers, observe,
+        AsViewKey, BuildPhase, BuildPhaseGuard, ChangeNotifier, CreationSite, DataTransferId,
+        DragSessionId, ElementId, FrameCallbackId, FrameEpoch, FrameStamp, GenId, Id, IdExhausted,
+        Identifier, InputSequenceId, LayerId, Listenable, ListenerCallback, ListenerId,
+        ListenerObserver, ManualClock, Marker, MintedId, MonotonicClock, MutatedDuringBuild,
+        NotificationCallback, Notifier, NotifierCallback, PathEntry, PresentationAddress,
+        PresentationId, PressId, RawId, RebuildReason, RebuildReasons, RecoveryCallback, RenderId,
+        SemanticsId, Subscription, SurfaceGeneration, TextDirection, TextScaleProfile, TextSize,
+        TextSizeError, TextSizeRequest, TextSizingIntent, TreeContext, TreeError, TreeId,
+        UiRuntimeId, UniqueKey, ValueKey, ValueListenable, ValueNotifier, ViewId, ViewKey, inspect,
+        markers, observe,
     };
 
     /// A slot's typed generation, as the ids above carry it.
@@ -284,8 +284,6 @@ pub mod foundation {
     }
 }
 pub use flui_foundation::geometry;
-/// The typed self-description of a node, and its derive, for application-defined types.
-pub use flui_foundation::inspect::Inspect;
 /// The Material Design system (`flui-material`). Requires the `material`
 /// feature.
 #[cfg(feature = "material")]
@@ -338,7 +336,7 @@ pub mod services {
 ///
 /// What a window is created with on one system is a value of that system's
 /// type in [`platform::os_options::OsWindowOptions`], given to
-/// [`AppConfig::os_options`].
+/// [`app::AppConfig::os_options`].
 #[cfg(feature = "native")]
 pub mod native {
     #[cfg(target_os = "macos")]
@@ -376,34 +374,34 @@ pub mod platform {
         Availability, Brightness, BrowserException, CapabilityAbsence, CapabilityParts,
         ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
         ClipboardWrite, ClipboardWritten, ColorGamut, CommandRefusal, Concealment, ControlsOffset,
-        CopiedAside, Cursor, CursorError, CursorGrab, CursorIcon, CursorImage, CursorImageError,
-        DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription, DisplayId, DisplayParts,
-        DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, Distance, DragDropEvent,
-        DurationScale, DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange,
-        EmptyPointerFrame, Environment, ExpiryClearing, FlingSpeeds, FramePacing, FramePresented,
-        FrameRateHint, FrameRequest, GestureGeometry, GestureParts, GesturePreferences,
-        HapticFeedback, Headroom, HostNotice, HourCycle, ImeEvent, InputLatency, InsetCurve,
-        InsetMotion, InvalidAppDataDir, InvalidControlsOffset, InvalidDisplayBounds,
-        InvalidGeometry, InvalidHeadroom, InvalidInsets, InvalidLocale, InvalidPreference,
-        InvalidRefreshPeriod, InvalidRegionalFormat, InvalidWindowOption, KeyboardPlacement,
-        Launch, Locale, MAX_OPENED_URL_LEN, MAX_SURFACE_EXTENT, MeasurementSystem,
-        MotionPreference, NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, OpenTarget,
-        Opened, OpenedFile, OpenedOverflow, OpeningGeometry, OsRelease, PlacementError,
-        PlacementOffset, PlatformFailure, PlatformInput, PlatformSystemChrome, PlatformTextInput,
-        PlatformWindow, PointerFrame, PreferenceParts, PreferenceQueryError, PublicationMint,
-        RedrawRequester, RefreshPeriod, RegionOverride, RegionalFormats, RegionalParts,
-        ResolvedPlacement, ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility,
-        ScrollTrackClick, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
-        SessionEndRequest, SizeConstraints, SoftKeyboard, SrgbColor, Storage, StorageError,
-        StorageFuture, StorageName, Stored, StoredVersion, SubmitError, SurfaceColorSpace,
-        SurfaceTarget, SwapChainStatistics, SystemControls, SystemFailure, SystemNotice,
-        SystemPreferences, SystemUiOverlayStyle, TargetPlatform, TextWeightPreference, Unsupported,
-        UnsupportedReason, Weekday, WheelParts, WheelPreferences, WheelStep, WindowAt,
-        WindowCapabilities, WindowCapability, WindowCommand, WindowDisplay, WindowExecutionState,
-        WindowExtent, WindowFocus, WindowFrame, WindowGeometry, WindowId, WindowInsets,
-        WindowInteraction, WindowLevel, WindowMaterial, WindowMode, WindowOption, WindowOptions,
-        WindowPlacement, WindowPosition, WindowReveal, WindowRevision, WindowRevisionExhausted,
-        WindowState, WindowStateParts, WriteMode,
+        CopiedAside, Cursor, CursorError, CursorGrab, CursorImage, CursorImageError, DesktopOrigin,
+        DisplayBounds, DisplayColor, DisplayDescription, DisplayId, DisplayParts, DisplayRevision,
+        DisplayRevisionExhausted, DisplaySnapshot, Distance, DragDropEvent, DurationScale,
+        DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange, EmptyPointerFrame,
+        Environment, ExpiryClearing, FlingSpeeds, FramePacing, FramePresented, FrameRateHint,
+        FrameRequest, GestureGeometry, GestureParts, GesturePreferences, HapticFeedback, Headroom,
+        HostNotice, HourCycle, ImeEvent, InputLatency, InsetCurve, InsetMotion, InvalidAppDataDir,
+        InvalidControlsOffset, InvalidDisplayBounds, InvalidGeometry, InvalidHeadroom,
+        InvalidInsets, InvalidLocale, InvalidPreference, InvalidRefreshPeriod,
+        InvalidRegionalFormat, InvalidWindowOption, KeyboardPlacement, Launch, Locale,
+        MAX_OPENED_URL_LEN, MAX_SURFACE_EXTENT, MeasurementSystem, MotionPreference,
+        NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, OpenTarget, Opened, OpenedFile,
+        OpenedOverflow, OpeningGeometry, OsRelease, PlacementError, PlacementOffset,
+        PlatformFailure, PlatformInput, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+        PointerFrame, PreferenceParts, PreferenceQueryError, PublicationMint, RedrawRequester,
+        RefreshPeriod, RegionOverride, RegionalFormats, RegionalParts, ResolvedPlacement,
+        ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick,
+        SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndRequest,
+        SizeConstraints, SoftKeyboard, SrgbColor, Storage, StorageError, StorageFuture,
+        StorageName, Stored, StoredVersion, SubmitError, SurfaceColorSpace, SurfaceTarget,
+        SwapChainStatistics, SystemControls, SystemFailure, SystemNotice, SystemPreferences,
+        SystemUiOverlayStyle, TargetPlatform, TextWeightPreference, Unsupported, UnsupportedReason,
+        Weekday, WheelParts, WheelPreferences, WheelStep, WindowAt, WindowCapabilities,
+        WindowCapability, WindowCommand, WindowDisplay, WindowExecutionState, WindowExtent,
+        WindowFocus, WindowFrame, WindowGeometry, WindowId, WindowInsets, WindowInteraction,
+        WindowLevel, WindowMaterial, WindowMode, WindowOption, WindowOptions, WindowPlacement,
+        WindowPosition, WindowReveal, WindowRevision, WindowRevisionExhausted, WindowState,
+        WindowStateParts, WriteMode,
     };
     /// Capabilities: what an application registers, and the contracts a provider and a host meet.
     pub mod capability {
@@ -500,9 +498,7 @@ pub mod platform {
     /// Handle-less input capabilities (ADR-0213); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::input::capabilities::{
-            InputCapabilities, InputCapabilitiesBuilder, PointerKindSet,
-        };
+        pub use flui_platform::input::capabilities::{InputCapabilities, InputCapabilitiesBuilder};
     }
     /// Haptic patterns, requests and outcomes (ADR-0210); unstable.
     #[cfg(feature = "unstable-input")]
@@ -537,93 +533,20 @@ pub mod view {
     mod __runtime {}
 }
 
-/// Application configuration. Re-exported from [`app`] (`flui-app`).
-pub use flui_app::AppConfig;
-/// The errors a window request can fail with — what [`AppHandle`] reports and
-/// what an [`Application`] window-error observer receives (and, under
-/// `unstable-windows`, what `open_window` answers). Re-exported from [`app`]
-/// (`flui-app`); desktop only, like the entry points that produce it.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub use flui_app::AppWindowError;
-/// Whether an additional window joins the caller's UI runtime or gets its own.
-/// Re-exported from [`app`] (`flui-app`); unstable, under `unstable-windows`
-/// (see `open_window`), and absent on iOS, where no secondary-window entry
-/// point exists.
-#[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
-pub use flui_app::WindowPolicy;
 /// The function an application starts from on every platform; on Android it
 /// writes the `android_main` the system calls. Re-exported from `flui-app`.
 pub use flui_app::main;
-/// Open an additional top-level window without widget content.
-///
-/// Unstable, under `unstable-windows` (see [`open_window`]). Desktop only.
-/// Call on the owner thread while its event loop is live. Success can mean
-/// creation was admitted for a later owner turn; this API does not provide a
-/// completion receiver or a renderer. Use [`open_window`] for widget content.
-/// See [`app::open_secondary_window`] for policy, deferred-failure, and
-/// ownership details. Re-exported from [`app`] (`flui-app`).
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32"),
-    feature = "unstable-windows"
-))]
-pub use flui_app::open_secondary_window;
-/// Open an additional top-level window with mounted widget content.
-///
-/// Unstable: an application has one window unless it turns on the additive
-/// `unstable-windows` feature, because ADR-0091 §3–§5 are not built yet
-/// (`docs/gaps.md`). Without the feature this entry point,
-/// [`open_secondary_window`] and [`WindowPolicy`] are absent.
-///
-/// Desktop only. Call on the owner thread while its event loop is live, with
-/// [`WindowPolicy::Isolated`]. `WindowPolicy::Shared` is refused with
-/// [`AppWindowError::UnsupportedPolicy`]. As with [`open_secondary_window`],
-/// success can mean admission for deferred creation rather than completed
-/// installation; see [`app::open_window`] for the error contract.
-/// Re-exported from [`app`] (`flui-app`).
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32"),
-    feature = "unstable-windows"
-))]
-pub use flui_app::open_window;
 /// Run `root` in a main window: `Application::new().run(root)`, as Flutter's
-/// `runApp` takes the root widget. Re-exported from [`app`] (`flui-app`).
+/// `runApp` takes the root widget. Re-exported from `flui-app`.
 ///
 /// The root is any [`view::View`], stateless or stateful. It returns a
 /// [`LaunchError`] when the platform cannot start, the system is below FLUI's
 /// floor or the run fails; on the desktop it returns after shutdown.
 pub use flui_app::run_app;
-/// The handle a desktop [`Application`] gives its `on_ready` observer, which
-/// shows the main window or quits from any thread, and why a request through
-/// it fails. Re-exported from [`app`] (`flui-app`); desktop only.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub use flui_app::{AppControlError, AppHandle};
 /// The builder of a configured run, and why a run fails. Re-exported from
-/// [`app`] (`flui-app`).
-pub use flui_app::{Application, BackendFailure, GpuBackend, LaunchError, UnsupportedSystem};
-/// Registers a font's faces with the app, for measurement, paint and carets.
-/// Re-exported from [`app`] (`flui-app`).
-///
-/// Call on the app's owner thread, before startup or from an app callback.
-/// Registration on a worker thread does not update the running app: send the
-/// bytes to its owner thread first. Successful registration updates each
-/// UI runtime's text layout on its next frame; faces are never removed.
-///
-/// Invalid font bytes, repeated bytes, and reentry while the runtime is borrowed
-/// return [`FontRegistrationError`] without adding a face. See
-/// [`app::register_font`] for the individual error variants.
-pub use flui_app::{FontRegistrationError, register_font};
+/// `flui-app`; the configuration it takes and the rest of the application's
+/// vocabulary are in [`app`].
+pub use flui_app::{Application, LaunchError};
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature
@@ -670,23 +593,7 @@ pub use flui_app::{FontRegistrationError, register_font};
 /// (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so it stays at
 /// `flui::cupertino` rather than joining this glob.
 pub mod prelude {
-    pub use flui_app::AppConfig;
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub use flui_app::AppWindowError;
-    #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
-    pub use flui_app::WindowPolicy;
-    pub use flui_app::{Application, LaunchError, register_font, run_app};
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32"),
-        feature = "unstable-windows"
-    ))]
-    pub use flui_app::{open_secondary_window, open_window};
+    pub use flui_app::{Application, LaunchError, run_app};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

@@ -1,15 +1,16 @@
 //! What `uiautomator dump` shows of the screen, read as untrusted input: where the app's window
-//! is and how the display is turned.
+//! is, how the display is turned, and the accessibility nodes the app serves.
 //!
 //! The dump is the active window's view hierarchy as accessibility reads it:
-//! `<hierarchy rotation="N">` and its `<node>`s, each with its `package` and
-//! `bounds="[left,top][right,bottom]"` in display pixels as the display is turned, which is all
-//! the lane reads of them. It is read whole only after its size is checked ([`MAX_DUMP`]), with a
-//! bound on its nodes ([`MAX_NODES`]) and on its depth ([`MAX_DEPTH`]).
+//! `<hierarchy rotation="N">` and its `<node>`s, each with its `package`, its `class`, its `text`
+//! and `content-desc`, its states (`checkable`, `checked`, `enabled`, `focusable`, `focused`,
+//! `selected`) and `bounds="[left,top][right,bottom]"` in display pixels as the display is turned,
+//! clipped to the display (AOSP's `AccessibilityNodeInfoDumper`). It is read whole only after its
+//! size is checked ([`MAX_DUMP`]), with a bound on its nodes ([`MAX_NODES`]) and on its depth
+//! ([`MAX_DEPTH`]).
 //!
-//! FLUI's own nodes are not read from it: the adapter that serves them (`accesskit_android`) sets
-//! no `resource-id`, so the identifier a projection and an activation look for never reaches it
-//! (`docs/gaps.md`).
+//! FLUI's nodes carry no `resource-id`: the adapter that serves them (`accesskit_android`) sets
+//! none, so the lane finds them by matching the dump to the app's own tree (`super::tree`).
 
 /// The most bytes of a dump the lane reads.
 pub const MAX_DUMP: usize = 4 * 1024 * 1024;
@@ -82,12 +83,30 @@ impl Bounds {
     }
 }
 
-/// One node of a dump.
+/// One node of a dump. A dump writes an absent text as an empty one, so the two read alike.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct UiNode {
     /// The application that shows it.
     pub package: String,
+    /// Its class name (`AccessibilityNodeInfo.getClassName`): `android.widget.Button`.
+    pub class: String,
+    /// Its text (`getText`).
+    pub text: String,
+    /// Its content description (`getContentDescription`), what a screen reader reads as its name.
+    pub content_desc: String,
+    /// Whether it has a checked state.
+    pub checkable: bool,
+    /// Whether it is checked.
+    pub checked: bool,
+    /// Whether it takes interaction.
+    pub enabled: bool,
+    /// Whether it can take the input focus.
+    pub focusable: bool,
+    /// Whether it holds the input focus.
+    pub focused: bool,
+    /// Whether it is selected.
+    pub selected: bool,
     /// Where it is; `None` when the dump gave no bounds it could read.
     pub bounds: Option<Bounds>,
     /// The nodes inside it.
@@ -185,8 +204,20 @@ fn nodes_of(parent: roxmltree::Node<'_, '_>, depth: usize) -> Result<Vec<UiNode>
         .children()
         .filter(|child| child.has_tag_name("node"))
         .map(|node| {
+            let text = |name: &str| node.attribute(name).unwrap_or_default().to_owned();
+            // A state the dump does not write, or writes as anything but `true`, is not held.
+            let state = |name: &str| node.attribute(name) == Some("true");
             Ok(UiNode {
-                package: node.attribute("package").unwrap_or_default().to_owned(),
+                package: text("package"),
+                class: text("class"),
+                text: text("text"),
+                content_desc: text("content-desc"),
+                checkable: state("checkable"),
+                checked: state("checked"),
+                enabled: state("enabled"),
+                focusable: state("focusable"),
+                focused: state("focused"),
+                selected: state("selected"),
                 bounds: node.attribute("bounds").and_then(Bounds::parse),
                 children: nodes_of(node, depth + 1)?,
             })

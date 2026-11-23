@@ -38,6 +38,9 @@ pub(crate) const PROBED: &str = "I: Bus=0003 Vendor=18d1 Product=abcc Version=00
                       N: Name=\"FLUI Driver Probe\"\n\
                       P: Phys=\n";
 
+/// The accessibility settings of a device whose user turned no service on.
+pub(crate) const NO_SCREEN_READER: &str = "null\n0\n";
+
 pub(crate) const FOCUSED: &str =
     "  mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}\n";
 
@@ -68,6 +71,15 @@ pub(crate) fn scripted(emulator: bool, uinput: bool) -> ScriptedAdb {
 /// [`scripted`], its `uinput` devices answering what they are written with `uinput` (the kernel
 /// then lists the probe's), or with no rule for `uinput` at all when `None`.
 pub(crate) fn scripted_with(emulator: bool, uinput: Option<Responder>) -> ScriptedAdb {
+    scripted_showing(emulator, uinput, WINDOW)
+}
+
+/// [`scripted_with`], its window dumped as `window`.
+pub(crate) fn scripted_showing(
+    emulator: bool,
+    uinput: Option<Responder>,
+    window: &str,
+) -> ScriptedAdb {
     let adb = ScriptedAdb::new()
         .reply(
             "shell getprop",
@@ -79,7 +91,11 @@ pub(crate) fn scripted_with(emulator: bool, uinput: Option<Responder>) -> Script
             AdbReply::new(0, "Physical size: 1080x2400\nPhysical density: 420\n"),
         )
         .reply("shell dumpsys window", AdbReply::new(0, FOCUSED))
-        .reply("exec-out uiautomator", AdbReply::new(0, WINDOW))
+        .reply(
+            "shell settings get secure",
+            AdbReply::new(0, NO_SCREEN_READER),
+        )
+        .reply("exec-out uiautomator", AdbReply::new(0, window))
         .reply("shell input ", AdbReply::new(0, ""))
         .stream(
             "shell -tt getevent",

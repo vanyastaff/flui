@@ -151,8 +151,8 @@ integration test and is not affected.
 `interaction` re-exports what a third-party recognizer is written against: the recognizer and
 arena-member traits, `ArenaMembership`, `PrimaryContact` and its contact types, the arena entry
 and disposition, `GestureComposition`, `GestureBranches`, `SequencedBranch`, `CompositionError`,
-`MotionRole`, `PanClaim`, `PointerKindSet` (which `GestureRecognizer::allowed_devices` returns, so
-it is here and not only behind `unstable-input`), `GestureSettingsProvider`, `cancel_all`, the
+`MotionRole`, `PanClaim`, `PointerKindSet` (which `GestureRecognizer::allowed_devices` returns),
+`GestureSettingsProvider`, `cancel_all`, the
 pointer event and dispatch types and `EventTime`; `RawGestureDetector`,
 `GestureRecognizerFactory` and `RecognizerContext` come through the whole `widgets` export. The
 facade's `interaction` module holds every one of them, so the paths rule holds.

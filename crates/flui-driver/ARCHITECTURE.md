@@ -108,6 +108,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   its own: a window dump at a path of the session's, and a forward from a loopback port the lane
   picked, asked for with `--no-rebind` (a port another session holds is refused and another
   picked) and removed by that port at its end once `adb` made it or may have.
+- **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
+  sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
+  `lane::android::tree` matches the dump to it: a node fits an app node by structure, the class
+  `lane::android::roles` gives its AccessKit role, its content description, its checked and
+  enabled state and its bounds at the surface's origin; two candidates alike are
+  `Error::Ambiguous`, and bounds off the display place a node nowhere. Only a matched node carries
+  the app's role and identifier. No dump runs while a screen reader does
+  (`safety::check_dump`): the dump suspends the accessibility services. `invoke` is refused,
+  since UI Automator performs no accessibility action.
 - **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
   spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input
   event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything

@@ -1176,8 +1176,23 @@ graph LR
     without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
     and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
-  - `uiautomator dump` suspends the accessibility services running while it dumps, so a TalkBack
-    run locates the window before TalkBack is on (`docs/gaps.md`).
+  - `uiautomator dump` suspends the accessibility services running while it dumps, so the lane
+    refuses every dump while a screen reader runs (a TalkBack service in
+    `enabled_accessibility_services`, or touch exploration on), naming `android_window_dump`, and a
+    TalkBack run locates the window before TalkBack is on (`docs/gaps.md`).
+  - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
+    sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
+    which `Lane::read_tree` is handed, by structure, role (the class `accesskit_android` gives the
+    node's AccessKit role, `lane::android::roles`), content description, checked and enabled
+    state and bounds placed at the surface's origin; two candidates alike are `Ambiguous`, and
+    bounds off the display place a node nowhere. `invoke` is refused naming `os_invoke`: UI
+    Automator performs no action. Held by `android_tree::*` and, through the lane on a scripted
+    emulator serving the headless app's tree, by
+    `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app` and
+    `scenarios::the_android_accessibility_scenario_passes_through_the_lane_but_its_activation`; the
+    device runs are `android_device::the_android_roles_scenario_runs_through_the_os_lane` and
+    `android_device::the_android_accessibility_scenario_runs_through_the_os_lane`, owed on an Android device (the
+    `assistive technology conformance` row of `crates/flui-native/platform-parity.toml`).
   - `lane::android::launch` installs, starts and attaches; `Artifact::Apk` through `Driver::launch`
     answers `not_supported` naming `android_launch`, since a path names no package or activity.
 

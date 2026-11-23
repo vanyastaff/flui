@@ -32,7 +32,7 @@ use flui_sdk::widgets::SizedBox;
 /// into a loud failure rather than a silent false-pass.
 #[derive(Clone, Debug, StatelessView)]
 struct ThemeOfCapture {
-    captured: Rc<RefCell<Option<ThemeData>>>,
+    captured: Rc<RefCell<Option<Rc<ThemeData>>>>,
 }
 
 impl StatelessView for ThemeOfCapture {
@@ -45,7 +45,7 @@ impl StatelessView for ThemeOfCapture {
 /// `Theme::of` returns exactly the ancestor's data when a `Theme` is present
 /// — the success path of the panicking accessor.
 pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
-    let captured: Rc<RefCell<Option<ThemeData>>> = Rc::new(RefCell::new(None));
+    let captured: Rc<RefCell<Option<Rc<ThemeData>>>> = Rc::new(RefCell::new(None));
     // Sentinel primary color distinct from both presets so the assertion
     // fails if `Theme::of` returned a preset instead of the provided value.
     let sentinel = Color::from_argb(0xFF0A_141E);
@@ -75,12 +75,47 @@ pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
     );
 
     assert_eq!(
-        got, provided,
+        *got, provided,
         "Theme::of should return exactly the data provided by the ancestor Theme, \
          not a default or wrong scope"
     );
     assert_eq!(got.brightness(), Brightness::Dark);
     assert_eq!(got.color_scheme.primary, sentinel);
+}
+
+/// Every `Theme::of` below one `Theme` hands out the allocation the `Theme`
+/// was given, not a copy of the `ThemeData`.
+pub fn theme_of_shares_the_ancestor_data_instead_of_copying_it() {
+    use flui_sdk::widgets::Column;
+
+    let provided = Rc::new(ThemeData::dark());
+    let first: Rc<RefCell<Option<Rc<ThemeData>>>> = Rc::default();
+    let second: Rc<RefCell<Option<Rc<ThemeData>>>> = Rc::default();
+    let _laid = lay_out(
+        Theme::new(
+            Rc::clone(&provided),
+            Column::new((
+                ThemeOfCapture {
+                    captured: Rc::clone(&first),
+                },
+                ThemeOfCapture {
+                    captured: Rc::clone(&second),
+                },
+            )),
+        ),
+        loose(100.0),
+    );
+
+    for (name, captured) in [("first", &first), ("second", &second)] {
+        let got = captured
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| panic!("the {name} reader never built"));
+        assert!(
+            Rc::ptr_eq(&got, &provided),
+            "the {name} reader got a copy of the theme, not the shared data"
+        );
+    }
 }
 
 #[derive(Clone, Debug, StatelessView)]
@@ -93,7 +128,7 @@ impl StatelessView for PaintedThemeRoles {
         use flui_sdk::painting::typography::TextStyle;
         use flui_sdk::widgets::{Column, RichText, Text};
 
-        let theme = Theme::of(ctx).text_theme;
+        let theme = Theme::of(ctx).text_theme.clone();
         let title = theme.title_small.expect("Material title style");
         let label = theme.label_large.expect("Material label style");
         let body = theme.body_medium.expect("Material body style");
