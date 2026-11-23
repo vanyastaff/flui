@@ -70,7 +70,7 @@
   `crates/flui-rendering/src/pipeline/owner/semantics.rs:695`, `:715`, `:723`) считает
   конфликтом любое пересечение битов; правила по полям разбросаны по одной функции.
 - **Трансляция** (`accesskit_translation.rs`) — единственное место встречи с AccessKit, плюс
-  проекция для агента (`agent.rs`, `wire_role`), закреплённая на `accesskit_windows` 0.35.1.
+  проекция для агента (`agent.rs`, `wire_role`), закреплённая на `accesskit_windows` 0.35.2.
 - **Покрытие.** Из ~165 ролей AccessKit публикуются около 45, из ~110 свойств узла около 30.
   Нет текстовой модели поля (`text_selection`, `TextRun`), индексов таблиц и сеток, `level` вне
   заголовков, `orientation`, `has_popup`, `aria-current`, `sort`, `busy`, `keyboard_shortcut`,
