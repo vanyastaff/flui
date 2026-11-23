@@ -122,15 +122,15 @@ use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
 /// A `Tab` with no icon's height.
-pub const TAB_HEIGHT: f64 = 46.0;
+pub(crate) const TAB_HEIGHT: f64 = 46.0;
 
 /// A `Tab` with both an icon and text/child's height.
-pub const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
+pub(crate) const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
 
 /// The horizontal padding every tab label gets, both sides
 /// (`EdgeInsets.symmetric(horizontal: 16.0)`) — see the module docs for why this crate has no override surface
 /// for it yet.
-pub const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
+pub(crate) const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
 
 /// One [`TabBar`] tab's label content: some combination of `text`/`child`
 /// and `icon`.

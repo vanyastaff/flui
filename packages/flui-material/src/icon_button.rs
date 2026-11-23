@@ -139,7 +139,7 @@ use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
 /// The standard variant's icon side length.
-pub const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
+pub(crate) const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
 
 /// A small M3 button wrapping a single icon child. Use for a single, low-emphasis action (an app bar action, a
 /// list-item trailing control, …) — see

@@ -112,14 +112,14 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
             }
         }));
     }
-    // Independent owners can mint equal local ElementIds. Map keys here only
+    // Independent owners can mint equal local ElementIds. The ids here only
     // identify fanout slots, so take two distinct slots from one owner.
     let root_id = fanout[1].tree.iter().next().expect("a mounted slot");
     handle
         .shared
         .scaffolds
         .borrow_mut()
-        .insert(root_id, fanout[0].handle.clone());
+        .push((root_id, fanout[0].handle.clone()));
     let second_id = fanout[1]
         .tree
         .iter()
@@ -129,7 +129,7 @@ fn exercise(completion_fails: bool, forward_fails: bool, fanout_failures: usize)
         .shared
         .scaffolds
         .borrow_mut()
-        .insert(second_id, fanout[1].handle.clone());
+        .push((second_id, fanout[1].handle.clone()));
     let completions = Rc::new(Cell::new(0));
     let seen = Rc::clone(&completions);
     let arm = Arc::clone(&armed);

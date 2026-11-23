@@ -147,7 +147,7 @@ fn running(transition: PageTransition) -> Themed {
     let platform = TargetPlatform::Linux;
     themed(
         platform,
-        PageTransitionsTheme::default().with(platform, transition),
+        PageTransitionsTheme::default().transition(platform, transition),
     )
 }
 
@@ -634,4 +634,33 @@ pub fn page_transitions_theme_defaults_and_equality() {
         PageTransition::SharedAxis(SharedAxis::Horizontal),
         PageTransition::SharedAxis(SharedAxis::Vertical)
     );
+}
+
+#[test]
+fn a_theme_keeps_one_transition_per_platform_and_compares_by_content() {
+    let horizontal = PageTransition::SharedAxis(SharedAxis::Horizontal);
+    let replaced = PageTransitionsTheme::default()
+        .transition(TargetPlatform::Android, PageTransition::Zoom)
+        .transition(TargetPlatform::Android, horizontal.clone());
+    assert_eq!(
+        replaced.transition_for(TargetPlatform::Android),
+        horizontal,
+        "a later override for a platform replaces the earlier one"
+    );
+
+    let one_order = PageTransitionsTheme::default()
+        .transition(TargetPlatform::Android, horizontal.clone())
+        .transition(TargetPlatform::Windows, PageTransition::FadeForwards);
+    let other_order = PageTransitionsTheme::default()
+        .transition(TargetPlatform::Windows, PageTransition::FadeForwards)
+        .transition(TargetPlatform::Android, horizontal.clone());
+    assert_eq!(
+        one_order, other_order,
+        "the order of overrides is not content"
+    );
+    assert_eq!(
+        replaced,
+        PageTransitionsTheme::default().transition(TargetPlatform::Android, horizontal)
+    );
+    assert_ne!(one_order, replaced);
 }
