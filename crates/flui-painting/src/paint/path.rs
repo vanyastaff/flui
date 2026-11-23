@@ -182,17 +182,14 @@ impl std::fmt::Debug for Path {
 /// either has built its curves.
 impl PartialEq for Path {
     fn eq(&self, other: &Self) -> bool {
-        let unbuilt = |path: &Self| path.curves.get().is_none();
-        let same_geometry = self.shares_commands_with(other)
-            || (unbuilt(self)
-                && unbuilt(other)
-                && self.hint == other.hint
-                && self.offset == other.offset)
-            || self.geometry() == other.geometry();
-        same_geometry
-            && self.shape() == other.shape()
+        // The shape first: a clip a scroll moved differs there, and the curves would build
+        // every corner arc of both paths to give the same answer.
+        self.shape() == other.shape()
             && self.fill_type == other.fill_type
             && self.finite == other.finite
+            && (self.shares_commands_with(other)
+                || self.same_construction(other)
+                || self.geometry() == other.geometry())
     }
 }
 
@@ -836,14 +833,16 @@ impl Path {
     /// built them and both name the same constructor shape. `false` says
     /// nothing; [`PartialEq`] answers the full question.
     pub(crate) fn known_equal(&self, other: &Self) -> bool {
-        let unbuilt = |path: &Self| path.curves.get().is_none();
         let same_geometry = self.shares_commands_with(other)
-            || (unbuilt(self)
-                && unbuilt(other)
-                && self.hint != ShapeHint::None
-                && self.hint == other.hint
-                && self.offset == other.offset);
+            || (self.hint != ShapeHint::None && self.same_construction(other));
         same_geometry && self.fill_type == other.fill_type && self.finite == other.finite
+    }
+
+    /// Whether neither path has built its curves and both would build them from one hint
+    /// at one offset: equal curves, known without building either.
+    fn same_construction(&self, other: &Self) -> bool {
+        let unbuilt = |path: &Self| path.curves.get().is_none();
+        unbuilt(self) && unbuilt(other) && self.hint == other.hint && self.offset == other.offset
     }
 
     /// Returns `true` if the path has no elements.
@@ -1445,5 +1444,26 @@ mod tests {
                 "{fill_type:?}: a point just inside the right extreme"
             );
         }
+    }
+
+    /// A clip moved by a scroll is compared with last frame's clip in the scene patch: the
+    /// shapes differ, so the answer is known without building either path's arcs.
+    #[test]
+    fn shapes_in_different_places_are_unequal_without_building_either() {
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 80.0, 40.0), 8.0);
+        let last_frame = Path::from_rrect(rrect).translate(Offset::new(0.0, 12.0));
+        let this_frame = Path::from_rrect(rrect).translate(Offset::new(0.0, 20.0));
+
+        assert_ne!(last_frame, this_frame);
+        assert_ne!(Path::from_rrect(rrect), this_frame);
+        assert!(
+            last_frame.curves.get().is_none() && this_frame.curves.get().is_none(),
+            "comparing two different shapes built their curves"
+        );
+
+        // Equal shapes still compare by their curves once one is built.
+        let built = Path::from_rrect(rrect).translate(Offset::new(0.0, 20.0));
+        let _ = built.commands().len();
+        assert_eq!(built, this_frame);
     }
 }
