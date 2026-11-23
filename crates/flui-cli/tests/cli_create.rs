@@ -473,6 +473,37 @@ fn create_project_default_template_is_counter() {
 }
 
 #[test]
+fn every_project_gives_rust_analyzer_a_target_directory_of_its_own() {
+    let tmp = TempDir::new().expect("temp dir");
+    for (name, flags) in [
+        ("counter", &["--template", "counter"][..]),
+        ("empty", &["--template", "empty"][..]),
+        ("widgets", &["--lib"][..]),
+        ("reload", &["--hot-reload"][..]),
+    ] {
+        flui()
+            .args(["create", name, "--org", "com.test", "--no-check"])
+            .args(flags)
+            .arg("--path")
+            .arg(tmp.path())
+            .assert()
+            .success();
+        let project = tmp.path().join(name);
+        let config: toml::Table = std::fs::read_to_string(project.join("rust-analyzer.toml"))
+            .unwrap_or_else(|error| panic!("{name}: rust-analyzer.toml: {error}"))
+            .parse()
+            .unwrap_or_else(|error| panic!("{name}: rust-analyzer.toml is not TOML: {error}"));
+        // `true` is rust-analyzer's own subdirectory of the target directory,
+        // `target/rust-analyzer`, which the project's `/target` rule ignores.
+        assert_eq!(
+            config.get("cargo").and_then(|cargo| cargo.get("targetDir")),
+            Some(&toml::Value::Boolean(true)),
+            "{name}: {config:?}"
+        );
+    }
+}
+
+#[test]
 fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
     let tmp = TempDir::new().expect("temp dir");
     for (name, template, hot_reload) in [

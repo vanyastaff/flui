@@ -146,6 +146,17 @@ Cargo.lock
 *.keystore
 ";
 
+/// `rust-analyzer.toml` for a generated project, read by rust-analyzer in
+/// any editor. Its `cargo check` on each save then builds in
+/// `target/rust-analyzer` and no longer holds the build directory lock the
+/// `cargo build` of `flui run` waits on after the same save.
+const RUST_ANALYZER_TEMPLATE: &str = r"# rust-analyzer checks this project in target/rust-analyzer, so the check it
+# runs on each save does not hold the lock on target/ while `flui run`
+# rebuilds the application.
+[cargo]
+targetDir = true
+";
+
 /// Builder for generating FLUI project templates.
 ///
 /// # Builder Methods
@@ -236,7 +247,8 @@ impl TemplateBuilder {
     ///
     /// This is what `--dry-run` inspects, and what [`generate`](Self::generate)
     /// writes: the same plan either way, so a dry run shows exactly what a
-    /// real run would create — including `.gitignore` and, for a
+    /// real run would create — including `.gitignore`, `rust-analyzer.toml`,
+    /// an application's `.cargo/config.toml` and, for a
     /// non-library, non-hot-reload template, the platform scaffolding
     /// (`platforms/<name>/…`). The template match is exhaustive on
     /// purpose — a new [`Template`] variant must get its own generator
@@ -263,7 +275,9 @@ impl TemplateBuilder {
             }
         };
 
-        let plan = plan.file(".gitignore", GITIGNORE_TEMPLATE);
+        let plan = plan
+            .file(".gitignore", GITIGNORE_TEMPLATE)
+            .file("rust-analyzer.toml", RUST_ANALYZER_TEMPLATE);
 
         if !self.hot_reload && self.template.is_library() {
             return plan;
@@ -322,7 +336,7 @@ impl TemplateBuilder {
     /// Generate the project from the template.
     ///
     /// This is the terminal method that consumes the builder and writes
-    /// the plan — templates, `.gitignore`, and platform scaffolding alike
+    /// the plan — every file [`plan`](Self::plan) lists
     /// — to disk. It is a thin wrapper over [`plan`](Self::plan) and
     /// [`ProjectPlan::write`] on purpose: the only way to change what a
     /// real run produces is to change the plan, which is exactly what
