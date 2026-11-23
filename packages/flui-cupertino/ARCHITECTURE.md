@@ -40,22 +40,31 @@ styles through a mounted CupertinoTheme and checks actual painted glyph sizes
 and restored layout through MediaQuery publication. It does not establish
 UIKit font identity, optical sizing or native execution.
 
-### Palette resolution shares brightness precedence and contrast dependencies
+### Palette resolution shares brightness precedence and selective dependencies
 
-Standalone dynamic colors, theme resolution and text roles pick a variant
-through one private color resolver, from the effective brightness and the
-contrast preference. A theme's explicit brightness wins even before that theme
-is installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
-colors remain authored values. A standalone dynamic color subscribes only to
-the media fields it varies along, so unrelated window size changes do not rerun
-its resolution; a theme reads brightness, contrast and the system accent once
-for all its colors.
+`CupertinoColors` is UIKit's palette as Flutter carries it, every value
+Flutter's. Standalone dynamic colors, theme resolution and text roles pick a
+variant through one private color resolver, from the effective brightness, the
+interface level and the contrast preference. A theme's explicit brightness wins
+even before that theme is installed as an ancestor; the level follows the
+nearest `CupertinoUserInterfaceLevel`, base without one; contrast follows the
+nearest `MediaQuery`. Static colors remain authored values. A standalone
+dynamic color subscribes only to the inputs it varies along, so unrelated
+window size or level changes do not rerun its resolution; a theme reads
+brightness, level, contrast and the system accent once for all its colors.
+Nothing in this package installs an elevated level: the dialogs and sheets
+that do in Flutter are not in this catalog, and an application installs one
+over what it presents above its main content.
 
 `retained_colors_follow_contrast_and_explicit_brightness` and
 `authored_and_nested_colors_ignore_outer_contrast` pin retained-tree behavior.
 `explicit_app_brightness_applies_to_live_contrast_colors` checks the palette and
-text roles an app's descendants read during live contrast changes. Elevation
-variants remain stored but unresolved; no interface-level source is implemented.
+text roles an app's descendants read during live contrast changes.
+`palette_constants_resolve_to_flutters_values` holds a sample of the palette to
+Flutter's values, `an_elevated_level_picks_the_elevated_variants` the level's
+selection, its live change and its selective dependency, and
+`a_theme_below_an_elevated_level_resolves_apart` the theme resolution keyed by
+the level.
 
 ### A theme is resolved once per set of inputs and read by field
 
@@ -67,10 +76,11 @@ with its source by mistake.
 
 `CupertinoTheme` keeps the resolutions its readers asked for in a cache its
 view value owns, so a clone of the view shares it. The key is every input
-resolution reads: the effective brightness, the contrast preference and the
-system accent when it applies. Resolution under a key reads nothing else from
-the context, so the key is complete by construction. The cache holds four
-entries and evicts the oldest. Readers under the same inputs share one `Rc`;
+resolution reads: the effective brightness, the interface level, the contrast
+preference and the system accent when it applies. Resolution under a key reads
+nothing else from the context, so the key is complete by construction. The
+cache holds eight entries, the brightness, level and contrast combinations,
+and evicts the oldest. Readers under the same inputs share one `Rc`;
 `CupertinoTheme::of` without an ancestor theme resolves the default afresh.
 The default roles share one process-wide copy of their family names, which is
 immutable data.

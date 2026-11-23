@@ -2,9 +2,11 @@
 //!
 //! The iOS-style (Cupertino) widget catalog for FLUI.
 //!
-//! - Color and theme: [`CupertinoColors`], [`CupertinoColor`] and
-//!   [`CupertinoDynamicColor`] (the brightness- and contrast-adaptive color
-//!   system), [`CupertinoThemeData`] and [`CupertinoTextThemeData`] (what an
+//! - Color and theme: [`CupertinoColors`] (UIKit's palette), [`CupertinoColor`]
+//!   and [`CupertinoDynamicColor`] (the brightness-, contrast- and level-adaptive
+//!   color system), [`CupertinoUserInterfaceLevel`] (the base or elevated
+//!   level a subtree's colors resolve for), [`CupertinoThemeData`] and
+//!   [`CupertinoTextThemeData`] (what an
 //!   author writes), the [`CupertinoTheme`] inherited widget that publishes
 //!   them to a subtree, and [`ResolvedCupertinoTheme`] with
 //!   [`ResolvedCupertinoTextTheme`] (what widgets read, resolved for their
@@ -25,11 +27,12 @@
 //! it leaves out of Flutter's counterpart.
 //!
 //! Other Cupertino components (`CupertinoTextField`, pickers, action sheets,
-//! `CupertinoSliverNavigationBar` and large titles) are not provided. The
-//! interface-elevation axis of [`CupertinoDynamicColor`] is not resolved:
-//! the elevated variants are stored and resolution uses base elevation,
-//! because FLUI has no interface-level ambient. Brightness and contrast
-//! resolve from the ambient theme and media data.
+//! `CupertinoSliverNavigationBar` and large titles) are not provided, so
+//! nothing in this package installs an elevated
+//! [`CupertinoUserInterfaceLevel`]; an application wraps what it presents
+//! above its main content in one. A dynamic color takes its brightness from
+//! the ambient theme, its contrast from the media data and its level from
+//! the nearest `CupertinoUserInterfaceLevel`.
 //!
 //! ## ADR-0088: built on `flui-sdk` alone
 //!
@@ -76,6 +79,7 @@ mod app;
 mod bottom_tab_bar;
 mod button;
 mod colors;
+mod interface_level;
 mod nav_bar;
 mod page_control;
 mod page_scaffold;
@@ -88,6 +92,7 @@ pub use app::CupertinoApp;
 pub use bottom_tab_bar::{CupertinoTabBar, CupertinoTabBarItem};
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};
 pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
+pub use interface_level::{CupertinoUserInterfaceLevel, CupertinoUserInterfaceLevelData};
 pub use nav_bar::CupertinoNavigationBar;
 pub use page_control::CupertinoPageControl;
 pub use page_scaffold::CupertinoPageScaffold;
