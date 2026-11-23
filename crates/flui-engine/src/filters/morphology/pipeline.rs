@@ -108,7 +108,7 @@ impl MorphologyPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Morphology Shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/effects/morphology.wgsl").into(),
+                crate::shaders::wgsl_source!("effects/morphology.wgsl").into(),
             ),
         });
 

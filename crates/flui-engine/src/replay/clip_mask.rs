@@ -480,7 +480,7 @@ impl ClipMaskPipeline {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Clip Mask Membership"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/clip_mask.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::wgsl_source!("clip_mask.wgsl").into()),
         });
         Self {
             layout,

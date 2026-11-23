@@ -37,6 +37,14 @@
 //! Only the uniform structs + bind-group layout are taken from the generated
 //! bindings.
 //!
+//! ## Shader text for the binary
+//!
+//! A pipeline hands WGSL text to the GPU API, so the text is linked into every
+//! application. `strip_wgsl_sources` writes each file of `src/shaders/` to
+//! `OUT_DIR/wgsl/<same path>` without its line comments, indentation and blank
+//! lines, and the composed shaders are written the same way; the pipelines
+//! include those copies (`shaders::wgsl_source!`), never a source file.
+//!
 //! ## Inner-attribute post-processing
 //!
 //! `wgsl_bindgen` 0.22 emits `#![allow(...)]` at the top of the generated file.
@@ -261,6 +269,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let composed_root = out_dir.join("shaders");
     compose_wesl_shaders(&shader_root, &composed_root)?;
+    strip_wgsl_sources(&shader_root, &out_dir.join("wgsl"))?;
 
     for cfg in SHADER_CONFIGS {
         let entry_path = effects_dir.join(cfg.shader_name);
@@ -326,7 +335,7 @@ fn compose_wesl_shaders(
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&out_path, composed.to_string())?;
+        fs::write(&out_path, strip_wgsl(&composed.to_string())?)?;
     }
     Ok(())
 }
@@ -439,4 +448,58 @@ fn strip_inner_allow_from_generated(path: &Path) -> Result<(), Box<dyn std::erro
         .join("\n");
     fs::write(path, patched)?;
     Ok(())
+}
+
+/// Write every `.wgsl` file under `shader_root` to the same relative path under
+/// `stripped_root`, as [`strip_wgsl`] leaves it.
+///
+/// A pipeline hands its shader text to the GPU API as it is, so the text is
+/// linked into every application. The sources carry more comment than code; the
+/// copies carry the code alone, and `shaders::wgsl_source!` includes them.
+fn strip_wgsl_sources(
+    shader_root: &Path,
+    stripped_root: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in fs::read_dir(shader_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let stripped = stripped_root.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            strip_wgsl_sources(&path, &stripped)?;
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "wgsl")
+        {
+            let code = strip_wgsl(&fs::read_to_string(&path)?)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            fs::create_dir_all(stripped_root)?;
+            fs::write(&stripped, code)?;
+        }
+    }
+    Ok(())
+}
+
+/// `source` without its line comments, indentation and blank lines.
+///
+/// WGSL has no string or character literal, so `//` opens a comment wherever it
+/// stands, and the comment ends at its line's break, which stays where a line
+/// has code. A block comment is refused: one may hold a `//`, so cutting line
+/// comments around it would cut its end.
+fn strip_wgsl(source: &str) -> Result<String, &'static str> {
+    if source.contains("/*") {
+        return Err(
+            "a block comment (`/*`): the shader sources use line comments, which the \
+                    build strips",
+        );
+    }
+    let mut code = String::with_capacity(source.len());
+    for line in source.lines() {
+        let line = line.split_once("//").map_or(line, |(code, _comment)| code);
+        let line = line.trim();
+        if !line.is_empty() {
+            code.push_str(line);
+            code.push('\n');
+        }
+    }
+    Ok(code)
 }

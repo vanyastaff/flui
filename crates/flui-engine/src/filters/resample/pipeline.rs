@@ -48,7 +48,7 @@ impl ResamplePipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Resample Shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/effects/resample.wgsl").into(),
+                crate::shaders::wgsl_source!("effects/resample.wgsl").into(),
             ),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

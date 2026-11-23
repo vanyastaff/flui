@@ -3,13 +3,28 @@
 //! A shader appears here when its source is ASSEMBLED rather than merely read:
 //! every entry below is a concatenation whose piece order is load-bearing, and
 //! the assembly is what earns the indirection. Shaders that are a single file
-//! (`effects/*.wgsl`, the remaining `common/*.wgsl`) stay
-//! `include_str!`-loaded by their consumers, including `pipelines/effects.rs`
-//! for the shadow pipeline.
+//! (`effects/*.wgsl`, the remaining `common/*.wgsl`) are included by their
+//! consumers through [`wgsl_source!`], including `pipelines/effects.rs` for
+//! the shadow pipeline.
+//!
+//! No pipeline includes a file of `src/shaders/` itself: the text a pipeline
+//! hands to the GPU API is linked into every application, so `build.rs` writes
+//! each file without its comments, indentation and blank lines, and
+//! [`wgsl_source!`] includes that copy.
 //!
 //! A shader that imports a shared module (`import package::color_filter::…;`)
 //! is not read from here at all: `build.rs` resolves it with WESL and its
 //! consumer includes the result through [`composed_wgsl!`].
+
+/// The code of `src/shaders/$path` (`"effects/blit.wgsl"`), as `build.rs`
+/// strips it of comments, indentation and blank lines, as a `&'static str`
+/// literal, so it also nests in `concat!`.
+macro_rules! wgsl_source {
+    ($path:literal) => {
+        include_str!(concat!(env!("OUT_DIR"), "/wgsl/", $path))
+    };
+}
+pub(crate) use wgsl_source;
 
 /// The plain WGSL `build.rs` composed from the WESL module at `$path` under
 /// `src/shaders/` (`"effects/mode"` is `effects/mode.wgsl`), as a `&'static str`
@@ -55,51 +70,51 @@ macro_rules! coverage_correct_shader {
     (gradient $module:literal, $vertex:literal) => {
         crate::pipelines::variants::CoverageShaderSources {
             folded: concat!(
-                include_str!("common/clip.wgsl"),
-                include_str!("common/coverage.wgsl"),
-                include_str!("gradients/stops.wgsl"),
-                include_str!($module),
-                include_str!("common/fragment_folded.wgsl"),
+                wgsl_source!("common/clip.wgsl"),
+                wgsl_source!("common/coverage.wgsl"),
+                wgsl_source!("gradients/stops.wgsl"),
+                wgsl_source!($module),
+                wgsl_source!("common/fragment_folded.wgsl"),
             ),
             isolation: concat!(
-                include_str!("common/clip.wgsl"),
-                include_str!("common/coverage.wgsl"),
-                include_str!("gradients/stops.wgsl"),
-                include_str!($module),
-                include_str!("common/fragment_isolation.wgsl"),
+                wgsl_source!("common/clip.wgsl"),
+                wgsl_source!("common/coverage.wgsl"),
+                wgsl_source!("gradients/stops.wgsl"),
+                wgsl_source!($module),
+                wgsl_source!("common/fragment_isolation.wgsl"),
                 $vertex,
             ),
             second_source: concat!(
                 "enable dual_source_blending;\n",
-                include_str!("common/clip.wgsl"),
-                include_str!("common/coverage.wgsl"),
-                include_str!("gradients/stops.wgsl"),
-                include_str!($module),
-                include_str!("common/fragment_second_source.wgsl"),
+                wgsl_source!("common/clip.wgsl"),
+                wgsl_source!("common/coverage.wgsl"),
+                wgsl_source!("gradients/stops.wgsl"),
+                wgsl_source!($module),
+                wgsl_source!("common/fragment_second_source.wgsl"),
             ),
         }
     };
     ($module:literal, $vertex:literal) => {
         crate::pipelines::variants::CoverageShaderSources {
             folded: concat!(
-                include_str!("common/clip.wgsl"),
-                include_str!("common/coverage.wgsl"),
-                include_str!($module),
-                include_str!("common/fragment_folded.wgsl"),
+                wgsl_source!("common/clip.wgsl"),
+                wgsl_source!("common/coverage.wgsl"),
+                wgsl_source!($module),
+                wgsl_source!("common/fragment_folded.wgsl"),
             ),
             isolation: concat!(
-                include_str!("common/clip.wgsl"),
-                include_str!("common/coverage.wgsl"),
-                include_str!($module),
-                include_str!("common/fragment_isolation.wgsl"),
+                wgsl_source!("common/clip.wgsl"),
+                wgsl_source!("common/coverage.wgsl"),
+                wgsl_source!($module),
+                wgsl_source!("common/fragment_isolation.wgsl"),
                 $vertex,
             ),
             second_source: concat!(
                 "enable dual_source_blending;\n",
-                include_str!("common/clip.wgsl"),
-                include_str!("common/coverage.wgsl"),
-                include_str!($module),
-                include_str!("common/fragment_second_source.wgsl"),
+                wgsl_source!("common/clip.wgsl"),
+                wgsl_source!("common/coverage.wgsl"),
+                wgsl_source!($module),
+                wgsl_source!("common/fragment_second_source.wgsl"),
             ),
         }
     };
@@ -150,53 +165,136 @@ pub(crate) const SWEEP_GRADIENT: crate::pipelines::variants::CoverageShaderSourc
 
 /// Instanced rectangle rendering shader.
 pub(crate) const RECT_INSTANCED: &str = concat!(
-    include_str!("common/clip.wgsl"),
-    include_str!("rect_instanced.wgsl")
+    wgsl_source!("common/clip.wgsl"),
+    wgsl_source!("rect_instanced.wgsl")
 );
 /// Instanced circle rendering shader.
 pub(crate) const CIRCLE_INSTANCED: &str = concat!(
-    include_str!("common/clip.wgsl"),
-    include_str!("circle_instanced.wgsl")
+    wgsl_source!("common/clip.wgsl"),
+    wgsl_source!("circle_instanced.wgsl")
 );
 /// Instanced arc rendering shader.
 pub(crate) const ARC_INSTANCED: &str = concat!(
-    include_str!("common/clip.wgsl"),
-    include_str!("arc_instanced.wgsl")
+    wgsl_source!("common/clip.wgsl"),
+    wgsl_source!("arc_instanced.wgsl")
 );
 /// Analytical shadow shader with shared final clip coverage.
 pub(crate) const SHADOW: &str = concat!(
-    include_str!("common/clip.wgsl"),
-    include_str!("effects/shadow.wgsl")
+    wgsl_source!("common/clip.wgsl"),
+    wgsl_source!("effects/shadow.wgsl")
 );
 /// Instanced texture rendering shader.
 pub(crate) const TEXTURE_INSTANCED: &str = concat!(
-    include_str!("common/clip.wgsl"),
+    wgsl_source!("common/clip.wgsl"),
     "fn filterSourceTexel(t: vec4<f32>) -> vec4<f32> { return vec4<f32>(t.rgb * t.a, t.a); }\n",
-    include_str!("texture_instanced.wgsl"),
+    wgsl_source!("texture_instanced.wgsl"),
     "\n@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
 );
 /// Image color and independent clip coverage over a cropped attachment.
 pub(crate) const TEXTURE_ISOLATION: &str = concat!(
-    include_str!("common/clip.wgsl"),
+    wgsl_source!("common/clip.wgsl"),
     "fn filterSourceTexel(t: vec4<f32>) -> vec4<f32> { return vec4<f32>(t.rgb * t.a, t.a); }\n",
-    include_str!("texture_instanced.wgsl"),
-    include_str!("texture_isolation.wgsl")
+    wgsl_source!("texture_instanced.wgsl"),
+    wgsl_source!("texture_isolation.wgsl")
 );
 /// Decoded source filtering preserves floating channels until composition.
 pub(crate) const TEXTURE_FILTERED: &str = concat!(
-    include_str!("common/clip.wgsl"),
+    wgsl_source!("common/clip.wgsl"),
     composed_wgsl!("image_source_filter"),
-    include_str!("texture_instanced.wgsl"),
+    wgsl_source!("texture_instanced.wgsl"),
     "\n@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
 );
 pub(crate) const TEXTURE_FILTERED_ISOLATION: &str = concat!(
-    include_str!("common/clip.wgsl"),
+    wgsl_source!("common/clip.wgsl"),
     composed_wgsl!("image_source_filter"),
-    include_str!("texture_instanced.wgsl"),
-    include_str!("texture_isolation.wgsl")
+    wgsl_source!("texture_instanced.wgsl"),
+    wgsl_source!("texture_isolation.wgsl")
 );
 /// Instanced glyph rendering shader (the glyph atlas' consumer).
 pub(crate) const GLYPH_INSTANCED: &str = concat!(
-    include_str!("common/clip.wgsl"),
-    include_str!("glyph_instanced.wgsl")
+    wgsl_source!("common/clip.wgsl"),
+    wgsl_source!("glyph_instanced.wgsl")
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ARC_INSTANCED, CIRCLE_INSTANCED, GLYPH_INSTANCED, LINEAR_GRADIENT, RADIAL_GRADIENT,
+        RECT_INSTANCED, SHADOW, SHAPE, SWEEP_GRADIENT, TEXTURE_FILTERED,
+        TEXTURE_FILTERED_ISOLATION, TEXTURE_INSTANCED, TEXTURE_ISOLATION,
+    };
+
+    /// Every shader text a pipeline includes, by the name a failure reports.
+    fn included_sources() -> Vec<(&'static str, &'static str)> {
+        let mut sources = vec![
+            ("rect_instanced", RECT_INSTANCED),
+            ("circle_instanced", CIRCLE_INSTANCED),
+            ("arc_instanced", ARC_INSTANCED),
+            ("shadow", SHADOW),
+            ("texture_instanced", TEXTURE_INSTANCED),
+            ("texture_isolation", TEXTURE_ISOLATION),
+            ("texture_filtered", TEXTURE_FILTERED),
+            ("texture_filtered_isolation", TEXTURE_FILTERED_ISOLATION),
+            ("glyph_instanced", GLYPH_INSTANCED),
+            ("clip_mask", wgsl_source!("clip_mask.wgsl")),
+            ("portable_coverage", wgsl_source!("portable_coverage.wgsl")),
+            ("effects/blit", wgsl_source!("effects/blit.wgsl")),
+            ("effects/blur", wgsl_source!("effects/blur.wgsl")),
+            (
+                "effects/box_downsample",
+                wgsl_source!("effects/box_downsample.wgsl"),
+            ),
+            (
+                "effects/morphology",
+                wgsl_source!("effects/morphology.wgsl"),
+            ),
+            (
+                "effects/present_transform",
+                wgsl_source!("effects/present_transform.wgsl"),
+            ),
+            ("effects/resample", wgsl_source!("effects/resample.wgsl")),
+            ("advanced_blend", composed_wgsl!("advanced_blend")),
+            (
+                "effects/color_matrix",
+                composed_wgsl!("effects/color_matrix"),
+            ),
+            ("effects/gamma", composed_wgsl!("effects/gamma")),
+            ("effects/mode", composed_wgsl!("effects/mode")),
+        ];
+        for (name, coverage) in [
+            ("shape", SHAPE),
+            ("gradients/linear", LINEAR_GRADIENT),
+            ("gradients/radial", RADIAL_GRADIENT),
+            ("gradients/sweep", SWEEP_GRADIENT),
+        ] {
+            sources.push((name, coverage.folded));
+            sources.push((name, coverage.second_source));
+            sources.push((name, coverage.isolation));
+        }
+        sources
+    }
+
+    /// The shader text is linked into every application, so it carries code
+    /// and nothing for a reader: `build.rs` strips each source and each
+    /// composed shader before a pipeline includes it.
+    #[test]
+    fn a_pipeline_includes_shader_code_without_comments_or_indentation() {
+        for (name, source) in included_sources() {
+            for line in source.lines() {
+                assert!(!line.contains("//"), "{name} keeps a comment: {line:?}");
+                assert_eq!(line, line.trim(), "{name} keeps a line's indentation");
+            }
+        }
+    }
+
+    /// Stripping removes nothing a shader needs: each text still parses, on a
+    /// host with no GPU to compile it.
+    #[test]
+    fn every_included_shader_parses_as_wgsl() {
+        for (name, source) in included_sources() {
+            if let Err(error) = wgpu::naga::front::wgsl::parse_str(source) {
+                panic!("{name} does not parse:\n{}", error.emit_to_string(source));
+            }
+        }
+    }
+}

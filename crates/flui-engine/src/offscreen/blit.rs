@@ -137,7 +137,7 @@ impl OffscreenRenderer {
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Blit Shader"),
                     source: wgpu::ShaderSource::Wgsl(
-                        include_str!("../shaders/effects/blit.wgsl").into(),
+                        crate::shaders::wgsl_source!("effects/blit.wgsl").into(),
                     ),
                 });
 
