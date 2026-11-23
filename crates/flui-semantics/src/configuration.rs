@@ -2604,6 +2604,22 @@ mod tests {
             ),
             (
                 &[
+                    ("button", plain, click),
+                    (
+                        "disabled header",
+                        |c| {
+                            c.set_expanded(false);
+                            c.set_enabled(Some(false));
+                        },
+                        &[],
+                    ),
+                ],
+                &[A::Click],
+                &[Some("button")],
+                "a header that registers nothing because it is disabled is no click-only disclosure",
+            ),
+            (
+                &[
                     ("tile", plain, click),
                     (
                         "disabled radio",
@@ -2725,6 +2741,20 @@ mod tests {
             ),
         ]));
         assert_eq!(node.is_enabled(), Some(false), "the disabled radio's state");
+        // A disabled header whose click is not the node's does not disable
+        // the button that owns it.
+        let node = merge(&build(&[
+            (
+                "disabled header",
+                |c| {
+                    c.set_expanded(false);
+                    c.set_enabled(Some(false));
+                },
+                &[],
+            ),
+            ("button", |c| c.set_enabled(Some(true)), click),
+        ]));
+        assert_eq!(node.is_enabled(), Some(true), "the button owns the click");
 
         // A nested merge whose blocked radio acted stays acting: an outer
         // merge does not give its click to a tile.

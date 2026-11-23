@@ -89,8 +89,8 @@ impl ActionSubject {
     }
 
     /// What `Click` changes on `node`: the first of `toggled`, `selected`
-    /// and a click-only `expanded` (one without `Expand` or `Collapse`) it
-    /// declares.
+    /// and a click-only `expanded` (one with `Click` and without `Expand` or
+    /// `Collapse`) it declares.
     #[cfg(test)]
     fn click_on(node: &SemanticsConfiguration) -> Self {
         let states = node.states();
@@ -99,6 +99,7 @@ impl ActionSubject {
         } else if states.selected().is_some() {
             Self::Selection
         } else if states.expanded().is_some()
+            && node.has_action(SemanticsAction::Click)
             && !node.has_action(SemanticsAction::Expand)
             && !node.has_action(SemanticsAction::Collapse)
         {
@@ -235,8 +236,15 @@ impl ActionPlan {
         let announced = |subject: ActionSubject, attribute: RoleAttribute| {
             owner_of(subject).is_some() && applicable(role, attribute)
         };
+        // A click-only disclosure is one its click expands: a header that
+        // registers nothing only because it is disabled is not one, so it
+        // does not take the click of an enabled part beside it.
         let click_only_disclosure = owner_of(ActionSubject::Disclosure).is_some_and(|owner| {
-            !owner.has_action(SemanticsAction::Expand)
+            (owner.has_action(SemanticsAction::Click)
+                || owner
+                    .withheld_subjects()
+                    .contains(ActionSubject::Disclosure))
+                && !owner.has_action(SemanticsAction::Expand)
                 && !owner.has_action(SemanticsAction::Collapse)
         });
         let click = if announced(ActionSubject::Toggle, RoleAttribute::Toggled) {
@@ -261,10 +269,14 @@ impl ActionPlan {
                     .is_some_and(|owner| subject.is_acted_on_by(owner, click, has_range))
             })
             .fold(SubjectSet::default(), SubjectSet::with);
-        let enabled_from = OWNED
-            .iter()
-            .position(|owned| *owned == click)
-            .and_then(|index| owners[index])
+        // The node announces enabled as the part whose handler its click
+        // runs: the owner of the click's subject when it acts on it, else the
+        // first part registering `Click`.
+        let click_place = match OWNED.iter().position(|owned| *owned == click) {
+            Some(index) if acting.contains(click) => owners[index],
+            _ => all().position(|config| config.has_action(SemanticsAction::Click)),
+        };
+        let enabled_from = click_place
             .filter(|place| at(*place).is_some_and(|owner| owner.states().enabled().is_some()));
         Self {
             owners,
@@ -392,6 +404,12 @@ mod tests {
 
         let mut disclosure = SemanticsConfiguration::new();
         disclosure.set_expanded(false);
+        assert_eq!(
+            ActionSubject::of(A::Click, &disclosure),
+            Some(S::Activation),
+            "an expanded state nothing clicks is not a click-only disclosure"
+        );
+        disclosure.add_action(A::Click, std::rc::Rc::new(|_| {}));
         assert_eq!(
             ActionSubject::of(A::Click, &disclosure),
             Some(S::Disclosure)

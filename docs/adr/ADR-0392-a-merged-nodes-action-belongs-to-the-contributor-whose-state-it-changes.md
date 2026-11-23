@@ -9,9 +9,9 @@
   completes for a forced merge's standard actions, `toggled`, `selected` and `enabled`),
   [ADR-0332](ADR-0332-a-control-takes-the-content-roles-beneath-it.md) (role precedence in a
   merge), [ADR-0223](ADR-0223-authored-semantics-regions.md) (handlers pinned before a fold)
-- **Sources:** `flutter/flutter@3.44.0` `packages/flutter/lib/src/semantics/semantics.dart:5040`
-  (`_getSemanticsActionHandlerForId`), `:6746` (`SemanticsConfiguration.absorb`), `:3830`
-  (merged flags); `packages/flutter/lib/src/widgets/basic.dart:8121` (the `MergeSemantics`
+- **Sources:** `flutter/flutter@3.50.1` `packages/flutter/lib/src/semantics/semantics.dart:5185`
+  (`_getSemanticsActionHandlerForId`), `:6910` (`SemanticsConfiguration.absorb`), `:3943`
+  (merged flags); `packages/flutter/lib/src/widgets/basic.dart:7986` (the `MergeSemantics`
   contract)
 
 ## Context and problem statement
@@ -39,12 +39,12 @@ announces and the action that changes it come from two merge rules. The question
 contributor's handler a forced merge's standard action runs, and which contributor's `enabled`
 the node announces beside it.
 
-Flutter documents the first handler in tree order (`basic.dart:8121`), and resolves an action
+Flutter documents the first handler in tree order (`basic.dart:7986`), and resolves an action
 on a merged node by its own handler, else the first descendant node in tree order that can
-perform it (`semantics.dart:5040`). A descendant that forms no node of its own is folded into
-its parent's configuration last wins (`_actions.addAll`, `:6759`), so two plain buttons under
+perform it (`semantics.dart:5185`). A descendant that forms no node of its own is folded into
+its parent's configuration last wins (`_actions.addAll`, `:6923`), so two plain buttons under
 one `MergeSemantics` run the second, against the documented contract; the merged node's flags
-are the union of its descendants' (`:3830`). Either way the handler is chosen by tree order and
+are the union of its descendants' (`:3943`). Either way the handler is chosen by tree order and
 the state by union, so Flutter can announce a radio's checked state and run the tile's tap. Its
 material list tiles avoid the case by giving the tile and the control one callback; an
 application composing its own tile does not know to.
@@ -121,7 +121,7 @@ pub(crate) enum ActionSubject {
 
 | Action | Subject on the merged node |
 |---|---|
-| `Click` | the first of `Toggle`, `Selection`, `Disclosure` whose state the node publishes and its published role announces (`applicability::applicable`; a node without a role announces every state), where `Disclosure` counts only when its owner registers neither `Expand` nor `Collapse` (the click-only disclosure); else `Activation` |
+| `Click` | the first of `Toggle`, `Selection`, `Disclosure` whose state the node publishes and its published role announces (`applicability::applicable`; a node without a role announces every state), where `Disclosure` counts only when its owner registers `Click` and neither `Expand` nor `Collapse` (the click-only disclosure; a full header that registers nothing because it is disabled is not one); else `Activation` |
 | `Expand`, `Collapse` | `Disclosure` |
 | `Increment`, `Decrement`, `SetNumericValue` | `Range` when the node publishes a numeric range, else `Scroll` |
 | `ScrollUp`, `ScrollDown`, `ScrollLeft`, `ScrollRight`, `SetScrollOffset`, `ScrollIntoView` | `Scroll`: reveal moves the scroll groups of the node and its ancestors (`resolve_action`), so its handler is the scroll group's owner's |
@@ -161,28 +161,33 @@ dropped. Its owners are those of the merged result:
   `selected`, not the most informative one, so `Toggled` merges receiver first like every other
   state and ADR-0206 decision 3's `Mixed > On > Off` is gone;
 - an owner **acts on** its subject when it registers one of the subject's actions (a blocked one
-  included), declares `enabled(false)`, or is itself a merge whose owner of that subject acted
+  included), declares `enabled(false)`, or is a fragment already folded from its own descendants
+  whose owner of that subject acted
   (§3);
 - an acting owner supplies every handler of its subject, and only it: an action of the subject it
   does not offer (a scrollable at its end, a disabled or blocked control) is offered by nobody;
 - a subject whose owner does not act (a `Semantics` that only declares `expanded` or `toggled`
   over the detector that handles the tap), and a subject nobody declares, takes each action from
   the first configuration in fold order that registers it, as `Activation` does;
-- the node's `enabled` is the owner's of `Click`'s subject when that owner declares one, else
-  ADR-0206's (the receiver's, else the first contributor's), so a disabled radio in an enabled
-  tile is announced disabled and offers no click. A node announced disabled refuses every
+- the node's `enabled` is that of the part whose handler `Click` runs (the acting owner of its
+  subject, else the first part registering `Click`) when that part declares one, else ADR-0206's
+  (the receiver's, else the first contributor's), so a disabled radio in an enabled tile is
+  announced disabled and offers no click, and a disabled header beside an enabled button does not
+  disable the button's node. A node announced disabled refuses every
   request at `resolve_action`, so the merged node offers what it announces: a disabled owner of
   `Click` disables the whole node, as a disabled tile always has.
 
 `absorb` itself keeps ADR-0206's table for an ordinary merge, where the conflict rules already
 leave each group and each action one supplier; only `ForcedMerge::absorb` reads the plan.
 
-### §3 A merged configuration keeps what an outer merge needs
+### §3 A folded fragment keeps what the next fold up needs
 
-A configuration that is the result of a forced merge is one contributor to an outer merge.
-Blocking drops a handler before the fold takes it, so such a configuration records, in a
+Under one `MergeSemantics` each level folds its pending fragments into its own configuration,
+which is then one fragment of the level above (a node that merges its own descendants is never
+absorbed, ADR-0206 decision 4, so this is the only way one fold feeds another).
+Blocking drops a handler before the fold takes it, so such a fragment records, in a
 `SubjectSet` of two bytes, the subjects whose owner acted but whose handlers it offers none of;
-the outer plan reads that set as acting. Nothing else is kept per contributor once it is folded,
+the plan above reads that set as acting. Nothing else is kept per contributor once it is folded,
 and no allocation is added. The handlers the fold drops are pinned before it runs (ADR-0223), as
 the overwritten ones were.
 
@@ -192,7 +197,7 @@ the overwritten ones were.
   both orders, and a later contributor that changes the role or adds a group changes the owner
   before any handler is taken.
 - Good, because two plain buttons merged run the first one, which is the `MergeSemantics`
-  contract Flutter documents (`basic.dart:8121`) and its own fold does not keep.
+  contract Flutter documents (`basic.dart:7986`) and its own fold does not keep.
 - Good, because an ordinary merge is unchanged: `absorb`'s table and the conflict rules are as
   before.
 - Good, because a new `SemanticsAction` fails a test until its subject is chosen.
@@ -219,7 +224,7 @@ the overwritten ones were.
   action of `SemanticsAction::ALL` with its subject.
 - `a_forced_merge_plans_each_action_by_its_owner` in `configuration.rs`: a row per subject in
   both orders, the non-acting wrapper, a disabled and a blocked owner, a later contributor that
-  changes the role or adds a range, a nested merge whose blocked owner acted, a switch beside a
+  changes the role or adds a range, a fragment folded from a blocked radio, a switch beside a
   click-only header (its `expanded` dropped, no Expand), a toggle button over a check box whose
   role announces the toggle, and `enabled` from the owner; `state_merge_precedence` there keeps
   the receiver's `toggled`.

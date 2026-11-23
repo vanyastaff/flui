@@ -180,8 +180,9 @@ value control, then content (image, heading, a text-level role, or a read-only v
 rule: every state (`toggled`, a yes/no state, `Invalid`,
 `Current`, `HasPopup`, `AutoComplete`, an orientation) as the receiver declares it, else as
 the contributor does, so a disabled tile is not enabled by a part that declares itself enabled
-and a field that passed validation is not failed by a part; a forced merge then takes `toggled`,
-`selected` and `enabled` from the part that owns the action changing them (below).
+and a field that passed validation is not failed by a part; a forced merge then takes `toggled`
+and `selected` from the part that owns the action changing them, and `enabled` from the part
+whose handler its click runs (below).
 `Invalid::False` is a declaration:
 two fields that each validated form two nodes (`a_passed_validation_counts_as_declared`).
 The roles `Generic` and `Presentation` declare a node to mean nothing: it publishes as a
@@ -205,8 +206,10 @@ declares the state, else the first that does). An owner that acts on its subject
 of its actions, a blocked one included, or declares itself disabled) supplies every handler of
 it and nobody else does, so a scrollable at its end offers no further step and a blocked or
 disabled radio no click; any other action keeps the first handler in fold order, the receiver's
-own first. The node's `enabled` is the owner's of its click's subject. A forced merge records the
-subjects whose owner acted but offered nothing, so an outer forced merge reads it the same way
+own first. The node's `enabled` is that of the part whose handler its click runs, where that part
+declares one; a click-only disclosure is one that registers `Click`, so a header disabled into
+registering nothing takes no click from a button beside it. A fold records the
+subjects whose owner acted but offered nothing, so the fold one level up reads it the same way
 (ADR-0392).
 A node offers any number of custom actions, each added with its label and
 its own handler, and two sets of them share a node. Their `CustomActionId` is the action's place
