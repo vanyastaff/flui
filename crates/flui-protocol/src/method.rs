@@ -48,6 +48,10 @@ vocabulary! {
     pub enum MethodEffect {
         /// Nothing in the app.
         ReadOnly => "read_only",
+        /// Only what the development tools draw over the app's windows, never the app's own
+        /// state: an observer may call it (ADR-0288 §8). A window serves it from that drawing
+        /// alone.
+        Annotates => "annotates",
         /// The app's state, as a user's input would. Never resent on timeout.
         Acts => "acts",
         /// Something that cannot be taken back, such as ending the app.
@@ -156,6 +160,7 @@ macro_rules! addressed_by_window_field {
 
 addressed_by_window_field!(
     crate::audit::AuditParams,
+    crate::build::BuildReportParams,
     crate::capture::CaptureParams,
     crate::input::JournalParams,
     crate::inspect::InspectParams,
@@ -346,6 +351,10 @@ macro_rules! __method_table {
             /// what was not.
             AuditScreen = "audit.screen", Driver, ReadOnly, Core,
                 $crate::audit::AuditParams => $crate::audit::AuditReport;
+            /// Show a window where the application's next build is: building, failed with its
+            /// diagnostics, or done.
+            BuildReport = "build.report", Agent(window), Annotates, Session,
+                $crate::build::BuildReportParams => $crate::session::Empty;
             /// The pixels the window last put on screen.
             CapturePresented = "capture.presented", Agent(window), ReadOnly, Core,
                 $crate::capture::CaptureParams => $crate::capture::Screenshot;
