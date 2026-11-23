@@ -467,9 +467,9 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
         height: Some(2.0),
         font_family: Some("monospace".into()),
         font_family_fallback: ["serif"].into(),
-        font_features: vec![FontFeature::enable(OpenTypeTag::new(*b"smcp"))],
-        font_variations: vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 700.0)],
-        shadows: Some(vec![Shadow::new(Color::BLACK, Offset::new(1.0, 1.0), 2.0)]),
+        font_features: [FontFeature::enable(OpenTypeTag::new(*b"smcp"))].into(),
+        font_variations: [FontVariation::new(OpenTypeTag::new(*b"wght"), 700.0)].into(),
+        shadows: Some([Shadow::new(Color::BLACK, Offset::new(1.0, 1.0), 2.0)].into()),
         decoration: Some(TextDecoration::UNDERLINE),
     };
     let TextSpan {

@@ -86,7 +86,7 @@ impl Lerp for crate::typography::TextStyle {
                         ),
                         blur_radius: scalar(&a.blur_radius, &b.blur_radius).max(0.0),
                     })
-                    .collect::<Vec<crate::styling::Shadow>>(),
+                    .collect::<crate::typography::SharedSlice<crate::styling::Shadow>>(),
             ),
             _ => near.shadows.clone(),
         };

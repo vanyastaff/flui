@@ -1714,9 +1714,11 @@ pub(crate) fn lerp_endpoints_keep_a_gradient_fallback_and_an_image_blend() {
 }
 
 /// A copy of a style, and a merge that takes a side's names, share the names instead of copying
-/// them: the same family and the same fallback list, not equal ones at another address.
-pub(crate) fn a_style_copy_and_merge_share_its_font_names() {
-    use flui_painting::typography::TextStyle;
+/// them: the same family and the same fallback list, not equal ones at another address, and the
+/// same font settings and shadows.
+pub(crate) fn a_style_copy_and_merge_share_its_font_lists() {
+    use flui_painting::styling::{Color, Shadow};
+    use flui_painting::typography::{FontFeature, FontVariation, OpenTypeTag, TextStyle};
     let named = TextStyle {
         font_family: Some("Roboto".into()),
         font_family_fallback: ["Noto Sans", "sans-serif"].into(),
@@ -1747,5 +1749,27 @@ pub(crate) fn a_style_copy_and_merge_share_its_font_names() {
     assert!(
         TextStyle::default().font_family_fallback.is_empty(),
         "no fallback is the empty list"
+    );
+
+    // A style's font settings and shadows are shared the same way: an icon's style, copied
+    // through a theme and a painter, copies none of them.
+    let set = TextStyle::default()
+        .with_font_variation(FontVariation::new(OpenTypeTag::new(*b"wght"), 500.0))
+        .with_font_feature(FontFeature::enable(OpenTypeTag::new(*b"smcp")))
+        .with_shadow(Shadow::new(Color::BLACK, Offset::new(1.0, 1.0), 2.0));
+    let (allocations, copy) = crate::foreign_image::allocations_during(|| {
+        set.clone()
+            .merge(&TextStyle::default().with_font_size(12.0))
+    });
+    assert_eq!(
+        allocations, 0,
+        "copying and merging a style copied its lists"
+    );
+    assert_eq!(copy.font_variations, set.font_variations);
+    assert_eq!(copy.font_features.as_ptr(), set.font_features.as_ptr());
+    assert_eq!(copy.shadows, set.shadows);
+    assert_eq!(
+        copy.font_variations.as_slice(),
+        [FontVariation::new(OpenTypeTag::new(*b"wght"), 500.0)]
     );
 }

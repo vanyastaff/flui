@@ -104,7 +104,7 @@ pub(crate) fn span_shadows_and_backgrounds_reach_the_display_list() {
     let sharp = Shadow::new(Color::BLUE, Offset::new(-1.0, 0.0), 0.0);
     let cast = TextStyle {
         background_color: Some(Color::YELLOW),
-        shadows: Some(vec![near, sharp]),
+        shadows: Some([near, sharp].into()),
         ..base()
     };
     let paint_only = TextStyle {
@@ -186,7 +186,7 @@ pub(crate) fn an_ellipsis_takes_its_spans_shadow_and_background() {
     let fonts = FontCollection::new();
     let shadowed = TextStyle {
         background_color: Some(Color::YELLOW),
-        shadows: Some(vec![Shadow::new(Color::RED, Offset::new(1.0, 1.0), 0.0)]),
+        shadows: Some([Shadow::new(Color::RED, Offset::new(1.0, 1.0), 0.0)].into()),
         ..base()
     };
     let text = TextSpan::new("")
@@ -297,7 +297,7 @@ pub(crate) fn refused_shadows_are_dropped_and_the_rest_painted() {
     let text = TextSpan::styled(
         "Refused",
         TextStyle {
-            shadows: Some(list),
+            shadows: Some(list.into()),
             ..base()
         },
     );

@@ -3,9 +3,7 @@
 use std::num::NonZeroU16;
 
 use crate::styling::{Color, Shadow};
-use crate::typography::{
-    FontFamilyFallback, FontFamilyName, FontFeature, FontVariation, TextDecoration,
-};
+use crate::typography::{FontFamilyName, FontFeature, FontVariation, SharedSlice, TextDecoration};
 
 /// The thickness of glyphs, on the CSS Fonts 4 scale of 1 to 1000.
 ///
@@ -146,7 +144,7 @@ pub struct StrutStyle {
     /// Font family name.
     pub font_family: Option<FontFamilyName>,
     /// Font families to fall back to.
-    pub font_family_fallback: FontFamilyFallback,
+    pub font_family_fallback: SharedSlice<FontFamilyName>,
     /// Font size.
     pub font_size: Option<f64>,
     /// Line height multiplier.
@@ -228,16 +226,16 @@ pub struct TextStyle {
     /// Font family name.
     pub font_family: Option<FontFamilyName>,
     /// Font families to fall back to.
-    pub font_family_fallback: FontFamilyFallback,
+    pub font_family_fallback: SharedSlice<FontFamilyName>,
     /// Font features.
-    pub font_features: Vec<FontFeature>,
+    pub font_features: SharedSlice<FontFeature>,
     /// Font variations.
-    pub font_variations: Vec<FontVariation>,
+    pub font_variations: SharedSlice<FontVariation>,
     /// The shadows the span's glyphs cast, painted in list order under the
     /// glyphs: each is the glyphs' silhouette in the shadow's colour, moved
     /// by its offset and blurred by its blur radius (ADR-0309). `None`
     /// inherits the enclosing style's; an empty list casts none.
-    pub shadows: Option<Vec<Shadow>>,
+    pub shadows: Option<SharedSlice<Shadow>>,
     /// The lines drawn along the span's text, where its font puts them
     /// (ADR-0310). `None` inherits the enclosing style's;
     /// [`TextDecoration::NONE`] draws none.
@@ -363,21 +361,21 @@ impl TextStyle {
     /// Adds a font feature.
     #[inline]
     pub fn with_font_feature(mut self, feature: FontFeature) -> Self {
-        self.font_features.push(feature);
+        self.font_features = self.font_features.with(feature);
         self
     }
 
     /// Adds a font variation.
     #[inline]
     pub fn with_font_variation(mut self, variation: FontVariation) -> Self {
-        self.font_variations.push(variation);
+        self.font_variations = self.font_variations.with(variation);
         self
     }
 
     /// Adds a shadow after the ones the style already casts.
     #[inline]
     pub fn with_shadow(mut self, shadow: Shadow) -> Self {
-        self.shadows.get_or_insert_with(Vec::new).push(shadow);
+        self.shadows = Some(self.shadows.take().unwrap_or_default().with(shadow));
         self
     }
 
