@@ -395,10 +395,7 @@ mod tests {
     fn fixture() -> FallbackChain {
         FallbackChain::from_lists(
             &["Nothing Carries This", "Roboto", "CupertinoIcons"],
-            &[(
-                Script::from_str_unchecked("Hani"),
-                &["Material Icons", "Roboto"],
-            )],
+            &[(Script::from_bytes(*b"Hani"), &["Material Icons", "Roboto"])],
         )
     }
 
@@ -435,7 +432,7 @@ mod tests {
         install_into(&fixture(), &HostOrder::default(), &mut collection);
 
         let han: Vec<_> = collection
-            .fallback_families(FallbackKey::new(Script::from_str_unchecked("Hani"), None))
+            .fallback_families(FallbackKey::new(Script::from_bytes(*b"Hani"), None))
             .collect();
         assert_eq!(
             han,
@@ -446,7 +443,7 @@ mod tests {
             "Han: the script list, then the common list"
         );
         let common = ids(&mut collection, &["Roboto", "CupertinoIcons"]);
-        for script in [Script::from_str_unchecked("Latn"), Script::COMMON] {
+        for script in [Script::from_bytes(*b"Latn"), Script::COMMON] {
             let families: Vec<_> = collection
                 .fallback_families(FallbackKey::new(script, None))
                 .collect();
@@ -467,7 +464,10 @@ mod tests {
 
         for tag in ["Latn", "Hani"] {
             let families: Vec<_> = collection
-                .fallback_families(FallbackKey::new(Script::from_str_unchecked(tag), None))
+                .fallback_families(FallbackKey::new(
+                    Script::parse(tag).expect("a script tag"),
+                    None,
+                ))
                 .collect();
             assert_eq!(
                 families,
@@ -593,19 +593,16 @@ mod tests {
     /// locale naming none of them takes the Simplified Chinese ones.
     #[test]
     fn a_platform_chain_picks_han_by_locale() {
-        let hani = Script::from_str_unchecked("Hani");
+        let hani = Script::from_bytes(*b"Hani");
         let ja = FallbackChain::of(Platform::Unix, "ja");
         let us = FallbackChain::of(Platform::Unix, "en-US");
         assert_eq!(ja.script(hani), ["Noto Sans CJK JP"]);
         assert_eq!(us.script(hani), ["Noto Sans CJK SC"]);
         assert_eq!(
-            ja.script(Script::from_str_unchecked("Kana")),
+            ja.script(Script::from_bytes(*b"Kana")),
             ["Noto Sans CJK JP"]
         );
-        assert_eq!(
-            us.script(Script::from_str_unchecked("Latn")),
-            [] as [&str; 0]
-        );
+        assert_eq!(us.script(Script::from_bytes(*b"Latn")), [] as [&str; 0]);
         assert_eq!(us.common().first(), Some(&"Noto Sans"));
         for (platform, locale, expected) in [
             (Platform::Unix, "ja-JP", "Noto Sans CJK JP"),
@@ -686,7 +683,10 @@ mod tests {
 
         let mut fallbacks = |script: &str| -> Vec<FamilyId> {
             collection
-                .fallback_families(FallbackKey::new(Script::from_str_unchecked(script), None))
+                .fallback_families(FallbackKey::new(
+                    Script::parse(script).expect("a script tag"),
+                    None,
+                ))
                 .collect()
         };
         let arab = fallbacks("Arab");
@@ -735,7 +735,7 @@ mod tests {
         install_into(&fixture(), &order, &mut collection);
 
         let hani: Vec<FamilyId> = collection
-            .fallback_families(FallbackKey::new(Script::from_str_unchecked("Hani"), None))
+            .fallback_families(FallbackKey::new(Script::from_bytes(*b"Hani"), None))
             .collect();
         let emoji: Vec<_> = collection.generic_families(GenericFamily::Emoji).collect();
         let common = ids(

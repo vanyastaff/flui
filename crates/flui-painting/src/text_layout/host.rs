@@ -217,12 +217,15 @@ impl HostFonts {
         let scripts = CodePointMapData::<IcuScript>::new();
         let names = PropertyNamesShort::<IcuScript>::new();
         text.chars().filter(|c| !c.is_whitespace()).all(|c| {
-            let script = names.get(scripts.get(c)).map_or(&[][..], |tag| {
+            // ICU's short script names are ISO 15924 codes, four letters each.
+            let code = names
+                .get(scripts.get(c))
+                .map(|tag| <[u8; 4]>::try_from(tag.as_bytes()).unwrap_or(*b"Zzzz"));
+            let script = code.map_or(&[][..], |code| {
                 self.chain
-                    .script(parley::fontique::Script::from_str_unchecked(tag))
+                    .script(parley::fontique::Script::from_bytes(code))
             });
-            let host_script = names.get(scripts.get(c)).map_or(&[][..], |tag| {
-                let code = <[u8; 4]>::try_from(tag.as_bytes()).unwrap_or(*b"Zzzz");
+            let host_script = code.map_or(&[][..], |code| {
                 self.system
                     .script(super::system_fallback::ScriptCode::from_bytes(code))
             });

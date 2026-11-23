@@ -8,9 +8,9 @@
 [size]
 counter_release_bytes = 22547760
 counter_wasm_bytes = 14517927
-crates_android = 219
-crates_linux = 270
-crates_macos = 202
-crates_wasm32 = 175
-crates_windows = 201
+crates_android = 223
+crates_linux = 274
+crates_macos = 206
+crates_wasm32 = 179
+crates_windows = 205
 hot_reload_host_release_bytes = 22703792

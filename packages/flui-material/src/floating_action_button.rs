@@ -96,10 +96,10 @@ use crate::theme_data::ThemeData;
 
 /// The regular (non-mini) floating action button's side length: tight
 /// constraints of 56.0 × 56.0.
-pub const FAB_SIZE: f64 = 56.0;
+pub(crate) const FAB_SIZE: f64 = 56.0;
 
 /// The regular variant's icon side length.
-pub const FAB_ICON_SIZE: f64 = 24.0;
+pub(crate) const FAB_ICON_SIZE: f64 = 24.0;
 
 /// The enabled default AND disabled elevation (they coincide — see the
 /// module docs). The M3 default is `elevation: 6.0`. The

@@ -28,7 +28,6 @@
 //! fade-forwards' slide direction (the slides move toward the leading edge
 //! in left-to-right terms), and the predictive-back variants.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
@@ -156,33 +155,56 @@ impl fmt::Debug for PageTransition {
 /// use flui_sdk::platform::TargetPlatform;
 ///
 /// let theme = PageTransitionsTheme::default()
-///     .with(TargetPlatform::Android, PageTransition::SharedAxis(SharedAxis::Horizontal));
+///     .transition(TargetPlatform::Android, PageTransition::SharedAxis(SharedAxis::Horizontal));
 /// assert_eq!(
 ///     theme.transition_for(TargetPlatform::Android),
 ///     PageTransition::SharedAxis(SharedAxis::Horizontal)
 /// );
 /// assert_eq!(theme.transition_for(TargetPlatform::iOS), PageTransition::Cupertino);
 /// ```
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct PageTransitionsTheme {
-    overrides: HashMap<TargetPlatform, PageTransition>,
+    /// One entry per platform with an override; a theme names a few, so they
+    /// are a list.
+    overrides: Vec<(TargetPlatform, PageTransition)>,
+}
+
+impl PartialEq for PageTransitionsTheme {
+    /// Two themes are equal when they run the same transition on every
+    /// platform, whatever order their overrides were given in.
+    fn eq(&self, other: &Self) -> bool {
+        self.overrides.len() == other.overrides.len()
+            && self
+                .overrides
+                .iter()
+                .all(|(platform, transition)| other.overridden(*platform) == Some(transition))
+    }
 }
 
 impl PageTransitionsTheme {
-    /// Run `transition` on `platform`.
+    /// Run `transition` on `platform`, replacing an earlier override for it.
     #[must_use]
-    pub fn with(mut self, platform: TargetPlatform, transition: PageTransition) -> Self {
-        let _previous = self.overrides.insert(platform, transition);
+    pub fn transition(mut self, platform: TargetPlatform, transition: PageTransition) -> Self {
+        match self.overrides.iter_mut().find(|(at, _)| *at == platform) {
+            Some((_, held)) => *held = transition,
+            None => self.overrides.push((platform, transition)),
+        }
         self
     }
 
     /// The transition `platform`'s page routes run under this theme.
     #[must_use]
     pub fn transition_for(&self, platform: TargetPlatform) -> PageTransition {
-        self.overrides
-            .get(&platform)
+        self.overridden(platform)
             .cloned()
             .unwrap_or_else(|| Self::default_for(platform))
+    }
+
+    fn overridden(&self, platform: TargetPlatform) -> Option<&PageTransition> {
+        self.overrides
+            .iter()
+            .find(|(at, _)| *at == platform)
+            .map(|(_, transition)| transition)
     }
 
     /// The Material default for `platform`.

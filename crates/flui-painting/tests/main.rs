@@ -878,6 +878,10 @@ fn text_context_contract() {
                 text_context::direct_shape_finite_size_cannot_publish_nonfinite_metrics,
             ),
             (
+                "a_root_style_no_span_uses_adds_no_line_height",
+                pm::a_root_style_no_span_uses_adds_no_line_height,
+            ),
+            (
                 "measurement_follows_the_context_it_is_given",
                 pm::measurement_follows_the_context_it_is_given,
             ),

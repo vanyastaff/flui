@@ -28,7 +28,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{lay_out, loose};
-use flui_material::chip::CHIP_ICON_SIZE;
+/// The M3 chip icon size (`_ChipDefaultsM3.iconTheme.size`), restated here
+/// to place the delete icon from the outside.
+const CHIP_ICON_SIZE: f64 = 18.0;
 use flui_material::{Chip, Theme, ThemeData};
 use flui_sdk::widgets::Text;
 

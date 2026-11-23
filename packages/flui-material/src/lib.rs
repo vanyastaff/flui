@@ -1,51 +1,20 @@
 //! # `flui_material`
 //!
-//! Material Design theming foundation for FLUI: [`ColorScheme`], the M3 2021
-//! type scale ([`typography`]) and [`TextTheme`], [`ThemeData`], the
-//! [`Theme`] inherited widget that publishes it to a subtree, the
-//! [`MaterialApp`] application shell with its [`ThemeMode`] selection
-//! (ADR-0042 — composed over `flui-widgets`' design-neutral `WidgetsApp`),
-//! the [`Material`]/[`InkWell`] surface primitives, the M3 button family
-//! ([`ButtonStyle`], [`ElevatedButton`], [`FilledButton`], [`OutlinedButton`],
-//! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
-//! [`Scaffold`]/[`AppBar`], [`Card`], [`CarouselView`], [`Dialog`]/[`AlertDialog`]/
-//! [`show_dialog`], the input decoration substrate ([`InputDecoration`],
-//! [`InputDecorator`], [`TextField`]), the data-display family
-//! ([`ListTile`], [`Divider`]/[`VerticalDivider`], [`DataTable`]), bottom
-//! navigation ([`NavigationBar`]/[`NavigationDestination`]), the chip family
-//! ([`Chip`], [`FilterChip`]), and secondary tabs ([`TabController`],
-//! [`DefaultTabController`], [`Tab`], [`TabBar`], [`TabBarView`]).
+//! Material Design 3 for FLUI: the theme ([`ThemeData`], [`ColorScheme`],
+//! [`TextTheme`], [`Theme`]), the application shell ([`MaterialApp`] over
+//! `flui-widgets`' `WidgetsApp`, ADR-0042), the surfaces ([`Material`],
+//! [`InkWell`], [`Card`]) and the component catalog: buttons, app bars and
+//! [`Scaffold`], dialogs, text fields, lists, tables, navigation bars, chips,
+//! tabs, drawers, snack bars, progress indicators and the container
+//! transform.
 //!
-//! ## Design tokens
+//! Every type is at the crate root. A component's M3 token values are its
+//! defaults; a theme slot (`ThemeData::elevated_button_theme` and the rest)
+//! overrides them per property, and the widget's own builder overrides both.
 //!
-//! The theming surface follows the Material 3 spec. Every constant table
-//! (`ColorScheme::light`/`dark`, [`typography::english_like_2021`],
-//! [`TextTheme::black_mountain_view`]/[`white_mountain_view`](TextTheme::white_mountain_view),
-//! each button's M3 token defaults) carries the spec's values verbatim —
-//! see each module's docs for the details.
-//!
-//! ## Scope (V1 — constants-first)
-//!
-//! This crate ships the fixed M3 baseline: two literal color schemes, one
-//! literal type scale, and the plumbing (`ThemeData`, `Theme`) to compose and
-//! publish them. It deliberately does **not** ship:
-//!
-//! - `ColorScheme::fromSeed` — dynamic-color generation from a seed. See [`color_scheme`] module docs.
-//! - Every shipped widget's own component theme slot (`ElevatedButtonThemeData`
-//!   and friends, [`AppBarThemeData`], [`CardThemeData`], [`CarouselViewThemeData`],
-//!   [`DialogThemeData`],
-//!   [`FabThemeData`], [`InputDecorationThemeData`]) is narrowed to the
-//!   fields its owning widget actually consumes — see `theme_data`'s module
-//!   docs and each type's own doc comment for the ported/deferred field
-//!   split. [`ThemeData`] stays `#[non_exhaustive]` to receive the rest
-//!   without a breaking change.
-//! - Dense/tall type-scale geometries (CJK / Farsi-Hindi-Thai) — only
-//!   `englishLike2021` is ported; see [`typography`] module docs.
-//!
-//! Each deferral is named, not silently dropped — see the owning module's
-//! docs for the tracking rationale.
-//!
-//! ## Example
+//! The baseline palettes are [`ColorScheme::light`] and [`ColorScheme::dark`]
+//! and the type scale is [`english_like_2021`]. Seed-colour schemes and the
+//! dense and tall type scales are not built yet.
 //!
 //! ```rust
 //! use flui_material::{Theme, ThemeData};
@@ -62,62 +31,63 @@
     )
 )]
 #![deny(missing_docs)]
+#![warn(clippy::disallowed_types)]
 
-pub mod animated_icons;
-pub mod app;
-pub mod app_bar;
-pub mod back_button;
-pub mod button_style;
+mod animated_icons;
+mod app;
+mod app_bar;
+mod back_button;
+mod button_style;
 mod button_style_button;
-pub mod card;
-pub mod carousel_view;
-pub mod checkbox;
-pub mod chip;
-pub mod color_scheme;
-pub mod data_table;
-pub mod dialog;
-pub mod divider;
-pub mod drawer;
-pub mod elevated_button;
+mod card;
+mod carousel_view;
+mod checkbox;
+mod chip;
+mod color_scheme;
+mod data_table;
+mod dialog;
+mod divider;
+mod drawer;
+mod elevated_button;
 mod event_callback;
-pub mod filled_button;
-pub mod flexible_space_bar;
-pub mod floating_action_button;
+mod filled_button;
+mod flexible_space_bar;
+mod floating_action_button;
 mod horizontal_side;
-pub mod icon_button;
-pub mod ink_well;
-pub mod input_decorator;
-pub mod list_tile;
-pub mod material;
-pub mod navigation_bar;
-pub mod open_container;
-pub mod outlined_button;
-pub mod page_transitions;
-pub mod progress_indicator;
-pub mod radio;
-pub mod ripple;
-pub mod scaffold;
-pub mod scaffold_messenger;
-pub mod shape;
-pub mod sliver_app_bar;
-pub mod snack_bar;
+mod icon_button;
+mod ink_well;
+mod input_decorator;
+mod list_tile;
+mod material;
+mod navigation_bar;
+mod open_container;
+mod outlined_button;
+mod page_transitions;
+mod progress_indicator;
+mod radio;
+mod ripple;
+mod scaffold;
+mod scaffold_messenger;
+mod shape;
+mod sliver_app_bar;
+mod snack_bar;
 mod state_color;
-pub mod switch;
-pub mod tab_bar_view;
-pub mod tab_controller;
-pub mod tabs;
-pub mod text_button;
-pub mod text_field;
-pub mod text_form_field;
-pub mod text_theme;
-pub mod theme;
-pub mod theme_data;
+mod switch;
+mod tab_bar_view;
+mod tab_controller;
+mod tabs;
+mod text_button;
+mod text_field;
+mod text_form_field;
+mod text_theme;
+mod theme;
+mod theme_data;
 mod theme_lerp;
-pub mod typography;
+mod typography;
 
 pub use animated_icons::AnimatedIcons;
 pub use app::{MaterialApp, ThemeMode};
-pub use app_bar::AppBar;
+pub use app_bar::{AppBar, DEFAULT_TOOLBAR_HEIGHT};
 pub use back_button::BackButton;
 pub use button_style::ButtonStyle;
 pub use card::Card;
@@ -132,7 +102,7 @@ pub use drawer::{Drawer, DrawerAlignment, DrawerController, DrawerControllerStat
 pub use elevated_button::ElevatedButton;
 pub use filled_button::FilledButton;
 pub use flexible_space_bar::{FlexibleSpaceBar, FlexibleSpaceBarData, FlexibleSpaceBarSettings};
-pub use floating_action_button::FloatingActionButton;
+pub use floating_action_button::{FloatingActionButton, FloatingActionButtonState};
 pub use icon_button::IconButton;
 pub use ink_well::{InkWell, InkWellState};
 pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};

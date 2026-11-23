@@ -179,7 +179,7 @@
 //! regardless of whether the snack bar carries an action.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
 use std::time::Duration;
@@ -417,7 +417,9 @@ struct MessengerCore {
     /// Reentrancy guard for [`Self::pop_and_advance`] — see the module docs'
     /// "The drain state machine" section.
     advancing: Cell<bool>,
-    scaffolds: RefCell<HashMap<ElementId, RebuildHandle>>,
+    /// The registered scaffolds, one entry per element. A messenger serves
+    /// a handful, so they are a list.
+    scaffolds: RefCell<Vec<(ElementId, RebuildHandle)>>,
 }
 
 type CompletionFailure = Option<Box<dyn std::any::Any + Send>>;
@@ -449,7 +451,12 @@ impl MessengerCore {
 
     fn deliver_scaffold_rebuilds(&self) {
         // Host wake callbacks may synchronously register or dispose scaffolds.
-        let handles: Vec<_> = self.scaffolds.borrow().values().cloned().collect();
+        let handles: Vec<RebuildHandle> = self
+            .scaffolds
+            .borrow()
+            .iter()
+            .map(|(_, rebuild)| rebuild.clone())
+            .collect();
         let mut first = None;
         for rebuild in &handles {
             #[expect(
@@ -777,6 +784,15 @@ pub struct ScaffoldMessengerHandle {
     shared: Rc<MessengerCore>,
 }
 
+/// Two handles are equal when they name the same messenger.
+impl PartialEq for ScaffoldMessengerHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.shared, &other.shared)
+    }
+}
+
+impl Eq for ScaffoldMessengerHandle {}
+
 impl std::fmt::Debug for ScaffoldMessengerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScaffoldMessengerHandle")
@@ -808,7 +824,7 @@ impl ScaffoldMessengerHandle {
             last_entry_status: Cell::new(AnimationStatus::ReverseSettled),
             last_duration_status: Cell::new(AnimationStatus::ReverseSettled),
             advancing: Cell::new(false),
-            scaffolds: RefCell::new(HashMap::new()),
+            scaffolds: RefCell::new(Vec::new()),
         });
         Self { shared }
     }
@@ -888,35 +904,29 @@ impl ScaffoldMessengerHandle {
         if !self.shared.queue.borrow().is_empty() {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         }
-        self.shared
-            .scaffolds
-            .borrow_mut()
-            .insert(element_id, rebuild);
+        let replaced = {
+            let mut scaffolds = self.shared.scaffolds.borrow_mut();
+            if let Some((_, held)) = scaffolds.iter_mut().find(|(id, _)| *id == element_id) {
+                Some(std::mem::replace(held, rebuild))
+            } else {
+                scaffolds.push((element_id, rebuild));
+                None
+            }
+        };
+        // The replaced handle's destructor runs with the table released.
+        drop(replaced);
     }
 
     /// Unregisters a [`crate::Scaffold`] — called from its `dispose`.
     pub(crate) fn unregister_scaffold(&self, element_id: ElementId) {
-        let _prev = self.shared.scaffolds.borrow_mut().remove(&element_id);
-    }
-
-    /// The number of currently-registered [`crate::Scaffold`]s — mainly a
-    /// test seam proving `Self::unregister_scaffold` actually ran (an
-    /// unmounted element's stale `RebuildHandle` would silently no-op
-    /// forever either way, per that type's own doc, so a mere
-    /// absence-of-panic assertion cannot distinguish "unregistered" from
-    /// "leaked").
-    #[must_use]
-    pub fn registered_scaffold_count(&self) -> usize {
-        self.shared.scaffolds.borrow().len()
-    }
-
-    /// Whether `self` and `other` name the same underlying messenger — the
-    /// `Rc::ptr_eq` identity check [`crate::Scaffold`]'s
-    /// `did_change_dependencies` uses to decide whether to re-home its
-    /// registration.
-    #[must_use]
-    pub fn ptr_eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.shared, &other.shared)
+        let removed = {
+            let mut scaffolds = self.shared.scaffolds.borrow_mut();
+            scaffolds
+                .iter()
+                .position(|(id, _)| *id == element_id)
+                .map(|at| scaffolds.swap_remove(at))
+        };
+        drop(removed);
     }
 
     /// The entry every registered [`crate::Scaffold`] should currently

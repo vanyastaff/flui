@@ -720,7 +720,7 @@ impl ScaffoldState {
     fn sync_messenger_registration(&mut self, ctx: &dyn BuildContext) {
         let new_messenger = ScaffoldMessengerScope::maybe_of(ctx);
         let identity_changed = match (&self.messenger, &new_messenger) {
-            (Some(old), Some(new)) => !old.ptr_eq(new),
+            (Some(old), Some(new)) => old != new,
             (None, None) => false,
             _ => true,
         };

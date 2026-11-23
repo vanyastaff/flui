@@ -23,9 +23,9 @@ it. The scope is `flui-painting`'s text style, layout and painter, and `flui-obj
 | `TextDecoration` was a bit set no style field held and nothing read | `crates/flui-painting/src/typography/text_decoration.rs:11` at `96684b6e`; ADR-0309 Consequences |
 | `RenderEditable` drew the composing region as a 1-logical-pixel bar 1 px under the baseline, whatever the font and size | `crates/flui-objects/src/text/editable.rs:72-78,765` at `96684b6e`; ADR-0030 §6 |
 | ADR-0030 §6 declared that bar an approximation, to be deleted once a span decoration exists | `docs/adr/ADR-0030-platform-text-input-ime-capability.md:103-114` |
-| Each Parley run carries its font's underline and strikethrough offset and thickness, its ascent and x-height, scaled to pixels | `parley-0.11.1/src/layout/run.rs:224-245` |
-| For a font without those tables Parley substitutes `units_per_em / 18` in font units, unscaled, and a positive underline offset | `parley-0.11.1/src/layout/data.rs:418-432` |
-| Spans that differ only in paint share a Parley run, so a decoration cannot be attributed by run | `parley-0.11.1/src/resolve/range.rs:139-154`; ADR-0309 §3 |
+| Each Parley run carries its font's underline and strikethrough offset and thickness, its ascent and x-height, scaled to pixels (`Run::font_metrics`) | `parley_engine-0.13.0/src/shape/shaped_text.rs:32-52`, `parley-0.13.0/src/layout/run.rs:124` |
+| For a font without those tables Parley substitutes HarfBuzz's defaults in pixels: a thickness of `font_size / 18`, an underline that far below the baseline, a strikethrough at half the ascent | `parley_engine-0.13.0/src/shape/shaped_text.rs:105-119` |
+| Spans that differ only in paint share a Parley run, so a decoration cannot be attributed by run | `parley-0.13.0/src/resolve/range.rs:141-155`; ADR-0309 §3 |
 
 How does a decoration reach the display list where its font puts it, and how does the editable's
 composing underline stop being a separate approximation?
@@ -74,7 +74,7 @@ decoration-only `set_text` repaints the measured paragraph. Decorations of the s
 style interpolate their colour and thickness; others switch at the midpoint.
 
 §2. **Where a line lies.** A line is placed from the font of the run it decorates
-(`DecorationMetrics::of` over Parley's `RunMetrics`): an underline at the font's underline offset
+(`DecorationMetrics::of` over Parley's `FontMetrics`): an underline at the font's underline offset
 and thickness, a line-through at its strikethrough offset and thickness, an overline at the ascent
 with the underline's thickness. A font's offset is trusted within an em of the baseline on its
 side, and a thickness in (0, em/4]; otherwise an underline is em/18 thick and em/18 below the

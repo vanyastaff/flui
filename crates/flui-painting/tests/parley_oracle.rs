@@ -306,7 +306,12 @@ fn place(
             fonts
                 .register_face(face, Arc::new(font.data.clone()))
                 .expect("a face Parley shaped with is a face");
-            let variation = fonts.intern_variation(run.normalized_coords());
+            let coords: Vec<i16> = run
+                .normalized_coords()
+                .iter()
+                .map(|coord| coord.to_bits())
+                .collect();
+            let variation = fonts.intern_variation(&coords);
             let synthesis = run.synthesis();
             #[expect(
                 clippy::cast_possible_truncation,

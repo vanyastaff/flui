@@ -109,10 +109,10 @@ use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
 /// The track's width (M3: `52.0`).
-pub const SWITCH_TRACK_WIDTH: f64 = 52.0;
+pub(crate) const SWITCH_TRACK_WIDTH: f64 = 52.0;
 
 /// The track's height (M3: `32.0`).
-pub const SWITCH_TRACK_HEIGHT: f64 = 32.0;
+pub(crate) const SWITCH_TRACK_HEIGHT: f64 = 32.0;
 
 /// The M3 default horizontal padding added to the track to form the tap
 /// target, each side: `EdgeInsets.symmetric(horizontal: 4)`.
@@ -120,13 +120,14 @@ const TAP_TARGET_HORIZONTAL_PADDING: f64 = 4.0;
 
 /// The tap target's width: the track plus the M3 default horizontal
 /// padding on both sides.
-pub const SWITCH_TAP_TARGET_WIDTH: f64 = SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
+pub(crate) const SWITCH_TAP_TARGET_WIDTH: f64 =
+    SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
 
 /// The tap target's height: the minimum interactive dimension, `48.0`
 /// (`40.0 + 8.0`) — the `MaterialTapTargetSize.padded` branch this V1
 /// always takes (no override yet, matching [`crate::Checkbox`]'s own
 /// deferral).
-pub const SWITCH_TAP_TARGET_HEIGHT: f64 = 48.0;
+pub(crate) const SWITCH_TAP_TARGET_HEIGHT: f64 = 48.0;
 
 /// The thumb radius when selected (or thumb-iconed, which V1 doesn't
 /// paint): `24.0 / 2`.

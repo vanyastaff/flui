@@ -37,7 +37,7 @@ use crate::icon_button::IconButton;
 /// why this codepoint is used even with no bundled icon font to shape it
 /// against.
 #[must_use]
-pub fn back_arrow_icon_data() -> IconData {
+pub(crate) fn back_arrow_icon_data() -> IconData {
     IconData {
         match_text_direction: true,
         ..IconData::new(0xE092).with_font_family("Material Icons")
