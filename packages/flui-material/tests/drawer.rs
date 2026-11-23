@@ -1481,3 +1481,99 @@ pub fn a_direction_flip_mid_drag_keeps_progress_and_signs_the_next_move_by_the_n
     );
     laid.dispatch_pointer_cancel();
 }
+
+/// A drawer removed from the scaffold while open takes its open state with
+/// it: the handle reports no open drawer, and a drawer configured again
+/// starts closed, with no scrim over the body.
+pub fn a_drawer_removed_while_open_comes_back_closed() {
+    let vsync = Vsync::new();
+    let handle_slot: Rc<RefCell<Option<DrawerHandle>>> = Rc::new(RefCell::new(None));
+    let probe = HandleProbe {
+        slot: Rc::clone(&handle_slot),
+        on_tap: Rc::new(|_handle: &DrawerHandle| {}),
+    };
+    let with_drawer = || Scaffold::new().drawer(Drawer::new()).body(probe.clone());
+    let mut laid = lay_out_animated(
+        themed_animated(with_drawer(), &vsync),
+        tight(400.0, 800.0),
+        vsync.clone(),
+    );
+    let handle = handle_slot
+        .borrow()
+        .clone()
+        .expect("HandleProbe captures the handle on its first build");
+    laid.enter_owner_scope(|| handle.open_drawer());
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(handle.is_drawer_open(), "the drawer opened");
+
+    laid.pump_widget(themed_animated(Scaffold::new().body(probe.clone()), &vsync));
+    laid.pump_for(FRAME);
+    assert!(!handle.has_drawer(), "the drawer is no longer configured");
+    assert!(
+        !handle.is_drawer_open(),
+        "a scaffold without a drawer has no open drawer"
+    );
+
+    laid.pump_widget(themed_animated(with_drawer(), &vsync));
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(handle.has_drawer());
+    assert!(
+        !handle.is_drawer_open(),
+        "a drawer configured again starts closed"
+    );
+    assert!(
+        laid.try_find_by_render_type("RenderDecoratedBox").is_none(),
+        "no scrim covers the body of a scaffold whose drawer came back"
+    );
+}
+
+/// A drawer opened by its handle and then dragged past halfway toward closed
+/// reports itself closed the moment it crosses, and never reports open a
+/// second time on the way.
+pub fn dragging_an_opened_drawer_past_halfway_reports_it_closed() {
+    let vsync = Vsync::new();
+    let handle_slot: Rc<RefCell<Option<DrawerHandle>>> = Rc::new(RefCell::new(None));
+    let reports: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let probe = HandleProbe {
+        slot: Rc::clone(&handle_slot),
+        on_tap: Rc::new(|_handle: &DrawerHandle| {}),
+    };
+    let record = Rc::clone(&reports);
+    let mut laid = lay_out_animated(
+        themed_animated(
+            Scaffold::new()
+                .drawer(Drawer::new())
+                .on_drawer_changed(move |_ctx, opened| record.borrow_mut().push(opened))
+                .body(probe),
+            &vsync,
+        ),
+        tight(400.0, 800.0),
+        vsync,
+    );
+    let handle = handle_slot
+        .borrow()
+        .clone()
+        .expect("HandleProbe captures the handle on its first build");
+    laid.enter_owner_scope(|| handle.open_drawer());
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert_eq!(*reports.borrow(), [true], "opening reports open once");
+
+    // From x=250 on the 304-wide panel to x=30: well past halfway even after
+    // the recognizer's slop, and the finger stays down.
+    laid.dispatch_pointer_down(250.0, 400.0);
+    for x in [215.0, 185.0, 155.0, 100.0, 30.0] {
+        laid.dispatch_pointer_move(x, 400.0);
+    }
+    assert_eq!(
+        *reports.borrow(),
+        [true, false],
+        "the drag reports the crossing, and only the crossing"
+    );
+    assert!(!handle.is_drawer_open(), "the scaffold heard it close");
+}
