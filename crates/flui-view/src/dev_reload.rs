@@ -41,8 +41,9 @@
 //!
 //! The per-call seam ADR-0094 §1 also describes, which routes each framework
 //! call into user code through a patcher's jump table, arrives with a code
-//! patcher that needs it. [`ReloadEvent`] asks for a reassemble only; the event
-//! that asks for a restart, and the root a restart mounts, are ADR-0393 §3.
+//! patcher that needs it. [`ReloadEvent`] asks for a reassemble only; the
+//! version an event carries, and the methods through which a loop restarts
+//! and reports, are ADR-0393 §3.
 
 use std::{fmt, sync::Arc};
 

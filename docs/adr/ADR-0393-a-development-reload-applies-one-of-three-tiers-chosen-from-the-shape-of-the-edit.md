@@ -198,10 +198,12 @@ pub enum RestartRefusal {
   its UI runtimes were composed from (`composed`), the last version the hook reported (`loaded`)
   and, per UI runtime, the revision it last reassembled to. `composed` is written when the
   application is first composed and when a restart succeeds, and nowhere else. No tier is stored.
-- **The tier is derived.** When `loaded.layout` differs from `composed.layout`, the loop restarts
-  (§4) at its next turn, before any UI runtime's frame. Otherwise each UI runtime whose revision
-  differs from `loaded.revision` reassembles at its own frame boundary, as ADR-0311 §2 has it
-  apply a reload, and records the revision. A version the hook reports twice changes nothing.
+- **The tier is derived.** When the hook reports a version whose layout differs from
+  `composed.layout`, the loop restarts to it (§4), once, at its next turn and before any UI
+  runtime's frame; a restart that is refused is not tried again for that version. While the two
+  layouts are equal, each UI runtime whose revision differs from `loaded.revision` reassembles at
+  its own frame boundary, as ADR-0311 §2 has it apply a reload, and records the revision; while
+  they differ no UI runtime reassembles. A version the hook reports twice changes nothing.
 - **A mechanism may raise and never lowers.** A hook that cannot place a build mints a layout no
   earlier version had. A UI runtime that cannot finish a reassemble (its mechanism refuses an
   element) raises: the loop restarts to the same `loaded` version at its next turn and the outcome
@@ -219,9 +221,9 @@ pub enum RestartRefusal {
 1. runs `DevReloadHook::run_entry` and takes the application the entry hands over: its
    `Application` and its root. An entry that panics, returns an error or returns without an
    application refuses the restart, and so does an application `run` would refuse
-   (`LaunchError`). A refused restart changes nothing: the UI runtimes keep running, `composed`
-   keeps its value, the outcome is `RestartRefused`, and the next version the hook reports is
-   compared with `composed` as any other, so a later build restarts again.
+   (`LaunchError`). A refused restart changes nothing in the process: the UI runtimes keep
+   running, `composed` keeps its value and the outcome is `RestartRefused`. The tool, which
+   receives the outcome, then applies a process restart, so the edit is shown either way.
 2. retires every UI runtime of the loop: each unmounts its root, so every `State` is disposed in
    tree order by the code that created it. A dispose that panics does not stop the unmount; the
    first payload is kept (`FirstPanic`) and logged. Each presentation detaches from its surface,
@@ -250,8 +252,9 @@ a UI runtime reassembles, and the two higher tiers are not operations on a UI ru
 §5. **The tool reports what the process did.** For every build `flui run` prints the tier, the
 reason (the first changed file and, for a restart, the item whose shape changed), the time from
 the save to the outcome, and what the outcome names: a raise with its reason, a refusal with its
-reason, the view types left behind. A build with no outcome within the tool's deadline is reported
-as unanswered. When a mechanism knows of code an edit replaced that keeps running, its record says
+reason and the process restart that follows it, the view types left behind. A build with no
+outcome within the tool's deadline is reported as unanswered. When a mechanism knows of code an
+edit replaced that keeps running, its record says
 how the report names it.
 
 §6. **The tiers hold on every host that drives `DevReloadHook`.** Where no mechanism loads new
@@ -277,6 +280,10 @@ says so. Which hosts have a mechanism is the mechanism's record and
 - Bad, because a restart builds a UI runtime again: its element, render and semantics trees and
   its caches start empty.
 - Bad, because the worker path restarts the process on an edit that today reloads.
+- Bad, because the entry runs again while the earlier application is still alive and in the same
+  process, where Flutter gives `main` a new isolate: an entry that sets a process-wide value a
+  second time (a global log subscriber) or takes what the earlier one still holds (a port) refuses
+  every restart, and each of its Restart-tier edits costs a process restart.
 - Bad, because nothing restarts in the process until a mechanism implements `run_entry`.
 
 ### Confirmation
@@ -295,11 +302,11 @@ scripted hook from the testing kit.
 | §3 a raise restarts to the same version | `flui-app`: `a_raised_reassemble_restarts_the_loop` |
 | §3 the outcome | `flui-app`: `each_reassembled_runtime_and_each_restart_is_reported_once` |
 | §3 `ReloadEvent` is exhaustive | the compiler: a host that does not map `Loaded` does not compile |
-| §4 step 1 | `flui-app`: `a_panicking_entry_refuses_the_restart_and_the_next_version_restarts`, `an_entry_without_an_application_refuses_the_restart`, `a_refused_restart_keeps_every_state` |
+| §4 step 1 | `flui-app`: `a_panicking_entry_refuses_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_refuses_the_restart`, `a_refused_restart_keeps_every_state` |
 | §4 step 2 | `flui-app`: `a_restart_disposes_every_state_before_the_new_root_mounts`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened` |
 | §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_its_text_context`, `an_answer_to_a_retired_runtime_is_refused` |
 | §4 `ReloadTier` is gone | the compiler |
-| §5 the report | `flui-cli`: `the_report_names_the_tier_the_reason_and_the_outcome`, `a_build_without_an_outcome_is_reported_unanswered` |
+| §5 the report | `flui-cli`: `the_report_names_the_tier_the_reason_and_the_outcome`, `a_refused_restart_restarts_the_process`, `a_build_without_an_outcome_is_reported_unanswered` |
 | §6 no mechanism | `flui-cli`: `a_target_without_a_mechanism_restarts_the_process` |
 
 - What a restart keeps on a real surface (the window does not close, the pipelines are not built
