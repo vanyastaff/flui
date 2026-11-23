@@ -125,7 +125,7 @@ pub(crate) enum ActionSubject {
 | `Expand`, `Collapse` | `Disclosure` |
 | `Increment`, `Decrement`, `SetNumericValue` | `Range` when the node publishes a numeric range, else `Scroll` |
 | `ScrollUp`, `ScrollDown`, `ScrollLeft`, `ScrollRight`, `SetScrollOffset`, `ScrollIntoView` | `Scroll`: reveal moves the scroll groups of the node and its ancestors (`resolve_action`), so its handler is the scroll group's owner's |
-| `SetValue` | `Value` |
+| `SetValue` | `Value`. When no part supplies it (the value's owner does not act and nobody else registers it), a node with a numeric range reads the text as a number and runs the range's `SetNumericValue` (`reads_text_as_number` in `owner.rs`), as an unmerged range does: the range is then the first part that takes the write |
 | `SetTextSelection`, `ReplaceSelectedText` | `Text` |
 | `Focus`, `Blur` | `Focus` |
 | `ShowTooltip`, `HideTooltip` | `Tooltip` |
@@ -234,7 +234,8 @@ the overwritten ones were.
 - `a_merged_action_runs_the_control_whose_state_it_announces` in
   `crates/flui-widgets/tests/semantics.rs`, through the platform request path: two buttons, a
   click-only disclosure and a button in both orders, a switch and a tap in both orders, a
-  selectable tab and a tap, two scrollables each at one extent.
+  selectable tab and a tap, two scrollables each at one extent, and a text write beside a range,
+  to a value part that takes text and to one that does not.
 - `an_ordinary_merge_keeps_its_actions` in `configuration.rs`: a wrapper that declares a state
   over a detector, and a `value` declarer beside a `SetValue` registrant, publish what they
   published before.
