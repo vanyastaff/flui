@@ -206,7 +206,8 @@ impl ElementTree {
             node.inherited = scope;
         }
         let mut descendants = Vec::new();
-        let mut stack = self.owned_children(id, registry);
+        let mut stack = Vec::new();
+        self.extend_owned_children(id, registry, &mut stack);
         for child in &stack {
             self.recompute_subtree_ancestry(*child, registry);
         }
@@ -215,7 +216,7 @@ impl ElementTree {
                 continue;
             };
             descendants.push((descendant, node.depth()));
-            stack.extend(self.owned_children(descendant, registry));
+            self.extend_owned_children(descendant, registry, &mut stack);
         }
         descendants
     }

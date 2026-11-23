@@ -195,3 +195,37 @@ fn warm_hit_tests_reuse_their_result_storage() {
     let requests = ALLOCATIONS.with(Cell::get) - before;
     assert_eq!(requests, 0, "warm hit tests allocate");
 }
+
+/// Removing a subtree reuses the id lists and the node buffer the last removal
+/// grew: an item scrolled off a list, removed frame after frame, asks the heap
+/// for nothing once its first removal has sized them.
+#[test]
+fn a_warm_subtree_removal_allocates_nothing() {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root = owner.set_root_render_object(Box::new(RenderPadding::all(1.0)));
+    let mut removals = Vec::new();
+    for _ in 0..3 {
+        let item = owner
+            .insert_child_render_object(root, Box::new(RenderPadding::all(2.0)))
+            .expect("item attaches");
+        let mut parent = item;
+        for _ in 0..6 {
+            parent = owner
+                .insert_child_render_object(parent, Box::new(RenderPadding::all(1.0)))
+                .expect("padding attaches");
+        }
+        owner
+            .insert_child_render_object(parent, Box::new(RenderColoredBox::red(4.0, 4.0)))
+            .expect("leaf attaches");
+
+        let before = ALLOCATIONS.with(Cell::get);
+        let removed = owner.remove_render_object(black_box(item));
+        removals.push((removed, ALLOCATIONS.with(Cell::get) - before));
+    }
+    assert!(removals.iter().all(|&(removed, _)| removed == 8), "{removals:?}");
+    assert_eq!(
+        removals.last().map(|&(_, allocations)| allocations),
+        Some(0),
+        "a warm removal allocated: {removals:?}"
+    );
+}

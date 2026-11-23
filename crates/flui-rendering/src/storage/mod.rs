@@ -73,4 +73,5 @@ pub(crate) use state::{BoxLayoutRecord, LayoutRecord, SliverLayoutRecord};
 // Type aliases for convenience
 pub(crate) use node_slab::{EnterRefusal, EnteredNode, TreeLease};
 pub use state::{BoxRenderState, SliverRenderState};
+pub(crate) use tree::SubtreeBuffers;
 pub use tree::{ChildrenUpdate, RenderTree};

@@ -178,8 +178,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         );
 
         let former_parent = self.render_tree.parent(id);
-        let subtree = self.render_tree.collect_subtree(id);
+        let subtree = self
+            .render_tree
+            .collect_subtree(id, std::mem::take(&mut self.subtree_buffers));
         if subtree.ids().is_empty() {
+            self.subtree_buffers = self
+                .render_tree
+                .take_subtree(subtree, &mut self.removed_nodes);
             return 0;
         }
 
@@ -217,7 +222,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         }
 
-        let removed_nodes = self.render_tree.take_subtree(subtree);
+        let mut removed_nodes = std::mem::take(&mut self.removed_nodes);
+        self.subtree_buffers = self.render_tree.take_subtree(subtree, &mut removed_nodes);
         let count = removed_nodes.len();
         if self.root_id == Some(id) {
             self.root_id = None;
@@ -228,7 +234,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         tracing::debug!(?id, count, "remove_render_object: subtree disposed");
         // Destructors run last, against a committed tree and owner (ADR-0252,
         // ADR-0287): one that panics leaves nothing half-removed.
-        drop(removed_nodes);
+        // `clear` drops every node even when one panics; the buffer is kept
+        // only when none did.
+        removed_nodes.clear();
+        self.removed_nodes = removed_nodes;
         count
     }
 
