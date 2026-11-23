@@ -110,7 +110,10 @@ const _: () = {
 #[derive(Clone, Debug)]
 struct SpanInfo {
     len: usize,
-    family: std::sync::Arc<str>,
+    /// The family it was shaped in, held as [`ShapedFamily`]'s two parts so that the
+    /// generic sits in the padding beside `italic`.
+    family_name: Option<std::sync::Arc<str>>,
+    generic_family: Generic,
     weight: f32,
     italic: bool,
     size: Option<f32>,
@@ -129,7 +132,11 @@ impl SpanInfo {
     fn description(&self, color: Option<Color>) -> SpanDescription {
         SpanDescription {
             len: self.len,
-            family: std::sync::Arc::clone(&self.family),
+            family: ShapedFamily {
+                name: self.family_name.clone(),
+                generic: self.generic_family,
+            }
+            .described(),
             weight: self.weight,
             italic: self.italic,
             size: self.size,
@@ -1243,7 +1250,8 @@ impl TextContext {
         // Families are resolved against the collection before the builder
         // borrows it (`resolve_family_name`).
         let collection = &mut self.font_ctx.collection;
-        let (default_family, default_family_name) = family(collection, None);
+        let default_family = family(collection, None);
+        let default_family_name = ShapedFamily::of(collection, None);
         let default_properties = paragraph.default_style.map_or_default(|style| {
             properties(collection, style, None, paragraph.font_weight_adjustment)
         });
@@ -1284,7 +1292,7 @@ impl TextContext {
                 }
                 let info = match style {
                     Some(style) => {
-                        let (_, name) = family(collection, Some(style));
+                        let name = ShapedFamily::of(collection, Some(style));
                         span_info(
                             span.len(),
                             name,
@@ -1406,7 +1414,7 @@ fn sliced_spans(
 /// its source and paint run are the caller's to set.
 fn span_info(
     len: usize,
-    family: std::sync::Arc<str>,
+    family: ShapedFamily,
     style: Option<&TextStyle>,
     default: Option<&TextStyle>,
     adjustment: i32,
@@ -1417,7 +1425,8 @@ fn span_info(
     )]
     SpanInfo {
         len,
-        family,
+        family_name: family.name,
+        generic_family: family.generic,
         weight: adjusted_weight(style, default, adjustment).unwrap_or_else(|| {
             style
                 .and_then(|style| style.font_weight)
@@ -1434,20 +1443,18 @@ fn span_info(
     }
 }
 
-/// The one family a style is shaped with, and its name as a snapshot prints
-/// it: FLUI's family rule (`resolve_family_name`) over the families
-/// `collection` holds, so an absent name never reaches Parley's fallback
-/// walk (flui-painting `ARCHITECTURE.md`, mapping decision 8). Nothing follows it in the list: past that family,
+/// The one family a style is shaped with: FLUI's family rule
+/// (`resolve_family_name`) over the families `collection` holds, so an absent
+/// name never reaches Parley's fallback walk (flui-painting `ARCHITECTURE.md`,
+/// mapping decision 8). Nothing follows it in the list: past that family,
 /// Parley walks the collection's fallback families, which a collection fed
 /// from the host takes from FLUI's lists for it
 /// (`FontCollection::with_host_fonts`).
 fn family(
     collection: &mut Collection,
     style: Option<&TextStyle>,
-) -> (StyleProperty<'static, SpanBrush>, std::sync::Arc<str>) {
-    let family = resolve_family_name(style, |name| holds_exactly(collection, name));
-    let described: std::sync::Arc<str> = format!("{family:?}").into();
-    let name = match family {
+) -> StyleProperty<'static, SpanBrush> {
+    let name = match resolve_family_name(style, |name| holds_exactly(collection, name)) {
         Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
         Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),
         Family::SansSerif => FontFamilyName::Generic(GenericFamily::SansSerif),
@@ -1455,10 +1462,58 @@ fn family(
         Family::Fantasy => FontFamilyName::Generic(GenericFamily::Fantasy),
         Family::Monospace => FontFamilyName::Generic(GenericFamily::Monospace),
     };
-    (
-        StyleProperty::FontFamily(FontFamily::Single(name)),
-        described,
-    )
+    StyleProperty::FontFamily(FontFamily::Single(name))
+}
+
+/// The family a span was shaped in ([`family`]'s rule), kept for
+/// [`ShapedParagraph::describe_spans`]. A generic family holds nothing on
+/// the heap; the text a snapshot prints is made only when one is described.
+#[derive(Clone, Debug)]
+struct ShapedFamily {
+    /// The family's name when it is one the collection holds; `None` for a generic.
+    name: Option<std::sync::Arc<str>>,
+    /// Which generic, when `name` is `None`.
+    generic: Generic,
+}
+
+/// A CSS generic family, one byte beside [`ShapedFamily::name`].
+#[derive(Clone, Copy, Debug)]
+enum Generic {
+    Serif,
+    SansSerif,
+    Cursive,
+    Fantasy,
+    Monospace,
+}
+
+impl ShapedFamily {
+    fn of(collection: &mut Collection, style: Option<&TextStyle>) -> Self {
+        let generic = match resolve_family_name(style, |name| holds_exactly(collection, name)) {
+            Family::Name(name) => {
+                return Self {
+                    name: Some(name.into()),
+                    generic: Generic::SansSerif,
+                };
+            }
+            Family::Serif => Generic::Serif,
+            Family::SansSerif => Generic::SansSerif,
+            Family::Cursive => Generic::Cursive,
+            Family::Fantasy => Generic::Fantasy,
+            Family::Monospace => Generic::Monospace,
+        };
+        Self {
+            name: None,
+            generic,
+        }
+    }
+
+    /// The family as a snapshot prints it: `Family`'s `Debug` form.
+    fn described(&self) -> std::sync::Arc<str> {
+        match (&self.name, self.generic) {
+            (Some(name), _) => format!("{:?}", Family::Name(name)).into(),
+            (None, generic) => format!("{generic:?}").into(),
+        }
+    }
 }
 
 /// Whether `collection` holds a family spelled exactly `name`.
@@ -1525,7 +1580,7 @@ fn properties(
     let mut properties = Vec::new();
     let adjusted = adjusted_weight(Some(style), default, adjustment);
     if style.font_family.is_some() {
-        properties.push(family(collection, Some(style)).0);
+        properties.push(family(collection, Some(style)));
     }
     if let Some(weight) = adjusted {
         properties.push(StyleProperty::FontWeight(FontWeight::new(weight)));
