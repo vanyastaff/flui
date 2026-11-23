@@ -159,8 +159,11 @@ handlers a fold drops are pinned before it runs (ADR-0223), as the overwritten o
   supplier already, and the wrapper form keeps working through the non-acting owner.
 - Good, because a new `SemanticsAction` does not compile until its subject is chosen.
 - Bad, because a tile's own tap is no longer reachable through the merged node when a control in
-  it owns `Click`; the tile's handler is the one assistive technology cannot reach. That is the
-  same trade Flutter's list tiles make by giving both one callback.
+  it owns `Click`; the tile's handler is the one assistive technology cannot reach. In the usual
+  form, a radio, check box or switch list tile, tapping the tile and selecting its control are one
+  act with one callback, so nothing is lost there; only a tile whose tap does something else than
+  its control loses that tap under assistive technology, and such a tile announces a control whose
+  state the tap would not change.
 - Bad, because a forced merge of two checkable controls no longer announces the more informative
   state; it announces the owner's.
 - Neutral, because a merged node's `enabled` still follows ADR-0206 (receiver first), so a node
@@ -181,7 +184,8 @@ handlers a fold drops are pinned before it runs (ADR-0223), as the overwritten o
 - Unit rows in `configuration.rs` for the owner of each subject and for the non-acting wrapper
   form, and `state_merge_precedence` restated for `Toggled` under its owner.
 - `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
-  `packages/flui-material/tests/list_tile.rs` extended to invoke Click.
+  `packages/flui-material/tests/list_tile.rs` extended to invoke Click: the radio is selected,
+  and a `RadioListTile`-shaped tile whose tap and radio share one callback runs it once.
 
 ## Pros and cons of the options
 
