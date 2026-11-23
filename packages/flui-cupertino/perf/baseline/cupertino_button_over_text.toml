@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [cupertino_button_over_text]
-allocations = 73
-bytes = 11404
+allocations = 88
+bytes = 12602
 elements = 9
 reallocations = 1
 render_nodes = 6
