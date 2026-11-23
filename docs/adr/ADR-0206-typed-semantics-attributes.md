@@ -3,7 +3,9 @@
 - **Status:** Accepted (2026-10-12)
 - **Date:** 2026-10-12
 - **Superseded-by:** [ADR-0332](ADR-0332-a-control-takes-the-content-roles-beneath-it.md) for
-  decision 4's rule that two declared roles always form separate nodes; the rest remains in force
+  decision 4's rule that two declared roles always form separate nodes; [ADR-0392](ADR-0392-a-merged-nodes-action-belongs-to-the-contributor-whose-state-it-changes.md)
+  for decision 3's `Toggled` precedence and decision 4's forced merge of standard actions,
+  `toggled`, `selected` and `enabled`; the rest remains in force
 - **Replaces:** `crates/flui-semantics/ARCHITECTURE.md` mapping decisions 1 and 2 (the role
   cascade over flags), with the role precedence in decision 4 below.
 - **Supersedes:** [ADR-0168](ADR-0168-descendant-reveal-through-scroll-ancestors.md), in part:
@@ -48,7 +50,8 @@ while Slint keeps its own model and confines AccessKit to a backend.
    `false` is distinct from unset. Tri-state values are enums (`Toggled { Off, On, Mixed }`
    serves both checked and pressed, its meaning set by the role, as in AccessKit and Chromium).
    Each state type implements `StateMerge`: `conflicts` (declared on both sides) and `merge`
-   (its documented precedence under a forced merge; `Mixed > On > Off` for `Toggled`).
+   (under a forced merge, the receiver's declaration, else the contributor's; `toggled`,
+   `selected` and `enabled` come from the part that owns the action changing them, ADR-0392).
 4. **One merge table.** Per group: union (relations, tags, and custom actions, which the
    contributor's follow and each keep their own handler), direction-aware concatenation (label,
    description), first wins (other naming, traversal), conflict when both
@@ -58,7 +61,8 @@ while Slint keeps its own model and confines AccessKit to a backend.
    (`MergeSemantics`) resolves it: states by `StateMerge::merge`, the receiver otherwise, and
    role by specificity — an authored structural role (tab, list item, dialog, …) first, then
    checkable roles, then `Button`, then link, text inputs and slider, then image and heading;
-   on a tie the receiver keeps its own. A node that itself merges its descendants is
+   on a tie the receiver keeps its own; each standard action's handler comes from the part
+   that owns the state it changes (ADR-0392). A node that itself merges its descendants is
    never absorbed by an outer merge; it stays a node of its own.
 5. **One translation.** One module maps attributes to `accesskit::Node`; nothing else names
    AccessKit node types. A role, state or property ARIA 1.2 does not allow on the node's role is

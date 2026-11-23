@@ -1,7 +1,10 @@
 # ADR-0392: A merged node's action belongs to the contributor whose state it changes
 
-- **Status:** Proposed (2026-11-23)
+- **Status:** Accepted (2026-11-23)
 - **Date:** 2026-11-23
+- **Supersedes:** [ADR-0206](ADR-0206-typed-semantics-attributes.md), in part: decision 3's
+  `Mixed > On > Off` precedence for `Toggled`, and decision 4's forced merge of a standard
+  action's handler and of `toggled`, `selected` and `enabled`
 - **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md) (the merge table this record
   completes for a forced merge's standard actions, `toggled`, `selected` and `enabled`),
   [ADR-0332](ADR-0332-a-control-takes-the-content-roles-beneath-it.md) (role precedence in a
