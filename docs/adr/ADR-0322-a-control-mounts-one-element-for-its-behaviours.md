@@ -47,12 +47,12 @@ several behaviours mount?
 
 ## Decision drivers
 
-- The entry [An interactive widget costs eighteen elements](../gaps.md#an-interactive-widget-costs-eighteen-elements)
-  closes on counted numbers: a button adds to its child at most 2 elements, 1 render node, 40
-  allocations and 3 KB.
-- The catalogs do not wait for the last kilobyte. The Material and Cupertino controls move to the
-  node at a migration threshold counted by the same scenario: 2 elements, 1 render node, at most
-  40 allocations and at most 5 KB. The entry's numbers above stay the goal.
+- A control's cost is counted: a button adds to its child at most 2 elements, 1 render node and
+  40 allocations, and the bytes the baseline of `perf_raw_button_over_text` holds, about 3.6 KB,
+  which only fall.
+  The 46 KB of the wrappers were the problem; what is left is the cost of any element, render
+  node and focus node, and cutting it further changes public shapes.
+- The catalogs move to the node once a control is within those numbers.
 - Nothing a user or a tool observes changes: the accessibility tree, the gesture arena's
   outcomes, focus traversal, action resolution, what locators and `inspect` select.
 - A disabled control is disabled in one place. A control that is disabled for the pointer and
@@ -412,7 +412,7 @@ render object or already owns the element the value comes from.
 ### Confirmation
 
 - `crates/flui-widgets/tests/perf.rs`, `perf_raw_button_over_text`: the counted elements,
-  render nodes, allocations and bytes a `RawButton` adds to its `Text` are within the entry's
+  render nodes, allocations and bytes a `RawButton` adds to its `Text` are within the drivers'
   numbers.
 - `raw_button_a11y_tree_matches_wrappers`: `a11y_tree()` of `RawButton` equals, byte for byte, the
   tree of the same button composed from the public wrappers, enabled and disabled, focused and
@@ -491,7 +491,7 @@ render object or already owns the element the value comes from.
 
 - Good, because no control changes.
 - Bad, because five wrappers are at least five elements whatever each costs; the element count
-  the entry closes on is out of reach.
+  the drivers name is out of reach.
 - Bad, because enablement stays spread over three wrappers and states still arrive by rebuild.
 
 ### 3. Fuse adjacent wrappers at mount
@@ -516,6 +516,6 @@ render object or already owns the element the value comes from.
 
 - The measurement is `flui_testing::control_cost::control_over_text` on a `HeadlessHost`, counted
   by the kit's global allocator (`flui_testing::heap::CountingAllocator`); the
-  numbers and the closing condition live in `docs/gaps.md`.
+  bytes are held by `crates/flui-widgets/perf/baseline/raw_button_over_text.toml`.
 - Revisit option 3 if controls written outside the catalogs show the same cost at a scale that
   matters.
