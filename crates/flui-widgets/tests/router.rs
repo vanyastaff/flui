@@ -2659,10 +2659,11 @@ pub(crate) fn a_transition_tick_rebuilds_neither_page() {
         ticks >= 18,
         "the push rebuilt its transitions {ticks} times"
     );
-    // Each route's state changes once in a push (the one going out is
-    // covered, the one coming in settles), and a state change builds the
-    // page again, as Flutter's `changedInternalState` and
-    // `changedExternalState` do. Thirty ticks build it no more than one would.
+    // Each route changes state once in a push (the one going out is covered,
+    // the one coming in settles), and the entry hands its scope a new view
+    // then, which builds the page again; Flutter drops its cached page on
+    // `changedExternalState` and `didChangeDependencies`. Thirty ticks build
+    // it no more than one would.
     assert_eq!(
         pages_built(&calls),
         [2, 2],
