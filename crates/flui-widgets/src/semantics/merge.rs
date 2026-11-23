@@ -8,6 +8,17 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Merges the semantics of all descendants into a single node.
+///
+/// The node announces one control: a tile with a radio, check box or switch
+/// is that control, named by the tile's text. A screen reader's action runs
+/// the handler of the part whose state it changes: Click on a node announcing
+/// a radio selects that radio, Expand opens the disclosure whose state the
+/// node announces, a scroll moves the scrollable whose position it announces,
+/// whatever their order. An action that changes nothing the node announces
+/// (a plain tap) runs the first descendant's handler in reading order. A
+/// tap of the tile that does something other than its control is therefore
+/// not reachable through the node; give that act a custom action of its own
+/// (ADR-0392).
 #[derive(Clone, Debug)]
 pub struct MergeSemantics {
     identifier: Option<std::sync::Arc<str>>,
