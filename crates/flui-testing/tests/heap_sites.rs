@@ -38,12 +38,18 @@ fn a_profiled_stretch_counts_and_names_only_what_the_program_asked() {
     drop(grown);
 
     assert_eq!(
-        (counts.allocations, counts.reallocations, counts.allocated_bytes),
+        (
+            counts.allocations,
+            counts.reallocations,
+            counts.allocated_bytes
+        ),
         (5, 4, 8 + 16 + 32 + 64 + 128),
         "DHAT's own allocations are not the program's"
     );
 
-    let sites = profiler.finish("grow_a_vec").expect("the profile reads back");
+    let sites = profiler
+        .finish("grow_a_vec")
+        .expect("the profile reads back");
     let [site] = sites.sites() else {
         panic!("one site, the push in `grow_a_vec`:\n{sites}");
     };

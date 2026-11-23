@@ -131,7 +131,7 @@ impl Drop for InnerCall {
 // default spelled out so it can be counted: `self.alloc` + copy +
 // `self.dealloc`, still `INNER`. `alloc_zeroed` keeps the default, through
 // `self.alloc`.
-#[expect(unsafe_code, reason = "a counting allocator forwards to System or DHAT")]
+#[expect(unsafe_code, reason = "counts, then forwards to System or DHAT")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // Held across `INNER`, so the allocations DHAT makes inside it are not counted.

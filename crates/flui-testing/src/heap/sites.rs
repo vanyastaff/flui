@@ -231,6 +231,9 @@ struct Frame {
     function: String,
     file: String,
     line: u32,
+    /// A path relative to some other crate's directory, not the workspace's: a dependency
+    /// whose debug info names its files from its own root (`src/alloc.rs`).
+    foreign: bool,
 }
 
 /// The address and frame of one `ftbl` entry.
@@ -252,6 +255,7 @@ fn parse_frame(text: &str) -> Option<(u64, Frame)> {
             function: function.to_owned(),
             file: file.to_owned(),
             line: line.parse::<u32>().ok()?,
+            foreign: false,
         },
     ))
 }
@@ -289,6 +293,7 @@ fn stacks_resolved_here(profile: &DhatProfile) -> Vec<Vec<Frame>> {
 
     let table: Vec<Option<(u64, Frame)>> =
         profile.ftbl.iter().map(|text| parse_frame(text)).collect();
+    let workspace = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
     let mut resolved: FxHashMap<u64, Vec<Frame>> = FxHashMap::default();
     let mut resolve = |address: u64| -> Vec<Frame> {
         resolved
@@ -303,10 +308,15 @@ fn stacks_resolved_here(profile: &DhatProfile) -> Vec<Vec<Frame>> {
                     else {
                         return;
                     };
+                    // A workspace crate's files are named from the workspace root
+                    // (`crates/…`); a relative path that is no file there is another
+                    // crate's, named from that crate's own root.
+                    let foreign = file.is_relative() && !workspace.join(file).is_file();
                     frames.push(Frame {
                         function: format!("{name:#}"),
                         file: file.display().to_string(),
                         line,
+                        foreign,
                     });
                 });
                 frames
@@ -340,15 +350,7 @@ fn stacks_resolved_here(profile: &DhatProfile) -> Vec<Vec<Frame>> {
 /// dependency, rather than to the code that asked for the memory.
 fn is_below_the_asker(frame: &Frame) -> bool {
     const MACHINERY: [&str; 9] = [
-        "dhat::",
-        "alloc::",
-        "core::",
-        "std::",
-        "<alloc::",
-        "<core::",
-        "<std::",
-        "__rust",
-        "__rdl",
+        "dhat::", "alloc::", "core::", "std::", "<alloc::", "<core::", "<std::", "__rust", "__rdl",
     ];
     let file = frame.file.replace('\\', "/");
     MACHINERY
@@ -356,13 +358,17 @@ fn is_below_the_asker(frame: &Frame) -> bool {
         .any(|prefix| frame.function.starts_with(prefix))
         // The standard library, from its own build or from `rust-src`.
         || file.starts_with("/rustc/")
+        // The standard library's own dependencies (its `hashbrown`), as its build names them.
+        || file.starts_with("/rust/deps/")
         || file.contains("/library/alloc/")
         || file.contains("/library/core/")
         || file.contains("/library/std/")
-        || file.contains("/.cargo/registry/")
-        || file.contains("/.cargo/git/")
+        // A dependency, under `$CARGO_HOME` or a build's remapped `/cargo/`.
+        || file.contains("cargo/registry/")
+        || file.contains("cargo/git/")
         // The counting allocator itself.
         || file.ends_with("flui-testing/src/heap.rs")
+        || frame.foreign
         || file == "???"
 }
 
@@ -470,7 +476,12 @@ mod tests {
         let (address, valgrind) = parse_frame("0x4C2DB8F: malloc (vg_replace_malloc.c:299)")
             .expect("Valgrind's frame form, no column");
         assert_eq!(
-            (address, valgrind.function.as_str(), valgrind.file.as_str(), valgrind.line),
+            (
+                address,
+                valgrind.function.as_str(),
+                valgrind.file.as_str(),
+                valgrind.line
+            ),
             (0x04C2_DB8F, "malloc", "vg_replace_malloc.c", 299)
         );
         let everything = sum_sites(&profile, &stacks, "");
