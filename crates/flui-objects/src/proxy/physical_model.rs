@@ -295,7 +295,8 @@ impl PhysicalClipSource for PathClip {
 pub struct RenderPhysicalModelBase<C: PhysicalClipSource> {
     /// The per-variant clip-shape source.
     clip_source: C,
-    /// Shadow elevation. `0.0` means no shadow is cast.
+    /// Shadow elevation, finite and non-negative (`shadow_elevation`). `0.0`
+    /// means no shadow is cast.
     elevation: f64,
     /// The fill color painted behind (or, under `AntiAliasWithSaveLayer`,
     /// inside) the clip.
@@ -316,6 +317,18 @@ pub type RenderPhysicalModel = RenderPhysicalModelBase<RectangleClip>;
 /// Arbitrary-path-target variant.
 pub type RenderPhysicalShape = RenderPhysicalModelBase<PathClip>;
 
+/// The elevation a physical model stores for a requested `elevation`: the
+/// value itself when it is finite and positive, else `0.0` (no shadow).
+/// `+∞` maps to `0.0` too: no finite blur stands for it, and a shadow that
+/// covers the whole canvas is never what a caller meant.
+fn shadow_elevation(elevation: f64) -> f64 {
+    if elevation.is_finite() && elevation > 0.0 {
+        elevation
+    } else {
+        0.0
+    }
+}
+
 impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
     /// Shared field baseline: `elevation = 0.0`, `shadow_color` = opaque
     /// black, `clip_behavior = Clip::None`.
@@ -330,29 +343,28 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
         }
     }
 
-    /// The current elevation. Zero means no shadow is cast.
+    /// The current elevation: finite and non-negative. Zero means no shadow
+    /// is cast.
     #[inline]
     pub fn elevation(&self) -> f64 {
         self.elevation
     }
 
-    /// Builder: sets the elevation (debug-asserts non-negative).
+    /// Builder: sets the elevation, normalized as
+    /// [`set_elevation`](Self::set_elevation) normalizes it.
     #[must_use]
     pub fn with_elevation(mut self, elevation: f64) -> Self {
-        debug_assert!(
-            elevation >= 0.0,
-            "RenderPhysicalModelBase: elevation must be non-negative, got {elevation}"
-        );
-        self.elevation = elevation;
+        self.elevation = shadow_elevation(elevation);
         self
     }
 
     /// Replaces the elevation and reports paint when it changed.
+    ///
+    /// A negative, NaN or infinite elevation is stored as `0.0`, so the
+    /// model casts no shadow rather than handing the canvas a blur it cannot
+    /// draw; every widget that builds a physical model gets this rule here.
     pub fn set_elevation(&mut self, elevation: f64) -> RenderUpdateImpact {
-        debug_assert!(
-            elevation >= 0.0,
-            "RenderPhysicalModelBase: elevation must be non-negative, got {elevation}"
-        );
+        let elevation = shadow_elevation(elevation);
         if self.elevation == elevation {
             return RenderUpdateImpact::NONE;
         }

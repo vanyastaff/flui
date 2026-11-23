@@ -137,9 +137,9 @@ impl Material {
     /// snapping or curve — a continuous z-depth, matching the oracle's own
     /// `double elevation` (M3 has no discrete elevation "levels" at the
     /// `Material` layer; token tables like `_surfaceTintElevationOpacities`
-    /// operate on the same continuous value). Must be non-negative — the
-    /// underlying render object debug-asserts this (oracle:
-    /// `assert(elevation >= 0.0)`).
+    /// operate on the same continuous value). A negative or non-finite
+    /// elevation casts no shadow: the render object stores it as `0.0`
+    /// (where Flutter asserts `elevation >= 0.0`).
     #[must_use]
     pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = elevation;

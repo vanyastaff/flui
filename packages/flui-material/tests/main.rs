@@ -596,6 +596,10 @@ fn overlay_contracts() {
             "drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed",
             drawer::dragging_an_opened_drawer_past_halfway_reports_it_closed,
         ),
+        (
+            "drawer::a drawer with an unusable width or elevation lays out finite",
+            drawer::a_drawer_with_an_unusable_width_or_elevation_lays_out_finite,
+        ),
     ]);
 }
 
