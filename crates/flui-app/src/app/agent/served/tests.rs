@@ -694,8 +694,12 @@ fn a_connection_without_the_right_hello_is_refused() {
         );
         assert!(matches!(across.recv(RECV), Recv::Closed), "then it closes");
 
+        // An observer, so the driver hello below is admitted however soon the agent sees
+        // this one go.
         let mut earlier = Client::connect(&at);
-        earlier.send(&json!({ "hello": { "token": TOKEN, "protocol": broke.to_string() } }));
+        earlier.send(
+            &json!({ "hello": { "token": TOKEN, "protocol": broke.to_string(), "role": "observer" } }),
+        );
         let Recv::Line(welcome) = earlier.recv(RECV) else {
             panic!("a client the break does not separate is greeted");
         };
