@@ -2594,3 +2594,50 @@ pub(crate) fn an_app_dropped_with_a_popup_open_frees_its_builder() {
         "a popup builder that holds a {leaked:?} outlives its app"
     );
 }
+
+// ============================================================================
+// A transition rebuilds the transitions, not the pages
+// ============================================================================
+
+/// A push runs its transition on the frames that follow, and each tick
+/// rebuilds the transitions around the two pages, not the pages: the page
+/// builder of the route going out and of the route coming in runs a fixed
+/// number of times however many frames the transition takes (Flutter's
+/// `_ModalScopeState._page`).
+#[test]
+fn a_transition_tick_rebuilds_neither_page() {
+    let home_builds = Rc::new(Cell::new(0_usize));
+    let note_builds = Rc::new(Cell::new(0_usize));
+    let home = Probe::default();
+    let (home_count, note_count) = (Rc::clone(&home_builds), Rc::clone(&note_builds));
+    let pages = pages(&home);
+    let mut laid = mount(Router::new(AppRoute::Home, move |route, ctx| {
+        match route {
+            AppRoute::Home => home_count.set(home_count.get() + 1),
+            _ => note_count.set(note_count.get() + 1),
+        }
+        pages(route, ctx)
+    }));
+    settle(&mut laid);
+    let home_before = home_builds.get();
+
+    home.handle()
+        .push(AppRoute::Note { id: 1 })
+        .expect("the router is mounted");
+    // Ticks a sixtieth of a second apart: the 300 ms transition takes
+    // eighteen of them.
+    let tick = Duration::from_nanos(16_666_667);
+    let ticks = 60;
+    for _ in 0..ticks {
+        laid.pump_for(tick);
+    }
+    assert!(laid_out_text(&laid, "Note 1"), "the push finished");
+
+    let home_during = home_builds.get() - home_before;
+    let note_during = note_builds.get();
+    assert!(
+        home_during <= 2 && note_during <= 2,
+        "{ticks} ticks rebuilt the page going out {home_during} times and the page \
+         coming in {note_during} times; a tick must rebuild neither"
+    );
+}
