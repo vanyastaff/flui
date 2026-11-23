@@ -51,7 +51,9 @@ pub type RouteContentBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 /// *above* this one, when the two coordinate.
 pub type RouteAnimation = std::rc::Rc<dyn Animation<f64>>;
 
-/// Builds a route's page.
+/// Builds a route's page: once per route state, not on each tick of its
+/// animations. A page that follows an animation listens to it through an
+/// `AnimatedView` of its own.
 pub type RoutePageBuilder =
     Rc<dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView>;
 
