@@ -17,8 +17,8 @@
   one rebuild after it, not one each.
 - **`flui-hot-reload`**: a host reads its worker or scene artifact every 50 ms instead of every
   500 ms (`timing::ARTIFACT_POLL`, `timing::WATCHER_POLL`), so a rebuilt worker is picked up up
-  to half a second sooner. An artifact that failed to load is opened again only once it changes,
-  not on every read.
+  to half a second sooner. An artifact that failed to load is opened again once it changes, or
+  after a second, not on every read.
 - **`flui-cli`**: a save in `flui run`, and `r`, rebuild while the application keeps running and
   replace it only with a build that succeeded. A compile error leaves the previous build on
   screen instead of closing the window for the length of the build. Windows, which cannot
@@ -43,3 +43,7 @@
 - **`flui-cli`**: on Linux a build no longer starts the next one. `flui run` took the read of
   `Cargo.toml` that every build makes, which Linux reports as an open, for an edit, so after each
   build it rebuilt and restarted the application again.
+- **`flui-cli`**: `flui run` keeps seeing edits to `Cargo.toml` after an editor saves it by
+  renaming a new file over it, and an overflowing event queue is a change to every watched path
+  instead of a lost one. A worker host that exited while the worker built is reported as that
+  exit before its successor starts.

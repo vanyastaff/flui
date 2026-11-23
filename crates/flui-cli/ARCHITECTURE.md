@@ -641,6 +641,17 @@ nothing in a running app does. Keeping it here is what lets
 reload, `flui-hot-reload`, is linked by the app, and the two halves share
 only a pair of environment-variable names.
 
+A change is a write, a creation, a removal or a rename, never an open or a
+close: a build reads every source and the manifest, and Linux reports each read
+(`reading_the_sources_is_no_change`). A change is reported once no other has
+come for the debounce window, at most two seconds after it began, and the
+events that waited while the caller rebuilt join it, so one rebuild answers
+them (`the_batches_waiting_for_a_busy_caller_are_one_change`). A file is
+watched through its directory, filtered to its name, since an editor that
+saves by rename replaces the inode a file watch sits on
+(`a_watched_file_saved_by_rename_stays_watched`); a backend that lost events
+reports every watched path.
+
 ### Finishing a probe transfers its captured output
 
 The pipe reader owns a mutex-protected byte buffer shared with its drain thread.

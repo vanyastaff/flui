@@ -133,7 +133,8 @@ later frame to pick the rebuild up. Both the watcher and the frame-boundary poll
 read every 50 ms (`flui_hot_reload::strategy::timing`), since a reload waits for
 the next read. The first poll after `attach` reads the artifact too, so a rebuild
 that landed between making the hook and attaching it is not missed, and an
-artifact that failed to load is not opened again until its stamp changes.
+artifact that failed to load is opened again once its stamp changes, or after a
+second.
 
 This is still layer 2: the watcher watches the **artifact**, never `src/` (layer
 1, the CLI, owns source watching and the rebuild), and it adds no second

@@ -397,6 +397,9 @@ impl AndroidBuilder {
             });
         };
 
+        // Refused before anything is built or cleaned.
+        let package = self.application_package()?;
+
         let jni_libs_dir = self
             .workspace_root
             .join("platforms")
@@ -428,14 +431,6 @@ impl AndroidBuilder {
         // The API level the NDK links against is the floor the APK declares,
         // so the library calls nothing newer than the manifest promises.
         let platform = ctx.floors.android_api().to_string();
-        // `cargo rustc` compiles one target, so the package is named: a root
-        // package whose workspace lists other default members is not refused.
-        // By its name, which is how cargo-ndk looks up the manifest whose
-        // artifacts it copies (it refuses a package id).
-        let project = super::util::cargo::cargo_project(&self.workspace_root)?;
-        let (Some(package), Some(_)) = (project.package, project.library) else {
-            return Err(no_library());
-        };
         let mut rust_libs = Vec::new();
 
         for target in targets {
@@ -655,19 +650,37 @@ fn gradle_apk(apk_dir: &Path, profile: Profile) -> BuildResult<PathBuf> {
 /// The Gradle-less delivery: `aapt2` + `zipalign` + `apksigner` from the
 /// SDK's build-tools, see `android_package.rs`.
 impl AndroidBuilder {
+    /// The package whose library the Android build compiles: the one whose
+    /// manifest is in the project's directory, refused when it has no
+    /// library. `cargo rustc` compiles exactly one target, so the build names
+    /// it, by name, which is how cargo-ndk looks up the manifest whose
+    /// artifacts it copies (it panics on a package id). A dependency that
+    /// shares the application's name makes that name ambiguous to cargo,
+    /// which then refuses the build and names both.
+    fn application_package(&self) -> BuildResult<String> {
+        let project = super::util::cargo::cargo_project(&self.workspace_root)?;
+        let (Some(package), Some(_)) = (project.package, project.library) else {
+            return Err(no_library());
+        };
+        Ok(package)
+    }
+
     /// What the crates linked for the ABIs built, with the features the build
-    /// turns on, declare (ADR-0307). `cargo ndk rustc --lib` runs in the
-    /// project's directory and names no package, so the build is cargo's
-    /// default selection there.
+    /// turns on, declare (ADR-0307): the build of the package
+    /// [`Self::application_package`] names, which `cargo ndk rustc -p`
+    /// compiled.
     fn declarations(&self, ctx: &BuilderContext) -> BuildResult<crate::declarations::Declarations> {
         let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Android platform".to_string(),
             });
         };
+        let package = self.application_package()?;
         let triples: Vec<&str> = targets.iter().map(|abi| rust_target(abi)).collect();
         crate::declarations::Declarations::collect(
-            crate::declarations::Build::at(&self.workspace_root).features(&ctx.features),
+            crate::declarations::Build::at(&self.workspace_root)
+                .selecting(crate::declarations::Selection::Package(&package))
+                .features(&ctx.features),
             &triples,
         )
     }

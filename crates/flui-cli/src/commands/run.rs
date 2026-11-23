@@ -864,8 +864,8 @@ fn drive(
                 if let Some(exited) = child.as_mut() {
                     report_exit(exited, status);
                 }
-                ui::info("Watching for changes to restart...")?;
                 *child = None;
+                ui::info("Watching for changes to restart...")?;
             }
             LoopEvent::Changed(paths) => {
                 log_changed_paths(&paths);
@@ -2330,7 +2330,13 @@ impl ReloadStrategy for WorkerHost {
             return Ok(());
         }
         let staged = self.publish()?;
+        // A host that exited while the worker built is reported as that exit,
+        // and one that cannot be polled is stopped, so a successor never runs
+        // beside it.
         let host_alive = matches!(child.as_mut().map(|host| host.try_wait()), Some(Ok(None)));
+        if !host_alive {
+            stop_and_report(child);
+        }
         if host_alive {
             // The host's artifact watcher wakes it for the new worker.
             ui::success("Worker rebuilt — the running host is reloading it")?;

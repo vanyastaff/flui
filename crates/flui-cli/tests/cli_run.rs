@@ -324,9 +324,17 @@ fn a_restart_replaces_the_running_build_only_with_one_that_succeeded() {
         stop: std::path::PathBuf,
     }
     impl Drop for Session {
+        /// Ctrl-C, on which `flui run` stops the app it started; the `stop`
+        /// file is the app's own way out should `flui run` be gone.
         fn drop(&mut self) {
             let _ = std::fs::write(&self.stop, "");
-            std::thread::sleep(Duration::from_millis(200));
+            let _ = std::process::Command::new("kill")
+                .args(["-INT", &self.cli.id().to_string()])
+                .status();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while matches!(self.cli.try_wait(), Ok(None)) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let _ = self.cli.kill();
             let _ = self.cli.wait();
         }
@@ -382,9 +390,8 @@ fn a_restart_replaces_the_running_build_only_with_one_that_succeeded() {
         }
     });
     let mut seen = Vec::new();
-    // Waits for the first event `wanted` accepts, unless one already came.
-    // Every event received stays in `seen`, for the assertions and for the
-    // failure messages.
+    // Waits for the next event `wanted` accepts. Every event received stays
+    // in `seen`, for the assertions and for the failure messages.
     fn wait_for(
         events: &std::sync::mpsc::Receiver<serde_json::Value>,
         seen: &mut Vec<serde_json::Value>,
