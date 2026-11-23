@@ -37,7 +37,7 @@ cargo-test-args = [
     "routable_derive_ui",          # flui-widgets' routable_ui trybuild suite
     "--skip",
     "cli_create::generated_",
-    # the facade_consumer target, every test of which builds a project
+    # the facade_it target's facade_consumer module, every test of which builds a project
     "--skip",
     "ordinary_facade_graph_excludes_test_support",
     "--skip",

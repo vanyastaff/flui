@@ -14,7 +14,7 @@ use flui_protocol::semantics::SemanticsRole;
 use flui_protocol::wire::Role;
 
 /// The `accesskit_macos` version [`ROLES`] was transcribed from.
-pub const ADAPTER_CHECKED_AGAINST: &str = "0.27.1";
+pub const ADAPTER_CHECKED_AGAINST: &str = "0.27.2";
 
 /// One row of the table: a semantics role, and the role and subrole the accessibility API reports
 /// for a node of it.

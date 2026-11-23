@@ -83,7 +83,7 @@ impl FlowDelegate for FlowWithState {
         constraints.loosen()
     }
 
-    fn paint_children(&self, _context: &mut FlowPaintingContext<'_, '_>) {
+    fn paint_children(&self, _ctx: &mut FlowPaintingContext<'_, '_>) {
         self.0.set(self.0.get() + 1);
     }
 
@@ -116,7 +116,7 @@ struct MultiWithState(Shared);
 impl MultiChildLayoutDelegate for MultiWithState {
     fn perform_layout(
         &self,
-        _context: &mut dyn MultiChildLayoutContext,
+        _ctx: &mut dyn MultiChildLayoutContext,
         _size: Size,
     ) -> RenderResult<()> {
         self.0.set(self.0.get() + 1);

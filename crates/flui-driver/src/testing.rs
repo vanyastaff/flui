@@ -495,12 +495,13 @@ fn serve_one(
     mut script: Script,
     written: &AtomicUsize,
 ) -> io::Result<()> {
-    use interprocess::local_socket::traits::{ListenerExt as _, Stream as _};
+    use interprocess::local_socket::traits::ListenerExt as _;
     let stream = listener
         .incoming()
         .next()
         .ok_or_else(|| io::Error::other("the listener ended"))??;
-    let (mut reading, mut writing) = stream.split();
+    // `&Stream` reads and writes, so the loop reads and writes through two shared borrows.
+    let (mut reading, mut writing) = (&stream, &stream);
     let mut lines = LineReader::new(crate::connection::MAX_REPLY);
     let mut chunk = vec![0_u8; 8192];
     let mut greeted = false;

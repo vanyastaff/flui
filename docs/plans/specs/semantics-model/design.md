@@ -293,7 +293,7 @@ pub enum ActionCall {
   состояния и пробел адаптеров как известная клетка, которая падает при смене версии адаптера.
   - SwipeActions → `ListItem`; `Click`, `CustomAction` на каждое действие свайпа,
     `ShowContextMenu` с теми же действиями. Custom actions не показывают
-    `accesskit_windows` 0.35.1, `accesskit_macos` 0.27.1, `accesskit_atspi_common` 0.21.0;
+    `accesskit_windows` 0.35.2, `accesskit_macos` 0.27.2, `accesskit_atspi_common` 0.21.1;
     `ShowContextMenu` не маршрутизирует ни один адаптер.
   - Элемент ReorderableList/Grid → `ListItem` (`GridCell` в сетке); `CustomAction` «Move
     up/down/to start/to end» (плюс «left/right» по горизонтали и в сетке, зеркально в RTL),
