@@ -200,6 +200,18 @@ fn theme_and_color_resolution() {
             "cupertino_app::a live brightness republish re resolves the theme",
             cupertino_app::a_live_brightness_republish_re_resolves_the_theme,
         ),
+        (
+            "cupertino_app::a nested media query resolves the app theme below it",
+            cupertino_app::a_nested_media_query_resolves_the_app_theme_below_it,
+        ),
+        (
+            "theme::every text role set on the theme reaches a reader",
+            theme::every_text_role_set_on_the_theme_reaches_a_reader,
+        ),
+        (
+            "theme::readers under one context share one resolution",
+            theme::readers_under_one_context_share_one_resolution,
+        ),
     ]);
 }
 

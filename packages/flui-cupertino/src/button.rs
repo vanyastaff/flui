@@ -31,8 +31,8 @@ use flui_sdk::widgets::{
     DecoratedBox, DefaultTextStyle, FadeTransition, Padding,
 };
 
-use crate::CupertinoTheme;
 use crate::colors::{CupertinoColor, CupertinoColors};
+use crate::{CupertinoTheme, ResolvedCupertinoTheme};
 
 /// A user tap/long-press handler. `Rc`-based (owner-local, per ADR-0027) —
 /// matches the callback shape of the node's `ControlTap::on_tap`.
@@ -364,19 +364,19 @@ impl std::fmt::Debug for CupertinoButton {
 fn resolve_background_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
-    primary_color: Color,
+    theme: &ResolvedCupertinoTheme,
 ) -> Option<Color> {
     let base = match view.color {
         Some(color) => Some(color.resolve(ctx)),
         None => match view.style {
             ButtonFillStyle::Plain => None,
-            ButtonFillStyle::Tinted | ButtonFillStyle::Filled => Some(primary_color),
+            ButtonFillStyle::Tinted | ButtonFillStyle::Filled => Some(theme.primary_color),
         },
     };
 
     base.map(|base_color| match view.style {
         ButtonFillStyle::Tinted => {
-            let opacity = if CupertinoTheme::brightness_of(ctx) == Brightness::Light {
+            let opacity = if theme.brightness == Brightness::Light {
                 K_TINTED_OPACITY_LIGHT
             } else {
                 K_TINTED_OPACITY_DARK
@@ -391,16 +391,15 @@ fn resolve_background_color(
 fn resolve_foreground_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
-    theme: &crate::CupertinoThemeData,
-    primary_color: Color,
+    theme: &ResolvedCupertinoTheme,
     enabled: bool,
 ) -> Color {
     if let Some(color) = view.foreground_color {
         return color.resolve(ctx);
     }
     match (view.style, enabled) {
-        (ButtonFillStyle::Filled, _) => theme.primary_contrasting_color().resolve(ctx),
-        (_, true) => primary_color,
+        (ButtonFillStyle::Filled, _) => theme.primary_contrasting_color,
+        (_, true) => theme.primary_color,
         (_, false) => CupertinoColors::TERTIARY_LABEL.resolve_from(ctx),
     }
 }
@@ -599,19 +598,18 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
     fn build(&self, view: &CupertinoButton, ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = view.enabled();
         let theme = CupertinoTheme::of(ctx);
-        let primary_color = theme.primary_color().resolve(ctx);
 
-        let background_color = resolve_background_color(view, ctx, primary_color);
-        let foreground_color = resolve_foreground_color(view, ctx, &theme, primary_color, enabled);
+        let background_color = resolve_background_color(view, ctx, &theme);
+        let foreground_color = resolve_foreground_color(view, ctx, &theme, enabled);
 
         let text_style = if view.size_style == CupertinoButtonSize::Small {
-            theme.text_theme().action_small_text_style()
+            &theme.text_theme.action_small_text_style
         } else {
-            theme.text_theme().action_text_style()
+            &theme.text_theme.action_text_style
         };
         let text_style = TextStyle {
             color: Some(foreground_color),
-            ..text_style
+            ..text_style.clone()
         };
 
         let fill_color = match background_color {

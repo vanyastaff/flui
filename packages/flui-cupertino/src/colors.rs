@@ -37,7 +37,10 @@ impl CupertinoColor {
     /// [`CupertinoDynamicColor::resolve_from`].
     #[must_use]
     pub fn resolve(&self, ctx: &dyn BuildContext) -> Color {
-        ColorResolver::new(ctx, None).resolve(*self)
+        match *self {
+            Self::Static(color) => color,
+            Self::Dynamic(color) => color.resolve_from(ctx),
+        }
     }
 }
 
@@ -159,12 +162,21 @@ impl CupertinoDynamicColor {
             || self.high_contrast_elevated_color != self.dark_high_contrast_elevated_color
     }
 
+    /// The base-elevation variants at `brightness`: normal contrast, then
+    /// high contrast.
+    fn base_variants(&self, brightness: Brightness) -> (Color, Color) {
+        match brightness {
+            Brightness::Light => (self.color, self.high_contrast_color),
+            Brightness::Dark => (self.dark_color, self.dark_high_contrast_color),
+        }
+    }
+
     /// Resolves this dynamic color against `ctx`, per the "Resolution scope"
     /// section on the type doc: brightness and contrast resolved, elevation
     /// at its base variant. Only fields that affect the color are dependencies.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Color {
-        ColorResolver::new(ctx, None).dynamic(*self)
+        ColorResolver::ambient_for(ctx, *self).dynamic(*self)
     }
 
     /// Resolves `resolvable` by calling [`CupertinoColor::resolve`] — a
@@ -188,46 +200,55 @@ impl CupertinoDynamicColor {
     }
 }
 
-/// Shares precedence and selective inherited reads between standalone colors,
-/// theme materialization and text roles. A theme being resolved need not already
-/// be installed as an ancestor for its explicit brightness to take effect.
-pub(crate) struct ColorResolver<'a> {
-    context: &'a dyn BuildContext,
-    brightness: Option<Brightness>,
+/// The ambient inputs a dynamic colour picks its variant by: the effective
+/// brightness and whether the user asked for high contrast. Interface
+/// elevation is not one: FLUI has no interface-level ambient, so the base
+/// variant is always picked.
+///
+/// Standalone colours read these from the context selectively
+/// ([`Self::ambient_for`]), and a theme reads them once for all its colours
+/// and keys its resolution cache by them, so both paths select variants the
+/// same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColorResolver {
+    pub(crate) brightness: Brightness,
+    pub(crate) high_contrast: bool,
 }
 
-impl<'a> ColorResolver<'a> {
-    pub(crate) fn new(context: &'a dyn BuildContext, brightness: Option<Brightness>) -> Self {
+impl ColorResolver {
+    /// The inputs `color` varies along, read from `ctx` and nothing else: a
+    /// colour with no dark variant registers no brightness dependency, one
+    /// with no high-contrast variant at the picked brightness registers no
+    /// contrast dependency, so an unrelated media change does not rebuild its
+    /// reader. An input not read is fixed at its default, which picks the
+    /// same variant.
+    pub(crate) fn ambient_for(ctx: &dyn BuildContext, color: CupertinoDynamicColor) -> Self {
+        let brightness = if color.is_platform_brightness_dependent() {
+            crate::CupertinoTheme::brightness_of(ctx)
+        } else {
+            Brightness::Light
+        };
+        let (normal, contrast) = color.base_variants(brightness);
+        let high_contrast =
+            normal != contrast && MediaQuery::high_contrast_of(ctx).unwrap_or(false);
         Self {
-            context,
             brightness,
+            high_contrast,
         }
     }
 
-    pub(crate) fn resolve(&self, color: CupertinoColor) -> Color {
+    /// `color` under these inputs.
+    pub(crate) fn resolve(self, color: CupertinoColor) -> Color {
         match color {
             CupertinoColor::Static(color) => color,
             CupertinoColor::Dynamic(color) => self.dynamic(color),
         }
     }
 
-    pub(crate) fn dynamic(&self, color: CupertinoDynamicColor) -> Color {
-        let brightness = if color.is_platform_brightness_dependent() {
-            self.brightness
-                .or_else(|| crate::CupertinoTheme::maybe_brightness_of(self.context))
-                .unwrap_or(Brightness::Light)
-        } else {
-            Brightness::Light
-        };
-        let (normal, contrast) = match brightness {
-            Brightness::Light => (color.color, color.high_contrast_color),
-            Brightness::Dark => (color.dark_color, color.dark_high_contrast_color),
-        };
-        if normal != contrast && MediaQuery::high_contrast_of(self.context).unwrap_or(false) {
-            contrast
-        } else {
-            normal
-        }
+    /// The variant of `color` these inputs pick.
+    pub(crate) fn dynamic(self, color: CupertinoDynamicColor) -> Color {
+        let (normal, contrast) = color.base_variants(self.brightness);
+        if self.high_contrast { contrast } else { normal }
     }
 }
 
