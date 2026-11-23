@@ -20,31 +20,25 @@ struct Counted {
 }
 
 struct CountedState {
-    view: Counted,
-    listener: Option<Box<dyn Any>>,
+    _listener: Box<dyn Any>,
 }
 
 impl StatefulView for Counted {
     type State = CountedState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let count = Rc::clone(&self.count);
+        ctx.post_frame_handle()
+            .expect("a mounted presentation has a post-frame lane")
+            .schedule(move |_timing| count.set(count.get() + 10))
+            .expect("the lane admits the callback");
         CountedState {
-            view: self.clone(),
-            listener: None,
+            _listener: Box::new(listen(&self.notifier, &self.count)),
         }
     }
 }
 
 impl ViewState<Counted> for CountedState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.listener = Some(Box::new(listen(&self.view.notifier, &self.view.count)));
-        let count = Rc::clone(&self.view.count);
-        ctx.post_frame_handle()
-            .expect("a mounted presentation has a post-frame lane")
-            .schedule(move |_timing| count.set(count.get() + 10))
-            .expect("the lane admits the callback");
-    }
-
     fn build(&self, _view: &Counted, _ctx: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(10.0, 10.0)
     }
@@ -63,7 +57,7 @@ fn wasm_consumer_captures_rc_in_listener_and_post_frame() {
     let _listener = listen(&notifier, &count);
     notifier.notify_listeners();
     assert_eq!(count.get(), 1, "the listener ran on the owner thread");
-    // The view's `init_state` holds the post-frame half; compiling it on
+    // The view's `create_state` holds the post-frame half; compiling it on
     // wasm32 is that half's check.
     let _ = Counted { notifier, count };
 }

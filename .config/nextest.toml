@@ -52,7 +52,7 @@ run-wrapper = 'test-desktop'
 # Nested-cargo tests: each runs a real `cargo` of its own on a project it
 # generates. The trybuild suites push every compile_fail case through rustc;
 # the flui-cli template tests (`cli_create::generated_*`) build or test a
-# generated project; `flui::facade_consumer` checks external consumer
+# generated project; `flui::facade_it`'s `facade_consumer` module checks external consumer
 # crates against the facade; `ios_cargo_artifact_fixtures` drives the iOS
 # builder's real `cargo` over 14 generated fixtures. They own the run's wall-clock: in a cold local
 # run of the whole suite 21 of them took 83-305 s each (2026-09-22, e9a5456d, jobs=6),
@@ -102,7 +102,7 @@ run-wrapper = 'test-desktop'
 # Windows host (2026-10-28), past the 300 s period, and a cold 4-core runner
 # is slower.
 [[profile.default.overrides]]
-filter = 'binary_id(flui::facade_consumer) & test(=acceptance_app_runs_through_the_facade)'
+filter = 'binary_id(flui::facade_it) & test(=facade_consumer::acceptance_app_runs_through_the_facade)'
 slow-timeout = { period = "600s", terminate-after = 3 }
 
 # The live counter scenario builds a generated app for a device and launches
@@ -140,7 +140,7 @@ priority = 100
 test-group = 'trybuild'
 
 [[profile.default.overrides]]
-filter = '(binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer) | (binary_id(flui-cli::bin/flui) & test(=build::tests::ios_artifacts::ios_cargo_artifact_fixtures))'
+filter = '(binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | (binary_id(flui::facade_it) & test(/^facade_consumer::/)) | (binary_id(flui-cli::bin/flui) & test(=build::tests::ios_artifacts::ios_cargo_artifact_fixtures))'
 slow-timeout = { period = "300s", terminate-after = 4 }
 priority = 100
 test-group = 'nested-cargo'
@@ -196,7 +196,7 @@ nested-cargo = { max-threads = "num-cpus" }
 trybuild = { max-threads = "num-cpus" }
 
 [[profile.default.overrides]]
-filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine::painter_warm_path_allocation) & test(=warm_path_recording_has_no_per_draw_vertex_allocation)) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(/blur_filter_tests::foreground::/) | test(=renderer::tests::renderer_surface_selection_and_layer_compositing_read_back_as_specified) | test(=painter::tests::painter_images_and_offscreen_results_read_back_as_specified) | test(=painter::tests::painter_vertices_use_effective_colors_for_compositing) | test(=painter::tests::painter_solid_shaders_use_effective_colors_for_compositing) | test(=device_domain::tests::prepared_quota_failure_and_retirement) | test(=blur_filter_tests::gpu_tests::kawase_calls_keep_parameters_and_recover_after_admission_failure)))'
+filter = '(binary_id(flui::facade_it) & test(/^composited_layer_update_readback::/)) | (binary_id(flui-engine::painter_warm_path_allocation) & test(=warm_path_recording_has_no_per_draw_vertex_allocation)) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(/blur_filter_tests::foreground::/) | test(=renderer::tests::renderer_surface_selection_and_layer_compositing_read_back_as_specified) | test(=painter::tests::painter_images_and_offscreen_results_read_back_as_specified) | test(=painter::tests::painter_vertices_use_effective_colors_for_compositing) | test(=painter::tests::painter_solid_shaders_use_effective_colors_for_compositing) | test(=device_domain::tests::prepared_quota_failure_and_retirement) | test(=blur_filter_tests::gpu_tests::kawase_calls_keep_parameters_and_recover_after_admission_failure)))'
 test-group = 'gpu-readback'
 priority = 90
 
