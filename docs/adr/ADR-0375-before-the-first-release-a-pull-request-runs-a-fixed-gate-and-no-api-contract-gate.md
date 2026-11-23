@@ -14,6 +14,9 @@
   ADR-0312, ADR-0322, ADR-0323, ADR-0327, ADR-0329, ADR-0330, ADR-0331, ADR-0368.
 - **Superseded-by:** [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
   for the Confirmation only: the `ci` job's rule is a shell step, not `cargo xtask ci-verify`.
+  [ADR-0396](ADR-0396-a-perf-scenario-is-one-workload-every-instrument-measures-and-its-costs-are-a-file-beside-it.md)
+  for the Consequences only for a perf count: a count a pull request moves fails that pull
+  request's `test` job, which holds the baseline files; `perf-gates` stays in `FULL_JOBS`.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   (the source gates, removed by the same reasoning).
 

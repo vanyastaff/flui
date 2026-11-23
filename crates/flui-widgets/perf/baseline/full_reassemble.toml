@@ -1,9 +1,9 @@
-# Written by `FLUI_PERF_BASELINE=bless cargo nextest run --locked --no-fail-fast -p flui-widgets --test perf -E 'test(/^perf_/)'`;
-# counts, not timings. One scenario of crates/flui-widgets/tests/perf.rs.
+# Written by `FLUI_PERF_BASELINE=bless CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --no-fail-fast --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf`;
+# counts, not timings.
 
 [full_reassemble]
-allocated_bytes = 212184
-allocations = 842
+allocated_bytes = 211920
+allocations = 836
 builds_run = 278
 damage_full = 0
 damage_rects = 1

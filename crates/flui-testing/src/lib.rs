@@ -99,6 +99,7 @@ pub mod motion;
 // path keeps its name for the kit's consumers.
 pub use flui_log::testing as log_capture;
 pub mod ownership;
+pub mod perf;
 pub mod portal_exports;
 pub mod primary_selection;
 pub mod recording;

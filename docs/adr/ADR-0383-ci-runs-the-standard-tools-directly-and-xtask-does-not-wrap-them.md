@@ -28,6 +28,11 @@
   each target with `cargo +nightly --config .cargo/fuzz.toml run`; §9: the tools for working in
   the repository are removed, the source checks are steps, and `test-desktop` is a crate; §10: the
   generators are tests of the crates that own their output, and `tools/xtask` is deleted.
+- **Superseded-by:** [ADR-0396](ADR-0396-a-perf-scenario-is-one-workload-every-instrument-measures-and-its-costs-are-a-file-beside-it.md)
+  for §7 only for the perf scenarios' counts and the `perf_scaling_` instructions: one holder in
+  `flui_testing::perf` holds every perf target's files, CI's `test` job checks them on every pull
+  request, and `perf-gates` keeps the callgrind step until the kit counts instructions; the
+  `size` and `deps` comparisons stand.
 - **Related:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md),
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   and [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)

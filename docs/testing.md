@@ -775,13 +775,16 @@ thread, counted by the target's `#[global_allocator]`: `allocations` (a
 `realloc` included), `reallocations` (buffers that outgrew their capacity) and
 `allocated_bytes`.
 With `FLUI_PERF_BASELINE` set, each scenario holds every count to its file
-under `crates/flui-widgets/perf/baseline/` before it asserts its budget (the
-target's `tests/perf/baseline.rs`):
+under its target's `perf/baseline/` before it asserts its budget, through the
+one holder every perf target uses, `flui_testing::perf::Baselines`
+([ADR-0396](adr/ADR-0396-a-perf-scenario-is-one-workload-every-instrument-measures-and-its-costs-are-a-file-beside-it.md) §2).
+The `perf` targets of flui-widgets, flui-material and flui-cupertino hold
+their files this way:
 
 ```bash
 cargo nextest run -p flui-widgets --test perf                          # the budget assertions alone
-FLUI_PERF_BASELINE=check cargo nextest run -p flui-widgets --test perf -E 'test(/^perf_/)'   # and every count against its file
-FLUI_PERF_BASELINE=bless cargo nextest run --no-fail-fast -p flui-widgets --test perf -E 'test(/^perf_/)'   # rewrite the file of each scenario that passed
+FLUI_PERF_BASELINE=check CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf   # and every count against its file
+FLUI_PERF_BASELINE=bless CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --no-fail-fast --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf   # rewrite the file of each scenario that passed
 ```
 
 The comparison is exact, and how a difference counts depends on the counter.
@@ -796,13 +799,16 @@ the old value fails. A counter on one side only fails. A bless writes a
 scenario's file only when its body runs to its end, so a broken budget blesses
 nothing; a panic while the runtime the body mounted drops comes after the write.
 Each scenario has its own file, so changes to different scenarios never
-conflict, and `every_baseline_file_is_a_scenario` fails on a file whose name is
-not in the module's list of scenarios. With a mode set and `FLUI_PERF_OUT`
-naming a directory, each scenario writes its counts there; the `perf-gates`
-job then fails on a baseline file no scenario wrote a record for, and prints
-each record that moved, which is where a cost that fell shows. The files are
-blessed from `-p flui-widgets` with its default features: a run over the
-workspace unifies other features into it, which move the heap counters. A
+conflict, and each target's `every_baseline_file_is_a_scenario` fails on a file
+whose name is not in its list of scenarios. With a mode set and `FLUI_PERF_OUT`
+naming a directory, each scenario writes its counts there; CI's `test` job runs
+its workspace suite with `check` and then fails on a baseline file no scenario
+wrote a record for, and prints each record that moved, which is where a cost
+that fell shows. Every pull request runs that check. The files are blessed
+with the `test` job's features and opt-level, the command
+`flui_testing::perf::BLESS_COMMAND` names: other features change what a frame
+builds, and the optimizer can remove an allocation, so a run with either
+differs. A
 count is a function of the tree and
 the change, so it must not depend on a random seed: a per-frame table keyed by
 ids is slot-indexed (`flui_foundation::SlotIndex`, `SlotSet`) or hashed with a
@@ -815,9 +821,9 @@ The `perf-gates` job runs each size alone under `valgrind --tool=callgrind`,
 counting only inside the target's `perf_measured`, and fails when the large
 tree costs more than 5% over the small one: a frame that clears a table the
 mount grew or walks the whole tree for what a few nodes report is caught there,
-while every counter of its work stays put. The budget assertions run with
-flui-widgets' suite on every PR; `perf-gates` runs the check against the
-baseline and the callgrind step in the `full` lane, which main runs.
+while every counter of its work stays put. The budget assertions and the
+baseline check run in the `test` job on every PR; `perf-gates` runs only the
+callgrind step, in the `full` lane, which main runs.
 
 The perf targets of flui-widgets and flui-material also hold the heap level:
 `flui_testing::heap::assert_rounds_plateau`
@@ -1327,7 +1333,7 @@ cargo clippy --workspace --all-targets --locked --target aarch64-linux-android -
 cargo clippy --workspace --all-targets --all-features --locked --target aarch64-linux-android -- -D warnings  # same job: every feature; off Windows the Windows leg is `cargo xwin clippy`
 cargo deny --workspace --locked check bans licenses sources   # deps job: cargo-deny bans / licenses / sources
 cargo deny --workspace --locked check advisories              # same job: RustSec advisories, blocking on main, reported on a pull request; advisories.yml runs it daily on main
-cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native -E 'not (group(nested-cargo) | group(trybuild))'   # test job; ci.yml has its flui-native, Wayland, GPU and link steps
+FLUI_PERF_BASELINE=check cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native -E 'not (group(nested-cargo) | group(trybuild))'   # test job, which also fails on a perf baseline file no scenario held; ci.yml has its flui-native, Wayland, GPU and link steps
 cargo nextest run -p flui -p flui-cli --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native -E 'group(nested-cargo)'   # test-nested: generated projects and facade consumers
 cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 cargo +nightly miri test -p flui-foundation --lib             # miri job: every unit test of the
@@ -1416,7 +1422,7 @@ needs. One row per job:
 | `test-trybuild` | `cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --features flui/material,flui/cupertino,flui/native -E 'group(trybuild)'`, then `cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast` | compile-fail suites in three shards (`facade`, `core`, `view`) on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; a shard adds its `--test` list and its binaries' `binary_id` filter from the job's matrix, so it builds only its own test targets with the whole run's features; locally the command above runs every suite |
 | `test-features` | the job's `cargo nextest run` lines | — |
 | `doc` | `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --locked --document-private-items --features <every package's testing feature>` | the job reads the feature list from `cargo metadata`; its step shows how |
-| `perf-gates` | `FLUI_PERF_BASELINE=check FLUI_PERF_OUT=<dir> cargo nextest run --locked -p flui-widgets --test perf --no-fail-fast -E 'test(/^perf_/)'`, then the job's comparison of `<dir>` with `crates/flui-widgets/perf/baseline/` and its callgrind loop over the `perf_scaling_` scenarios | main only; the callgrind step needs valgrind (Linux) |
+| `perf-gates` | the job's callgrind loop over the `perf_scaling_` scenarios of flui-widgets' `perf` target | main only; needs valgrind (Linux); the baseline files are checked by `test` |
 | `size` | the job's step: `flui create --local` twice, three `cargo build --release` runs and their binaries' bytes against `perf/size.toml` | main only, CI only: three cold release builds on Linux x86_64, the baseline's host |
 | `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories`, then for each triple `cargo tree --locked --quiet --edges normal --prefix none --package flui --target <triple> \| awk 'NF >= 2 { print $1, $2 }' \| LC_ALL=C sort -u \| wc -l` against `perf/size.toml` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |

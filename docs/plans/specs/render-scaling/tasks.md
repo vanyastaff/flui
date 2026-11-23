@@ -191,7 +191,7 @@
   `BoundaryRecord`; цепочка узлов (`Geometry::node_links`) читает запись каждого узла один раз.
   Кэша `node_links` на границу нет: `effects_damage` уже читает цепочку один раз на версию, а при
   неизменной цепочке один раз на обе (`chain_kept`, `crates/flui-layer/src/scene/footprint.rs`).
-- **Ворота:** строка baseline задания `perf-gates`, падающая на коде до пулов: 0 аллокаций paint
+- **Ворота:** строка baseline, которую проверяет задание `test`, падающая на коде до пулов: 0 аллокаций paint
   и сборки сцены на `slide_transition_tick` и на кадре без изменений; update
   `paint/rotated_box_turn_change/inline` 2.13 / 3.08 / 12.7 µs при N = 1 / 1 000 / 10 000, а цель,
   которую не взять, получает в строке статуса причину и разбивку callgrind.
